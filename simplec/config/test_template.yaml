@@ -1,0 +1,48 @@
+template:
+  name: "SimpleC Zephyr Manual Template"
+  version: "2.0"
+
+output:
+  format: "markdown"
+
+naming:
+  platform_allowed: ["W", "M"]
+  feature_code_pattern: '^[A-Z0-9_]{2,10}$'
+  name_format: "[{platform}][{feature}] {title}"
+
+status:
+  fixed: "требуется согласование"
+
+priority:
+  allowed: ["P0", "P1", "P2", "P3"]
+  default: "P2"
+
+# Структура "карточки" тест-кейса
+fields:
+  required:
+    - name
+    - description
+    - preconditions
+    - status
+    - priority
+    - steps
+
+# Структура шага (Zephyr)
+step_fields:
+  action_required: true
+  test_data_optional: true
+  expected_required: true
+  expected_layers: ["UI", "API", "DB", "Kafka"]
+  expected_joiner: " "   # как склеивать слои в один текст
+
+markdown:
+  header: "# Manual Test Cases (Zephyr)"
+  case_title: "## {name}"
+  bullets:
+    - "- Priority: {priority}"
+    - "- Status: {status}"
+    - "- Trace: {trace}"
+  sections:
+    description: "**Description:**"
+    preconditions: "**Preconditions:**"
+    steps: "**Steps (Zephyr):**"

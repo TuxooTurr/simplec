@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SimpleC — MVP</title>
+  <style>
+    :root{
+      --bg: #0b1020;
+      --border: rgba(255,255,255,.12);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.68);
+      --accent: #6ea8ff;
+      --accent2: #9bffda;
+      --danger: #ff6b6b;
+      --ok: #70ffb3;
+      --shadow: 0 18px 50px rgba(0,0,0,.40);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, system-ui, Segoe UI, Roboto, Arial;
+      --radius: 16px;
+    }
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      font-family: var(--sans);
+      color: var(--text);
+      background:
+        radial-gradient(1200px 800px at 12% 12%, rgba(110,168,255,.25), transparent 55%),
+        radial-gradient(900px 700px at 88% 22%, rgba(112,255,179,.16), transparent 55%),
+        radial-gradient(1000px 900px at 40% 95%, rgba(180,140,255,.12), transparent 55%),
+        var(--bg);
+    }
+    .wrap{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 60px; }
+    .topbar{
+      display:flex; justify-content:space-between; align-items:center; gap:14px;
+      flex-wrap: wrap; margin-bottom: 18px;
+    }
+    .brand h1{ font-size: 22px; margin:0; letter-spacing: .2px; }
+    .brand p{ margin:6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .chip{
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      padding: 8px 10px;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      display:flex; gap:10px; align-items:center;
+      user-select:none;
+    }
+    .chip b{ color: var(--text); font-weight: 700; }
+    .grid{ display:grid; grid-template-columns: 1.1fr .9fr; gap: 16px; }
+    @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+    .card{
+      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow:hidden;
+    }
+    .card .head{
+      padding: 14px 14px 10px;
+      display:flex; align-items:center; justify-content:space-between; gap: 10px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      min-height: 44px;
+    }
+    .card .head h2{ font-size: 14px; margin:0; color: rgba(255,255,255,.86); }
+    .card .body{ padding: 14px; }
+    .row{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    @media (max-width: 560px){ .row{ grid-template-columns: 1fr; } }
+    .label-line{ display:flex; align-items:center; gap:8px; margin-bottom: 7px; }
+    .label-line label{ font-size: 12px; color: var(--muted); margin:0; }
+    .q{
+      width: 18px; height: 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(0,0,0,.12);
+      color: rgba(255,255,255,.78);
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      font-size: 12px;
+      line-height: 1;
+      cursor: help;
+      flex: 0 0 auto;
+      user-select:none;
+    }
+    .control{
+      width:100%; box-sizing:border-box;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.18);
+      color: var(--text);
+      outline: none;
+    }
+    .control:focus{
+      border-color: rgba(110,168,255,.55);
+      box-shadow: 0 0 0 4px rgba(110,168,255,.15);
+    }
+    select.control{
+      appearance: none;
+      background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255,255,255,.6) 50%),
+        linear-gradient(135deg, rgba(255,255,255,.6) 50%, transparent 50%);
+      background-position:
+        calc(100% - 18px) calc(50% - 2px),
+        calc(100% - 13px) calc(50% - 2px);
+      background-size: 6px 6px, 6px 6px;
+      background-repeat: no-repeat;
+    }
+    textarea.control{
+      min-height: 220px;
+      font-family: var(--mono);
+      line-height: 1.35;
+      resize: vertical;
+    }
+    .actions{ display:flex; gap:10px; align-items:center; flex-wrap: wrap; margin-top: 12px; }
+    .btn{
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.07);
+      color: var(--text);
+      padding: 10px 22px;
+      border-radius: 12px;
+      cursor:pointer;
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+      user-select:none;
+      height: 40px;
+      font-size: 15px;
+      text-decoration: none;
+      box-sizing: border-box;
+      transition: background .12s, border .12s, color .12s, box-shadow .12s;
+    }
+    .btn:hover{ background: rgba(255,255,255,.10); }
+    .btn.primary{
+      border-color: rgba(110,168,255,.55);
+      background: linear-gradient(180deg, rgba(110,168,255,.30), rgba(110,168,255,.12));
+    }
+    .btn-accent{
+      border: none;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      color: #182134;
+      font-weight: 800;
+      box-shadow: 0 2px 18px 0 rgba(110,168,255,.10);
+    }
+    .btn-accent:hover{
+      filter: brightness(0.95);
+      box-shadow: 0 2px 16px 2px rgba(110,168,255,.23);
+    }
+    .btn:disabled{ opacity: .6; cursor: not-allowed; }
+    .drop{
+      border: 1px dashed rgba(255,255,255,.18);
+      border-radius: 14px;
+      background: rgba(255,255,255,.04);
+      padding: 12px;
+      display:flex; align-items:center; justify-content:space-between; gap: 12px;
+    }
+    .drop strong{ font-size: 13px; }
+    .drop small{ color: var(--muted); display:block; margin-top: 4px; }
+    .msg{
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.18);
+      font-size: 13px;
+      line-height: 1.35;
+      margin-top: 12px;
+    }
+    .msg.err{ border-color: rgba(255,107,107,.40); }
+    .msg.ok{ border-color: rgba(112,255,179,.35); }
+    .msg code{ font-family: var(--mono); font-size: 12px; }
+    pre{
+      margin: 12px 0 0;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.35;
+      white-space: pre;
+      overflow:auto;
+      max-height: 560px;
+      padding: 12px;
+      border-radius: 14px;
+      background: rgba(0,0,0,.22);
+      border: 1px solid rgba(255,255,255,.10);
+    }
+    .toolbar{
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      justify-content: flex-end;
+      margin-bottom: 0;
+      margin-top: 0;
+      flex-wrap: wrap;
+    }
+    .spinner{
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: rgba(255,255,255,.9);
+      animation: spin 0.8s linear infinite;
+      display:none;
+    }
+    @keyframes spin{ to{ transform: rotate(360deg); } }
+    .toast{ font-size: 12px; color: var(--ok); display:none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <h1>SimpleC — генерация тест-кейсов (MVP)</h1>
+        <p>Вставьте требования или загрузите файл. На выходе — <b>zephyr_import.json</b> для импорта в Zephyr.</p>
+      </div>
+      <div class="chip">
+        <span>Статус:</span>
+        {% if result %}<b>Готово</b>{% elif error %}<b style="color: var(--danger);">Ошибка</b>{% else %}<b>Ожидание</b>{% endif %}
+      </div>
+    </div>
+    <div class="grid">
+      <!-- Ввод -->
+      <div class="card">
+        <div class="head">
+          <h2>Ввод</h2>
+          <div class="toolbar">
+            <div class="spinner" id="spinner"></div>
+            <span class="toast" id="toast">Скопировано</span>
+          </div>
+        </div>
+        <div class="body">
+          <form id="genForm" method="post" action="/generate" enctype="multipart/form-data">
+            <div class="row">
+              <div class="field">
+                <div class="label-line">
+                  <label for="platform">Платформа</label>
+                  <span class="q" data-tip="Выберите целевую платформу для тест-кейсов: Web [W] или Mobile [M].">?</span>
+                </div>
+                {% set plat = (form.platform if form else 'W') %}
+                <select id="platform" class="control" name="platform">
+                  <option value="W" {% if plat=='W' %}selected{% endif %}>Web [W]</option>
+                  <option value="M" {% if plat=='M' %}selected{% endif %}>Mobile [M]</option>
+                </select>
+              </div>
+              <div class="field">
+                <div class="label-line">
+                  <label for="feature">Код доработки</label>
+                  <span class="q" data-tip="Укажите суть или наименование фичи для быстрого поиска тестовых кейсов в будущем. До 50 символов, можно кириллицу.">?</span>
+                </div>
+                <input
+                  id="feature"
+                  class="control"
+                  name="feature"
+                  value="{{ (form.feature if form else '') }}"
+                  maxlength="50"
+                  placeholder="Например: Авторизация, Сброс пароля, Профиль"
+                />
+              </div>
+            </div>
+            <div class="row">
+              <div class="field">
+                <div class="label-line">
+                  <label for="llm_provider">Провайдер LLM</label>
+                  <span class="q" data-tip="Откуда брать генерацию: GigaChat / OpenAI. Для демо выберите «Демо (без LLM)» — будет генерация моков.">?</span>
+                </div>
+                {% set p = (form.llm_provider if form else 'gigachat') %}
+                <select id="llm_provider" class="control" name="llm_provider">
+                  <option value="gigachat" {% if p=='gigachat' %}selected{% endif %}>GigaChat</option>
+                  <option value="openai" {% if p=='openai' %}selected{% endif %}>OpenAI</option>
+                  <option value="mock" {% if p=='mock' %}selected{% endif %}>Демо (без LLM)</option>
+                </select>
+              </div>
+            </div>
+            <div class="field" style="margin-bottom: 12px;">
+              <div class="label-line">
+                <label>Файл требований</label>
+                <span class="q" data-tip="Можно загрузить txt/markdown. Если файл выбран — поле «Требования (текст)» можно оставить пустым.">?</span>
+              </div>
+              <div class="drop" id="dropZone">
+                <div>
+                  <strong>Перетащите файл сюда</strong>
+                  <small>или выберите вручную</small>
+                </div>
+                <input class="control" style="max-width: 320px;" type="file" name="file" id="fileInput" />
+              </div>
+            </div>
+            <div class="field">
+              <div class="label-line">
+                <label for="text">Требования (текст)</label>
+                <span class="q" data-tip="Лучше писать требования списком: один пункт — одна строка. Так качество тестов выше.">?</span>
+              </div>
+              <textarea id="text" class="control" name="text" placeholder="Например:
+Логин по email/паролю
+Ошибка при неверном пароле
+Блокировка после 5 попыток">{{ form.text if form else '' }}</textarea>
+              <div class="actions">
+                <button class="btn primary" id="genBtn" type="submit">Сгенерировать Zephyr JSON</button>
+                <button class="btn" type="button" onclick="fillExample()">Вставить пример</button>
+                <button class="btn" type="button" onclick="clearAll()">Очистить</button>
+              </div>
+            </div>
+          </form>
+          {% if error %}
+            <div class="msg err"><b>Ошибка:</b> {{ error }}</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- Результат -->
+      <div class="card">
+        <div class="head">
+          <h2>Результат</h2>
+          <div class="toolbar">
+            {% if result %}
+              <button class="btn" type="button" onclick="copyZephyr()">Скопировать JSON</button>
+              <a class="btn btn-accent" href="/download/zephyr?out_dir={{ result.out_dir }}">Скачать файл</a>
+            {% endif %}
+          </div>
+        </div>
+        <div class="body">
+          {% if result %}
+            <div class="msg ok">
+              <b>Готово.</b> Артефакты: <code>{{ result.out_dir }}</code>
+            </div>
+            <pre id="zephyrPre">{{ result.zephyr_json }}</pre>
+          {% else %}
+            <div class="msg">Тут скоро будет магия =)</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Submit state
+    const spinner = document.getElementById("spinner");
+    const genBtn = document.getElementById("genBtn");
+    const formEl = document.getElementById("genForm");
+    formEl?.addEventListener("submit", () => {
+      spinner.style.display = "inline-block";
+      genBtn.disabled = true;
+      genBtn.textContent = "Генерируем…";
+    });
+    function fillExample(){
+      const t = document.getElementById("text");
+      t.value =
+`Логин по email/паролю
+Ошибка при неверном пароле
+Блокировка после 5 попыток
+Восстановление пароля по email`;
+    }
+    function clearAll(){
+      document.getElementById("text").value = "";
+      const f = document.getElementById("fileInput");
+      if (f) f.value = "";
+    }
+    async function copyZephyr(){
+      const pre = document.getElementById("zephyrPre");
+      if (!pre) return;
+      const text = pre.innerText;
+      const toast = document.getElementById("toast");
+      try {
+        await navigator.clipboard.writeText(text);
+        if (toast){ toast.style.display = "inline"; setTimeout(() => toast.style.display = "none", 1200); }
+      } catch (e) {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (toast){ toast.style.display = "inline"; setTimeout(() => toast.style.display = "none", 1200); }
+      }
+    }
+    // Drag&drop file
+    const dropZone = document.getElementById("dropZone");
+    const fileInput = document.getElementById("fileInput");
+    dropZone?.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.style.background = "rgba(110,168,255,.12)";
+      dropZone.style.borderColor = "rgba(110,168,255,.45)";
+    });
+    dropZone?.addEventListener("dragleave", () => {
+      dropZone.style.background = "rgba(255,255,255,.04)";
+      dropZone.style.borderColor = "rgba(255,255,255,.18)";
+    });
+    dropZone?.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.style.background = "rgba(255,255,255,.04)";
+      dropZone.style.borderColor = "rgba(255,255,255,.18)";
+      if (!fileInput) return;
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) fileInput.files = files;
+    });
+    // Tooltip layer
+    const tip = document.createElement("div");
+    tip.style.position = "fixed";
+    tip.style.zIndex = "9999";
+    tip.style.maxWidth = "320px";
+    tip.style.padding = "10px 10px";
+    tip.style.borderRadius = "12px";
+    tip.style.border = "1px solid rgba(255,255,255,.14)";
+    tip.style.background = "rgba(20, 26, 48, .98)";
+    tip.style.color = "rgba(255,255,255,.92)";
+    tip.style.fontSize = "12px";
+    tip.style.lineHeight = "1.35";
+    tip.style.boxShadow = "0 14px 40px rgba(0,0,0,.45)";
+    tip.style.display = "none";
+    tip.style.pointerEvents = "none";
+    document.body.appendChild(tip);
+    function showTip(el, e){
+      const text = el.getAttribute("data-tip");
+      if (!text) return;
+      tip.textContent = text;
+      tip.style.display = "block";
+      const pad = 12;
+      const rect = tip.getBoundingClientRect();
+      let x = e.clientX + 12;
+      let y = e.clientY - rect.height - 12;
+      x = Math.min(x, window.innerWidth - rect.width - pad);
+      x = Math.max(x, pad);
+      if (y < pad) y = e.clientY + 14;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+    }
+    function hideTip(){ tip.style.display = "none"; }
+    document.querySelectorAll(".q[data-tip]").forEach((el) => {
+      el.addEventListener("mousemove", (e) => showTip(el, e));
+      el.addEventListener("mouseenter", (e) => showTip(el, e));
+      el.addEventListener("mouseleave", hideTip);
+    });
+  </script>
+</body>
+</html>

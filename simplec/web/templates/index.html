@@ -12,8 +12,6 @@
       --muted: rgba(255,255,255,.68);
       --accent: #6ea8ff;
       --accent2: #9bffda;
-      --danger: #ff6b6b;
-      --ok: #70ffb3;
       --shadow: 0 18px 50px rgba(0,0,0,.40);
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       --sans: -apple-system, system-ui, Segoe UI, Roboto, Arial;
@@ -31,72 +29,55 @@
         var(--bg);
     }
     .wrap{ max-width: 1120px; margin: 0 auto; padding: 28px 18px 60px; }
-    .topbar{
-      display:flex; justify-content:space-between; align-items:center; gap:14px;
-      flex-wrap: wrap; margin-bottom: 18px;
-    }
+    .topbar{ display:flex; justify-content:space-between; align-items:center; gap:14px; flex-wrap: wrap; margin-bottom: 18px; }
     .brand h1{ font-size: 22px; margin:0; letter-spacing: .2px; }
     .brand p{ margin:6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.35; }
-    .chip{
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,.04);
-      padding: 8px 10px;
-      border-radius: 999px;
-      color: var(--muted);
-      font-size: 12px;
-      display:flex; gap:10px; align-items:center;
-      user-select:none;
-    }
+    .chip{ border: 1px solid var(--border); background: rgba(255,255,255,.04); padding: 8px 10px; border-radius: 999px; color: var(--muted); font-size: 12px; display:flex; gap:10px; align-items:center; user-select:none; }
     .chip b{ color: var(--text); font-weight: 700; }
-    .grid{ display:grid; grid-template-columns: 1.1fr .9fr; gap: 16px; }
+
+    .grid{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      align-items: stretch;
+    }
     @media (max-width: 980px){ .grid{ grid-template-columns: 1fr; } }
+
     .card{
       background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.04));
       border: 1px solid var(--border);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      overflow:hidden;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
     }
     .card .head{
       padding: 14px 14px 10px;
       display:flex; align-items:center; justify-content:space-between; gap: 10px;
       border-bottom: 1px solid rgba(255,255,255,.08);
-      min-height: 44px;
+      min-height: 48px;
     }
-    .card .head h2{ font-size: 14px; margin:0; color: rgba(255,255,255,.86); }
-    .card .body{ padding: 14px; }
-    .row{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+    .card .head h1{ font-size: 20px; margin:0; color: rgba(255,255,255,.9); letter-spacing:.2px; }
+    .card .body{ padding: 14px; display:flex; flex-direction: column; gap: 16px; flex: 1; }
+
+    .row{ display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     @media (max-width: 560px){ .row{ grid-template-columns: 1fr; } }
-    .label-line{ display:flex; align-items:center; gap:8px; margin-bottom: 7px; }
-    .label-line label{ font-size: 12px; color: var(--muted); margin:0; }
-    .q{
-      width: 18px; height: 18px;
-      border-radius: 999px;
-      border: 1px solid rgba(255,255,255,.18);
-      background: rgba(0,0,0,.12);
-      color: rgba(255,255,255,.78);
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      font-size: 12px;
-      line-height: 1;
-      cursor: help;
-      flex: 0 0 auto;
-      user-select:none;
-    }
+
+    .field{ display: flex; flex-direction: column; gap: 6px; }
+    .field label{ font-size: 14px; color: var(--muted); margin:0; cursor: help; }
+
     .control{
       width:100%; box-sizing:border-box;
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,.12);
       background: rgba(0,0,0,.18);
       color: var(--text);
       outline: none;
+      font-size: 14px;
     }
-    .control:focus{
-      border-color: rgba(110,168,255,.55);
-      box-shadow: 0 0 0 4px rgba(110,168,255,.15);
-    }
+    .control:focus{ border-color: rgba(110,168,255,.55); box-shadow: 0 0 0 4px rgba(110,168,255,.15); }
     select.control{
       appearance: none;
       background-image:
@@ -108,324 +89,246 @@
       background-size: 6px 6px, 6px 6px;
       background-repeat: no-repeat;
     }
-    textarea.control{
-      min-height: 220px;
-      font-family: var(--mono);
-      line-height: 1.35;
-      resize: vertical;
-    }
-    .actions{ display:flex; gap:10px; align-items:center; flex-wrap: wrap; margin-top: 12px; }
-    .btn{
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(255,255,255,.07);
-      color: var(--text);
-      padding: 10px 22px;
-      border-radius: 12px;
-      cursor:pointer;
-      display:inline-flex;
-      align-items:center;
-      gap:10px;
-      user-select:none;
-      height: 40px;
-      font-size: 15px;
-      text-decoration: none;
-      box-sizing: border-box;
-      transition: background .12s, border .12s, color .12s, box-shadow .12s;
-    }
-    .btn:hover{ background: rgba(255,255,255,.10); }
-    .btn.primary{
-      border-color: rgba(110,168,255,.55);
-      background: linear-gradient(180deg, rgba(110,168,255,.30), rgba(110,168,255,.12));
-    }
-    .btn-accent{
-      border: none;
-      background: linear-gradient(90deg, var(--accent), var(--accent2));
-      color: #182134;
-      font-weight: 800;
-      box-shadow: 0 2px 18px 0 rgba(110,168,255,.10);
-    }
-    .btn-accent:hover{
-      filter: brightness(0.95);
-      box-shadow: 0 2px 16px 2px rgba(110,168,255,.23);
-    }
-    .btn:disabled{ opacity: .6; cursor: not-allowed; }
+    textarea.control{ min-height: 180px; font-family: var(--mono); line-height: 1.35; resize: vertical; }
+
     .drop{
       border: 1px dashed rgba(255,255,255,.18);
       border-radius: 14px;
       background: rgba(255,255,255,.04);
       padding: 12px;
       display:flex; align-items:center; justify-content:space-between; gap: 12px;
+      cursor: pointer;
+      transition: background .15s, border-color .15s;
     }
-    .drop strong{ font-size: 13px; }
-    .drop small{ color: var(--muted); display:block; margin-top: 4px; }
-    .msg{
-      padding: 10px 12px;
-      border-radius: 12px;
+    .drop strong{ font-size: 12px; font-weight: 600; }
+    .drop .filename{ margin-top:6px; color: var(--muted); font-size:12px; }
+    .drop.dragover{ border-color: rgba(110,168,255,.55); background: rgba(110,168,255,.10); }
+
+    .actions{ display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .btn{
       border: 1px solid rgba(255,255,255,.14);
-      background: rgba(0,0,0,.18);
-      font-size: 13px;
-      line-height: 1.35;
-      margin-top: 12px;
+      background: rgba(255,255,255,.07);
+      color: var(--text);
+      padding: 8px 18px;
+      border-radius: 10px;
+      cursor:pointer;
+      display:inline-flex; align-items:center; gap:10px;
+      user-select:none;
+      height: 36px;
+      font-size: 14px;
+      text-decoration: none;
+      box-sizing: border-box;
+      transition: background .12s, border .12s, color .12s, box-shadow .12s;
     }
-    .msg.err{ border-color: rgba(255,107,107,.40); }
-    .msg.ok{ border-color: rgba(112,255,179,.35); }
-    .msg code{ font-family: var(--mono); font-size: 12px; }
-    pre{
-      margin: 12px 0 0;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      line-height: 1.35;
-      white-space: pre;
-      overflow:auto;
-      max-height: 560px;
-      padding: 12px;
+    .btn:hover{ background: rgba(255,255,255,.10); }
+    .btn.primary{ border-color: rgba(110,168,255,.55); background: linear-gradient(180deg, rgba(110,168,255,.30), rgba(110,168,255,.12)); }
+    .btn-accent{ border: none; background: linear-gradient(90deg, var(--accent), var(--accent2)); color: #182134; font-weight: 800; box-shadow: 0 2px 18px 0 rgba(110,168,255,.10); }
+    .btn-demo{ background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.10); color: rgba(255,255,255,.86); }
+
+    .result-body{ display:flex; flex-direction: column; gap: 12px; flex: 1; }
+    .preview{
+      flex: 1;
+      min-height: 200px;
+      max-height: 600px;
+      overflow: auto;
       border-radius: 14px;
       background: rgba(0,0,0,.22);
       border: 1px solid rgba(255,255,255,.10);
     }
-    .toolbar{
-      display: flex;
-      gap: 14px;
-      align-items: center;
-      justify-content: flex-end;
-      margin-bottom: 0;
-      margin-top: 0;
-      flex-wrap: wrap;
+    .preview pre{
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.35;
+      white-space: pre;
+      padding: 12px;
+      color: var(--text);
     }
-    .spinner{
-      width: 14px; height: 14px;
-      border-radius: 50%;
-      border: 2px solid rgba(255,255,255,.25);
-      border-top-color: rgba(255,255,255,.9);
-      animation: spin 0.8s linear infinite;
-      display:none;
-    }
-    @keyframes spin{ to{ transform: rotate(360deg); } }
-    .toast{ font-size: 12px; color: var(--ok); display:none; }
+    .preview::-webkit-scrollbar{ width: 8px; height: 8px; }
+    .preview::-webkit-scrollbar-track{ background: rgba(255,255,255,.05); border-radius: 4px; }
+    .preview::-webkit-scrollbar-thumb{ background: rgba(110,168,255,.4); border-radius: 4px; }
+    .preview::-webkit-scrollbar-thumb:hover{ background: rgba(110,168,255,.6); }
+    .preview::-webkit-scrollbar-corner{ background: transparent; }
+
+    .msg{ padding: 12px; border-radius: 10px; background: rgba(255,255,255,.05); color: var(--muted); }
+    .msg.err{ background: rgba(255,80,80,.15); color: #ff9090; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="topbar">
       <div class="brand">
-        <h1>SimpleC — генерация тест-кейсов (MVP)</h1>
-        <p>Вставьте требования или загрузите файл. На выходе — <b>zephyr_import.json</b> для импорта в Zephyr.</p>
+        <h1>SimpleC — MVP</h1>
+        <p>Генерация manual тестов для Zephyr из требований</p>
       </div>
-      <div class="chip">
-        <span>Статус:</span>
-        {% if result %}<b>Готово</b>{% elif error %}<b style="color: var(--danger);">Ошибка</b>{% else %}<b>Ожидание</b>{% endif %}
-      </div>
+      <div class="chip">Провайдер по умолчанию: <b>{{ form.llm_provider }}</b></div>
     </div>
+
     <div class="grid">
-      <!-- Ввод -->
-      <div class="card">
-        <div class="head">
-          <h2>Ввод</h2>
-          <div class="toolbar">
-            <div class="spinner" id="spinner"></div>
-            <span class="toast" id="toast">Скопировано</span>
-          </div>
-        </div>
+      <form id="form-main" class="card" method="post" action="/generate" enctype="multipart/form-data">
+        <div class="head"><h1>Исходные данные</h1></div>
         <div class="body">
-          <form id="genForm" method="post" action="/generate" enctype="multipart/form-data">
-            <div class="row">
-              <div class="field">
-                <div class="label-line">
-                  <label for="platform">Платформа</label>
-                  <span class="q" data-tip="Выберите целевую платформу для тест-кейсов: Web [W] или Mobile [M].">?</span>
-                </div>
-                {% set plat = (form.platform if form else 'W') %}
-                <select id="platform" class="control" name="platform">
-                  <option value="W" {% if plat=='W' %}selected{% endif %}>Web [W]</option>
-                  <option value="M" {% if plat=='M' %}selected{% endif %}>Mobile [M]</option>
-                </select>
-              </div>
-              <div class="field">
-                <div class="label-line">
-                  <label for="feature">Код доработки</label>
-                  <span class="q" data-tip="Укажите суть или наименование фичи для быстрого поиска тестовых кейсов в будущем. До 50 символов, можно кириллицу.">?</span>
-                </div>
-                <input
-                  id="feature"
-                  class="control"
-                  name="feature"
-                  value="{{ (form.feature if form else '') }}"
-                  maxlength="50"
-                  placeholder="Например: Авторизация, Сброс пароля, Профиль"
-                />
-              </div>
-            </div>
-            <div class="row">
-              <div class="field">
-                <div class="label-line">
-                  <label for="llm_provider">Провайдер LLM</label>
-                  <span class="q" data-tip="Откуда брать генерацию: GigaChat / OpenAI. Для демо выберите «Демо (без LLM)» — будет генерация моков.">?</span>
-                </div>
-                {% set p = (form.llm_provider if form else 'gigachat') %}
-                <select id="llm_provider" class="control" name="llm_provider">
-                  <option value="gigachat" {% if p=='gigachat' %}selected{% endif %}>GigaChat</option>
-                  <option value="openai" {% if p=='openai' %}selected{% endif %}>OpenAI</option>
-                  <option value="mock" {% if p=='mock' %}selected{% endif %}>Демо (без LLM)</option>
-                </select>
-              </div>
-            </div>
-            <div class="field" style="margin-bottom: 12px;">
-              <div class="label-line">
-                <label>Файл требований</label>
-                <span class="q" data-tip="Можно загрузить txt/markdown. Если файл выбран — поле «Требования (текст)» можно оставить пустым.">?</span>
-              </div>
-              <div class="drop" id="dropZone">
-                <div>
-                  <strong>Перетащите файл сюда</strong>
-                  <small>или выберите вручную</small>
-                </div>
-                <input class="control" style="max-width: 320px;" type="file" name="file" id="fileInput" />
-              </div>
+          <div class="row">
+            <div class="field">
+              <label for="platform" title="W — Web, M — Mobile">Платформа</label>
+              <select class="control" id="platform" name="platform">
+                <option value="W" {{ 'selected' if (form.platform or '')=='W' else '' }}>W — Web</option>
+                <option value="M" {{ 'selected' if (form.platform or '')=='M' else '' }}>M — Mobile</option>
+              </select>
             </div>
             <div class="field">
-              <div class="label-line">
-                <label for="text">Требования (текст)</label>
-                <span class="q" data-tip="Лучше писать требования списком: один пункт — одна строка. Так качество тестов выше.">?</span>
-              </div>
-              <textarea id="text" class="control" name="text" placeholder="Например:
-Логин по email/паролю
-Ошибка при неверном пароле
-Блокировка после 5 попыток">{{ form.text if form else '' }}</textarea>
-              <div class="actions">
-                <button class="btn primary" id="genBtn" type="submit">Сгенерировать Zephyr JSON</button>
-                <button class="btn" type="button" onclick="fillExample()">Вставить пример</button>
-                <button class="btn" type="button" onclick="clearAll()">Очистить</button>
-              </div>
+              <label for="feature" title="Код фичи, например AUTH">Фича</label>
+              <input class="control" type="text" id="feature" name="feature" value="{{ form.feature or '' }}" placeholder="AUTH" />
             </div>
-          </form>
+          </div>
+
+          <div class="row">
+            <div class="field">
+              <label for="llm_provider" title="mock — оффлайн генерация; gigachat/openai — реальные LLM">LLM провайдер</label>
+              <select class="control" id="llm_provider" name="llm_provider">
+                <option value="mock" {{ 'selected' if (form.llm_provider or '')=='mock' else '' }}>mock</option>
+                <option value="gigachat" {{ 'selected' if (form.llm_provider or '')=='gigachat' else '' }}>gigachat</option>
+                <option value="openai" {{ 'selected' if (form.llm_provider or '')=='openai' else '' }}>openai</option>
+              </select>
+            </div>
+            <div></div>
+          </div>
+
+          <div class="field">
+            <label for="text" title="Вставьте чистый текст требований.">Требования (текст)</label>
+            <textarea class="control" id="text" name="text" placeholder="Вставьте требования...">{{ form.text or '' }}</textarea>
+          </div>
+
+          <div class="field">
+            <label for="file" title="Поддерживается текст UTF-8: .txt, .md, .json, .yaml">Файл с требованиями</label>
+            <div class="drop" id="dropzone">
+              <div style="flex:1 1 auto;">
+                <strong>Перетащите файл сюда</strong>
+                <div class="filename" id="file-name">Файл не выбран</div>
+              </div>
+              <input type="file" id="file" name="file" accept=".txt,.md,.markdown,.json,.yaml,.yml,.csv,.tsv" style="display:none" />
+              <button type="button" class="btn" id="browse-btn">Выберите файл</button>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-accent" type="submit" id="submit-btn">Сгенерировать</button>
+            <button class="btn btn-demo" type="button" id="demo-btn" title="Вставить демо-текст и сгенерировать с моками">Демо</button>
+          </div>
+
           {% if error %}
-            <div class="msg err"><b>Ошибка:</b> {{ error }}</div>
+          <div class="msg err" role="alert">{{ error }}</div>
           {% endif %}
         </div>
-      </div>
+      </form>
 
-      <!-- Результат -->
       <div class="card">
-        <div class="head">
-          <h2>Результат</h2>
-          <div class="toolbar">
-            {% if result %}
-              <button class="btn" type="button" onclick="copyZephyr()">Скопировать JSON</button>
-              <a class="btn btn-accent" href="/download/zephyr?out_dir={{ result.out_dir }}">Скачать файл</a>
-            {% endif %}
-          </div>
-        </div>
-        <div class="body">
+        <div class="head"><h1>Результат</h1></div>
+        <div class="body result-body">
           {% if result %}
-            <div class="msg ok">
-              <b>Готово.</b> Артефакты: <code>{{ result.out_dir }}</code>
+            <div class="actions">
+              <a class="btn primary" id="download-btn" href="/download/zephyr?out_dir={{ result.out_dir|e }}">Скачать файл JSON</a>
+              <button class="btn" id="copy-btn" type="button">Копировать в буфер</button>
             </div>
-            <pre id="zephyrPre">{{ result.zephyr_json }}</pre>
+            {% if result.zephyr_json %}
+              <div class="preview">
+                <pre id="zephyr-preview">{{ result.zephyr_json }}</pre>
+              </div>
+            {% endif %}
           {% else %}
-            <div class="msg">Тут скоро будет магия =)</div>
+            <div class="msg">Здесь появятся артефакты после генерации.</div>
           {% endif %}
         </div>
       </div>
     </div>
   </div>
+
   <script>
-    // Submit state
-    const spinner = document.getElementById("spinner");
-    const genBtn = document.getElementById("genBtn");
-    const formEl = document.getElementById("genForm");
-    formEl?.addEventListener("submit", () => {
-      spinner.style.display = "inline-block";
-      genBtn.disabled = true;
-      genBtn.textContent = "Генерируем…";
+  (function(){
+    const dz = document.getElementById('dropzone');
+    const fileInput = document.getElementById('file');
+    const browseBtn = document.getElementById('browse-btn');
+    const fileName = document.getElementById('file-name');
+    const textArea = document.getElementById('text');
+    const demoBtn = document.getElementById('demo-btn');
+    const form = document.getElementById('form-main');
+    const provider = document.getElementById('llm_provider');
+
+    function setFile(f){
+      if (!f) return;
+      const dt = new DataTransfer();
+      dt.items.add(f);
+      fileInput.files = dt.files;
+      fileName.textContent = f.name || 'Файл выбран';
+    }
+
+    function onDrag(e){ e.preventDefault(); e.stopPropagation(); dz.classList.add('dragover'); }
+    function onLeave(e){ e.preventDefault(); e.stopPropagation(); dz.classList.remove('dragover'); }
+
+    dz.addEventListener('click', function(e){ if (e.target !== browseBtn) fileInput.click(); });
+    browseBtn.addEventListener('click', function(e){ e.preventDefault(); fileInput.click(); });
+    fileInput.addEventListener('change', function(){
+      const f = fileInput.files && fileInput.files[0];
+      fileName.textContent = f ? (f.name || 'Файл выбран') : 'Файл не выбран';
     });
-    function fillExample(){
-      const t = document.getElementById("text");
-      t.value =
-`Логин по email/паролю
-Ошибка при неверном пароле
-Блокировка после 5 попыток
-Восстановление пароля по email`;
-    }
-    function clearAll(){
-      document.getElementById("text").value = "";
-      const f = document.getElementById("fileInput");
-      if (f) f.value = "";
-    }
-    async function copyZephyr(){
-      const pre = document.getElementById("zephyrPre");
-      if (!pre) return;
-      const text = pre.innerText;
-      const toast = document.getElementById("toast");
-      try {
-        await navigator.clipboard.writeText(text);
-        if (toast){ toast.style.display = "inline"; setTimeout(() => toast.style.display = "none", 1200); }
-      } catch (e) {
-        const ta = document.createElement("textarea");
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-        if (toast){ toast.style.display = "inline"; setTimeout(() => toast.style.display = "none", 1200); }
+
+    ['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, onDrag));
+    ['dragleave','dragend'].forEach(ev => dz.addEventListener(ev, onLeave));
+
+    dz.addEventListener('drop', function(e){
+      e.preventDefault(); e.stopPropagation();
+      dz.classList.remove('dragover');
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length){ setFile(files[0]); return; }
+      const items = e.dataTransfer && e.dataTransfer.items;
+      if (items && items.length){
+        for (const it of items){
+          if (it.kind === 'string'){
+            it.getAsString(function(s){
+              textArea.value = (textArea.value ? textArea.value + '\n' : '') + s;
+              textArea.focus();
+            });
+            return;
+          }
+        }
       }
+    });
+
+    if (demoBtn){
+      demoBtn.addEventListener('click', function(){
+        provider.value = 'mock';
+        const demo = [
+          'REQ-1: Пользователь может войти по email и паролю.',
+          'REQ-2: При включённой 2FA требуется код из приложения.',
+          'REQ-3: После 5 неудачных попыток входа — временная блокировка на 15 минут.',
+        ].join('\n');
+        textArea.value = demo;
+        if (fileInput.value) { fileInput.value = ''; fileName.textContent = 'Файл не выбран'; }
+        form.submit();
+      });
     }
-    // Drag&drop file
-    const dropZone = document.getElementById("dropZone");
-    const fileInput = document.getElementById("fileInput");
-    dropZone?.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      dropZone.style.background = "rgba(110,168,255,.12)";
-      dropZone.style.borderColor = "rgba(110,168,255,.45)";
-    });
-    dropZone?.addEventListener("dragleave", () => {
-      dropZone.style.background = "rgba(255,255,255,.04)";
-      dropZone.style.borderColor = "rgba(255,255,255,.18)";
-    });
-    dropZone?.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dropZone.style.background = "rgba(255,255,255,.04)";
-      dropZone.style.borderColor = "rgba(255,255,255,.18)";
-      if (!fileInput) return;
-      const files = e.dataTransfer.files;
-      if (files && files.length > 0) fileInput.files = files;
-    });
-    // Tooltip layer
-    const tip = document.createElement("div");
-    tip.style.position = "fixed";
-    tip.style.zIndex = "9999";
-    tip.style.maxWidth = "320px";
-    tip.style.padding = "10px 10px";
-    tip.style.borderRadius = "12px";
-    tip.style.border = "1px solid rgba(255,255,255,.14)";
-    tip.style.background = "rgba(20, 26, 48, .98)";
-    tip.style.color = "rgba(255,255,255,.92)";
-    tip.style.fontSize = "12px";
-    tip.style.lineHeight = "1.35";
-    tip.style.boxShadow = "0 14px 40px rgba(0,0,0,.45)";
-    tip.style.display = "none";
-    tip.style.pointerEvents = "none";
-    document.body.appendChild(tip);
-    function showTip(el, e){
-      const text = el.getAttribute("data-tip");
-      if (!text) return;
-      tip.textContent = text;
-      tip.style.display = "block";
-      const pad = 12;
-      const rect = tip.getBoundingClientRect();
-      let x = e.clientX + 12;
-      let y = e.clientY - rect.height - 12;
-      x = Math.min(x, window.innerWidth - rect.width - pad);
-      x = Math.max(x, pad);
-      if (y < pad) y = e.clientY + 14;
-      tip.style.left = x + "px";
-      tip.style.top = y + "px";
+
+    const copyBtn = document.getElementById('copy-btn');
+    if (copyBtn){
+      copyBtn.addEventListener('click', async function(){
+        const pre = document.getElementById('zephyr-preview');
+        if (!pre) return;
+        const text = pre.innerText || pre.textContent || '';
+        try{
+          await navigator.clipboard.writeText(text);
+          copyBtn.textContent = 'Скопировано';
+          setTimeout(()=> copyBtn.textContent = 'Копировать в буфер', 1500);
+        }catch(e){
+          const ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); copyBtn.textContent = 'Скопировано'; }
+          catch(e2){}
+          document.body.removeChild(ta);
+          setTimeout(()=> copyBtn.textContent = 'Копировать в буфер', 1500);
+        }
+      });
     }
-    function hideTip(){ tip.style.display = "none"; }
-    document.querySelectorAll(".q[data-tip]").forEach((el) => {
-      el.addEventListener("mousemove", (e) => showTip(el, e));
-      el.addEventListener("mouseenter", (e) => showTip(el, e));
-      el.addEventListener("mouseleave", hideTip);
-    });
+  })();
   </script>
 </body>
 </html>

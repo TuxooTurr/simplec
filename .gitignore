@@ -1,10 +1,26 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
-.env
-*.sqlite3
+*.py[cod]
 *.log
-.DS_Store
+*.sqlite*
+.venv/
+venv/
+
+# Editors/OS
 .idea/
 .vscode/
+.DS_Store
+
+# Build/Dist
+build/
+dist/
+*.egg-info/
+
+# App artifacts
 out/
+*.zip
+simplec-autotests.zip
+gigachat_token.py.save
+
+# Env
+.env

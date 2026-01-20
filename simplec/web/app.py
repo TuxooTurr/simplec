@@ -5,9 +5,17 @@ import os
 from pathlib import Path
 from typing import Optional
 
+# .env loader (не обязателен, но если установлен — подхватим локальные переменные)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv()
+except Exception:
+    pass
+
 from fastapi import FastAPI, Form, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from simplec.app.pipeline import PipelineInput, run_pipeline
 
@@ -30,6 +38,51 @@ def index(request: Request):
         "text": "",
     }
     return templates.TemplateResponse("index.html", {"request": request, "result": None, "error": None, "form": form})
+
+
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz():
+    return PlainTextResponse("ok")
+
+
+@app.get("/api/health")
+def api_health():
+    return {
+        "status": "ok",
+        "app": app.title,
+        "env": {
+            "LLM_PROVIDER": os.getenv("LLM_PROVIDER", ""),
+            "USE_REAL_LLM": os.getenv("USE_REAL_LLM", ""),
+        },
+    }
+
+
+class ApiGenerateRequest(BaseModel):
+    platform: str = "W"
+    feature: str = "AUTH"
+    use_real_llm: str = "1"
+    llm_provider: str = "gigachat"
+    text: str = ""
+
+
+@app.post("/api/generate")
+def api_generate(req: ApiGenerateRequest):
+    # Настройки провайдера
+    if req.llm_provider == "mock":
+        os.environ["USE_REAL_LLM"] = "0"
+        os.environ["LLM_PROVIDER"] = "gigachat"
+    else:
+        os.environ["USE_REAL_LLM"] = "1" if req.use_real_llm == "1" else "0"
+        os.environ["LLM_PROVIDER"] = req.llm_provider
+
+    if not (req.text or "").strip():
+        return {"error": "text is required"}, 400
+
+    out = run_pipeline(PipelineInput(text=req.text, platform=req.platform.strip(), feature=req.feature.strip()))
+    return {
+        "out_dir": out.out_dir,
+        "zephyr_import": out.zephyr_import or {},
+    }
 
 
 @app.post("/generate", response_class=HTMLResponse)

@@ -1,5 +1,0 @@
-import base64import uuidimport requests# Вставь свои значенияauthorization_key = "MDE5YmQxMjYtYWMwYi03MGY1LTk4ZTMtMDcyNGMzOTU2OWFkOjhmZmY3YmM0LTVkZDQtNDkwMC04Mjk0LWMzNTIzNDVmZjEyNA=="client_secret = "<8fff7bc4-5dd4-4900-8294-c352345ff124>"  # если его нет — оставь просто ''scope = "GIGACHAT_API_PERS"  # или "GIGACHAT_API_B2B"# Если есть client_secret, то обязательно "key:secret", если нет — просто "key"if client_secret:    upair = f"{authorization_key}:{client_secret}"else:    upair = f"{authorization_key}"basic = base64.b64encode(upair.encode()).decode()headers = {    "Content-Type": "application/x-www-form-urlencoded",    "Accept": "application/json",    "RqUID": str(uuid.uuid4()),    "Authorization": f"Basic {basic}",}data = {    "scope": scope}resp = requests.post('https://ngw.devices.sberbank.ru:9443/api/v2/oauth', headers=headers, data=data)resp.raise_for_status()result = resp.json()access_token = result["access_token"]print("Access token is:", access_token)cd /Users/stefanzastylov/Documents/SimpleC
-
-cd /Users/stefanzastylov/Documents/Simple
-cd /Users/stefanzastylov/Documents/SimpleC
-

@@ -1,26 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*.log
-*.sqlite*
 .venv/
-venv/
-
-# Editors/OS
-.idea/
-.vscode/
-.DS_Store
-
-# Build/Dist
-build/
-dist/
-*.egg-info/
-
-# App artifacts
-out/
-*.zip
-simplec-autotests.zip
-gigachat_token.py.save
-
-# Env
+__pycache__/
+*.pyc
 .env
+db/chroma_data/
+db/chroma_db/
+out/
+*.egg-info/
+.DS_Store
+.cache/
+*.save
+feedback.json

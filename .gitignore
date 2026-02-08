@@ -4,6 +4,7 @@ __pycache__/
 .env
 db/chroma_data/
 db/chroma_db/
+db/logs/
 out/
 *.egg-info/
 .DS_Store

@@ -93,7 +93,7 @@ class TestGeneratorAgent:
             self.llm = GigaChat(
                 credentials=self.auth_key,
                 scope=self.scope,
-                verify_ssl_certs=False
+                verify_ssl_certs=True
             )
         else:
             self.llm = None

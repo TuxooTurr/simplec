@@ -1,18 +1,18 @@
 """
-Агент-генератор тест-кейсов.
-Принимает требование -> ищет похожие эталоны -> генерирует тест-кейсы в XML (Zephyr).
+test_generator — агент генерации тест-кейсов.
+RAG + GigaChat для создания XML в формате Zephyr Scale.
 """
 
-from __future__ import annotations
-
 import os
-import json
 import re
+import time
 from pathlib import Path
 from typing import List, Dict, Optional
 
 from dotenv import load_dotenv
 from gigachat import GigaChat
+from agents.llm_client import LLMClient, Message
+from agents.prompt_templates import PromptTemplateManager
 from gigachat.models import Chat, Messages, MessagesRole
 
 import sys
@@ -24,31 +24,53 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 class TestGeneratorAgent:
 
-    SYSTEM_PROMPT = """Ты — старший QA-инженер в крупном банке. Твоя задача — генерировать тест-кейсы по требованиям.
+    SYSTEM_PROMPT = """Ты — старший QA-инженер в крупном банке. Генерируй тест-кейсы по требованиям.
 
-ПРАВИЛА:
-1. Генерируй тест-кейсы ТОЛЬКО в формате XML для Zephyr Scale (TM4J)
-2. Каждый тест-кейс ДОЛЖЕН содержать:
-   - name: формат "ПЛАТФОРМА [ФИЧА] Краткое описание"
-   - objective: что именно проверяем
-   - precondition: предусловия с конкретными данными
-   - steps: шаги с разделением проверок на UI/API/БД
-3. В expectedResult используй HTML-разметку:
-   - <strong>UI</strong>, <strong>API</strong>, <strong>БД</strong> для категорий
-   - <ul><li> для списка проверок
-4. В precondition и testData указывай КОНКРЕТНЫЕ значения (ID, статусы, имена)
-5. Покрывай ВСЕ ветвления логики из требования (if/else/enum значения)
-6. Для каждого enum-значения создавай ОТДЕЛЬНЫЙ тест-кейс
-7. Учитывай граничные значения и негативные сценарии
-8. customFields ВСЕГДА включают: Автоматизирован, Вид тестирования, Крит. регресс, Домен, Команда, АС
+КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ НАЗВАНИЙ:
+1. Название ДОЛЖНО быть ПОНЯТНЫМ и ЧИТАЕМЫМ на русском языке
+2. Формат: "ПЛАТФОРМА [Функция] Понятное описание действия"
+3. ПРИМЕРЫ ХОРОШИХ названий:
+   - "W [Транскрибация] Проверка успешной транскрибации звонка"
+   - "M [Авторизация] Вход с корректным паролем"
+   - "A [Переводы] Перевод между своими счетами"
+4. ЗАПРЕЩЕНО: аббревиатуры ТКС, непонятные сокращения, транслит
 
-ФОРМАТ ОТВЕТА — только валидный XML без markdown-обёрток:
+КРИТИЧЕСКИЕ ПРАВИЛА ДЛЯ ШАГОВ:
+1. ШАГ 0 ОБЯЗАТЕЛЬНО — Начальные действия/Подготовка:
+   - Описание: "Подготовка тестовых данных и начальные действия"
+   - testData: ВСЕ конкретные данные (ID, логины, суммы, статусы)
+   - expectedResult: "Данные подготовлены, система готова к тестированию"
+
+2. КАЖДЫЙ последующий шаг ДОЛЖЕН содержать:
+   - description: ЧТО делает тестировщик (глагол в повелительном наклонении)
+   - testData: КОНКРЕТНЫЕ значения для этого шага
+   - expectedResult: ЧТО должно произойти (с разделением UI/API/БД)
+
+3. Шаги должны быть АТОМАРНЫМИ — одно действие = один шаг
+
+ФОРМАТ expectedResult с HTML:
+<strong>UI:</strong>
+<ul><li>Отображается сообщение "Операция успешна"</li></ul>
+<strong>API:</strong>
+<ul><li>Статус 200, поле status="SUCCESS"</li></ul>
+<strong>БД:</strong>
+<ul><li>Запись в таблице transactions создана</li></ul>
+
+ПОКРЫТИЕ ТРЕБОВАНИЙ:
+- Все ветвления if/else — отдельные кейсы
+- Все enum-значения — отдельные кейсы
+- Граничные значения (мин/макс)
+- Негативные сценарии (ошибки, пустые данные)
+
+ФОРМАТ XML (Zephyr Scale TM4J):
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <testCases>
   <testCase>
-    <name><![CDATA[...]]></name>
-    <objective><![CDATA[...]]></objective>
-    <precondition><![CDATA[...]]></precondition>
+    <name><![CDATA[W [Функция] Понятное название теста]]></name>
+    <objective><![CDATA[Цель: проверить что именно]]></objective>
+    <precondition><![CDATA[1. Пользователь авторизован
+2. Доступ к функции есть
+3. Тестовые данные созданы]]></precondition>
     <priority><![CDATA[Normal]]></priority>
     <status><![CDATA[Черновик]]></status>
     <customFields>
@@ -75,25 +97,46 @@ class TestGeneratorAgent:
     <testScript type="steps">
       <steps>
         <step index="0">
-          <description><![CDATA[...]]></description>
-          <expectedResult><![CDATA[<strong>UI</strong><ul><li>...</li></ul>]]></expectedResult>
-          <testData><![CDATA[...]]></testData>
+          <description><![CDATA[Подготовка тестовых данных и начальные действия]]></description>
+          <testData><![CDATA[user_id=12345, account="40817810000000000001", amount=1000.00]]></testData>
+          <expectedResult><![CDATA[Данные подготовлены, система готова к тестированию]]></expectedResult>
+        </step>
+        <step index="1">
+          <description><![CDATA[Открыть страницу функции]]></description>
+          <testData><![CDATA[URL: /app/feature]]></testData>
+          <expectedResult><![CDATA[<strong>UI:</strong><ul><li>Страница загружена</li><li>Форма отображается</li></ul>]]></expectedResult>
         </step>
       </steps>
     </testScript>
   </testCase>
-</testCases>"""
+</testCases>
 
-    def __init__(self, auth_key: Optional[str] = None):
+ОТВЕЧАЙ ТОЛЬКО ВАЛИДНЫМ XML БЕЗ MARKDOWN-ОБЁРТОК!
+
+КРИТИЧЕСКИ ВАЖНО:
+- Генерируй НЕ БОЛЕЕ 5-7 тест-кейсов за раз
+- ВСЕГДА завершай XML тегом </testCases>
+- КАЖДЫЙ тег должен быть закрыт: </testCase>, </steps>, </testScript>
+- КАЖДАЯ CDATA секция должна быть закрыта: ]]>
+- НЕ ОБРЫВАЙ ответ посередине
+- Лучше меньше тест-кейсов, но полностью завершённых"""
+
+    def __init__(self, auth_key: Optional[str] = None, provider: str = "gigachat"):
         self.auth_key = auth_key or os.getenv("GIGACHAT_AUTH_KEY", "")
         self.scope = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+        self.provider = provider
         self.vs = VectorStore()
-
+        
+        # Универсальный LLM клиент
+        self.llm_client = LLMClient(provider)
+        
+        # GigaChat для обратной совместимости
         if self.auth_key:
             self.llm = GigaChat(
+                timeout=120,
                 credentials=self.auth_key,
                 scope=self.scope,
-                verify_ssl_certs=True
+                verify_ssl_certs=False
             )
         else:
             self.llm = None
@@ -102,175 +145,187 @@ class TestGeneratorAgent:
         self,
         requirement: str,
         platform: str = "W",
-        feature: str = "",
-        domain: str = "Omega",
-        team: str = "Канальный агент и агенты эксперты [00G10014]",
-        system: str = "РМДС [CI04663743]",
-        folder: str = "Новая ТМ",
+        feature: str = "Функционал",
+        depth: str = "normal",
+        domain: str = "Домен",
+        team: str = "Команда",
+        system: str = "АС",
+        folder: str = "Папка",
         n_etalons: int = 3,
-        max_test_cases: int = 10,
+        max_test_cases: int = 10
     ) -> Dict:
-
-        req_types = self._classify_requirement(requirement)
-
-        similar_pairs = self.vs.find_similar_pairs(
-            query=requirement, n_results=n_etalons,
-            platform=platform
-        )
-
-        similar_reqs = self.vs.find_similar_requirements(
-            query=requirement, n_results=n_etalons,
-            platform=platform
-        )
-
-        prompt = self._build_prompt(
-            requirement=requirement,
-            req_types=req_types,
-            similar_pairs=similar_pairs,
-            similar_reqs=similar_reqs,
-            platform=platform,
-            feature=feature,
-            domain=domain,
-            team=team,
-            system=system,
-            folder=folder,
-            max_test_cases=max_test_cases
-        )
-
+        """Генерирует тест-кейсы по требованию."""
         if not self.llm:
             return {
                 "xml": "",
-                "prompt": prompt,
-                "test_cases_count": 0,
-                "etalons_used": len(similar_pairs),
-                "requirement_types": req_types,
-                "error": "GigaChat AUTH_KEY не задан. Установите GIGACHAT_AUTH_KEY в .env",
-                "similar_pairs": [
-                    {"id": p["id"], "distance": p["distance"]}
-                    for p in similar_pairs
-                ],
+                "count": 0,
+                "error": "GigaChat не инициализирован"
             }
 
-        xml_response = self._call_llm(prompt, domain, team, system, folder)
-        tc_count = xml_response.count("<testCase")
+        # Получаем похожие примеры из RAG
+        examples = self._get_rag_examples(requirement, platform, feature)
+
+        # Формируем промпт
+        user_prompt = self._build_user_prompt(
+            requirement, platform, feature, depth, examples
+        )
+
+        # Вызываем LLM
+        xml_response = self._call_llm(
+            user_prompt, domain, team, system, folder
+        )
+
+        # Парсим результат
+        count = self._count_test_cases(xml_response)
 
         return {
             "xml": xml_response,
-            "test_cases_count": tc_count,
-            "etalons_used": len(similar_pairs),
-            "requirement_types": req_types,
-            "similar_pairs": [
-                {"id": p["id"], "distance": p["distance"]}
-                for p in similar_pairs
-            ],
+            "count": count,
+            "error": "" if count > 0 else "Не удалось сгенерировать"
         }
 
-    def _classify_requirement(self, text: str) -> List[str]:
-        types = []
-        lower = text.lower()
-        patterns = {
-            "business_logic": ["если", "в случае", "при условии", "когда", "то отображается", "проверяется"],
-            "api_method": ["метод", "request", "response", "path:", "путь:", "http", "параметры request"],
-            "data_model": ["таблица", "varchar", "int8", "timestamp", "поле в бд", "enum:"],
-            "ui_requirement": ["кнопка", "модальное окно", "отображается", "страница", "лейбл", "информационное окно"],
-            "sequence": ["sequence", "последовательность", "поток", "участники:", "диаграмма"],
-            "notification": ["уведомлен", "notification", "push", "template_ready"],
-            "scope": ["scope", "на странице представлены"],
-        }
-        for req_type, keywords in patterns.items():
-            if any(kw in lower for kw in keywords):
-                types.append(req_type)
-        return types or ["unknown"]
+    def _get_rag_examples(
+        self, requirement: str, platform: str, feature: str
+    ) -> str:
+        """Получает похожие примеры из векторной БД."""
+        examples = []
 
-    def _build_prompt(self, requirement, req_types, similar_pairs, similar_reqs,
-                      platform, feature, domain, team, system, folder, max_test_cases):
+        # Ищем похожие требования
+        try:
+            similar_reqs = self.vs.search_requirements(
+                requirement, n_results=2
+            )
+            if similar_reqs:
+                for doc in similar_reqs[:2]:
+                    examples.append(
+                        "Похожее требование:\n" + doc[:500]
+                    )
+        except Exception:
+            pass
 
-        etalons_text = ""
-        if similar_pairs:
-            etalons_text = "\n\n=== ЭТАЛОННЫЕ ПРИМЕРЫ (используй как образец стиля и структуры) ===\n"
-            for i, pair in enumerate(similar_pairs, 1):
-                etalons_text += f"\n--- Эталон {i} (distance={pair['distance']:.4f}) ---\n"
-                etalons_text += f"ТРЕБОВАНИЕ:\n{pair['document']}\n"
-                if pair.get("metadata", {}).get("test_case_xml"):
-                    etalons_text += f"ТЕСТ-КЕЙС:\n{pair['metadata']['test_case_xml']}\n"
+        # Ищем похожие пары требование-тесткейс
+        try:
+            similar_pairs = self.vs.search_pairs(
+                requirement, n_results=2
+            )
+            if similar_pairs:
+                for doc in similar_pairs[:2]:
+                    examples.append(
+                        "Пример тест-кейса:\n" + doc[:1000]
+                    )
+        except Exception:
+            pass
 
-        context_text = ""
-        if similar_reqs:
-            context_text = "\n\n=== КОНТЕКСТ: ПОХОЖИЕ ТРЕБОВАНИЯ ИЗ СИСТЕМЫ ===\n"
-            for i, req in enumerate(similar_reqs, 1):
-                context_text += f"\n--- Контекст {i} ---\n{req['document'][:300]}\n"
+        if examples:
+            return "\n\n---\n\n".join(examples)
+        return ""
 
-        return f"""ЗАДАЧА: Сгенерировать тест-кейсы по следующему требованию.
+    def _build_user_prompt(
+        self,
+        requirement: str,
+        platform: str,
+        feature: str,
+        depth: str,
+        examples: str
+    ) -> str:
+        """Формирует пользовательский промпт."""
+        depth_instruction = {
+            "smoke": "Только 3-5 критичных позитивных сценария.",
+            "normal": "Основные позитивные и негативные сценарии, 8-12 кейсов.",
+            "deep": "Полное покрытие: все ветвления, граничные значения, 15-25 кейсов."
+        }.get(depth, "Основные сценарии.")
 
-ПЛАТФОРМА: {platform}
-ФИЧА: {feature}
-ТИПЫ БЛОКОВ В ТРЕБОВАНИИ: {', '.join(req_types)}
-МАКСИМУМ ТЕСТ-КЕЙСОВ: {max_test_cases}
-
-=== ТРЕБОВАНИЕ ===
+        prompt = f"""ТРЕБОВАНИЕ ДЛЯ ТЕСТИРОВАНИЯ:
 {requirement}
-{etalons_text}
-{context_text}
 
-ИНСТРУКЦИИ:
-1. Проанализируй требование и определи ВСЕ сценарии для тестирования
-2. Для каждого ветвления (if/else/enum) создай ОТДЕЛЬНЫЙ тест-кейс
-3. Добавь граничные значения и негативные сценарии
-4. Используй стиль и структуру из эталонных примеров
-5. В name используй формат: {platform} [{feature}] Описание
-6. В precondition указывай конкретные тестовые данные
-7. Разделяй проверки на UI/API/БД в expectedResult
+ПАРАМЕТРЫ:
+- Платформа: {platform}
+- Функция: {feature}
+- Глубина: {depth_instruction}
 
-Сгенерируй XML с тест-кейсами:"""
+ВАЖНО:
+1. Название каждого теста: "{platform} [{feature}] Понятное описание"
+2. Шаг 0 ОБЯЗАТЕЛЬНО — подготовка данных с КОНКРЕТНЫМИ значениями
+3. Каждый шаг — атомарное действие
+4. expectedResult разделять на UI/API/БД где применимо
+"""
 
-    def _call_llm(self, prompt, domain, team, system, folder):
+        if examples:
+            prompt += f"""
+
+ПРИМЕРЫ ИЗ БАЗЫ ЗНАНИЙ (используй как образец стиля):
+{examples}
+"""
+
+        prompt += "\n\nСгенерируй тест-кейсы в формате XML:"
+        return prompt
+
+    def _call_llm(
+        self,
+        prompt: str,
+        domain: str,
+        team: str,
+        system: str,
+        folder: str
+    ) -> str:
+        """Вызывает GigaChat и возвращает XML."""
         system_prompt = self.SYSTEM_PROMPT.format(
             domain=domain, team=team, system=system, folder=folder
         )
 
-        response = self.llm.chat(Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                Messages(role=MessagesRole.USER, content=prompt),
-            ],
-            temperature=0.3,
-            max_tokens=8000,
-        ))
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.chat(Chat(
+                    messages=[
+                        Messages(role=MessagesRole.SYSTEM, content=system_prompt),
+                        Messages(role=MessagesRole.USER, content=prompt),
+                    ],
+                    temperature=0.3,
+                    max_tokens=8192,
+                ))
 
-        raw = response.choices[0].message.content
-        raw = re.sub(r"^```xml\s*", "", raw.strip())
-        raw = re.sub(r"\s*```$", "", raw.strip())
-        return raw
+                content = response.choices[0].message.content
+                
+                # Проверяем, не обрезан ли ответ
+                finish_reason = getattr(response.choices[0], 'finish_reason', None)
+                if finish_reason == 'length':
+                    content += "\n<!-- ВНИМАНИЕ: Ответ был обрезан из-за лимита токенов -->"
+                
+                # Убираем markdown обёртки
+                content = re.sub(r"```xml\s*", "", content)
+                content = re.sub(r"```\s*$", "", content)
+                content = content.strip()
+                return content
 
-    def generate_preview(self, requirement: str, **kwargs) -> str:
-        result = self.generate(requirement, **kwargs)
-        preview = []
-        preview.append("=" * 60)
-        preview.append("ПРЕВЬЮ ГЕНЕРАЦИИ ТЕСТ-КЕЙСОВ")
-        preview.append("=" * 60)
-        preview.append(f"\nТипы блоков: {', '.join(result['requirement_types'])}")
-        preview.append(f"Эталонов найдено: {result['etalons_used']}")
+            except Exception as e:
+                if '429' in str(e) and attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return f"<!-- Ошибка: {str(e)} -->"
 
-        if result.get("similar_pairs"):
-            preview.append("\nНайденные эталонные пары:")
-            for p in result["similar_pairs"]:
-                preview.append(f"  [{p['id']}] distance={p['distance']:.4f}")
+    def _count_test_cases(self, xml_text: str) -> int:
+        """Считает количество тест-кейсов."""
+        return len(re.findall(r"<testCase", xml_text))
 
-        if result.get("error"):
-            preview.append(f"\n⚠️  {result['error']}")
-
-        if result.get("xml"):
-            preview.append(f"\n✅ Сгенерировано тест-кейсов: {result['test_cases_count']}")
-            preview.append("\n--- XML (первые 1000 символов) ---")
-            preview.append(result["xml"][:1000])
-
-        return "\n".join(preview)
 
     def get_stats(self) -> Dict:
-        db_stats = self.vs.get_stats()
+        """Возвращает статистику RAG-базы и состояние LLM."""
+        try:
+            vs_stats = self.vs.get_stats()
+            db_stats = {
+                "requirements": vs_stats.get("requirements", 0),
+                "test_cases": vs_stats.get("test_cases", 0),
+                "pairs": vs_stats.get("pairs", 0),
+            }
+        except Exception:
+            db_stats = {
+                "requirements": 0,
+                "test_cases": 0,
+                "pairs": 0,
+            }
+        
         return {
-            "llm": "GigaChat",
-            "auth_key_set": bool(self.auth_key),
             "db": db_stats,
+            "auth_key_set": bool(self.auth_key),
         }
-

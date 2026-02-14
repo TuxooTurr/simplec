@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional, Dict
 
 from dotenv import load_dotenv
 from gigachat import GigaChat
+from agents.llm_client import LLMClient, Message
 from gigachat.models import Chat, Messages, MessagesRole
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -68,15 +70,19 @@ class QADocGenerator:
 - Таблицы форматируй через | col1 | col2 | col3 |
 - Выводи результат готовым для копирования в Confluence"""
 
-    def __init__(self, auth_key: Optional[str] = None):
+    def __init__(self, auth_key: Optional[str] = None, provider: str = "gigachat"):
         self.auth_key = auth_key or os.getenv("GIGACHAT_AUTH_KEY", "")
         self.scope = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
 
+        self.provider = provider
+        self.llm_client = LLMClient(provider)
+        
         if self.auth_key:
             self.llm = GigaChat(
+                timeout=600,
                 credentials=self.auth_key,
                 scope=self.scope,
-                verify_ssl_certs=True
+                verify_ssl_certs=False
             )
         else:
             self.llm = None
@@ -128,16 +134,23 @@ class QADocGenerator:
         )
 
     def _call_llm(self, prompt: str) -> str:
-        response = self.llm.chat(Chat(
-            messages=[
-                Messages(role=MessagesRole.SYSTEM, content=self.SYSTEM_PROMPT),
-                Messages(role=MessagesRole.USER, content=prompt),
-            ],
-            temperature=0.2,
-            max_tokens=8000,
-        ))
-
-        return response.choices[0].message.content
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.chat(Chat(
+                    messages=[
+                        Messages(role=MessagesRole.SYSTEM, content=self.SYSTEM_PROMPT),
+                        Messages(role=MessagesRole.USER, content=prompt),
+                    ],
+                    temperature=0.2,
+                    # max_tokens removed
+                ))
+                return response.choices[0].message.content
+            except Exception as e:
+                if '429' in str(e) and attempt < max_retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
 
     def _count_sections(self, doc: str) -> int:
         count = 0

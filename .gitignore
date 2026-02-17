@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
+**/__pycache__/
 *.pyc
+**/*.pyc
 .env
 db/chroma_data/
 db/chroma_db/
@@ -11,3 +13,4 @@ out/
 .cache/
 *.save
 feedback.json
+.claude/

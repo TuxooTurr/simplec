@@ -71,7 +71,6 @@ requests-oauthlib==2.0.0
 rich==14.3.2
 rpds-py==0.30.0
 shellingham==1.5.4
--e git+https://github.com/TuxooTurr/simplec.git@2b6a3b0b338bfcb5c9c3663402aff7501dc5ff02#egg=simplec
 six==1.17.0
 sniffio==1.3.1
 starlette==0.50.0

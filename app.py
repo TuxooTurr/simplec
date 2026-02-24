@@ -590,22 +590,59 @@ with st.sidebar:
         c1.metric("Оценок", fb_stats["total"])
         c2.metric("Позитивных", fb_stats["positive"])
 
-    # ── Re-configure credentials ────────────────────────────────
-    import hashlib
-    key_fp = hashlib.sha256(gigachat_key.encode()).hexdigest()[:8]
-    with st.expander(f"⚙️ Настройки подключения  ·  {key_fp}"):
-        new_key2 = st.text_input("Новый GIGACHAT_AUTH_KEY", type="password", key="reconf_key")
-        new_scope2 = st.selectbox("Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
-                                  index=0 if os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") == "GIGACHAT_API_PERS" else 1,
-                                  key="reconf_scope")
-        if st.button("Обновить ключ"):
-            if new_key2.strip():
-                _save_env_key("GIGACHAT_AUTH_KEY", new_key2.strip())
-                _save_env_key("GIGACHAT_SCOPE", new_scope2)
-                st.success("Ключ обновлён")
+    # ── LLM Settings panel ──────────────────────────────────────
+    st.markdown('<div class="section-header">Настройки LLM</div>', unsafe_allow_html=True)
+
+    def _mask_key(val: str) -> str:
+        """Show ****...last4 or 'не задан'."""
+        if not val:
+            return "не задан"
+        return "••••••••" + val[-4:]
+
+    # GigaChat block
+    gc_key_val = os.getenv("GIGACHAT_AUTH_KEY", "")
+    gc_scope_val = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+    st.markdown(f"""
+    <div style="font-size:12px;font-weight:700;color:#6366F1;margin:4px 0 2px">GigaChat</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;font-family:monospace">
+        KEY: {_mask_key(gc_key_val)}&nbsp;&nbsp;·&nbsp;&nbsp;{gc_scope_val}
+    </div>
+    """, unsafe_allow_html=True)
+    with st.expander("Изменить GigaChat"):
+        inp_gc = st.text_input("Новый ключ", type="password", placeholder="MDE5YmQx...", key="inp_gc")
+        inp_scope = st.selectbox(
+            "Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
+            index=0 if gc_scope_val == "GIGACHAT_API_PERS" else 1,
+            key="inp_gc_scope"
+        )
+        if st.button("Сохранить GigaChat", key="btn_gc"):
+            if inp_gc.strip():
+                _save_env_key("GIGACHAT_AUTH_KEY", inp_gc.strip())
+                _save_env_key("GIGACHAT_SCOPE", inp_scope)
+                st.success("Сохранено")
                 st.rerun()
             else:
-                st.warning("Введите новый ключ")
+                st.warning("Введите ключ")
+
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+    # DeepSeek block
+    ds_key_val = os.getenv("DEEPSEEK_API_KEY", "")
+    st.markdown(f"""
+    <div style="font-size:12px;font-weight:700;color:#6366F1;margin:4px 0 2px">DeepSeek</div>
+    <div style="font-size:11px;color:#64748b;margin-bottom:6px;font-family:monospace">
+        KEY: {_mask_key(ds_key_val)}
+    </div>
+    """, unsafe_allow_html=True)
+    with st.expander("Изменить DeepSeek"):
+        inp_ds = st.text_input("Новый ключ", type="password", placeholder="sk-...", key="inp_ds")
+        if st.button("Сохранить DeepSeek", key="btn_ds"):
+            if inp_ds.strip():
+                _save_env_key("DEEPSEEK_API_KEY", inp_ds.strip())
+                st.success("Сохранено")
+                st.rerun()
+            else:
+                st.warning("Введите ключ")
 
 
 tab1, tab2, tab3, tab4 = st.tabs(["Генерация", "Эталоны", "Дефекты", "О системе"])

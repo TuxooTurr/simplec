@@ -2,6 +2,7 @@
 SimpleC v2 - AI-powered QA Test Generator.
 """
 
+import os
 import sys
 import streamlit as st
 from pathlib import Path
@@ -484,7 +485,46 @@ for key, val in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = val
 
+def _save_env_key(key_name: str, value: str):
+    """Write or update a single key in the .env file."""
+    env_path = Path(".env")
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    found = False
+    new_lines = []
+    for line in lines:
+        if line.startswith(key_name + "="):
+            new_lines.append(f"{key_name}={value}")
+            found = True
+        else:
+            new_lines.append(line)
+    if not found:
+        new_lines.append(f"{key_name}={value}")
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    os.environ[key_name] = value
+
+
 with st.sidebar:
+    # ── First-run setup wizard ──────────────────────────────────
+    gigachat_key = os.getenv("GIGACHAT_AUTH_KEY", "").strip()
+    if not gigachat_key:
+        st.error("GigaChat ключ не настроен")
+        with st.expander("⚙️ Первичная настройка", expanded=True):
+            st.markdown("Введите `GIGACHAT_AUTH_KEY` (Base64 строка из личного кабинета Sber).")
+            new_key = st.text_input("GIGACHAT_AUTH_KEY", type="password", placeholder="MDE5YmQx...")
+            new_scope = st.selectbox("Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"], index=0)
+            deepseek_key = st.text_input("DEEPSEEK_API_KEY (опционально)", type="password")
+            if st.button("Сохранить настройки", type="primary"):
+                if new_key.strip():
+                    _save_env_key("GIGACHAT_AUTH_KEY", new_key.strip())
+                    _save_env_key("GIGACHAT_SCOPE", new_scope)
+                    if deepseek_key.strip():
+                        _save_env_key("DEEPSEEK_API_KEY", deepseek_key.strip())
+                    st.success("Настройки сохранены! Перезапускаю...")
+                    st.rerun()
+                else:
+                    st.warning("Введите ключ GigaChat")
+        st.stop()
+
     providers = LLMClient.get_available_providers()
 
     # Health check with 30s cache
@@ -496,7 +536,7 @@ with st.sidebar:
                 hc = LLMClient.health_check(p["id"])
                 results[p["id"]] = hc
             else:
-                results[p["id"]] = {"status": "red", "message": "Нет ключа / не запущен"}
+                results[p["id"]] = {"status": "red", "message": "Нет ключа"}
         return results
 
     health = _ping_providers()
@@ -549,6 +589,23 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         c1.metric("Оценок", fb_stats["total"])
         c2.metric("Позитивных", fb_stats["positive"])
+
+    # ── Re-configure credentials ────────────────────────────────
+    import hashlib
+    key_fp = hashlib.sha256(gigachat_key.encode()).hexdigest()[:8]
+    with st.expander(f"⚙️ Настройки подключения  ·  {key_fp}"):
+        new_key2 = st.text_input("Новый GIGACHAT_AUTH_KEY", type="password", key="reconf_key")
+        new_scope2 = st.selectbox("Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
+                                  index=0 if os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") == "GIGACHAT_API_PERS" else 1,
+                                  key="reconf_scope")
+        if st.button("Обновить ключ"):
+            if new_key2.strip():
+                _save_env_key("GIGACHAT_AUTH_KEY", new_key2.strip())
+                _save_env_key("GIGACHAT_SCOPE", new_scope2)
+                st.success("Ключ обновлён")
+                st.rerun()
+            else:
+                st.warning("Введите новый ключ")
 
 
 tab1, tab2, tab3, tab4 = st.tabs(["Генерация", "Эталоны", "Дефекты", "О системе"])

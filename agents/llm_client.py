@@ -239,6 +239,11 @@ class LLMClient:
 
     @staticmethod
     def get_available_providers():
+        """
+        Returns only actually usable providers.
+        Cloud providers (GigaChat, DeepSeek) are shown always (with key status).
+        Local providers (Ollama, LM Studio) are shown ONLY if running on this machine.
+        """
         providers = []
 
         cred = os.getenv("GIGACHAT_AUTH_KEY") or os.getenv("GIGACHAT_CREDENTIALS")
@@ -249,15 +254,14 @@ class LLMClient:
 
         if os.getenv("DEEPSEEK_API_KEY"):
             providers.append({"id": "deepseek", "name": "DeepSeek", "status": "ready"})
-        else:
-            providers.append({"id": "deepseek", "name": "DeepSeek", "status": "no_key"})
 
+        # Local providers — show only if actually reachable on this machine
         try:
             import ollama
             ollama.list()
             providers.append({"id": "ollama", "name": "Ollama", "status": "ready"})
         except Exception:
-            providers.append({"id": "ollama", "name": "Ollama", "status": "not_running"})
+            pass  # not installed or not running — skip silently
 
         try:
             import httpx
@@ -265,9 +269,7 @@ class LLMClient:
             r = httpx.get(url + "/models", timeout=2.0)
             if r.status_code == 200:
                 providers.append({"id": "lmstudio", "name": "LM Studio", "status": "ready"})
-            else:
-                providers.append({"id": "lmstudio", "name": "LM Studio", "status": "not_running"})
         except Exception:
-            providers.append({"id": "lmstudio", "name": "LM Studio", "status": "not_running"})
+            pass  # not running — skip silently
 
         return providers

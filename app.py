@@ -97,6 +97,65 @@ st.markdown("""
         transform: translateY(-1px) !important;
     }
 
+    /* ── Gear icon button ── */
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
+        [data-testid="column"]:last-child .stButton > button {
+        background: rgba(255,255,255,0.7) !important;
+        border: 1px solid rgba(99,102,241,0.20) !important;
+        border-radius: 50% !important;
+        width: 34px !important;
+        height: 34px !important;
+        min-height: unset !important;
+        padding: 0 !important;
+        font-size: 16px !important;
+        line-height: 1 !important;
+        box-shadow: 0 2px 6px rgba(99,102,241,0.08) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        white-space: nowrap !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
+        [data-testid="column"]:last-child .stButton > button:hover {
+        background: rgba(99,102,241,0.10) !important;
+        border-color: rgba(99,102,241,0.40) !important;
+        transform: none !important;
+    }
+
+    /* ── LLM Settings panel ── */
+    .settings-panel {
+        background: rgba(255,255,255,0.75);
+        border: 1px solid rgba(99,102,241,0.18);
+        border-radius: 14px;
+        padding: 14px 14px 6px;
+        margin: 6px 0 10px;
+        backdrop-filter: blur(12px);
+    }
+    .llm-provider-row {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 6px;
+        flex-wrap: wrap;
+    }
+    .llm-provider-name {
+        font-size: 12px;
+        font-weight: 700;
+        color: #6366F1;
+    }
+    .llm-provider-key {
+        font-size: 11px;
+        color: #64748b;
+        font-family: monospace;
+    }
+    .llm-provider-scope {
+        font-size: 10px;
+        color: #94a3b8;
+        background: rgba(99,102,241,0.07);
+        border-radius: 4px;
+        padding: 1px 5px;
+    }
+
     /* ── Download buttons ── */
     .stDownloadButton > button {
         background: rgba(255,255,255,0.8) !important;
@@ -480,6 +539,7 @@ defaults = {
     "selected_provider": None,
     "show_etalon_form": False,
     "bug_report_result": None,
+    "show_llm_settings": False,
 }
 for key, val in defaults.items():
     if key not in st.session_state:
@@ -544,12 +604,84 @@ with st.sidebar:
     status_html = '<div class="llm-status-bar">'
     for p in providers:
         hc = health.get(p["id"], {"status": "red", "message": "?"})
-        dot_class = hc["status"]  # green / yellow / red
+        dot_class = hc["status"]
         name_short = p["name"]
         tooltip = hc["message"]
         status_html += '<span class="llm-dot" title="' + tooltip + '"><span class="dot ' + dot_class + '"></span>' + name_short + '</span>'
     status_html += '</div>'
-    st.markdown(status_html, unsafe_allow_html=True)
+
+    # Status bar + gear icon on same row
+    _col_status, _col_gear = st.columns([7, 1])
+    with _col_status:
+        st.markdown(status_html, unsafe_allow_html=True)
+    with _col_gear:
+        gear_label = "⚙️" if not st.session_state.show_llm_settings else "✕"
+        if st.button(gear_label, key="btn_gear", help="Настройки LLM"):
+            st.session_state.show_llm_settings = not st.session_state.show_llm_settings
+            st.rerun()
+
+    # ── LLM Settings panel (toggle) ─────────────────────────────
+    def _mask_key(val: str) -> str:
+        if not val:
+            return "не задан"
+        return "••••••••" + val[-4:]
+
+    if st.session_state.show_llm_settings:
+        gc_key_val = os.getenv("GIGACHAT_AUTH_KEY", "")
+        gc_scope_val = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+        ds_key_val = os.getenv("DEEPSEEK_API_KEY", "")
+
+        st.markdown("""
+        <div class="settings-panel">
+            <div style="font-size:11px;font-weight:700;color:#6366F1;
+                        text-transform:uppercase;letter-spacing:.06em;
+                        margin-bottom:10px">Настройки LLM</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # GigaChat
+        st.markdown(f"""
+        <div class="llm-provider-row">
+          <span class="llm-provider-name">GigaChat</span>
+          <span class="llm-provider-key">{_mask_key(gc_key_val)}</span>
+          <span class="llm-provider-scope">{gc_scope_val}</span>
+        </div>""", unsafe_allow_html=True)
+        inp_gc = st.text_input("Ключ GigaChat", type="password",
+                               placeholder="MDE5YmQx...", key="inp_gc",
+                               label_visibility="collapsed")
+        inp_scope = st.selectbox("Scope GigaChat",
+                                 ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
+                                 index=0 if gc_scope_val == "GIGACHAT_API_PERS" else 1,
+                                 key="inp_gc_scope",
+                                 label_visibility="collapsed")
+        if st.button("Сохранить GigaChat", key="btn_gc", use_container_width=True):
+            if inp_gc.strip():
+                _save_env_key("GIGACHAT_AUTH_KEY", inp_gc.strip())
+                _save_env_key("GIGACHAT_SCOPE", inp_scope)
+                st.session_state.show_llm_settings = False
+                st.rerun()
+            else:
+                st.warning("Введите ключ")
+
+        st.markdown("<hr style='margin:10px 0;border-color:rgba(99,102,241,.12)'>",
+                    unsafe_allow_html=True)
+
+        # DeepSeek
+        st.markdown(f"""
+        <div class="llm-provider-row">
+          <span class="llm-provider-name">DeepSeek</span>
+          <span class="llm-provider-key">{_mask_key(ds_key_val)}</span>
+        </div>""", unsafe_allow_html=True)
+        inp_ds = st.text_input("Ключ DeepSeek", type="password",
+                               placeholder="sk-...", key="inp_ds",
+                               label_visibility="collapsed")
+        if st.button("Сохранить DeepSeek", key="btn_ds", use_container_width=True):
+            if inp_ds.strip():
+                _save_env_key("DEEPSEEK_API_KEY", inp_ds.strip())
+                st.session_state.show_llm_settings = False
+                st.rerun()
+            else:
+                st.warning("Введите ключ")
 
     st.markdown("""
     <div class="logo-container">
@@ -590,59 +722,6 @@ with st.sidebar:
         c1.metric("Оценок", fb_stats["total"])
         c2.metric("Позитивных", fb_stats["positive"])
 
-    # ── LLM Settings panel ──────────────────────────────────────
-    st.markdown('<div class="section-header">Настройки LLM</div>', unsafe_allow_html=True)
-
-    def _mask_key(val: str) -> str:
-        """Show ****...last4 or 'не задан'."""
-        if not val:
-            return "не задан"
-        return "••••••••" + val[-4:]
-
-    # GigaChat block
-    gc_key_val = os.getenv("GIGACHAT_AUTH_KEY", "")
-    gc_scope_val = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
-    st.markdown(f"""
-    <div style="font-size:12px;font-weight:700;color:#6366F1;margin:4px 0 2px">GigaChat</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;font-family:monospace">
-        KEY: {_mask_key(gc_key_val)}&nbsp;&nbsp;·&nbsp;&nbsp;{gc_scope_val}
-    </div>
-    """, unsafe_allow_html=True)
-    with st.expander("Изменить GigaChat"):
-        inp_gc = st.text_input("Новый ключ", type="password", placeholder="MDE5YmQx...", key="inp_gc")
-        inp_scope = st.selectbox(
-            "Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
-            index=0 if gc_scope_val == "GIGACHAT_API_PERS" else 1,
-            key="inp_gc_scope"
-        )
-        if st.button("Сохранить GigaChat", key="btn_gc"):
-            if inp_gc.strip():
-                _save_env_key("GIGACHAT_AUTH_KEY", inp_gc.strip())
-                _save_env_key("GIGACHAT_SCOPE", inp_scope)
-                st.success("Сохранено")
-                st.rerun()
-            else:
-                st.warning("Введите ключ")
-
-    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-
-    # DeepSeek block
-    ds_key_val = os.getenv("DEEPSEEK_API_KEY", "")
-    st.markdown(f"""
-    <div style="font-size:12px;font-weight:700;color:#6366F1;margin:4px 0 2px">DeepSeek</div>
-    <div style="font-size:11px;color:#64748b;margin-bottom:6px;font-family:monospace">
-        KEY: {_mask_key(ds_key_val)}
-    </div>
-    """, unsafe_allow_html=True)
-    with st.expander("Изменить DeepSeek"):
-        inp_ds = st.text_input("Новый ключ", type="password", placeholder="sk-...", key="inp_ds")
-        if st.button("Сохранить DeepSeek", key="btn_ds"):
-            if inp_ds.strip():
-                _save_env_key("DEEPSEEK_API_KEY", inp_ds.strip())
-                st.success("Сохранено")
-                st.rerun()
-            else:
-                st.warning("Введите ключ")
 
 
 tab1, tab2, tab3, tab4 = st.tabs(["Генерация", "Эталоны", "Дефекты", "О системе"])

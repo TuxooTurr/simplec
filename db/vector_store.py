@@ -34,9 +34,7 @@ class VectorStore:
     def __init__(self, persist_dir: Optional[Path] = None):
         self.persist_dir = str(persist_dir or CHROMA_DIR)
         self.client = chromadb.PersistentClient(path=self.persist_dir)
-        self.ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="paraphrase-multilingual-MiniLM-L12-v2"
-        )
+        self.ef = embedding_functions.DefaultEmbeddingFunction()
         self._init_collections()
 
     def _init_collections(self):

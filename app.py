@@ -98,14 +98,15 @@ st.markdown("""
     }
 
     /* ── Gear icon button ── */
-    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
-        [data-testid="stColumn"]:last-child .stButton > button {
+    [data-testid="stSidebar"] div:has(> [data-testid="stButton"]:last-child) [data-testid="stButton"] button,
+    [data-testid="stSidebar"] [data-testid="stColumn"]:last-child button[kind="secondary"] {
         background: rgba(255,255,255,0.7) !important;
         border: 1px solid rgba(99,102,241,0.20) !important;
         border-radius: 50% !important;
         width: 34px !important;
         height: 34px !important;
         min-height: unset !important;
+        min-width: unset !important;
         padding: 0 !important;
         font-size: 16px !important;
         line-height: 1 !important;
@@ -113,11 +114,9 @@ st.markdown("""
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
-        white-space: nowrap !important;
         font-family: sans-serif !important;
     }
-    [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
-        [data-testid="stColumn"]:last-child .stButton > button:hover {
+    [data-testid="stSidebar"] [data-testid="stColumn"]:last-child button[kind="secondary"]:hover {
         background: rgba(99,102,241,0.10) !important;
         border-color: rgba(99,102,241,0.40) !important;
         transform: none !important;

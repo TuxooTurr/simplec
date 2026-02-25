@@ -1,13 +1,16 @@
 [theme]
-primaryColor = "#00C9A7"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#1A1D26"
-textColor = "#E0E0E0"
+primaryColor = "#6366F1"
+backgroundColor = "#eef2ff"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1e293b"
 font = "sans serif"
 
 [server]
 headless = true
+enableCORS = false
+enableXsrfProtection = true
 
 [browser]
 gatherUsageStats = false
-
+serverAddress = "simpletest.pro"
+serverPort = 443

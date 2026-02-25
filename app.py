@@ -99,7 +99,7 @@ st.markdown("""
 
     /* ── Gear icon button ── */
     [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
-        [data-testid="column"]:last-child .stButton > button {
+        [data-testid="stColumn"]:last-child .stButton > button {
         background: rgba(255,255,255,0.7) !important;
         border: 1px solid rgba(99,102,241,0.20) !important;
         border-radius: 50% !important;
@@ -114,9 +114,10 @@ st.markdown("""
         align-items: center !important;
         justify-content: center !important;
         white-space: nowrap !important;
+        font-family: sans-serif !important;
     }
     [data-testid="stSidebar"] [data-testid="stHorizontalBlock"]:first-of-type
-        [data-testid="column"]:last-child .stButton > button:hover {
+        [data-testid="stColumn"]:last-child .stButton > button:hover {
         background: rgba(99,102,241,0.10) !important;
         border-color: rgba(99,102,241,0.40) !important;
         transform: none !important;
@@ -615,7 +616,7 @@ with st.sidebar:
     with _col_status:
         st.markdown(status_html, unsafe_allow_html=True)
     with _col_gear:
-        gear_label = "⚙️" if not st.session_state.show_llm_settings else "✕"
+        gear_label = "⚙" if not st.session_state.show_llm_settings else "✕"
         if st.button(gear_label, key="btn_gear", help="Настройки LLM"):
             st.session_state.show_llm_settings = not st.session_state.show_llm_settings
             st.rerun()

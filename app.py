@@ -64,6 +64,10 @@ st.markdown("""
         -webkit-backdrop-filter: blur(28px) !important;
         border-right: 1px solid rgba(99,102,241,0.1) !important;
     }
+    /* Поднять контент сайдбара выше */
+    [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+        padding-top: 12px !important;
+    }
 
     /* ── Buttons ── */
     .stButton > button {
@@ -98,27 +102,27 @@ st.markdown("""
     }
 
     /* ── Gear icon button ── */
-    [data-testid="stSidebar"] div:has(> [data-testid="stButton"]:last-child) [data-testid="stButton"] button,
     [data-testid="stSidebar"] [data-testid="stColumn"]:last-child button[kind="secondary"] {
-        background: rgba(255,255,255,0.7) !important;
-        border: 1px solid rgba(99,102,241,0.20) !important;
+        background: transparent !important;
+        border: none !important;
         border-radius: 50% !important;
-        width: 34px !important;
-        height: 34px !important;
+        width: 44px !important;
+        height: 44px !important;
         min-height: unset !important;
         min-width: unset !important;
         padding: 0 !important;
-        font-size: 16px !important;
+        font-size: 22px !important;
         line-height: 1 !important;
-        box-shadow: 0 2px 6px rgba(99,102,241,0.08) !important;
+        box-shadow: none !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
         font-family: sans-serif !important;
+        color: #6B7280 !important;
     }
     [data-testid="stSidebar"] [data-testid="stColumn"]:last-child button[kind="secondary"]:hover {
-        background: rgba(99,102,241,0.10) !important;
-        border-color: rgba(99,102,241,0.40) !important;
+        background: rgba(99,102,241,0.08) !important;
+        color: #4F46E5 !important;
         transform: none !important;
     }
 
@@ -451,13 +455,13 @@ st.markdown("""
         letter-spacing: -0.03em;
     }
     .logo-title {
-        font-size: 20px; font-weight: 700;
+        font-size: 26px; font-weight: 700;
         background: linear-gradient(135deg, #4F46E5, #7C3AED);
         -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         letter-spacing: -0.02em; line-height: 1.2;
     }
     .logo-sub {
-        font-size: 11px; color: #9CA3AF; font-weight: 400;
+        font-size: 12px; color: #9CA3AF; font-weight: 400;
         margin-top: 2px; letter-spacing: 0.02em;
     }
 
@@ -471,7 +475,7 @@ st.markdown("""
     }
 
     /* ── LLM status bar ── */
-    .llm-status-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .llm-status-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; margin-top: 0; }
     .llm-dot {
         display: inline-flex !important; align-items: center !important; gap: 6px !important;
         font-size: 12px !important; color: #4B5563 !important; font-weight: 500 !important;

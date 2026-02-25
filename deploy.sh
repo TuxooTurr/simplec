@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
-# SimpleTest — полный деплой на сервер (Ubuntu 22.04 / Debian 12)
+# SimpleTest — полный деплой на VPS
+# Поддерживает: Ubuntu 22.04/24.04, Debian 12, AlmaLinux 8/9, CentOS Stream 8/9
 # Использование: sudo bash deploy.sh
 #
 # Что делает:
-#   1. Устанавливает nginx, python3, certbot
+#   1. Определяет ОС и устанавливает nginx, python3.12, certbot
 #   2. Клонирует репозиторий с GitHub в /opt/simpletest
 #   3. Создаёт venv + устанавливает зависимости
 #   4. Настраивает .env (запрашивает GigaChat ключ)
 #   5. Создаёт systemd service (автозапуск)
 #   6. Настраивает nginx reverse proxy с WebSocket
-#   7. Выпускает SSL через Let's Encrypt
+#   7. Открывает порты 80/443 в firewall
+#   8. Выпускает SSL через Let's Encrypt
 
 set -euo pipefail
 
@@ -36,16 +38,79 @@ echo "║         SimpleTest — деплой на $DOMAIN          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
-# ── 1. Системные пакеты ───────────────────────────────────────
-info "Обновляю пакеты..."
-apt-get update -qq
-apt-get install -y -qq \
-    python3 python3-pip python3-venv \
-    git nginx curl \
-    certbot python3-certbot-nginx
-log "Системные пакеты установлены"
+# ── 1. Определение ОС ────────────────────────────────────────
+info "Определяю операционную систему..."
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS_ID="${ID:-unknown}"
+    OS_LIKE="${ID_LIKE:-}"
+else
+    OS_ID="unknown"
+    OS_LIKE=""
+fi
 
-# ── 2. Пользователь приложения ────────────────────────────────
+if echo "$OS_ID $OS_LIKE" | grep -qiE "ubuntu|debian"; then
+    PKG="apt"
+    info "ОС: Ubuntu/Debian (apt)"
+elif echo "$OS_ID $OS_LIKE" | grep -qiE "almalinux|centos|rhel|fedora|rocky"; then
+    PKG="dnf"
+    info "ОС: AlmaLinux/RHEL/CentOS (dnf)"
+else
+    warn "Неизвестная ОС: $OS_ID. Пробую как Ubuntu/Debian."
+    PKG="apt"
+fi
+
+# ── 2. Системные пакеты ───────────────────────────────────────
+info "Устанавливаю системные пакеты..."
+
+if [ "$PKG" = "apt" ]; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -qq
+    apt-get install -y -qq \
+        python3 python3-pip python3-venv python3.12 python3.12-venv \
+        git nginx curl \
+        certbot python3-certbot-nginx 2>/dev/null || \
+    apt-get install -y -qq \
+        python3 python3-pip python3-venv \
+        git nginx curl \
+        certbot python3-certbot-nginx
+    PYTHON="python3"
+    # На Ubuntu 22+ проверяем наличие python3.12
+    python3.12 --version &>/dev/null && PYTHON="python3.12" || true
+
+elif [ "$PKG" = "dnf" ]; then
+    dnf update -y -q
+    # EPEL нужен для certbot
+    dnf install -y -q epel-release 2>/dev/null || true
+    dnf install -y -q \
+        python3.12 python3.12-pip \
+        git nginx curl \
+        certbot python3-certbot-nginx
+    PYTHON="python3.12"
+    # SELinux: разрешаем nginx проксировать на localhost
+    if command -v setsebool &>/dev/null; then
+        setsebool -P httpd_can_network_connect 1 2>/dev/null || true
+        log "SELinux: nginx→proxy разрешён"
+    fi
+fi
+
+log "Системные пакеты установлены ($PYTHON)"
+
+# ── 3. Firewall ───────────────────────────────────────────────
+if command -v firewall-cmd &>/dev/null; then
+    info "Открываю порты в firewalld..."
+    firewall-cmd --permanent --add-service=http  &>/dev/null || true
+    firewall-cmd --permanent --add-service=https &>/dev/null || true
+    firewall-cmd --reload &>/dev/null || true
+    log "Порты 80/443 открыты (firewalld)"
+elif command -v ufw &>/dev/null; then
+    info "Открываю порты в ufw..."
+    ufw allow 80/tcp  &>/dev/null || true
+    ufw allow 443/tcp &>/dev/null || true
+    log "Порты 80/443 открыты (ufw)"
+fi
+
+# ── 4. Пользователь приложения ────────────────────────────────
 if ! id "$APP_USER" &>/dev/null; then
     useradd --system --create-home --home-dir "$APP_DIR" --shell /bin/bash "$APP_USER"
     log "Создан пользователь $APP_USER"
@@ -53,7 +118,7 @@ else
     log "Пользователь $APP_USER уже существует"
 fi
 
-# ── 3. Клонирование репозитория ───────────────────────────────
+# ── 5. Клонирование репозитория ───────────────────────────────
 if [ -d "$APP_DIR/.git" ]; then
     info "Обновляю существующий репозиторий..."
     sudo -u "$APP_USER" git -C "$APP_DIR" pull
@@ -63,21 +128,21 @@ else
     rm -rf "$APP_DIR"
     git clone "$REPO" "$APP_DIR"
     chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
-    log "Репозиторий клонирован в $APP_DIR"
+    log "Репозиторий клонирован → $APP_DIR"
 fi
 
-# ── 4. Python venv + зависимости ─────────────────────────────
-info "Создаю виртуальное окружение..."
+# ── 6. Python venv + зависимости ─────────────────────────────
+info "Создаю виртуальное окружение ($PYTHON)..."
 sudo -u "$APP_USER" bash -c "
     cd '$APP_DIR'
-    python3 -m venv .venv
+    $PYTHON -m venv .venv
     .venv/bin/pip install --quiet --upgrade pip
     .venv/bin/pip install --quiet streamlit
     .venv/bin/pip install --quiet -r requirements.txt
 "
 log "Python зависимости установлены"
 
-# ── 5. Настройка .env ─────────────────────────────────────────
+# ── 7. Настройка .env ─────────────────────────────────────────
 if [ ! -f "$APP_DIR/.env" ]; then
     info "Создаю .env из шаблона..."
     cp "$APP_DIR/.env.example" "$APP_DIR/.env"
@@ -100,11 +165,11 @@ else
     log ".env уже существует, пропускаю"
 fi
 
-# ── 6. Рабочие директории ─────────────────────────────────────
+# ── 8. Рабочие директории ─────────────────────────────────────
 sudo -u "$APP_USER" mkdir -p "$APP_DIR/out" "$APP_DIR/db/chroma_db" "$APP_DIR/data"
 log "Рабочие директории созданы"
 
-# ── 7. Systemd service ────────────────────────────────────────
+# ── 9. Systemd service ────────────────────────────────────────
 info "Создаю systemd service..."
 cat > "/etc/systemd/system/$SERVICE.service" <<EOF
 [Unit]
@@ -135,9 +200,10 @@ systemctl enable "$SERVICE"
 systemctl restart "$SERVICE"
 log "Сервис $SERVICE запущен (автозапуск включён)"
 
-# ── 8. Nginx конфиг ───────────────────────────────────────────
+# ── 10. Nginx конфиг ──────────────────────────────────────────
 info "Настраиваю nginx..."
-cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
+
+NGINX_CONF_CONTENT=$(cat <<EOF
 server {
     listen 80;
     server_name $DOMAIN www.$DOMAIN;
@@ -165,15 +231,25 @@ server {
     }
 }
 EOF
+)
 
-ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
-# Убираем дефолтный сайт
-rm -f /etc/nginx/sites-enabled/default
+if [ "$PKG" = "apt" ]; then
+    # Ubuntu/Debian: sites-available + symlink
+    echo "$NGINX_CONF_CONTENT" > "/etc/nginx/sites-available/$DOMAIN"
+    ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
+    rm -f /etc/nginx/sites-enabled/default
+else
+    # AlmaLinux/CentOS: conf.d
+    echo "$NGINX_CONF_CONTENT" > "/etc/nginx/conf.d/$DOMAIN.conf"
+    # Убираем дефолтный конфиг если мешает
+    [ -f /etc/nginx/conf.d/default.conf ] && mv /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf.bak
+fi
 
-nginx -t && systemctl reload nginx
+systemctl enable nginx
+nginx -t && systemctl restart nginx
 log "nginx настроен"
 
-# ── 9. SSL (Let's Encrypt) ────────────────────────────────────
+# ── 11. SSL (Let's Encrypt) ───────────────────────────────────
 echo ""
 echo "DNS для $DOMAIN должен указывать на этот сервер."
 echo "Если ещё не настроен — сначала настройте, потом запустите:"
@@ -187,7 +263,7 @@ if [[ "${do_ssl:-N}" =~ ^[Yy]$ ]]; then
         --non-interactive --agree-tos \
         --email "admin@$DOMAIN" \
         --redirect
-    log "SSL настроен. Авто-обновление: systemctl status certbot.timer"
+    log "SSL настроен. Авто-обновление включено."
 else
     warn "SSL пропущен. Запустите позже: sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN"
 fi
@@ -197,14 +273,14 @@ echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
 echo "║            SimpleTest успешно задеплоен!                ║"
 echo "╠══════════════════════════════════════════════════════════╣"
-echo "║  URL:      http://$DOMAIN (или https после SSL)  ║"
+echo "║  URL:        http://$DOMAIN                     ║"
 echo "║  Приложение: $APP_DIR                       ║"
 echo "║  .env:       $APP_DIR/.env                  ║"
 echo "╠══════════════════════════════════════════════════════════╣"
-echo "║  Полезные команды:                                       ║"
-echo "║    journalctl -u $SERVICE -f       # логи               ║"
-echo "║    systemctl restart $SERVICE      # перезапуск         ║"
-echo "║    systemctl status  $SERVICE      # статус             ║"
-echo "║    cd $APP_DIR && git pull         # обновление         ║"
+echo "║  Команды управления:                                     ║"
+echo "║    journalctl -u $SERVICE -f   # логи в реальном вр.   ║"
+echo "║    systemctl restart $SERVICE  # перезапуск             ║"
+echo "║    systemctl status  $SERVICE  # статус                 ║"
+echo "║    cd $APP_DIR && git pull     # обновление кода        ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""

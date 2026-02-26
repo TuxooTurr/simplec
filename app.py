@@ -4,6 +4,7 @@ SimpleC v2 - AI-powered QA Test Generator.
 
 import os
 import sys
+import time
 import streamlit as st
 from pathlib import Path
 from datetime import datetime
@@ -776,24 +777,42 @@ with tab1:
 
             llm = LLMClient(selected_provider)
             gen = LayeredGenerator(llm)
-            progress = st.progress(0, text="Слой 1: QA документация...")
 
-            qa_doc = gen.generate_qa_doc(req_text, feature)
-            progress.progress(30, text="Слой 2: Список кейсов...")
+            _depth_eta = {
+                "smoke": "~30–60 сек", "regression": "~1–3 мин",
+                "full": "~3–8 мин", "atomary": "~10–20 мин",
+            }
+            eta = _depth_eta.get(depth_key, "несколько минут")
+            t_start = time.time()
 
-            case_list = gen.generate_case_list(qa_doc, depth_key, "", feature)
-            progress.progress(50, text="Слой 3: Детальные кейсы...")
+            with st.status(f"Генерация тест-кейсов ({eta})...", expanded=True) as _status:
 
-            md_cases = []
-            total = len(case_list)
-            for i, case_info in enumerate(case_list):
-                pct = 50 + int(45 * (i + 1) / max(total, 1))
-                cname = case_info.get("name", "")[:40]
-                progress.progress(pct, text="Кейс " + str(i+1) + "/" + str(total) + ": " + cname)
-                tc = gen.generate_case_markdown(case_info, qa_doc, depth=depth_key)
-                md_cases.append(tc)
+                st.write("**Слой 1** — QA документация")
+                qa_doc = gen.generate_qa_doc(req_text, feature)
+                t1 = time.time() - t_start
+                st.write(f"✓ QA документация готова ({t1:.0f}с)")
 
-            progress.progress(100, text="Готово!")
+                st.write("**Слой 2** — Список кейсов")
+                case_list = gen.generate_case_list(qa_doc, depth_key, "", feature)
+                t2 = time.time() - t_start
+                st.write(f"✓ Список: {len(case_list)} кейсов ({t2:.0f}с)")
+
+                st.write(f"**Слой 3** — Детальные кейсы (0/{len(case_list)})")
+                _prog = st.progress(0)
+                md_cases = []
+                total = len(case_list)
+                for i, case_info in enumerate(case_list):
+                    pct = int(100 * (i + 1) / max(total, 1))
+                    cname = case_info.get("name", "")[:50]
+                    _prog.progress(pct, text=f"Кейс {i+1}/{total}: {cname}")
+                    tc = gen.generate_case_markdown(case_info, qa_doc, depth=depth_key)
+                    md_cases.append(tc)
+
+                t3 = time.time() - t_start
+                _status.update(
+                    label=f"✓ Готово — {total} кейсов за {t3:.0f}с",
+                    state="complete", expanded=False
+                )
 
             st.session_state.qa_doc = qa_doc
             st.session_state.case_list = case_list

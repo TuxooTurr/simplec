@@ -31,10 +31,14 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# CORS — в проде ограничить до simpletest.pro
+# CORS — разрешаем только свой домен + localhost для разработки
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://simpletest.pro",
+        "https://www.simpletest.pro",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

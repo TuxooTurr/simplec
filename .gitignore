@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 **/*.pyc
 .env
+frontend/.env.local
 db/chroma_data/
 db/chroma_db/
 db/logs/

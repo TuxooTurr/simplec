@@ -236,9 +236,11 @@ export default function EtalonsPage() {
 
                 {/* TC col */}
                 <div className="flex flex-col">
-                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-                    Тест-кейс (XML/текст) <span className="text-red-400 normal-case font-normal">*</span>
-                  </label>
+                  <div className="flex items-center mb-1.5">
+                    <label className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                      Тест-кейс (XML/текст) <span className="text-red-400 normal-case font-normal">*</span>
+                    </label>
+                  </div>
                   <textarea
                     value={tcText}
                     onChange={(e) => setTcText(e.target.value)}

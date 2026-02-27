@@ -14,18 +14,86 @@
 }
 
 @layer utilities {
+  /* ── Scrollbar ── */
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: #c7d2fe transparent;
   }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background-color: #c7d2fe;
     border-radius: 3px;
   }
+
+  /* ── Entrance animations ── */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out both;
+  }
+  .animate-slide-up {
+    animation: slideUp 0.35s ease-out both;
+  }
+  .animate-slide-up-delay-1 { animation: slideUp 0.35s ease-out 0.05s both; }
+  .animate-slide-up-delay-2 { animation: slideUp 0.35s ease-out 0.10s both; }
+  .animate-slide-up-delay-3 { animation: slideUp 0.35s ease-out 0.15s both; }
+
+  /* ── Progress glow ── */
+  .animate-progress-glow {
+    animation: progressGlow 1.5s ease-in-out infinite;
+  }
+
+  /* ── Pulse dot ── */
+  .animate-pulse-dot {
+    animation: pulseDot 2s ease-in-out infinite;
+  }
+
+  /* ── Shimmer (skeleton) ── */
+  .animate-shimmer {
+    background: linear-gradient(90deg, #f0f4ff 25%, #e0e7ff 50%, #f0f4ff 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  /* ── Success bounce ── */
+  .animate-success {
+    animation: successPop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+
+  /* ── Spin (for loaders) ── */
+  .spin-slow { animation: spin 1.2s linear infinite; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes progressGlow {
+  0%, 100% { box-shadow: 0 0 6px 0 rgba(99,102,241,0.4); }
+  50%       { box-shadow: 0 0 14px 3px rgba(99,102,241,0.7); }
+}
+
+@keyframes pulseDot {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%       { transform: scale(1.5); opacity: 0.7; }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+@keyframes successPop {
+  from { transform: scale(0.6); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }

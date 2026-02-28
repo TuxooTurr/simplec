@@ -275,21 +275,25 @@ class LayeredGenerator:
             "КОНТЕКСТ (QA документация):\n" + qa_doc[:2000] + "\n\n"
             + enhanced + "\n\n"
             "КОЛИЧЕСТВО ШАГОВ: " + step_instr + "\n\n"
-            "ФОРМАТ (строго соблюдай):\n\n"
+            "ФОРМАТ — ОБЯЗАТЕЛЬНО использовать ТОЧНО такой синтаксис заголовков шагов:\n\n"
             "## " + case_name + "\n\n"
-            "**Шаг 1:** Конкретное действие\n"
-            "- Тестовые данные: конкретные значения\n"
-            "- Результат:\n"
-            "  - UI: что видит пользователь\n"
-            "  - API: метод, endpoint, статус код\n"
-            "  - БД: таблица, запись, значения\n\n"
-            "ВАЖНО:\n"
-            "- Тестовые данные = КОНКРЕТНЫЕ значения\n"
-            "- UI = что ВИДИТ пользователь\n"
-            "- API = конкретный endpoint и ответ\n"
-            "- БД = конкретная таблица и поля\n"
-            "- Если для шага уровень не применим, пиши \"-\"\n\n"
-            "Только Markdown. Без пояснений."
+            "**Шаг 1:** Открыть браузер и перейти на страницу авторизации\n"
+            "- Тестовые данные: URL https://example.ru/login\n"
+            "- UI: Отображается форма входа с полями «Логин» и «Пароль»\n"
+            "- API: -\n"
+            "- БД: -\n\n"
+            "**Шаг 2:** Ввести корректные учётные данные и нажать «Войти»\n"
+            "- Тестовые данные: login=testuser, password=Test@1234\n"
+            "- UI: Пользователь перенаправлен на главную страницу\n"
+            "- API: POST /api/auth/login → 200 OK, body: {\"token\": \"...\"}\n"
+            "- БД: таблица users, поле last_login обновлено\n\n"
+            "КРИТИЧЕСКИ ВАЖНО:\n"
+            "- Заголовок шага ВСЕГДА: **Шаг N:** (звёздочки, двоеточие — точно так)\n"
+            "- После двоеточия — действие на той же строке\n"
+            "- Строки UI / API / БД — без дополнительных отступов\n"
+            "- Тестовые данные = КОНКРЕТНЫЕ значения, не шаблоны\n"
+            "- Если поле не применимо — пиши \"-\"\n\n"
+            "Только Markdown. Без вводных слов и пояснений."
         )
 
         response = self.llm.chat([Message(role="user", content=prompt)],
@@ -299,39 +303,76 @@ class LayeredGenerator:
 
     def _parse_markdown(self, text, case_info):
         import re
+
+        # Strip code fences
+        text = re.sub(r'```\w*\n?', '', text).strip()
+
+        # ── Step detection: try patterns from most to least strict ──────────
+        # Each pattern captures (step_number, block_content)
+        STEP_PATTERNS = [
+            # **Шаг N:** или **Шаг N.**  (двоеточие/точка внутри **)
+            r'\*\*Шаг\s*(\d+)\s*[:.]\*\*\s*(.+?)(?=\*\*Шаг\s*\d+\s*[:.]\*\*|\Z)',
+            # **Шаг N**: или **Шаг N**.  (знак снаружи **)
+            r'\*\*Шаг\s*(\d+)\*\*\s*[:.]\s*(.+?)(?=\*\*Шаг\s*\d+\*\*|\Z)',
+            # ### Шаг N: или ## Шаг N
+            r'#{1,3}\s+Шаг\s+(\d+)[:.]\s*(.+?)(?=#{1,3}\s+Шаг\s+\d+|\Z)',
+            # Шаг N: (plain, без markdown)
+            r'(?:^|\n)Шаг\s+(\d+)\s*[:.]\s*(.+?)(?=\nШаг\s+\d+\s*[:.]\s*|\Z)',
+        ]
+
+        matches = []
+        for pattern in STEP_PATTERNS:
+            matches = re.findall(pattern, text, re.DOTALL)
+            if matches:
+                break
+
+        # ── Fallback: нумерованный список  1. / 1) ─────────────────────────
+        if not matches:
+            matches = re.findall(
+                r'(?:^|\n)\s*(\d+)[.)]\s+(.+?)(?=\n\s*\d+[.)]\s+|\Z)',
+                text, re.DOTALL
+            )
+
+        # ── Парсинг блоков шагов ────────────────────────────────────────────
         steps = []
-
-        if text.strip().startswith('```'):
-            text = re.sub(r'```\w*', '', text)
-
-        step_pattern = r'\*\*Шаг\s*(\d+):\*\*\s*(.+?)(?=\*\*Шаг\s*\d+:\*\*|$)'
-        matches = re.findall(step_pattern, text, re.DOTALL)
-
-        for num, block in matches:
-            lines = block.strip().split(chr(10))
-            action = lines[0].strip() if lines else "Действие"
-
+        for _num, block in matches:
+            lines = block.strip().split('\n')
+            # Первая непустая строка — действие
+            action = next((l.strip() for l in lines if l.strip()), "Действие")
             step = {"action": action, "test_data": "-", "ui": "-", "api": "-", "db": "-"}
 
-            for line in block.split(chr(10)):
-                line_lower = line.lower().strip()
-                if "тестовые данные" in line_lower:
-                    val = line.split(":", 1)[-1].strip()
-                    step["test_data"] = val if val else "-"
-                elif line_lower.startswith("- ui:") or line_lower.startswith("ui:"):
-                    val = line.split(":", 1)[-1].strip()
-                    step["ui"] = val if val else "-"
-                elif line_lower.startswith("- api:") or line_lower.startswith("api:"):
-                    val = line.split(":", 1)[-1].strip()
-                    step["api"] = val if val else "-"
-                elif any(x in line_lower for x in ["бд:", "db:", "база данных:"]):
-                    val = line.split(":", 1)[-1].strip()
-                    step["db"] = val if val else "-"
+            for line in lines:
+                ls = line.strip()
+                ll = ls.lower()
+                if not ls or ll == action.lower():
+                    continue
+                if "тестовые данные" in ll or "test data" in ll:
+                    val = ls.split(":", 1)[-1].strip()
+                    if val:
+                        step["test_data"] = val
+                elif re.match(r'^-?\s*ui\s*:', ll):
+                    val = ls.split(":", 1)[-1].strip()
+                    if val:
+                        step["ui"] = val
+                elif re.match(r'^-?\s*api\s*:', ll):
+                    val = ls.split(":", 1)[-1].strip()
+                    if val:
+                        step["api"] = val
+                elif re.match(r'^-?\s*(бд|db|база данных)\s*:', ll):
+                    val = ls.split(":", 1)[-1].strip()
+                    if val:
+                        step["db"] = val
 
             steps.append(step)
 
+        # ── Крайний fallback: весь текст как один шаг ────────────────────────
         if not steps:
-            steps = [{"action": "Не удалось распарсить ответ LLM", "test_data": "-", "ui": "-", "api": "-", "db": "-"}]
+            first_meaningful = next(
+                (l.strip() for l in text.split('\n') if l.strip() and not l.startswith('#')),
+                text[:200].strip()
+            )
+            steps = [{"action": first_meaningful or "Требует уточнения",
+                       "test_data": "-", "ui": "-", "api": "-", "db": "-"}]
 
         return TestCaseMarkdown(
             name=case_info["name"],

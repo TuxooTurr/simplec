@@ -3,21 +3,21 @@
 
 При первом запуске, если users.json пуст, создаётся пользователь
 из переменных ADMIN_USER / ADMIN_PASS (по умолчанию: admin / simpletest).
+
+Используем bcrypt напрямую (без passlib) для совместимости с bcrypt 4.0+/5.0+.
+Пароль усекается до 72 байт перед хэшированием (ограничение алгоритма bcrypt).
 """
 
 import json
 import os
 from pathlib import Path
 
-from passlib.context import CryptContext
+import bcrypt as _bcrypt_lib
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _USERS_FILE = _DATA_DIR / "users.json"
 
-# bcrypt >= 4.0 raises ValueError for passwords > 72 bytes by default;
-# passlib 1.7.x may pass pre-processed (longer) data to the C library.
-# truncate_error=False restores silent truncation (safe for bcrypt 4+/5+).
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
+_TRUNCATE = 72  # bcrypt hard limit
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
@@ -35,6 +35,11 @@ def _save(users: list[dict]) -> None:
         json.dump(users, f, indent=2, ensure_ascii=False)
 
 
+def _encode(plain: str) -> bytes:
+    """UTF-8 encode + truncate to bcrypt limit."""
+    return plain.encode("utf-8")[:_TRUNCATE]
+
+
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 def get_user(username: str) -> dict | None:
@@ -42,11 +47,14 @@ def get_user(username: str) -> dict | None:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return _pwd_ctx.verify(plain, hashed)
+    try:
+        return _bcrypt_lib.checkpw(_encode(plain), hashed.encode("utf-8"))
+    except Exception:
+        return False
 
 
 def hash_password(plain: str) -> str:
-    return _pwd_ctx.hash(plain)
+    return _bcrypt_lib.hashpw(_encode(plain), _bcrypt_lib.gensalt()).decode("utf-8")
 
 
 def create_user(username: str, password: str) -> dict:

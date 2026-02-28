@@ -14,7 +14,10 @@ from passlib.context import CryptContext
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _USERS_FILE = _DATA_DIR / "users.json"
 
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt >= 4.0 raises ValueError for passwords > 72 bytes by default;
+# passlib 1.7.x may pass pre-processed (longer) data to the C library.
+# truncate_error=False restores silent truncation (safe for bcrypt 4+/5+).
+_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__truncate_error=False)
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────

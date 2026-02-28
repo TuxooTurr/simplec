@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Zap, BookOpen, Bug } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Zap, BookOpen, Bug, LogOut, User } from "lucide-react";
+import { useEffect, useState } from "react";
 import LLMStatusBar from "./LLMStatusBar";
+import { logout, getMe } from "@/lib/auth";
 
 interface SidebarProps {
   controls?: React.ReactNode;
@@ -17,6 +19,17 @@ const NAV = [
 
 export default function Sidebar({ controls }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
+  const [username, setUsername] = useState<string | null>(null);
+
+  useEffect(() => {
+    getMe().then((me) => setUsername(me?.username ?? null));
+  }, []);
+
+  async function handleLogout() {
+    await logout();
+    router.push("/login");
+  }
 
   return (
     <aside className="w-72 min-h-screen bg-white border-r border-border-main flex flex-col flex-shrink-0">
@@ -73,8 +86,27 @@ export default function Sidebar({ controls }: SidebarProps) {
       )}
 
       {/* LLM status at bottom */}
-      <div className="mt-auto px-4 py-3 border-t border-border-main">
-        <LLMStatusBar />
+      <div className="mt-auto border-t border-border-main">
+        <div className="px-4 py-3">
+          <LLMStatusBar />
+        </div>
+
+        {/* User + logout */}
+        {username && (
+          <div className="px-4 pb-3 flex items-center gap-2">
+            <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
+              <User className="w-3.5 h-3.5 text-primary" />
+            </div>
+            <span className="text-xs text-text-muted flex-1 truncate">{username}</span>
+            <button
+              onClick={handleLogout}
+              title="Выйти"
+              className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-red-500 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

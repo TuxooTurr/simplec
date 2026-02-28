@@ -19,16 +19,21 @@ if str(_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import generation, etalons, bugs, system
+from backend.api import auth, generation, etalons, bugs, system
+from backend.auth import require_auth
+from db.user_store import ensure_default_user
+
+# Создать пользователя по умолчанию если база пуста
+ensure_default_user()
 
 app = FastAPI(
     title="SimpleTest API",
     description="AI-генератор тест-кейсов для Jira Zephyr Scale",
-    version="2.0.0",
+    version="2.1.0",
 )
 
 # CORS — разрешаем только свой домен + localhost для разработки
@@ -44,11 +49,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Роутеры
+# ─── Открытые роутеры (без авторизации) ─────────────────────────────────────
+app.include_router(auth.router)
+
+# /healthz и /api/system/providers — публичные (для nginx health check и LLM статуса на login)
 app.include_router(system.router)
-app.include_router(generation.router)
-app.include_router(etalons.router)
-app.include_router(bugs.router)
+
+# ─── Защищённые роутеры (require_auth) ──────────────────────────────────────
+_auth_dep = [Depends(require_auth)]
+
+app.include_router(generation.router, dependencies=_auth_dep)
+app.include_router(etalons.router,    dependencies=_auth_dep)
+app.include_router(bugs.router,       dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

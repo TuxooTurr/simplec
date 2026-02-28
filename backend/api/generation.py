@@ -25,6 +25,7 @@ import time
 from typing import List
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from backend.auth import ws_require_auth
 
 router = APIRouter()
 
@@ -210,6 +211,9 @@ async def _handle_export(ws: WebSocket, data: dict):
 
 @router.websocket("/api/ws/generation")
 async def ws_generation(websocket: WebSocket):
+    username = await ws_require_auth(websocket)
+    if not username:
+        return
     await websocket.accept()
     try:
         while True:

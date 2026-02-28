@@ -20,6 +20,12 @@ interface WorkspaceCtx {
   /** Какая секция сейчас тащится из сайдбара */
   dragging: SectionId | null;
   setDragging: (id: SectionId | null) => void;
+  /** Видна ли левая панель */
+  leftVisible: boolean;
+  setLeftVisible: (v: boolean) => void;
+  /** Открыта ли правая панель (независимо от rightSection) */
+  rightOpen: boolean;
+  setRightOpen: (v: boolean) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceCtx>({
@@ -29,16 +35,28 @@ const WorkspaceContext = createContext<WorkspaceCtx>({
   setRightSection: () => {},
   dragging: null,
   setDragging: () => {},
+  leftVisible: true,
+  setLeftVisible: () => {},
+  rightOpen: false,
+  setRightOpen: () => {},
 });
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState("gigachat");
   const [rightSection, setRightSection] = useState<SectionId | null>(null);
   const [dragging, setDragging] = useState<SectionId | null>(null);
+  const [leftVisible, setLeftVisible] = useState(true);
+  const [rightOpen, setRightOpen] = useState(false);
 
   return (
     <WorkspaceContext.Provider
-      value={{ provider, setProvider, rightSection, setRightSection, dragging, setDragging }}
+      value={{
+        provider, setProvider,
+        rightSection, setRightSection,
+        dragging, setDragging,
+        leftVisible, setLeftVisible,
+        rightOpen, setRightOpen,
+      }}
     >
       {children}
     </WorkspaceContext.Provider>

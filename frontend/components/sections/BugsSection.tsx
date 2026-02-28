@@ -1,16 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { Bug, Loader2, Copy, CheckCheck, Globe, Smartphone, Monitor, Terminal } from "lucide-react";
+import { Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone, BarChart2, Palette, GitBranch } from "lucide-react";
 import { formatBug } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 const PLATFORMS = [
-  { id: "Web",            label: "Web",     Icon: Globe },
-  { id: "Mobile iOS",     label: "iOS",     Icon: Smartphone },
-  { id: "Mobile Android", label: "Android", Icon: Smartphone },
-  { id: "Desktop",        label: "Desktop", Icon: Monitor },
-  { id: "API",            label: "API",     Icon: Terminal },
+  { id: "Back",      label: "Back",      Icon: Server },
+  { id: "Front",     label: "Front",     Icon: Monitor },
+  { id: "Mobile",    label: "Mobile",    Icon: Smartphone },
+  { id: "Analytics", label: "Analytics", Icon: BarChart2 },
+  { id: "Design",    label: "Design",    Icon: Palette },
+  { id: "DevOps",    label: "DevOps",    Icon: GitBranch },
 ];
 
 const INPUT_CLS =
@@ -19,7 +20,7 @@ const INPUT_CLS =
 export default function BugsSection() {
   const { provider } = useWorkspace();
 
-  const [platform, setPlatform]       = useState("Web");
+  const [platform, setPlatform]       = useState("Back");
   const [feature, setFeature]         = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading]         = useState(false);

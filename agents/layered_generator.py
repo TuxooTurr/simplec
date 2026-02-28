@@ -218,13 +218,26 @@ class LayeredGenerator:
                                   temperature=0.5, max_tokens=4000)
 
         text = response.content.strip()
-        match = re.search(r'\$$.*\$$', text, re.DOTALL)
+
+        # 1. Прямой парсинг — LLM вернул чистый JSON
+        try:
+            cases = json.loads(text)
+            if isinstance(cases, list) and cases:
+                return cases
+        except Exception:
+            pass
+
+        # 2. Вырезаем JSON-массив из текста (LLM добавил пояснения вокруг)
+        match = re.search(r'\[.*\]', text, re.DOTALL)
         if match:
             try:
-                return json.loads(match.group())
+                cases = json.loads(match.group())
+                if isinstance(cases, list) and cases:
+                    return cases
             except Exception:
                 pass
 
+        # 3. Fallback — только если LLM совсем не справился
         return [
             {"name": "[" + system + "][" + feature + "] Основной сценарий", "priority": "High", "type": "positive"},
             {"name": "[" + system + "][" + feature + "] Валидация данных", "priority": "Normal", "type": "negative"},

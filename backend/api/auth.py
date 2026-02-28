@@ -30,6 +30,8 @@ def login(req: LoginRequest, response: Response):
             detail="Неверный логин или пароль",
         )
     token = create_token(req.username)
+    import os as _os
+    secure = _os.getenv("COOKIE_SECURE", "1") != "0"
     response.set_cookie(
         key=COOKIE_NAME,
         value=token,
@@ -37,7 +39,7 @@ def login(req: LoginRequest, response: Response):
         samesite="lax",
         max_age=SESSION_HOURS * 3600,
         path="/",
-        secure=False,   # True если только HTTPS (nginx добавит Secure на проде)
+        secure=secure,  # True на проде (HTTPS), False локально (COOKIE_SECURE=0)
     )
     return {"username": req.username}
 

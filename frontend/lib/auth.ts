@@ -9,13 +9,10 @@ export interface MeResponse {
 }
 
 export async function login(username: string, password: string): Promise<void> {
-  const body = new FormData();
-  body.append("username", username);
-  body.append("password", password);
-
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
-    body,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
     credentials: "include",
   });
 

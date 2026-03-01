@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Zap, UserPlus, Eye, EyeOff } from "lucide-react";
 import { register } from "@/lib/auth";
@@ -14,8 +13,6 @@ const INPUT_CLS = `
 `;
 
 export default function RegisterPage() {
-  const router = useRouter();
-
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm]   = useState("");
@@ -43,7 +40,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await register(username.trim(), password);
-      router.push("/generation");
+      window.location.href = "/generation";
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ошибка регистрации");
     } finally {

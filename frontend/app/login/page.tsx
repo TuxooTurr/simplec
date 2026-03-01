@@ -1,13 +1,12 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Zap, LogIn, Eye, EyeOff } from "lucide-react";
 import { login } from "@/lib/auth";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const from = searchParams.get("from") ?? "/generation";
 
@@ -23,7 +22,7 @@ function LoginForm() {
     setLoading(true);
     try {
       await login(username, password);
-      router.push(from);
+      window.location.href = from;
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Ошибка входа");
     } finally {

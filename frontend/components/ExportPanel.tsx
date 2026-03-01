@@ -12,7 +12,7 @@ interface ExportPanelProps {
   onBack: () => void;
   initialProject?: string;
   initialTeam?: string;
-  initialKe?: boolean;
+  initialSystem?: string;  // АС / КЭ из настроек кейса
 }
 
 export interface ExportPanelParams {
@@ -21,7 +21,6 @@ export interface ExportPanelParams {
   project: string;
   system: string;
   team: string;
-  ke: boolean;
   domain: string;
   folder: string;
   use_llm: boolean;
@@ -44,11 +43,10 @@ const DOWNLOAD_BUTTONS = [
   { key: "md",  label: "Markdown",    mime: "text/markdown",    ext: "md",  Icon: FileText,  color: "text-violet-600 border-violet-200 hover:bg-violet-50" },
 ] as const;
 
-export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialKe }: ExportPanelProps) {
+export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialSystem }: ExportPanelProps) {
   const [project, setProject] = useState(initialProject ?? "SBER911");
-  const [system, setSystem]   = useState("");
+  const [system, setSystem]   = useState(initialSystem ?? "");
   const [team, setTeam]       = useState(initialTeam ?? "");
-  const [ke, setKe]           = useState(initialKe ?? false);
   const [domain, setDomain]   = useState("");
   const [folder, setFolder]   = useState("Новая ТМ");
   const [useLlm, setUseLlm]   = useState(false);
@@ -57,7 +55,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
 
   const handleExport = async () => {
     setLoading(true);
-    onExport({ cases, qa_doc: qaDoc, project, system, team, ke, domain, folder, use_llm: useLlm, provider });
+    onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider });
     setLoading(false);
   };
 
@@ -87,7 +85,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
         <div className="grid grid-cols-2 gap-3">
           {[
             { label: "Проект",       val: project, set: setProject, ph: "SBER911" },
-            { label: "АС / Система", val: system,  set: setSystem,  ph: "Например: ЛК" },
+            { label: "АС / КЭ",      val: system,  set: setSystem,  ph: "Например: ЛК Физ. лица" },
             { label: "Команда",      val: team,    set: setTeam,    ph: "Например: Team Alpha" },
             { label: "Домен",        val: domain,  set: setDomain,  ph: "Например: Платежи" },
           ].map(({ label, val, set, ph }) => (
@@ -103,20 +101,6 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
               />
             </div>
           ))}
-          <div className="col-span-2">
-            <label className="flex items-center gap-2.5 cursor-pointer group select-none" onClick={() => setKe((v) => !v)}>
-              <div className={`relative flex-shrink-0 w-9 h-5 rounded-full transition-colors duration-200 ${ke ? "bg-violet-600" : "bg-gray-200"}`}>
-                <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200 ${ke ? "translate-x-4" : "translate-x-0.5"}`} />
-              </div>
-              <span className="text-sm text-text-muted group-hover:text-text-main transition-colors flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-violet-400" />
-                LLM-оценка критичности (КЭ)
-                <span className="text-xs text-text-muted/70">
-                  {ke ? "(LLM пометит кейсы как крит. для регресса)" : "(кейсы не будут помечены)"}
-                </span>
-              </span>
-            </label>
-          </div>
           <div className="col-span-2">
             <label className="block text-xs text-text-muted mb-1">Папка в Zephyr</label>
             <input

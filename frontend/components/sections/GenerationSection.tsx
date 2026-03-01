@@ -49,7 +49,7 @@ export default function GenerationSection() {
   const [feature, setFeature]     = useState("");
   const [team, setTeam]           = useState("");
   const [project, setProject]     = useState("");
-  const [ke, setKe]               = useState(false);  // LLM auto-marks critical regression cases
+  const [ke, setKe]               = useState("");  // АС (Автоматизированная Система)
   const [settingsTouched, setSettingsTouched] = useState(false);
 
   const { state, events, progress, cases, qaDoc, start, exportCases, exportResult, reset } =
@@ -58,12 +58,14 @@ export default function GenerationSection() {
   const settingsDone =
     feature.trim().length > 0 &&
     team.trim().length > 0 &&
-    project.trim().length > 0;
+    project.trim().length > 0 &&
+    ke.trim().length > 0;
 
   const filledCount = [
     feature.trim().length > 0,
     team.trim().length > 0,
     project.trim().length > 0,
+    ke.trim().length > 0,
   ].filter(Boolean).length;
 
   useEffect(() => {
@@ -194,34 +196,17 @@ export default function GenerationSection() {
             />
           </div>
 
-          {/* КЭ */}
-          <div className="pt-1">
-            <label className={LABEL_CLS}>КЭ</label>
-            <label
-              className="flex items-start gap-3 cursor-pointer group select-none"
-              onClick={() => setKe((v) => !v)}
-            >
-              {/* Toggle switch */}
-              <div className={`
-                relative flex-shrink-0 w-9 h-5 mt-0.5 rounded-full transition-colors duration-200
-                ${ke ? "bg-violet-600" : "bg-gray-200"}
-              `}>
-                <div className={`
-                  absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200
-                  ${ke ? "translate-x-4" : "translate-x-0.5"}
-                `} />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-text-main leading-tight">
-                  LLM-оценка критичности (КЭ)
-                </p>
-                <p className="text-xs text-text-muted mt-0.5 leading-snug">
-                  {ke
-                    ? "LLM автоматически пометит кейсы как крит. для регресса"
-                    : "Кейсы не будут помечены как крит. для регресса"}
-                </p>
-              </div>
+          {/* КЭ / АС */}
+          <div>
+            <label className={LABEL_CLS}>
+              АС / КЭ <span className="text-red-400">*</span>
             </label>
+            <input
+              value={ke}
+              onChange={(e) => setKe(e.target.value)}
+              placeholder="Например: ЛК Физ. лица"
+              className={`${INPUT_CLS} ${settingsTouched && !ke.trim() ? "border-red-300 focus:border-red-400 focus:ring-red-100" : ""}`}
+            />
           </div>
         </div>
 
@@ -242,7 +227,7 @@ export default function GenerationSection() {
           {settingsDone ? (
             <><CheckCircle2 className="w-4 h-4" /> Применить</>
           ) : (
-            `Заполните все поля (${filledCount}/3)`
+            `Заполните все поля (${filledCount}/4)`
           )}
         </button>
       </div>
@@ -282,7 +267,7 @@ export default function GenerationSection() {
                 <CheckCircle2 className="w-3.5 h-3.5" />
               ) : (
                 <span className="ml-0.5 bg-violet-200 text-violet-800 rounded-full px-1.5 py-0 text-[10px] font-bold">
-                  {filledCount}/3
+                  {filledCount}/4
                 </span>
               )}
             </button>
@@ -514,7 +499,7 @@ export default function GenerationSection() {
           onBack={() => setStage("review")}
           initialProject={project}
           initialTeam={team}
-          initialKe={ke}
+          initialSystem={ke}
         />
       </div>
     </div>

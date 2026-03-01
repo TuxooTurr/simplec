@@ -15,3 +15,6 @@ out/
 *.save
 feedback.json
 .claude/
+data/users.json
+Linly-Dubbing/
+*.css

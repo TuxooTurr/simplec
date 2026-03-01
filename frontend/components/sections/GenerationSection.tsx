@@ -196,6 +196,7 @@ export default function GenerationSection() {
 
           {/* КЭ */}
           <div className="pt-1">
+            <label className={LABEL_CLS}>КЭ</label>
             <label
               className="flex items-start gap-3 cursor-pointer group select-none"
               onClick={() => setKe((v) => !v)}

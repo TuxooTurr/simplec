@@ -93,6 +93,7 @@ export function useGeneration() {
       feature: string;
       depth: string;
       provider: string;
+      platform: string;
     }) => {
       // Reset state
       setState("generating");

@@ -22,6 +22,11 @@ const DEPTHS = [
   { id: "atomary",    label: "Atomary",    sub: "31-100",       hint: "~10–20 мин", color: "text-violet-600" },
 ];
 
+const PLATFORMS = [
+  { id: "W", label: "Web",    sub: "Браузер" },
+  { id: "M", label: "Mobile", sub: "Мобилка" },
+];
+
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
@@ -31,6 +36,7 @@ export default function GenerationSection() {
   const [requirement, setRequirement] = useState("");
   const [feature, setFeature]         = useState("");
   const [depth, setDepth]             = useState("smoke");
+  const [platform, setPlatform]       = useState("W");
   const [stage, setStage]             = useState<Stage>("input");
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
@@ -53,7 +59,7 @@ export default function GenerationSection() {
   const handleGenerate = () => {
     const text = requirement.trim();
     if (!text) return;
-    start({ requirement: text, feature: feature || "Feature", depth, provider });
+    start({ requirement: text, feature: feature || "Feature", depth, provider, platform });
   };
 
   const handleFileUpload = async (file: File) => {
@@ -117,6 +123,30 @@ export default function GenerationSection() {
                 {currentDepth.hint}
               </p>
             )}
+          </div>
+
+          {/* W/M платформа */}
+          <div className="flex-shrink-0">
+            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
+              Платформа
+            </label>
+            <div className="grid grid-cols-2 gap-1.5">
+              {PLATFORMS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setPlatform(p.id)}
+                  className={`
+                    px-3 py-2 rounded-lg text-xs font-medium border transition-all duration-150 text-center
+                    ${platform === p.id
+                      ? "border-primary bg-indigo-50 text-primary"
+                      : "border-border-main bg-white text-text-muted hover:border-primary/40 hover:text-text-main"}
+                  `}
+                >
+                  <div className="font-semibold">{p.label}</div>
+                  <div className="text-[10px] opacity-70 mt-0.5">{p.sub}</div>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Фича */}

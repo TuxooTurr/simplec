@@ -112,6 +112,7 @@ async def _handle_generation(ws: WebSocket, data: dict):
     feature = data.get("feature", "Feature")
     depth = data.get("depth", "smoke")
     provider = data.get("provider", "gigachat")
+    platform = data.get("platform", "W")
 
     if not requirement:
         await ws.send_json({"type": "error", "message": "Требование не может быть пустым"})
@@ -136,7 +137,7 @@ async def _handle_generation(ws: WebSocket, data: dict):
 
         # Layer 2 — Case list
         await ws.send_json({"type": "layer_start", "layer": 2, "name": "Список кейсов"})
-        case_list = await asyncio.to_thread(gen.generate_case_list, qa_doc, depth, "", feature)
+        case_list = await asyncio.to_thread(gen.generate_case_list, qa_doc, depth, "", feature, platform)
         t2 = round(time.time() - t_start)
         await ws.send_json({
             "type": "layer_done", "layer": 2, "elapsed": t2,

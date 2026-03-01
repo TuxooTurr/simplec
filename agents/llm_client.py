@@ -20,6 +20,7 @@ class LLMResponse:
     content: str
     model: str = ""
     usage: dict = None
+    finish_reason: str = "stop"  # "stop" | "length" | "content_filter"
 
     def __post_init__(self):
         if self.usage is None:
@@ -100,7 +101,8 @@ class LLMClient:
         return LLMResponse(
             content=response.choices[0].message.content,
             model=response.model,
-            usage={}
+            usage={},
+            finish_reason=str(response.choices[0].finish_reason or "stop"),
         )
 
     def _chat_deepseek(self, messages, temperature, max_tokens):

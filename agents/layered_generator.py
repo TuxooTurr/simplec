@@ -150,7 +150,7 @@ class LayeredGenerator:
     # ========================================================
     # LAYER 2: Case list (depth-aware)
     # ========================================================
-    def generate_case_list(self, qa_doc, depth="smoke", system="", feature=""):
+    def generate_case_list(self, qa_doc, depth="smoke", system="", feature="", platform="W"):
         from agents.llm_client import Message
         import json
         import re
@@ -204,13 +204,17 @@ class LayeredGenerator:
             "ПРАВИЛА ДЛЯ ГЛУБИНЫ \"" + depth + "\":\n" + rules + "\n\n"
             "ФОРМАТ (JSON массив):\n"
             "[\n"
-            '  {"name": "[' + system + '][' + feature + '] Название кейса", "priority": "High", "type": "positive"},\n'
-            '  {"name": "[' + system + '][' + feature + '] Название кейса", "priority": "Normal", "type": "negative"}\n'
+            '  {"name": "[' + platform + '][' + feature + '] HappyPath. Описание основного сценария", "priority": "High", "type": "positive"},\n'
+            '  {"name": "[' + platform + '][' + feature + '] Boundary. Описание граничного случая", "priority": "Normal", "type": "boundary"}\n'
             "]\n\n"
             "ПРАВИЛА ИМЕНОВАНИЯ:\n"
-            "- Первый кейс = Happy Path (High priority)\n"
-            "- type: positive, negative, boundary, integration, security\n"
-            "- priority: High (критичные), Normal (основные), Low (дополнительные)\n\n"
+            "- Формат СТРОГО: [" + platform + "][" + feature + "] ГруппаПроверок. Наименование кейса\n"
+            "- ГруппаПроверок — ОДНО слово из: HappyPath | Regression | Boundary | Security | Authorization | Integration | Error | Smoke\n"
+            "- Наименование — конкретное, понятное Junior-тестировщику, без аббревиатур и технического жаргона\n"
+            '- Пример хорошего названия: "[' + platform + '][' + feature + '] HappyPath. Пользователь успешно выполняет основное действие"\n'
+            '- Пример плохого названия: "[' + platform + '][' + feature + '] TC_001_positive"\n'
+            "- priority: High (критичные), Normal (основные), Low (дополнительные)\n"
+            "- type: positive, negative, boundary, integration, security\n\n"
             "Верни ТОЛЬКО JSON массив. Никакого текста до или после."
         )
 
@@ -239,8 +243,8 @@ class LayeredGenerator:
 
         # 3. Fallback — только если LLM совсем не справился
         return [
-            {"name": "[" + system + "][" + feature + "] Основной сценарий", "priority": "High", "type": "positive"},
-            {"name": "[" + system + "][" + feature + "] Валидация данных", "priority": "Normal", "type": "negative"},
+            {"name": "[" + platform + "][" + feature + "] HappyPath. Основной успешный сценарий", "priority": "High", "type": "positive"},
+            {"name": "[" + platform + "][" + feature + "] Error. Ошибка при некорректных входных данных", "priority": "Normal", "type": "negative"},
         ]
 
     # ========================================================
@@ -280,26 +284,68 @@ class LayeredGenerator:
             "**Шаг 1:** Открыть браузер и перейти на страницу авторизации\n"
             "- Тестовые данные: URL https://example.ru/login\n"
             "- UI: Отображается форма входа с полями «Логин» и «Пароль»\n"
-            "- API: -\n"
-            "- БД: -\n\n"
+            "- API: Запросов к API нет\n"
+            "- БД: Изменений в БД нет\n\n"
             "**Шаг 2:** Ввести корректные учётные данные и нажать «Войти»\n"
             "- Тестовые данные: login=testuser, password=Test@1234\n"
-            "- UI: Пользователь перенаправлен на главную страницу\n"
+            "- UI: Пользователь перенаправлен на главную страницу, отображается приветствие\n"
             "- API: POST /api/auth/login → 200 OK, body: {\"token\": \"...\"}\n"
-            "- БД: таблица users, поле last_login обновлено\n\n"
+            "- БД: таблица users, поле last_login обновлено на текущую дату\n\n"
             "КРИТИЧЕСКИ ВАЖНО:\n"
             "- Заголовок шага ВСЕГДА: **Шаг N:** (звёздочки, двоеточие — точно так)\n"
             "- После двоеточия — действие на той же строке\n"
-            "- Строки UI / API / БД — без дополнительных отступов\n"
-            "- Тестовые данные = КОНКРЕТНЫЕ значения, не шаблоны\n"
-            "- Если поле не применимо — пиши \"-\"\n\n"
+            "- Строки UI / API / БД — всегда присутствуют, без дополнительных отступов\n"
+            "- UI: что ВИДИТ пользователь — если нет изменений, пиши \"Визуальных изменений нет\"\n"
+            "- API: метод, endpoint, статус — если нет запроса, пиши \"Запросов к API нет\"\n"
+            "- БД: таблица и поле — если нет изменений, пиши \"Изменений в БД нет\"\n"
+            "- Тестовые данные = КОНКРЕТНЫЕ значения, если данных нет — пиши \"Не требуются\"\n"
+            "- НИКОГДА не пиши просто \"-\"\n"
+            "- Описания должны быть понятны Junior-тестировщику\n\n"
             "Только Markdown. Без вводных слов и пояснений."
         )
 
         response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.7, max_tokens=2500)
+                                  temperature=0.7, max_tokens=3000)
+        text = response.content
 
-        return self._parse_markdown(response.content, case_info)
+        # Продолжение если LLM обрезал ответ по лимиту токенов (до 3 раз)
+        for _ in range(3):
+            if not self._is_truncated(text, response):
+                break
+            cont_prompt = (
+                "Продолжи написание тест-кейса точно с того места, где текст оборвался.\n"
+                "НЕ повторяй уже написанное — только продолжение.\n\n"
+                "Уже написано:\n" + text + "\n\nПродолжай:"
+            )
+            response = self.llm.chat(
+                [Message(role="user", content=cont_prompt)],
+                temperature=0.7, max_tokens=2000,
+            )
+            if not response.content.strip():
+                break
+            text = text + "\n" + response.content
+
+        return self._parse_markdown(text, case_info)
+
+    def _is_truncated(self, text: str, response) -> bool:
+        """True если ответ LLM обрезан по лимиту токенов."""
+        import re
+        # Точный сигнал от GigaChat
+        if getattr(response, "finish_reason", "stop") == "length":
+            return True
+        stripped = text.rstrip()
+        if len(stripped) < 300:
+            return False
+        last_line = stripped.split("\n")[-1].strip()
+        if not last_line:
+            return False
+        # Считаем завершённым, если последняя строка — структурированное поле или конец предложения
+        clean = (
+            last_line.endswith((".", "!", "?", "–", "—")) or
+            re.match(r"^-\s*(UI|API|БД|Тестовые данные|Данные)\s*:", last_line, re.IGNORECASE) or
+            re.match(r"^-\s*(Изменений|Запросов|Визуальных|Не требуются)", last_line, re.IGNORECASE)
+        )
+        return not clean
 
     def _parse_markdown(self, text, case_info):
         import re
@@ -339,7 +385,7 @@ class LayeredGenerator:
             lines = block.strip().split('\n')
             # Первая непустая строка — действие
             action = next((l.strip() for l in lines if l.strip()), "Действие")
-            step = {"action": action, "test_data": "-", "ui": "-", "api": "-", "db": "-"}
+            step = {"action": action, "test_data": "Не требуются", "ui": "Визуальных изменений нет", "api": "Запросов к API нет", "db": "Изменений в БД нет"}
 
             for line in lines:
                 ls = line.strip()
@@ -372,7 +418,10 @@ class LayeredGenerator:
                 text[:200].strip()
             )
             steps = [{"action": first_meaningful or "Требует уточнения",
-                       "test_data": "-", "ui": "-", "api": "-", "db": "-"}]
+                       "test_data": "Не требуются",
+                       "ui": "Визуальных изменений нет",
+                       "api": "Запросов к API нет",
+                       "db": "Изменений в БД нет"}]
 
         return TestCaseMarkdown(
             name=case_info["name"],

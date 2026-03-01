@@ -1,41 +1,64 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Zap, LogIn, Eye, EyeOff } from "lucide-react";
-import { login } from "@/lib/auth";
+import { Zap, UserPlus, Eye, EyeOff } from "lucide-react";
+import { register } from "@/lib/auth";
 
-function LoginForm() {
+const INPUT_CLS = `
+  w-full h-9 px-3 text-sm rounded-lg border border-border-main
+  bg-white text-text-main placeholder:text-text-muted
+  focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
+  disabled:opacity-50 transition-all
+`;
+
+export default function RegisterPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const from = searchParams.get("from") ?? "/generation";
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm]   = useState("");
+  const [showPw, setShowPw]     = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (username.trim().length < 3) {
+      setError("Логин должен содержать минимум 3 символа");
+      return;
+    }
+    if (password.length < 6) {
+      setError("Пароль должен содержать минимум 6 символов");
+      return;
+    }
+    if (password !== confirm) {
+      setError("Пароли не совпадают");
+      return;
+    }
+
     setLoading(true);
     try {
-      await login(username, password);
-      router.push(from);
+      await register(username.trim(), password);
+      router.push("/generation");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Ошибка входа");
+      setError(err instanceof Error ? err.message : "Ошибка регистрации");
     } finally {
       setLoading(false);
     }
   }
 
+  const pwMatch = confirm.length > 0 && password === confirm;
+  const pwMismatch = confirm.length > 0 && password !== confirm;
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-50 via-blue-50 to-purple-50">
       <div className="w-full max-w-sm animate-fade-in">
-        {/* Card */}
         <div className="bg-white rounded-2xl shadow-lg border border-border-main p-8">
+
           {/* Logo */}
           <div className="flex items-center gap-3 mb-8">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-sm">
@@ -47,10 +70,11 @@ function LoginForm() {
             </div>
           </div>
 
-          <h1 className="text-lg font-semibold text-text-main mb-1">Вход в систему</h1>
-          <p className="text-sm text-text-muted mb-6">Введите логин и пароль для продолжения</p>
+          <h1 className="text-lg font-semibold text-text-main mb-1">Регистрация</h1>
+          <p className="text-sm text-text-muted mb-6">Создайте аккаунт для доступа к системе</p>
 
           <form onSubmit={handleSubmit} className="space-y-4">
+
             {/* Username */}
             <div>
               <label className="block text-xs font-medium text-text-muted mb-1.5">Логин</label>
@@ -61,13 +85,8 @@ function LoginForm() {
                 onChange={(e) => setUsername(e.target.value)}
                 required
                 disabled={loading}
-                placeholder="admin"
-                className="
-                  w-full h-9 px-3 text-sm rounded-lg border border-border-main
-                  bg-white text-text-main placeholder:text-text-muted
-                  focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
-                  disabled:opacity-50 transition-all
-                "
+                placeholder="Минимум 3 символа"
+                className={INPUT_CLS}
               />
             </div>
 
@@ -77,18 +96,13 @@ function LoginForm() {
               <div className="relative">
                 <input
                   type={showPw ? "text" : "password"}
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
                   disabled={loading}
-                  placeholder="••••••••"
-                  className="
-                    w-full h-9 pl-3 pr-9 text-sm rounded-lg border border-border-main
-                    bg-white text-text-main placeholder:text-text-muted
-                    focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary
-                    disabled:opacity-50 transition-all
-                  "
+                  placeholder="Минимум 6 символов"
+                  className={INPUT_CLS.replace("px-3", "pl-3 pr-9")}
                 />
                 <button
                   type="button"
@@ -101,6 +115,27 @@ function LoginForm() {
               </div>
             </div>
 
+            {/* Confirm password */}
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1.5">Повторите пароль</label>
+              <input
+                type={showPw ? "text" : "password"}
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                required
+                disabled={loading}
+                placeholder="••••••••"
+                className={`${INPUT_CLS} ${pwMatch ? "border-green-400 focus:border-green-500 focus:ring-green-200" : ""} ${pwMismatch ? "border-red-300 focus:border-red-400 focus:ring-red-100" : ""}`}
+              />
+              {pwMatch && (
+                <p className="text-xs text-green-600 mt-1">Пароли совпадают</p>
+              )}
+              {pwMismatch && (
+                <p className="text-xs text-red-500 mt-1">Пароли не совпадают</p>
+              )}
+            </div>
+
             {/* Error */}
             {error && (
               <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -111,7 +146,7 @@ function LoginForm() {
             {/* Submit */}
             <button
               type="submit"
-              disabled={loading || !username || !password}
+              disabled={loading || !username || !password || !confirm}
               className="
                 w-full h-9 rounded-lg text-sm font-medium
                 bg-primary text-white
@@ -123,29 +158,21 @@ function LoginForm() {
               {loading ? (
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
-                <LogIn className="w-4 h-4" />
+                <UserPlus className="w-4 h-4" />
               )}
-              {loading ? "Выполняется вход..." : "Войти"}
+              {loading ? "Регистрация..." : "Зарегистрироваться"}
             </button>
           </form>
 
-          {/* Link to register */}
+          {/* Link to login */}
           <p className="text-center text-xs text-text-muted mt-6">
-            Нет аккаунта?{" "}
-            <Link href="/register" className="text-primary hover:underline font-medium">
-              Зарегистрироваться
+            Уже есть аккаунт?{" "}
+            <Link href="/login" className="text-primary hover:underline font-medium">
+              Войти
             </Link>
           </p>
         </div>
       </div>
     </div>
-  );
-}
-
-export default function LoginPage() {
-  return (
-    <Suspense>
-      <LoginForm />
-    </Suspense>
   );
 }

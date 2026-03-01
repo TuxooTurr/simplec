@@ -22,6 +22,20 @@ export async function login(username: string, password: string): Promise<void> {
   }
 }
 
+export async function register(username: string, password: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail ?? "Ошибка регистрации");
+  }
+}
+
 export async function logout(): Promise<void> {
   await fetch(`${API_BASE}/api/auth/logout`, {
     method: "POST",

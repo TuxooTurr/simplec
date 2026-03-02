@@ -48,23 +48,35 @@ class KafkaClient:
     @classmethod
     def send(
         cls,
-        topic: str,
-        payload: str,
-        key: Optional[str] = None,
+        topic:     str,
+        payload:   str,
+        key:       Optional[str] = None,
+        headers:   Optional[list[tuple[str, bytes]]] = None,
+        partition: Optional[int] = None,
     ) -> dict:
         """
         Отправить сообщение в Kafka.
 
+        Args:
+            headers:   Kafka headers — list of (name: str, value: bytes).
+                       Используется для A2A-протокола (JWT заголовки).
+            partition: Явный номер партиции. None = автовыбор по ключу/round-robin.
+
         Returns:
             {"offset": int, "partition": int, "timestamp": int}
-        Raises:
-            Exception с читаемым сообщением при ошибке соединения / отправки.
         """
         producer = cls._build_producer()
         try:
             key_bytes   = key.encode("utf-8") if key else None
             value_bytes = payload.encode("utf-8")
-            future = producer.send(topic, value=value_bytes, key=key_bytes)
+
+            send_kwargs: dict = {"value": value_bytes, "key": key_bytes}
+            if headers:
+                send_kwargs["headers"] = headers
+            if partition is not None:
+                send_kwargs["partition"] = partition
+
+            future = producer.send(topic, **send_kwargs)
             producer.flush(timeout=10)
             record_meta = future.get(timeout=10)
             return {

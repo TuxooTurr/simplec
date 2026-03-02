@@ -17,15 +17,18 @@
   {
     "id": "reflex",
     "name": "Рефлекс",
-    "description": "Отправка алерта Рефлекс",
-    "topic": "alerts.reflex.v1",
-    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"system\": \"REFLEX\",\n  \"alertType\": \"{{alert_type}}\",\n  \"metricName\": \"{{metric_name}}\",\n  \"threshold\": \"{{threshold}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "description": "Алерт мониторинга Рефлекс — A2A протокол (JWT заголовки + JSON-RPC 2.0)",
+    "topic": "agent-in",
+    "script_type": "a2a",
+    "partition": 0,
+    "payload_template": "{{alert_text}}",
     "params": [
-      {"key": "as",          "label": "КЭ/АС",        "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
-      {"key": "alert_type",  "label": "Тип алерта",   "type": "select", "required": true,  "default": "THRESHOLD_EXCEEDED", "options": ["THRESHOLD_EXCEEDED", "NO_DATA", "ANOMALY"]},
-      {"key": "metric_name", "label": "Метрика",      "type": "text",   "required": false, "default": ""},
-      {"key": "threshold",   "label": "Порог",        "type": "text",   "required": false, "default": ""},
-      {"key": "timestamp",   "label": "Timestamp",    "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+      {"key": "as",              "label": "КЭ/АС (systemCi)",  "type": "text",     "required": true,  "default": "CI0000000",                           "hint": "CI-код системы"},
+      {"key": "sender",          "label": "Sender",            "type": "text",     "required": true,  "default": "alert_service"},
+      {"key": "recipient",       "label": "Recipient",         "type": "text",     "required": true,  "default": "sber.support_platform.channel_agent"},
+      {"key": "sender_id_aef",   "label": "Sender ID AEF",     "type": "text",     "required": false, "default": "CI00213821"},
+      {"key": "recipient_id_aef","label": "Recipient ID AEF",  "type": "text",     "required": false, "default": "CI00293210"},
+      {"key": "alert_text",      "label": "Alert JSON",        "type": "textarea", "required": true,  "default": "", "hint": "JSON объект алерта из Рефлекс"}
     ],
     "created_at": "2026-03-03T00:00:00Z",
     "builtin": true

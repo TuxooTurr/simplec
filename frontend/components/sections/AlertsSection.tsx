@@ -385,6 +385,9 @@ export default function AlertsSection() {
               >
                 <Bell className="w-3.5 h-3.5" />
                 {s.name}
+                {s.script_type === "a2a" && (
+                  <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">A2A</span>
+                )}
               </button>
               <div className="hidden group-hover:flex items-center absolute -top-2 -right-2 gap-0.5 z-10">
                 <button
@@ -483,9 +486,24 @@ export default function AlertsSection() {
           <div className="flex flex-col gap-4 min-h-0">
             <div className="bg-white border border-border-main rounded-xl p-5 flex flex-col gap-3 flex-1 min-h-0">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-text-main">Payload</h3>
-                <span className="text-xs text-text-muted font-mono truncate max-w-[200px]">{topicOverride}</span>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-text-main">
+                    {selected.script_type === "a2a" ? "Alert Content" : "Payload"}
+                  </h3>
+                  {selected.script_type === "a2a" && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">
+                      A2A · JWT · JSON-RPC
+                    </span>
+                  )}
+                </div>
+                <span className="text-xs text-text-muted font-mono truncate max-w-[180px]">{topicOverride}</span>
               </div>
+
+              {selected.script_type === "a2a" && (
+                <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-1.5">
+                  Контент алерта будет обёрнут в JSON-RPC 2.0 с JWT заголовками (Authorization, MessageToken, SystemCi…)
+                </p>
+              )}
 
               <pre className="text-xs font-mono text-text-main bg-gray-50 rounded-lg p-3 overflow-auto flex-1 min-h-[140px] whitespace-pre-wrap break-all">
                 {payload || <span className="text-text-muted italic">Заполните параметры...</span>}

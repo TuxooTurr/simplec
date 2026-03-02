@@ -112,6 +112,8 @@ export interface AlertScript {
   name:             string;
   description:      string;
   topic:            string;
+  script_type?:     "simple" | "a2a";
+  partition?:       number | null;
   payload_template: string;
   params:           AlertParam[];
   created_at?:      string;

@@ -23,7 +23,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import auth, generation, etalons, bugs, system
+from backend.api import auth, generation, etalons, bugs, system, alerts
 from backend.auth import require_auth
 from db.user_store import ensure_default_user
 
@@ -61,6 +61,7 @@ _auth_dep = [Depends(require_auth)]
 app.include_router(generation.router, dependencies=_auth_dep)
 app.include_router(etalons.router,    dependencies=_auth_dep)
 app.include_router(bugs.router,       dependencies=_auth_dep)
+app.include_router(alerts.router,     dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

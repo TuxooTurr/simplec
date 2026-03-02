@@ -1,0 +1,78 @@
+[
+  {
+    "id": "incident",
+    "name": "Инцидент",
+    "description": "Отправка инцидента",
+    "topic": "alerts.incident.v1",
+    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"eventType\": \"INCIDENT\",\n  \"severity\": \"{{severity}}\",\n  \"summary\": \"{{summary}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "params": [
+      {"key": "as",        "label": "КЭ/АС",     "type": "text",     "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
+      {"key": "severity",  "label": "Severity",  "type": "select",   "required": true,  "default": "CRITICAL", "options": ["CRITICAL", "HIGH", "MEDIUM", "LOW"]},
+      {"key": "summary",   "label": "Summary",   "type": "textarea", "required": false, "default": ""},
+      {"key": "timestamp", "label": "Timestamp", "type": "text",     "required": false, "default": "__now__",   "hint": "ISO 8601, пусто = текущее время"}
+    ],
+    "created_at": "2026-03-03T00:00:00Z",
+    "builtin": true
+  },
+  {
+    "id": "reflex",
+    "name": "Рефлекс",
+    "description": "Отправка алерта Рефлекс",
+    "topic": "alerts.reflex.v1",
+    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"system\": \"REFLEX\",\n  \"alertType\": \"{{alert_type}}\",\n  \"metricName\": \"{{metric_name}}\",\n  \"threshold\": \"{{threshold}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "params": [
+      {"key": "as",          "label": "КЭ/АС",        "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
+      {"key": "alert_type",  "label": "Тип алерта",   "type": "select", "required": true,  "default": "THRESHOLD_EXCEEDED", "options": ["THRESHOLD_EXCEEDED", "NO_DATA", "ANOMALY"]},
+      {"key": "metric_name", "label": "Метрика",      "type": "text",   "required": false, "default": ""},
+      {"key": "threshold",   "label": "Порог",        "type": "text",   "required": false, "default": ""},
+      {"key": "timestamp",   "label": "Timestamp",    "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+    ],
+    "created_at": "2026-03-03T00:00:00Z",
+    "builtin": true
+  },
+  {
+    "id": "tengri",
+    "name": "Тенгри",
+    "description": "Отправка алерта Тенгри",
+    "topic": "alerts.tengri.v1",
+    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"system\": \"TENGRI\",\n  \"ruleId\": \"{{rule_id}}\",\n  \"status\": \"{{status}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "params": [
+      {"key": "as",        "label": "КЭ/АС",     "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
+      {"key": "rule_id",   "label": "Rule ID",   "type": "text",   "required": true,  "default": ""},
+      {"key": "status",    "label": "Статус",    "type": "select", "required": true,  "default": "FIRING", "options": ["FIRING", "RESOLVED", "PENDING"]},
+      {"key": "timestamp", "label": "Timestamp", "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+    ],
+    "created_at": "2026-03-03T00:00:00Z",
+    "builtin": true
+  },
+  {
+    "id": "mpr",
+    "name": "МпР",
+    "description": "Отправка мероприятия по регламенту",
+    "topic": "alerts.mpr.v1",
+    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"eventType\": \"MPR\",\n  \"workType\": \"{{work_type}}\",\n  \"timeWindow\": \"{{time_window}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "params": [
+      {"key": "as",          "label": "КЭ/АС",          "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
+      {"key": "work_type",   "label": "Тип работ",      "type": "select", "required": true,  "default": "PLANNED", "options": ["PLANNED", "EMERGENCY", "REGULAR"]},
+      {"key": "time_window", "label": "Временное окно", "type": "text",   "required": false, "default": "", "hint": "Пример: 2026-03-03T10:00/2026-03-03T12:00"},
+      {"key": "timestamp",   "label": "Timestamp",      "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+    ],
+    "created_at": "2026-03-03T00:00:00Z",
+    "builtin": true
+  },
+  {
+    "id": "deployment",
+    "name": "Внедрения",
+    "description": "Отправка события внедрения",
+    "topic": "alerts.deployment.v1",
+    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"eventType\": \"DEPLOYMENT\",\n  \"version\": \"{{version}}\",\n  \"environment\": \"{{environment}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "params": [
+      {"key": "as",          "label": "КЭ/АС",       "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
+      {"key": "version",     "label": "Версия",      "type": "text",   "required": false, "default": ""},
+      {"key": "environment", "label": "Окружение",   "type": "select", "required": true,  "default": "PROD", "options": ["PROD", "PREPROD", "TEST", "DEV"]},
+      {"key": "timestamp",   "label": "Timestamp",   "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+    ],
+    "created_at": "2026-03-03T00:00:00Z",
+    "builtin": true
+  }
+]

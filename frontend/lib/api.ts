@@ -95,6 +95,71 @@ export async function getEtalonStats(): Promise<Record<string, number>> {
   return fetchJson("/api/etalons/stats");
 }
 
+// ─── Alerts ────────────────────────────────────────────────────────────────
+
+export interface AlertParam {
+  key:      string;
+  label:    string;
+  type:     "text" | "select" | "textarea";
+  required: boolean;
+  default:  string;
+  hint?:    string;
+  options?: string[];
+}
+
+export interface AlertScript {
+  id:               string;
+  name:             string;
+  description:      string;
+  topic:            string;
+  payload_template: string;
+  params:           AlertParam[];
+  created_at?:      string;
+  builtin?:         boolean;
+}
+
+export interface AlertHistoryEntry {
+  script_id:   string;
+  script_name: string;
+  topic:       string;
+  payload:     string;
+  status:      "ok" | "error";
+  error?:      string;
+  ts:          string;
+}
+
+export async function getAlertScripts(): Promise<AlertScript[]> {
+  return fetchJson("/api/alerts/scripts");
+}
+
+export async function saveAlertScript(script: Partial<AlertScript>): Promise<AlertScript> {
+  return fetchJson("/api/alerts/scripts", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(script),
+  });
+}
+
+export async function deleteAlertScript(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/alerts/scripts/${id}`, { method: "DELETE" });
+}
+
+export async function sendAlert(params: {
+  script_id:      string;
+  values:         Record<string, string>;
+  topic_override?: string;
+}): Promise<{ ok: boolean; payload: string; topic: string; offset?: number; error?: string }> {
+  return fetchJson("/api/alerts/send", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ topic_override: "", ...params }),
+  });
+}
+
+export async function getAlertHistory(limit = 20): Promise<AlertHistoryEntry[]> {
+  return fetchJson(`/api/alerts/history?limit=${limit}`);
+}
+
 // ─── Bugs ──────────────────────────────────────────────────────────────────
 
 export async function formatBug(params: {

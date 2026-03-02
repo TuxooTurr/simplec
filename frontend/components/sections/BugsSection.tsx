@@ -40,7 +40,7 @@ export default function BugsSection() {
       const raw = String(err);
       // Try to parse structured error from backend
       try {
-        const match = raw.match(/\{.*\}/s);
+        const match = raw.match(/\{[\s\S]*\}/);
         if (match) {
           const parsed = JSON.parse(match[0]);
           const detail = parsed.detail ?? parsed;

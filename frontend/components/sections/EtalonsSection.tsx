@@ -61,7 +61,7 @@ export default function EtalonsSection() {
   const [tcText, setTcText]             = useState("");
   const [tcFileLoading, setTcFileLoading]   = useState(false);
 
-  const [addPlatform, setAddPlatform]   = useState("");
+  const [addPlatforms, setAddPlatforms] = useState<string[]>([]);
   const [addFeature, setAddFeature]     = useState("");
   const [addLoading, setAddLoading]     = useState(false);
 
@@ -101,11 +101,11 @@ export default function EtalonsSection() {
         req_text: reqText,
         tc_text: tcText,
         qa_doc: qaText.trim() || undefined,
-        platform: addPlatform,
+        platform: addPlatforms.join(", "),
         feature: addFeature,
       });
       setReqText(""); setQaText(""); setTcText("");
-      setAddPlatform(""); setAddFeature("");
+      setAddPlatforms([]); setAddFeature("");
       setShowAdd(false);
       setReqMode("text"); setQaMode("text"); setTcMode("text");
       await load();
@@ -182,18 +182,33 @@ export default function EtalonsSection() {
               </button>
             </div>
 
-            {/* Platform + Feature */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className={`block ${LABEL_CLS} mb-1.5`}>Платформа</label>
-                <input value={addPlatform} onChange={(e) => setAddPlatform(e.target.value)}
-                  className={INPUT_CLS} placeholder="W, M, iPad..." />
+            {/* Platform */}
+            <div className="mb-3">
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Платформа</label>
+              <div className="flex flex-wrap gap-1.5">
+                {["Web", "Desktop", "iOS", "Android"].map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setAddPlatforms((prev) =>
+                      prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+                    )}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
+                      ${addPlatforms.includes(p)
+                        ? "border-primary bg-indigo-50 text-primary"
+                        : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
+                  >
+                    {p}
+                  </button>
+                ))}
               </div>
-              <div>
-                <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
-                <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
-                  className={INPUT_CLS} placeholder="Оплата картой..." />
-              </div>
+            </div>
+
+            {/* Feature */}
+            <div className="mb-4">
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
+              <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
+                className={INPUT_CLS} placeholder="Оплата картой..." />
             </div>
 
             {/* Row 1: Требование | QA Документация */}

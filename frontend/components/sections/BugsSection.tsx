@@ -73,7 +73,7 @@ export default function BugsSection() {
 
         <div className="bg-white border border-border-main rounded-xl p-5 mb-4">
           <div className="mb-4">
-            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Платформа</label>
+            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Направление</label>
             <div className="flex flex-wrap gap-2">
               {PLATFORMS.map(({ id, label, Icon }) => (
                 <button

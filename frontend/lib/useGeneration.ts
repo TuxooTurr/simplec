@@ -26,6 +26,7 @@ export interface GenEvent {
   elapsed?: number;
   message?: string;
   count?: number;
+  llm_error?: boolean;
 }
 
 export interface Progress {
@@ -152,7 +153,7 @@ export function useGeneration() {
 
             case "error":
               setState("error");
-              addEvent({ type: "error", message: msg.message });
+              addEvent({ type: "error", message: msg.message, llm_error: msg.llm_error ?? false });
               break;
           }
         };
@@ -180,7 +181,7 @@ export function useGeneration() {
           if (msg.type === "export_done") {
             setExportResult({ xml: msg.xml, csv: msg.csv, md: msg.md });
           } else if (msg.type === "error") {
-            addEvent({ type: "error", message: msg.message });
+            addEvent({ type: "error", message: msg.message, llm_error: msg.llm_error ?? false });
           }
         };
         ws.send(JSON.stringify({ action: "export", ...params }));

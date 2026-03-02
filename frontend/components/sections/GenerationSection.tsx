@@ -461,7 +461,11 @@ export default function GenerationSection() {
           <div className="flex items-center justify-between mb-4 max-w-3xl">
             <div>
               <h1 className="text-xl font-bold text-text-main">
-                {state === "error" ? "Ошибка генерации" : `${cases.length} тест-кейсов готово`}
+                {state === "error"
+                  ? events.some((e) => e.type === "error" && e.llm_error)
+                    ? "Проблема с LLM-провайдером"
+                    : "Ошибка генерации"
+                  : `${cases.length} тест-кейсов готово`}
               </h1>
               {state !== "error" && elapsedFinal > 0 && (
                 <p className="text-sm text-text-muted flex items-center gap-1 mt-0.5">

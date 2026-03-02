@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCircle2, XCircle, Loader2, Layers, Clock } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Layers, Clock, PlugZap } from "lucide-react";
 import type { GenEvent, Progress } from "@/lib/useGeneration";
 
 interface StatusPanelProps {
@@ -77,6 +77,21 @@ export default function StatusPanel({ events, progress, done, elapsed }: StatusP
             );
           }
           if (ev.type === "error") {
+            if (ev.llm_error) {
+              return (
+                <div key={i} className="rounded-xl border border-amber-200 bg-amber-50 p-4 animate-fade-in">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <PlugZap className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-amber-800 mb-1">Ошибка LLM-провайдера</p>
+                      <p className="text-sm text-amber-700">{ev.message}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div key={i} className="flex items-center gap-2.5 text-sm animate-fade-in">
                 <div className="w-5 h-5 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">

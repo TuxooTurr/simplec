@@ -6,6 +6,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { credentials: "include", ...init });
+  if (res.status === 401) {
+    // Токен истёк или невалиден — перенаправляем на логин
+    if (typeof window !== "undefined") {
+      const from = encodeURIComponent(window.location.pathname);
+      window.location.href = `/login?from=${from}`;
+    }
+    throw new Error("Сессия истекла, войдите снова");
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);

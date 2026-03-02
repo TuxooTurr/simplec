@@ -436,13 +436,14 @@ class LayeredGenerator:
     def wrap_case_to_xml_via_llm(self, case, qa_doc,
                                   project="SBER911", system="",
                                   team="", domain="",
-                                  folder="Новая ТМ"):
+                                  folder="Новая ТМ",
+                                  crit_regress=False):
         from agents.llm_client import Message
         import random
 
         cid = random.randint(10000000, 99999999)
         md_text = case.to_markdown()
-        critical = "true" if case.priority == "High" else "false"
+        critical = ("true" if case.priority == "High" else "false") if crit_regress else "false"
         case_key = project + "-T" + str(cid)
 
         xml_template = (
@@ -514,7 +515,8 @@ class LayeredGenerator:
                                 project="SBER911", system="",
                                 team="", domain="",
                                 folder="Новая ТМ",
-                                progress_callback=None):
+                                progress_callback=None,
+                                crit_regress=False):
         xml_parts = []
         total = len(cases)
 
@@ -524,7 +526,8 @@ class LayeredGenerator:
 
             case_xml = self.wrap_case_to_xml_via_llm(
                 case, qa_doc, project=project, system=system,
-                team=team, domain=domain, folder=folder
+                team=team, domain=domain, folder=folder,
+                crit_regress=crit_regress
             )
             xml_parts.append(case_xml)
 
@@ -541,13 +544,13 @@ class LayeredGenerator:
     # ========================================================
     def cases_to_xml(self, cases, project="SBER911",
                      system="", team="", domain="",
-                     folder="Новая ТМ"):
+                     folder="Новая ТМ", crit_regress=False):
         import random
 
         xml_parts = []
         for case in cases:
             cid = random.randint(10000000, 99999999)
-            critical = "true" if case.priority == "High" else "false"
+            critical = ("true" if case.priority == "High" else "false") if crit_regress else "false"
 
             steps_xml = ""
             for i, s in enumerate(case.steps):

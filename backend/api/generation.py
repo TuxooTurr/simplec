@@ -179,6 +179,7 @@ async def _handle_export(ws: WebSocket, data: dict):
     folder = data.get("folder", "Новая ТМ")
     use_llm = data.get("use_llm", False)
     provider = data.get("provider", "gigachat")
+    crit_regress = data.get("crit_regress", False)
 
     try:
         cases = [_dict_to_tc(c) for c in cases_raw]
@@ -191,11 +192,11 @@ async def _handle_export(ws: WebSocket, data: dict):
             gen = LayeredGenerator(llm)
             xml_content = await asyncio.to_thread(
                 gen.wrap_all_cases_via_llm,
-                cases, qa_doc, project, system, team, domain, folder
+                cases, qa_doc, project, system, team, domain, folder, None, crit_regress
             )
         else:
             gen = LayeredGenerator(None)
-            xml_content = gen.cases_to_xml(cases, project, system, team, domain, folder)
+            xml_content = gen.cases_to_xml(cases, project, system, team, domain, folder, crit_regress)
 
         csv_content = await asyncio.to_thread(_cases_to_csv, cases)
         md_content = _cases_to_md(cases, qa_doc)

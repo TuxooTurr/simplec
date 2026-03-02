@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import {
   BookOpen, Plus, RefreshCw, Trash2, ChevronDown,
-  Loader2, Smartphone, Tag, X, Save, AlignLeft, Paperclip,
+  Loader2, Smartphone, Tag, X, Save, AlignLeft, Paperclip, FileText,
 } from "lucide-react";
 import FileDropZone from "@/components/FileDropZone";
 import { listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile, type Etalon } from "@/lib/api";
@@ -11,25 +11,59 @@ import { listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile, type E
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
-export default function EtalonsSection() {
-  const [items, setItems] = useState<Etalon[]>([]);
-  const [stats, setStats] = useState<Record<string, number>>({});
-  const [loading, setLoading] = useState(true);
-  const [filterPlatform, setFilterPlatform] = useState("");
-  const [filterFeature, setFilterFeature] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+const LABEL_CLS = "text-xs font-semibold text-text-muted uppercase tracking-wide";
 
-  const [showAdd, setShowAdd] = useState(false);
-  const [reqMode, setReqMode] = useState<"text" | "file">("text");
-  const [reqText, setReqText] = useState("");
+/** Мини-тоглер Текст/Файл */
+function ModeToggle({ mode, onMode }: { mode: "text" | "file"; onMode: (m: "text" | "file") => void }) {
+  return (
+    <div className="flex rounded-md border border-border-main overflow-hidden text-[11px]">
+      <button
+        onClick={() => onMode("text")}
+        className={`flex items-center gap-1 px-2 py-1 transition-colors
+          ${mode === "text" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
+      >
+        <AlignLeft className="w-3 h-3" /> Текст
+      </button>
+      <button
+        onClick={() => onMode("file")}
+        className={`flex items-center gap-1 px-2 py-1 border-l border-border-main transition-colors
+          ${mode === "file" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
+      >
+        <Paperclip className="w-3 h-3" /> Файл
+      </button>
+    </div>
+  );
+}
+
+export default function EtalonsSection() {
+  const [items, setItems]               = useState<Etalon[]>([]);
+  const [stats, setStats]               = useState<Record<string, number>>({});
+  const [loading, setLoading]           = useState(true);
+  const [filterPlatform, setFilterPlatform] = useState("");
+  const [filterFeature, setFilterFeature]   = useState("");
+  const [expanded, setExpanded]         = useState<string | null>(null);
+  const [refreshing, setRefreshing]     = useState(false);
+
+  const [showAdd, setShowAdd]           = useState(false);
+
+  // Требование
+  const [reqMode, setReqMode]           = useState<"text" | "file">("text");
+  const [reqText, setReqText]           = useState("");
   const [reqFileLoading, setReqFileLoading] = useState(false);
-  const [tcMode, setTcMode] = useState<"text" | "file">("text");
-  const [tcText, setTcText] = useState("");
-  const [tcFileLoading, setTcFileLoading] = useState(false);
-  const [addPlatform, setAddPlatform] = useState("");
-  const [addFeature, setAddFeature] = useState("");
-  const [addLoading, setAddLoading] = useState(false);
+
+  // QA Документация (опционально)
+  const [qaMode, setQaMode]             = useState<"text" | "file">("text");
+  const [qaText, setQaText]             = useState("");
+  const [qaFileLoading, setQaFileLoading]   = useState(false);
+
+  // XML кейсов
+  const [tcMode, setTcMode]             = useState<"text" | "file">("text");
+  const [tcText, setTcText]             = useState("");
+  const [tcFileLoading, setTcFileLoading]   = useState(false);
+
+  const [addPlatform, setAddPlatform]   = useState("");
+  const [addFeature, setAddFeature]     = useState("");
+  const [addLoading, setAddLoading]     = useState(false);
 
   const load = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -49,27 +83,31 @@ export default function EtalonsSection() {
 
   useEffect(() => { load(); }, [filterPlatform, filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleReqFile = async (file: File) => {
-    setReqFileLoading(true);
-    try { const r = await parseFile(file); setReqText(r.text); }
+  const makeFileHandler = (
+    setText: (v: string) => void,
+    setFileLoading: (v: boolean) => void,
+  ) => async (file: File) => {
+    setFileLoading(true);
+    try { const r = await parseFile(file); setText(r.text); }
     catch (err) { alert("Ошибка: " + String(err)); }
-    finally { setReqFileLoading(false); }
-  };
-
-  const handleTcFile = async (file: File) => {
-    setTcFileLoading(true);
-    try { const r = await parseFile(file); setTcText(r.text); }
-    catch (err) { alert("Ошибка: " + String(err)); }
-    finally { setTcFileLoading(false); }
+    finally { setFileLoading(false); }
   };
 
   const handleAdd = async () => {
     if (!reqText.trim() || !tcText.trim()) return;
     setAddLoading(true);
     try {
-      await addEtalon({ req_text: reqText, tc_text: tcText, platform: addPlatform, feature: addFeature });
-      setReqText(""); setTcText(""); setAddPlatform(""); setAddFeature("");
-      setShowAdd(false); setReqMode("text"); setTcMode("text");
+      await addEtalon({
+        req_text: reqText,
+        tc_text: tcText,
+        qa_doc: qaText.trim() || undefined,
+        platform: addPlatform,
+        feature: addFeature,
+      });
+      setReqText(""); setQaText(""); setTcText("");
+      setAddPlatform(""); setAddFeature("");
+      setShowAdd(false);
+      setReqMode("text"); setQaMode("text"); setTcMode("text");
       await load();
     } catch (err) { alert("Ошибка: " + String(err)); }
     finally { setAddLoading(false); }
@@ -103,6 +141,7 @@ export default function EtalonsSection() {
           </button>
         </div>
 
+        {/* Filters */}
         <div className="flex gap-3 mb-4">
           <div className="relative flex-1">
             <Smartphone className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
@@ -123,6 +162,7 @@ export default function EtalonsSection() {
           </button>
         </div>
 
+        {/* Add form */}
         {showAdd && (
           <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
             <div className="flex items-center justify-between mb-4">
@@ -133,43 +173,38 @@ export default function EtalonsSection() {
               </button>
             </div>
 
+            {/* Platform + Feature */}
             <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
-                <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">Платформа</label>
+                <label className={`block ${LABEL_CLS} mb-1.5`}>Платформа</label>
                 <input value={addPlatform} onChange={(e) => setAddPlatform(e.target.value)}
                   className={INPUT_CLS} placeholder="W, M, iPad..." />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">Фича</label>
+                <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
                 <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
                   className={INPUT_CLS} placeholder="Оплата картой..." />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mb-4 items-stretch">
+            {/* Row 1: Требование | QA Документация */}
+            <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
+              {/* Требование */}
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1.5 h-7">
-                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                  <label className={LABEL_CLS}>
                     Требование <span className="text-red-400 normal-case font-normal">*</span>
                   </label>
-                  <div className="flex rounded-md border border-border-main overflow-hidden text-[11px]">
-                    <button onClick={() => setReqMode("text")}
-                      className={`flex items-center gap-1 px-2 py-1 transition-colors ${reqMode === "text" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}>
-                      <AlignLeft className="w-3 h-3" /> Текст
-                    </button>
-                    <button onClick={() => setReqMode("file")}
-                      className={`flex items-center gap-1 px-2 py-1 border-l border-border-main transition-colors ${reqMode === "file" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}>
-                      <Paperclip className="w-3 h-3" /> Файл
-                    </button>
-                  </div>
+                  <ModeToggle mode={reqMode} onMode={setReqMode} />
                 </div>
                 {reqMode === "text" ? (
                   <textarea value={reqText} onChange={(e) => setReqText(e.target.value)}
-                    className={`${INPUT_CLS} resize-none flex-1 min-h-[200px]`}
-                    placeholder="Текст требования..." />
+                    className={`${INPUT_CLS} resize-none flex-1 min-h-[160px]`}
+                    placeholder="Текст требования, user story..." />
                 ) : (
                   <div className="flex flex-col gap-2 flex-1">
-                    <FileDropZone onFile={handleReqFile} loading={reqFileLoading} className="flex-1 min-h-[168px]" />
+                    <FileDropZone onFile={makeFileHandler(setReqText, setReqFileLoading)}
+                      loading={reqFileLoading} className="flex-1 min-h-[136px]" />
                     {reqText && !reqFileLoading && (
                       <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
                         Извлечено {reqText.length.toLocaleString()} симв.
@@ -179,37 +214,56 @@ export default function EtalonsSection() {
                 )}
               </div>
 
+              {/* QA Документация */}
               <div className="flex flex-col">
                 <div className="flex items-center justify-between mb-1.5 h-7">
-                  <label className="text-xs font-semibold text-text-muted uppercase tracking-wide">
-                    Тест-кейс (XML/текст) <span className="text-red-400 normal-case font-normal">*</span>
+                  <label className={LABEL_CLS}>
+                    QA Документация
+                    <span className="ml-1 text-[10px] text-text-muted/60 normal-case font-normal">(необязательно)</span>
                   </label>
-                  <div className="flex rounded-md border border-border-main overflow-hidden text-[11px]">
-                    <button onClick={() => setTcMode("text")}
-                      className={`flex items-center gap-1 px-2 py-1 transition-colors ${tcMode === "text" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}>
-                      <AlignLeft className="w-3 h-3" /> Текст
-                    </button>
-                    <button onClick={() => setTcMode("file")}
-                      className={`flex items-center gap-1 px-2 py-1 border-l border-border-main transition-colors ${tcMode === "file" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}>
-                      <Paperclip className="w-3 h-3" /> Файл
-                    </button>
-                  </div>
+                  <ModeToggle mode={qaMode} onMode={setQaMode} />
                 </div>
-                {tcMode === "text" ? (
-                  <textarea value={tcText} onChange={(e) => setTcText(e.target.value)}
-                    className={`${INPUT_CLS} resize-none font-mono text-xs flex-1 min-h-[200px]`}
-                    placeholder="XML или текст тест-кейса..." />
+                {qaMode === "text" ? (
+                  <textarea value={qaText} onChange={(e) => setQaText(e.target.value)}
+                    className={`${INPUT_CLS} resize-none flex-1 min-h-[160px]`}
+                    placeholder="Промежуточная QA документация — результат анализа требования..." />
                 ) : (
                   <div className="flex flex-col gap-2 flex-1">
-                    <FileDropZone onFile={handleTcFile} loading={tcFileLoading} className="flex-1 min-h-[168px]" />
-                    {tcText && !tcFileLoading && (
+                    <FileDropZone onFile={makeFileHandler(setQaText, setQaFileLoading)}
+                      loading={qaFileLoading} className="flex-1 min-h-[136px]" />
+                    {qaText && !qaFileLoading && (
                       <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                        Извлечено {tcText.length.toLocaleString()} симв.
+                        Извлечено {qaText.length.toLocaleString()} симв.
                       </p>
                     )}
                   </div>
                 )}
               </div>
+            </div>
+
+            {/* Row 2: XML кейсов — full width */}
+            <div className="flex flex-col mb-4">
+              <div className="flex items-center justify-between mb-1.5 h-7">
+                <label className={LABEL_CLS}>
+                  XML кейсов <span className="text-red-400 normal-case font-normal">*</span>
+                </label>
+                <ModeToggle mode={tcMode} onMode={setTcMode} />
+              </div>
+              {tcMode === "text" ? (
+                <textarea value={tcText} onChange={(e) => setTcText(e.target.value)}
+                  className={`${INPUT_CLS} resize-none font-mono text-xs min-h-[140px]`}
+                  placeholder="XML или текст тест-кейса..." />
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <FileDropZone onFile={makeFileHandler(setTcText, setTcFileLoading)}
+                    loading={tcFileLoading} className="min-h-[120px]" />
+                  {tcText && !tcFileLoading && (
+                    <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
+                      Извлечено {tcText.length.toLocaleString()} симв.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex gap-2 justify-end">
@@ -228,6 +282,7 @@ export default function EtalonsSection() {
           </div>
         )}
 
+        {/* List */}
         {loading ? (
           <div className="flex items-center gap-2 py-8 text-text-muted text-sm">
             <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
@@ -263,6 +318,11 @@ export default function EtalonsSection() {
                           <Tag className="w-3 h-3" />{item.feature}
                         </span>
                       )}
+                      {item.qa_doc && (
+                        <span className="flex items-center gap-1 text-xs text-indigo-400">
+                          <FileText className="w-3 h-3" />QA doc
+                        </span>
+                      )}
                     </div>
                   </button>
                   <button onClick={() => handleDelete(item.id)}
@@ -276,14 +336,25 @@ export default function EtalonsSection() {
                     onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                   />
                 </div>
+
                 {expanded === item.id && (
-                  <div className="border-t border-border-main grid grid-cols-2 gap-0 divide-x divide-border-main animate-fade-in">
-                    <div className="px-4 py-3">
-                      <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Требование</p>
-                      <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed">{item.req_text}</pre>
+                  <div className="border-t border-border-main animate-fade-in">
+                    {/* Требование + QA Doc */}
+                    <div className={`grid gap-0 divide-x divide-border-main ${item.qa_doc ? "grid-cols-2" : "grid-cols-1"}`}>
+                      <div className="px-4 py-3">
+                        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Требование</p>
+                        <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed">{item.req_text}</pre>
+                      </div>
+                      {item.qa_doc && (
+                        <div className="px-4 py-3">
+                          <p className="text-xs font-semibold text-indigo-400 uppercase tracking-wide mb-2">QA Документация</p>
+                          <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed">{item.qa_doc}</pre>
+                        </div>
+                      )}
                     </div>
-                    <div className="px-4 py-3">
-                      <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Тест-кейс</p>
+                    {/* XML */}
+                    <div className="border-t border-border-main px-4 py-3">
+                      <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">XML кейсов</p>
                       <pre className="text-xs text-text-main whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
                         {item.tc_text}
                       </pre>

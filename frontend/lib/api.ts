@@ -44,6 +44,7 @@ export interface Etalon {
   id: string;
   req_text: string;
   tc_text: string;
+  qa_doc?: string;
   platform: string;
   feature: string;
 }
@@ -65,12 +66,14 @@ export async function listEtalons(params?: {
 export async function addEtalon(data: {
   req_text: string;
   tc_text: string;
+  qa_doc?: string;
   platform?: string;
   feature?: string;
 }): Promise<{ id: string; status: string }> {
   const body = new FormData();
   body.append("req_text", data.req_text);
   body.append("tc_text", data.tc_text);
+  if (data.qa_doc) body.append("qa_doc", data.qa_doc);
   if (data.platform) body.append("platform", data.platform);
   if (data.feature) body.append("feature", data.feature);
   return fetchJson("/api/etalons", { method: "POST", body });

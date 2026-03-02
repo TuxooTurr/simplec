@@ -97,12 +97,14 @@ class VectorStore:
         return self._format_results(results)
 
     def add_pair(self, pair_id: str, requirement_text: str, test_case_xml: str,
-                 platform: str = "", feature: str = "", tags: List[str] = None):
+                 platform: str = "", feature: str = "", tags: List[str] = None,
+                 qa_doc: str = ""):
         metadata = {
             "test_case_xml": test_case_xml,
             "platform": platform,
             "feature": feature,
             "tags": json.dumps(tags or [], ensure_ascii=False),
+            "qa_doc": qa_doc or "",
         }
         self.pairs.upsert(ids=[pair_id], documents=[requirement_text], metadatas=[metadata])
 

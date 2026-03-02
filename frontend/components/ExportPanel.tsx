@@ -12,7 +12,8 @@ interface ExportPanelProps {
   onBack: () => void;
   initialProject?: string;
   initialTeam?: string;
-  initialSystem?: string;  // АС / КЭ из настроек кейса
+  initialSystem?: string;      // АС / КЭ из настроек кейса
+  initialCritRegress?: boolean; // Критичный регресс из настроек кейса
 }
 
 export interface ExportPanelParams {
@@ -25,6 +26,7 @@ export interface ExportPanelParams {
   folder: string;
   use_llm: boolean;
   provider: string;
+  crit_regress: boolean;
 }
 
 function downloadBlob(content: string, filename: string, mime: string) {
@@ -43,19 +45,20 @@ const DOWNLOAD_BUTTONS = [
   { key: "md",  label: "Markdown",    mime: "text/markdown",    ext: "md",  Icon: FileText,  color: "text-violet-600 border-violet-200 hover:bg-violet-50" },
 ] as const;
 
-export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialSystem }: ExportPanelProps) {
-  const [project, setProject] = useState(initialProject ?? "SBER911");
-  const [system, setSystem]   = useState(initialSystem ?? "");
-  const [team, setTeam]       = useState(initialTeam ?? "");
-  const [domain, setDomain]   = useState("");
-  const [folder, setFolder]   = useState("Новая ТМ");
-  const [useLlm, setUseLlm]   = useState(false);
-  const [provider]            = useState("gigachat");
-  const [loading, setLoading] = useState(false);
+export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialSystem, initialCritRegress }: ExportPanelProps) {
+  const [project, setProject]       = useState(initialProject ?? "SBER911");
+  const [system, setSystem]         = useState(initialSystem ?? "");
+  const [team, setTeam]             = useState(initialTeam ?? "");
+  const [domain, setDomain]         = useState("");
+  const [folder, setFolder]         = useState("Новая ТМ");
+  const [useLlm, setUseLlm]         = useState(false);
+  const [provider]                  = useState("gigachat");
+  const [critRegress, setCritRegress] = useState(initialCritRegress ?? false);
+  const [loading, setLoading]       = useState(false);
 
   const handleExport = async () => {
     setLoading(true);
-    onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider });
+    onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider, crit_regress: critRegress });
     setLoading(false);
   };
 
@@ -113,19 +116,32 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
           </div>
         </div>
 
-        <label className="flex items-center gap-2.5 mt-4 text-sm cursor-pointer group select-none">
-          <input
-            type="checkbox"
-            checked={useLlm}
-            onChange={(e) => setUseLlm(e.target.checked)}
-            className="rounded border-border-main text-primary focus:ring-primary/30 w-4 h-4"
-          />
-          <span className="text-text-muted group-hover:text-text-main transition-colors flex items-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-            LLM XML-форматирование
-            <span className="text-xs text-text-muted/70">(медленнее, HTML-разметка)</span>
-          </span>
-        </label>
+        <div className="mt-4 space-y-2.5">
+          <label className="flex items-center gap-2.5 text-sm cursor-pointer group select-none">
+            <input
+              type="checkbox"
+              checked={useLlm}
+              onChange={(e) => setUseLlm(e.target.checked)}
+              className="rounded border-border-main text-primary focus:ring-primary/30 w-4 h-4"
+            />
+            <span className="text-text-muted group-hover:text-text-main transition-colors flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              LLM XML-форматирование
+              <span className="text-xs text-text-muted/70">(медленнее, HTML-разметка)</span>
+            </span>
+          </label>
+          <label className="flex items-center gap-2.5 text-sm cursor-pointer group select-none">
+            <input
+              type="checkbox"
+              checked={critRegress}
+              onChange={(e) => setCritRegress(e.target.checked)}
+              className="rounded border-border-main text-primary focus:ring-primary/30 w-4 h-4"
+            />
+            <span className="text-text-muted group-hover:text-text-main transition-colors">
+              Критичный регресс (LLM оценивает критичность)
+            </span>
+          </label>
+        </div>
 
         <button
           onClick={handleExport}

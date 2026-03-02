@@ -42,6 +42,7 @@ def list_etalons(platform: str = "", feature: str = "", limit: int = 50, offset:
                 "id": pair_id,
                 "req_text": docs[i] if i < len(docs) else "",
                 "tc_text": meta.get("test_case_xml", ""),
+                "qa_doc": meta.get("qa_doc", "") or None,
                 "platform": meta.get("platform", ""),
                 "feature": meta.get("feature", ""),
             })
@@ -60,6 +61,7 @@ def etalon_stats():
 async def add_etalon(
     req_text: str = Form(""),
     tc_text: str = Form(""),
+    qa_doc: str = Form(""),
     platform: str = Form(""),
     feature: str = Form(""),
     req_file: Optional[UploadFile] = File(None),
@@ -86,6 +88,7 @@ async def add_etalon(
             pair_id=pair_id,
             requirement_text=req_text,
             test_case_xml=tc_text,
+            qa_doc=qa_doc,
             platform=platform,
             feature=feature,
         )

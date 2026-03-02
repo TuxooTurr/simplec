@@ -19,7 +19,11 @@ CHROMA_DIR = DB_DIR / "chroma_data"
 def _build_where(platform: str = "", feature: str = "") -> Optional[Dict]:
     conditions = []
     if platform:
-        conditions.append({"platform": platform})
+        platforms = [p.strip() for p in platform.split(",") if p.strip()]
+        if len(platforms) == 1:
+            conditions.append({"platform": platforms[0]})
+        elif len(platforms) > 1:
+            conditions.append({"platform": {"$in": platforms}})
     if feature:
         conditions.append({"feature": feature})
     if not conditions:

@@ -23,8 +23,10 @@ const DEPTHS = [
 ];
 
 const PLATFORMS = [
-  { id: "W", label: "Web",    sub: "Браузер" },
-  { id: "M", label: "Mobile", sub: "Мобилка" },
+  { id: "Web",     label: "Web" },
+  { id: "Desktop", label: "Desktop" },
+  { id: "iOS",     label: "iOS" },
+  { id: "Android", label: "Android" },
 ];
 
 const INPUT_CLS =
@@ -41,7 +43,7 @@ const LABEL_CLS = "block text-xs font-semibold text-text-muted uppercase trackin
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  platform: string; onPlatform: (v: string) => void;
+  platform: string[]; onPlatform: (v: string[]) => void;
   feature: string;  onFeature:  (v: string) => void;
   team: string;     onTeam:     (v: string) => void;
   project: string;  onProject:  (v: string) => void;
@@ -92,14 +94,19 @@ function SettingsModal({
               {PLATFORMS.map((p) => (
                 <button
                   key={p.id}
-                  onClick={() => onPlatform(p.id)}
-                  className={`px-3 py-2.5 rounded-lg text-xs font-medium border transition-all duration-150 text-center
-                    ${platform === p.id
+                  onClick={() => onPlatform(
+                    platform.includes(p.id)
+                      ? platform.filter((x) => x !== p.id).length > 0
+                        ? platform.filter((x) => x !== p.id)
+                        : platform // prevent deselecting last
+                      : [...platform, p.id]
+                  )}
+                  className={`px-3 py-2 rounded-lg text-xs font-medium border transition-all duration-150 text-center
+                    ${platform.includes(p.id)
                       ? "border-primary bg-indigo-50 text-primary"
                       : "border-border-main bg-white text-text-muted hover:border-primary/40 hover:text-text-main"}`}
                 >
-                  <div className="font-semibold">{p.label}</div>
-                  <div className="text-[10px] opacity-70 mt-0.5">{p.sub}</div>
+                  {p.label}
                 </button>
               ))}
             </div>
@@ -207,7 +214,7 @@ export default function GenerationSection() {
 
   // Settings state (persists between generations)
   const [settingsOpen, setSettingsOpen]     = useState(false);
-  const [platform, setPlatform]             = useState("W");
+  const [platform, setPlatform]             = useState<string[]>(["Web"]);
   const [feature, setFeature]               = useState("");
   const [team, setTeam]                     = useState("");
   const [project, setProject]               = useState("");
@@ -252,7 +259,7 @@ export default function GenerationSection() {
     }
     const text = requirement.trim();
     if (!text) return;
-    start({ requirement: text, feature, depth, provider, platform });
+    start({ requirement: text, feature, depth, provider, platform: platform.join(", ") });
   };
 
   const handleFileUpload = async (file: File) => {
@@ -418,7 +425,7 @@ export default function GenerationSection() {
             ) : (
               <p className="text-xs text-text-muted flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
-                <span className="text-violet-700 font-medium">[{platform}]</span>
+                <span className="text-violet-700 font-medium">[{platform.join(", ")}]</span>
                 &nbsp;{feature}&nbsp;·&nbsp;{project}&nbsp;·&nbsp;{team}
               </p>
             )}

@@ -39,8 +39,8 @@ export default function EtalonsSection() {
   const [items, setItems]               = useState<Etalon[]>([]);
   const [stats, setStats]               = useState<Record<string, number>>({});
   const [loading, setLoading]           = useState(true);
-  const [filterPlatform, setFilterPlatform] = useState("");
-  const [filterFeature, setFilterFeature]   = useState("");
+  const [filterPlatforms, setFilterPlatforms] = useState<string[]>([]);
+  const [filterFeature, setFilterFeature]     = useState("");
   const [expanded, setExpanded]         = useState<string | null>(null);
   const [refreshing, setRefreshing]     = useState(false);
 
@@ -70,7 +70,7 @@ export default function EtalonsSection() {
     else setLoading(true);
     try {
       const [res, st] = await Promise.all([
-        listEtalons({ platform: filterPlatform, feature: filterFeature }),
+        listEtalons({ platform: filterPlatforms.join(","), feature: filterFeature }),
         getEtalonStats(),
       ]);
       setItems(res.items);
@@ -81,7 +81,7 @@ export default function EtalonsSection() {
     }
   };
 
-  useEffect(() => { load(); }, [filterPlatform, filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [filterPlatforms.join(","), filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const makeFileHandler = (
     setText: (v: string) => void,
@@ -142,13 +142,22 @@ export default function EtalonsSection() {
         </div>
 
         {/* Filters */}
-        <div className="flex gap-3 mb-4">
-          <div className="relative flex-1">
-            <Smartphone className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
-            <input value={filterPlatform} onChange={(e) => setFilterPlatform(e.target.value)}
-              placeholder="Платформа..." className={`${INPUT_CLS} pl-8`} />
-          </div>
-          <div className="relative flex-1">
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {["Web", "Desktop", "iOS", "Android"].map((p) => (
+            <button
+              key={p}
+              onClick={() => setFilterPlatforms((prev) =>
+                prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+              )}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
+                ${filterPlatforms.includes(p)
+                  ? "border-primary bg-indigo-50 text-primary"
+                  : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
+            >
+              {p}
+            </button>
+          ))}
+          <div className="relative flex-1 min-w-[140px]">
             <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
             <input value={filterFeature} onChange={(e) => setFilterFeature(e.target.value)}
               placeholder="Фича..." className={`${INPUT_CLS} pl-8`} />

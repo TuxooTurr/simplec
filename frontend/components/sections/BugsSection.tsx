@@ -65,7 +65,7 @@ export default function BugsSection() {
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="max-w-3xl">
+      <div className="w-full">
         <h1 className="text-xl font-bold text-text-main mb-1">Форматирование дефектов</h1>
         <p className="text-sm text-text-muted mb-5">
           Опишите баг — AI оформит его по стандарту Jira.

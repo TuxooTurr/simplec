@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone, BarChart2, Palette, GitBranch } from "lucide-react";
+import { Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone, BarChart2, Palette, GitBranch, PlugZap } from "lucide-react";
 import { formatBug } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -26,16 +26,32 @@ export default function BugsSection() {
   const [loading, setLoading]         = useState(false);
   const [report, setReport]           = useState("");
   const [copied, setCopied]           = useState(false);
+  const [bugError, setBugError]       = useState<{ message: string; llm_error: boolean } | null>(null);
 
   const handleFormat = async () => {
     if (!description.trim()) return;
     setLoading(true);
     setReport("");
+    setBugError(null);
     try {
       const res = await formatBug({ platform, feature, description, provider });
       setReport(res.report);
     } catch (err) {
-      setReport("Ошибка: " + String(err));
+      const raw = String(err);
+      // Try to parse structured error from backend
+      try {
+        const match = raw.match(/\{.*\}/s);
+        if (match) {
+          const parsed = JSON.parse(match[0]);
+          const detail = parsed.detail ?? parsed;
+          setBugError({
+            message: detail.message ?? raw,
+            llm_error: detail.llm_error ?? false,
+          });
+          return;
+        }
+      } catch { /* fallthrough */ }
+      setBugError({ message: raw, llm_error: false });
     } finally {
       setLoading(false);
     }
@@ -110,6 +126,32 @@ export default function BugsSection() {
               : <><Bug className="w-4 h-4" /> Оформить по стандарту Jira</>}
           </button>
         </div>
+
+        {bugError && (
+          <div className={`rounded-xl border p-4 mb-4 animate-slide-up ${
+            bugError.llm_error
+              ? "border-amber-200 bg-amber-50"
+              : "border-red-200 bg-red-50"
+          }`}>
+            <div className="flex items-start gap-3">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                bugError.llm_error ? "bg-amber-100" : "bg-red-100"
+              }`}>
+                {bugError.llm_error
+                  ? <PlugZap className="w-4 h-4 text-amber-600" />
+                  : <Bug className="w-4 h-4 text-red-500" />}
+              </div>
+              <div>
+                <p className={`text-sm font-semibold mb-1 ${bugError.llm_error ? "text-amber-800" : "text-red-700"}`}>
+                  {bugError.llm_error ? "Ошибка LLM-провайдера" : "Ошибка"}
+                </p>
+                <p className={`text-sm ${bugError.llm_error ? "text-amber-700" : "text-red-600"}`}>
+                  {bugError.message}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {report && (
           <div className="bg-white border border-border-main rounded-xl p-5 animate-slide-up">

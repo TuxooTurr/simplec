@@ -161,6 +161,27 @@ class LLMClient:
         )
 
     # ========================================================
+    # ERROR CLASSIFIER — friendly messages for LLM errors
+    # ========================================================
+    @staticmethod
+    def classify_error(e: Exception) -> tuple[bool, str]:
+        """Returns (is_llm_error, friendly_russian_message)."""
+        msg = str(e).lower()
+        if "402" in msg or "payment" in msg or "quota" in msg or "insufficient" in msg or "balance" in msg:
+            return True, "Ой! Закончились средства или квота у LLM-провайдера. Пополните баланс или смените провайдера в настройках."
+        if "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg or "authentication" in msg or "invalid api key" in msg:
+            return True, "Ой! Ошибка авторизации LLM-провайдера. Проверьте API-ключ или смените провайдера в настройках."
+        if "429" in msg or "rate limit" in msg or "too many requests" in msg or "ratelimit" in msg:
+            return True, "Ой! Превышен лимит запросов к LLM-провайдеру. Подождите немного или смените провайдера."
+        if any(x in msg for x in ("connectionerror", "connection refused", "connection error",
+                                   "econnrefused", "timeout", "timed out", "read timeout",
+                                   "connect timeout", "connection reset")):
+            return True, "Ой! Не удалось подключиться к LLM-провайдеру. Проверьте настройки соединения или смените провайдера."
+        if "500" in msg or "502" in msg or "503" in msg or "504" in msg or "bad gateway" in msg or "service unavailable" in msg:
+            return True, "Ой! LLM-провайдер временно недоступен. Попробуйте позже или смените провайдера."
+        return False, str(e)
+
+    # ========================================================
     # HEALTH CHECK — mini ping to verify LLM is alive
     # ========================================================
     @staticmethod

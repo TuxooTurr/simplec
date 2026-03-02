@@ -83,4 +83,9 @@ async def format_bug(req: BugFormatRequest):
         )
         return {"report": report}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        from agents.llm_client import LLMClient
+        is_llm, friendly = LLMClient.classify_error(e)
+        raise HTTPException(
+            status_code=503 if is_llm else 500,
+            detail={"message": friendly, "llm_error": is_llm}
+        )

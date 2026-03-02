@@ -123,7 +123,7 @@ export default function EtalonsSection() {
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="max-w-4xl">
+      <div className="w-full">
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl font-bold text-text-main">Эталонные тест-кейсы</h1>

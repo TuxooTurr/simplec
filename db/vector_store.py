@@ -137,37 +137,6 @@ class VectorStore:
             "pairs": self.pairs.count(),
         }
 
-    def add_requirement(self, req_id, text, metadata=None):
-        if metadata is None:
-            metadata = {}
-        clean_meta = {}
-        for k, v in metadata.items():
-            if isinstance(v, bool):
-                clean_meta[k] = str(v)
-            elif isinstance(v, (str, int, float)):
-                clean_meta[k] = v
-        self.requirements.add(
-            ids=[req_id],
-            documents=[text],
-            metadatas=[clean_meta],
-        )
-
-    def add_pair(self, pair_id, requirement_text, test_case_xml, metadata=None):
-        if metadata is None:
-            metadata = {}
-        clean_meta = {}
-        for k, v in metadata.items():
-            if isinstance(v, bool):
-                clean_meta[k] = str(v)
-            elif isinstance(v, (str, int, float)):
-                clean_meta[k] = v
-        clean_meta["test_case_xml"] = test_case_xml[:5000]
-        self.pairs.add(
-            ids=[pair_id],
-            documents=[requirement_text],
-            metadatas=[clean_meta],
-        )
-
     def clear_all(self):
         self.client.delete_collection("requirements")
         self.client.delete_collection("test_cases")

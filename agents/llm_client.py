@@ -177,14 +177,27 @@ class LLMClient:
                 if not credentials:
                     return {"status": "red", "message": "Нет ключа GIGACHAT_AUTH_KEY"}
                 from gigachat import GigaChat
+                from gigachat.models import Chat, Messages
                 scope = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
                 client = GigaChat(
                     credentials=credentials,
                     verify_ssl_certs=False,
                     scope=scope
                 )
-                models = client.get_models()
-                return {"status": "green", "message": "OK, модели: " + str(len(models.data))}
+                # Tiny chat call — checks both auth AND balance
+                try:
+                    client.chat(Chat(
+                        messages=[Messages(role="user", content="1")],
+                        max_tokens=5
+                    ))
+                    return {"status": "green", "message": "OK"}
+                except Exception as chat_e:
+                    errmsg = str(chat_e)
+                    if "402" in errmsg or "payment" in errmsg.lower() or "quota" in errmsg.lower() or "balance" in errmsg.lower():
+                        return {"status": "yellow", "message": "Нет средств (402) — пополните баланс"}
+                    if "401" in errmsg or "403" in errmsg or "unauthorized" in errmsg.lower():
+                        return {"status": "red", "message": "Ошибка авторизации"}
+                    return {"status": "yellow", "message": errmsg[:60]}
 
             elif provider_id == "deepseek":
                 api_key = os.getenv("DEEPSEEK_API_KEY")

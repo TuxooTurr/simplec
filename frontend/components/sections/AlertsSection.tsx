@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Bell, Plus, Send, Copy, CheckCheck, Trash2, Pencil,
   CircleCheck, CircleX, Loader2, ChevronDown, X, Sparkles,
-  Play, Square, Timer,
+  Play, Square, Timer, Clock,
 } from "lucide-react";
 import {
   getAlertScripts, saveAlertScript, deleteAlertScript,
@@ -87,21 +87,12 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
   };
 
   const handleSave = async () => {
-    if (!name.trim() || !topic.trim()) {
-      setErr("Название и топик обязательны");
-      return;
-    }
-    setSaving(true);
-    setErr("");
+    if (!name.trim() || !topic.trim()) { setErr("Название и топик обязательны"); return; }
+    setSaving(true); setErr("");
     try {
       const saved = await saveAlertScript({
-        id:               initial?.id,
-        name:             name.trim(),
-        description:      description.trim(),
-        topic:            topic.trim(),
-        payload_template: tmpl,
-        params,
-        builtin:          initial?.builtin ?? false,
+        id: initial?.id, name: name.trim(), description: description.trim(),
+        topic: topic.trim(), payload_template: tmpl, params, builtin: initial?.builtin ?? false,
       });
       onSave(saved as AlertScript);
     } catch (e) {
@@ -114,7 +105,6 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-main flex-shrink-0">
           <h2 className="text-base font-semibold text-text-main">
             {editing ? "Редактировать скрипт" : "Новый скрипт"}
@@ -124,7 +114,6 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
           </button>
         </div>
 
-        {/* Body */}
         <div className="overflow-y-auto scrollbar-thin p-6 space-y-4 flex-1">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -171,34 +160,15 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
                 {params.map((p, i) => (
                   <div key={p.key} className="grid grid-cols-[80px_1fr_100px_100px_72px] gap-2 items-center bg-gray-50 rounded-lg px-3 py-2">
                     <span className="text-xs font-mono text-text-muted truncate">{`{{${p.key}}}`}</span>
-                    <input
-                      value={p.label}
-                      onChange={e => updateParam(i, "label", e.target.value)}
-                      className={`${INPUT_CLS} text-xs py-1`}
-                      placeholder="Метка"
-                    />
-                    <select
-                      value={p.type}
-                      onChange={e => updateParam(i, "type", e.target.value)}
-                      className={`${INPUT_CLS} text-xs py-1`}
-                    >
+                    <input value={p.label} onChange={e => updateParam(i, "label", e.target.value)} className={`${INPUT_CLS} text-xs py-1`} placeholder="Метка" />
+                    <select value={p.type} onChange={e => updateParam(i, "type", e.target.value)} className={`${INPUT_CLS} text-xs py-1`}>
                       <option value="text">text</option>
                       <option value="select">select</option>
                       <option value="textarea">textarea</option>
                     </select>
-                    <input
-                      value={p.default}
-                      onChange={e => updateParam(i, "default", e.target.value)}
-                      className={`${INPUT_CLS} text-xs py-1`}
-                      placeholder="default"
-                    />
+                    <input value={p.default} onChange={e => updateParam(i, "default", e.target.value)} className={`${INPUT_CLS} text-xs py-1`} placeholder="default" />
                     <label className="flex items-center gap-1 text-xs text-text-muted cursor-pointer justify-center">
-                      <input
-                        type="checkbox"
-                        checked={p.required}
-                        onChange={e => updateParam(i, "required", e.target.checked)}
-                        className="accent-primary"
-                      />
+                      <input type="checkbox" checked={p.required} onChange={e => updateParam(i, "required", e.target.checked)} className="accent-primary" />
                       обяз.
                     </label>
                   </div>
@@ -210,19 +180,11 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
           {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-main flex-shrink-0">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm text-text-muted hover:text-text-main border border-border-main rounded-lg transition-colors"
-          >
+          <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted hover:text-text-main border border-border-main rounded-lg transition-colors">
             Отмена
           </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark transition-all disabled:opacity-40"
-          >
+          <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark transition-all disabled:opacity-40">
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
             Сохранить
           </button>
@@ -232,30 +194,65 @@ function ScriptModal({ initial, onSave, onClose }: ScriptModalProps) {
   );
 }
 
-// ── History row ──────────────────────────────────────────────────────────────
+// ── Audit modal ──────────────────────────────────────────────────────────────
 
-function HistoryRow({ entry }: { entry: AlertHistoryEntry }) {
-  const ts = new Date(entry.ts).toLocaleTimeString("ru-RU", {
-    hour: "2-digit", minute: "2-digit", second: "2-digit",
-  });
+function AuditModal({ history, onClose }: { history: AlertHistoryEntry[]; onClose: () => void }) {
   return (
-    <div className={`flex items-start gap-2 px-3 py-2 rounded-lg text-sm ${
-      entry.status === "ok" ? "bg-green-50" : "bg-red-50"
-    }`}>
-      {entry.status === "ok"
-        ? <CircleCheck className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
-        : <CircleX     className="w-4 h-4 text-red-500   flex-shrink-0 mt-0.5" />}
-      <div className="min-w-0 flex-1">
-        <span className={`font-medium ${entry.status === "ok" ? "text-green-800" : "text-red-700"}`}>
-          {entry.script_name}
-        </span>
-        <span className="text-text-muted mx-1">→</span>
-        <span className="font-mono text-xs text-text-muted">{entry.topic}</span>
-        {entry.error && (
-          <p className="text-xs text-red-600 mt-0.5 truncate" title={entry.error}>{entry.error}</p>
-        )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[70vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-text-muted" />
+            <h2 className="text-base font-semibold text-text-main">Аудит отправок</h2>
+            {history.length > 0 && (
+              <span className="text-xs font-medium bg-gray-100 text-text-muted px-2 py-0.5 rounded-full">
+                {history.length}
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-text-main transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto scrollbar-thin p-4 flex-1">
+          {history.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-3 text-text-muted">
+              <Clock className="w-10 h-10 opacity-20" />
+              <p className="text-sm">История отправок пуста</p>
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {history.map((entry, i) => {
+                const ts = new Date(entry.ts).toLocaleString("ru-RU", {
+                  day: "2-digit", month: "2-digit",
+                  hour: "2-digit", minute: "2-digit", second: "2-digit",
+                });
+                return (
+                  <div key={i} className={`flex items-start gap-2 px-3 py-2.5 rounded-lg text-sm ${
+                    entry.status === "ok" ? "bg-green-50" : "bg-red-50"
+                  }`}>
+                    {entry.status === "ok"
+                      ? <CircleCheck className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
+                      : <CircleX     className="w-4 h-4 text-red-500   flex-shrink-0 mt-0.5" />}
+                    <div className="min-w-0 flex-1">
+                      <span className={`font-medium ${entry.status === "ok" ? "text-green-800" : "text-red-700"}`}>
+                        {entry.script_name}
+                      </span>
+                      <span className="text-text-muted mx-1">→</span>
+                      <span className="font-mono text-xs text-text-muted">{entry.topic}</span>
+                      {entry.error && (
+                        <p className="text-xs text-red-600 mt-0.5" title={entry.error}>{entry.error}</p>
+                      )}
+                    </div>
+                    <span className="text-xs text-text-muted flex-shrink-0 whitespace-nowrap">{ts}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
-      <span className="text-xs text-text-muted flex-shrink-0">{ts}</span>
     </div>
   );
 }
@@ -273,6 +270,7 @@ export default function AlertsSection() {
   const [history,       setHistory]       = useState<AlertHistoryEntry[]>([]);
   const [copied,        setCopied]        = useState(false);
   const [showModal,     setShowModal]     = useState(false);
+  const [showAudit,     setShowAudit]     = useState(false);
   const [editScript,    setEditScript]    = useState<AlertScript | null>(null);
   const [loadErr,       setLoadErr]       = useState("");
 
@@ -318,19 +316,13 @@ export default function AlertsSection() {
     getAlertScripts()
       .then(data => {
         setScripts(data);
-        if (data.length > 0) {
-          setSelectedId(data[0].id);
-          initValues(data[0]);
-        }
+        if (data.length > 0) { setSelectedId(data[0].id); initValues(data[0]); }
       })
       .catch(e => setLoadErr(String(e)));
-
-    getAlertHistory()
-      .then(setHistory)
-      .catch(() => {});
+    getAlertHistory().then(setHistory).catch(() => {});
   }, [initValues]);
 
-  // Core send — reads from refs so safe to call from scheduler
+  // Core send — reads from refs (safe in scheduler)
   const doSendCore = useCallback(async () => {
     const sid = selectedIdRef.current;
     const sel = scriptsRef.current.find(s => s.id === sid) ?? null;
@@ -356,10 +348,7 @@ export default function AlertsSection() {
   }, []);
 
   const stopSchedule = useCallback(() => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
     schedActiveRef.current = false;
     setSchedActive(false);
   }, []);
@@ -376,21 +365,18 @@ export default function AlertsSection() {
       const now = new Date();
       const from = schedFromRef.current;
       const to   = schedToRef.current;
-      if (from && now < new Date(from)) return;       // не наступило
-      if (to   && now > new Date(to))   { stopSchedule(); return; } // истёк диапазон
+      if (from && now < new Date(from)) return;
+      if (to   && now > new Date(to))   { stopSchedule(); return; }
       await doSendCore();
       count++;
       setSchedCount(count);
     };
 
-    tick(); // немедленная первая отправка
+    tick();
     timerRef.current = setInterval(tick, freqSecs * 1000);
   }, [stopSchedule, doSendCore]);
 
-  // Cleanup on unmount
-  useEffect(() => () => {
-    if (timerRef.current) clearInterval(timerRef.current);
-  }, []);
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
   const handleSelectScript = (s: AlertScript) => {
     stopSchedule();
@@ -399,7 +385,6 @@ export default function AlertsSection() {
   };
 
   const payload = selected ? resolveTemplate(selected.payload_template, values) : "";
-
   const handleSend = () => doSendCore();
 
   const handleCopy = async () => {
@@ -408,20 +393,19 @@ export default function AlertsSection() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleOpenAudit = () => {
+    getAlertHistory().then(setHistory).catch(() => {});
+    setShowAudit(true);
+  };
+
   const handleModalSave = (saved: AlertScript) => {
     setScripts(prev => {
       const idx = prev.findIndex(s => s.id === saved.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = saved;
-        return next;
-      }
+      if (idx >= 0) { const next = [...prev]; next[idx] = saved; return next; }
       return [...prev, saved];
     });
-    setShowModal(false);
-    setEditScript(null);
-    setSelectedId(saved.id);
-    initValues(saved);
+    setShowModal(false); setEditScript(null);
+    setSelectedId(saved.id); initValues(saved);
   };
 
   const handleDelete = async (s: AlertScript) => {
@@ -431,13 +415,8 @@ export default function AlertsSection() {
       await deleteAlertScript(s.id);
       const next = scripts.filter(x => x.id !== s.id);
       setScripts(next);
-      if (selectedId === s.id && next.length > 0) {
-        setSelectedId(next[0].id);
-        initValues(next[0]);
-      }
-    } catch (e) {
-      alert(String(e));
-    }
+      if (selectedId === s.id && next.length > 0) { setSelectedId(next[0].id); initValues(next[0]); }
+    } catch (e) { alert(String(e)); }
   };
 
   if (loadErr) {
@@ -497,7 +476,6 @@ export default function AlertsSection() {
               </div>
             </div>
           ))}
-
           <button
             onClick={() => { setEditScript(null); setShowModal(true); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-dashed border-border-main text-text-muted hover:border-primary/40 hover:text-primary transition-all duration-150"
@@ -511,7 +489,7 @@ export default function AlertsSection() {
       {selected ? (
         <div className="grid grid-cols-2 gap-4 flex-1 min-h-0">
 
-          {/* Left: form + scheduling */}
+          {/* Left: params form */}
           <div className="bg-white border border-border-main rounded-xl p-5 overflow-y-auto scrollbar-thin flex flex-col gap-4">
             <div>
               <p className="text-sm font-semibold text-text-main">{selected.name}</p>
@@ -527,7 +505,6 @@ export default function AlertsSection() {
                   {p.required && <span className="text-red-400 normal-case font-normal"> *</span>}
                   {p.hint && <span className="normal-case font-normal text-text-muted ml-1">— {p.hint}</span>}
                 </label>
-
                 {p.type === "select" && p.options ? (
                   <div className="relative">
                     <select
@@ -535,9 +512,7 @@ export default function AlertsSection() {
                       onChange={e => setValues(v => ({ ...v, [p.key]: e.target.value }))}
                       className={`${INPUT_CLS} appearance-none pr-8`}
                     >
-                      {p.options.map(opt => (
-                        <option key={opt} value={opt}>{opt}</option>
-                      ))}
+                      {p.options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                     </select>
                     <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
                   </div>
@@ -562,213 +537,187 @@ export default function AlertsSection() {
 
             <div>
               <label className={LABEL_CLS}>Kafka Topic</label>
-              <input
-                value={topicOverride}
-                onChange={e => setTopicOverride(e.target.value)}
-                className={INPUT_CLS}
-              />
+              <input value={topicOverride} onChange={e => setTopicOverride(e.target.value)} className={INPUT_CLS} />
+            </div>
+          </div>
+
+          {/* Right: payload + scheduling + actions */}
+          <div className="bg-white border border-border-main rounded-xl p-5 overflow-y-auto scrollbar-thin flex flex-col gap-3">
+            {/* Payload header */}
+            <div className="flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-text-main">
+                  {selected.script_type === "a2a" ? "Alert Content" : "Payload"}
+                </h3>
+                {selected.script_type === "a2a" && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">
+                    A2A · JWT · JSON-RPC
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-text-muted font-mono truncate max-w-[180px]">{topicOverride}</span>
             </div>
 
-            {/* ── Scheduling ─────────────────────────────────────────── */}
-            <div className="border-t border-border-main pt-4 space-y-3">
-              <div className="flex items-center gap-1.5 mb-2">
-                <Timer className="w-3.5 h-3.5 text-text-muted" />
-                <span className={LABEL_CLS} style={{ marginBottom: 0 }}>Режим отправки</span>
-              </div>
+            {selected.script_type === "a2a" && (
+              <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-1.5 flex-shrink-0">
+                Контент алерта будет обёрнут в JSON-RPC 2.0 с JWT заголовками (Authorization, MessageToken, SystemCi…)
+              </p>
+            )}
 
+            <pre className="text-xs font-mono text-text-main bg-gray-50 rounded-lg p-3 overflow-auto flex-1 min-h-[120px] whitespace-pre-wrap break-all">
+              {payload || <span className="text-text-muted italic">Заполните параметры...</span>}
+            </pre>
+
+            {/* Send result */}
+            {sendResult && (
+              <div className={`rounded-lg border p-3 flex items-start gap-2 text-sm flex-shrink-0 ${
+                sendResult.ok ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
+              }`}>
+                {sendResult.ok
+                  ? <CircleCheck className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
+                  : <CircleX     className="w-4 h-4 text-red-500   flex-shrink-0 mt-0.5" />}
+                {sendResult.ok
+                  ? <span className="text-green-700 font-medium">
+                      Отправлено{sendResult.offset !== undefined && sendResult.offset !== null
+                        ? ` (offset: ${sendResult.offset})` : ""}
+                    </span>
+                  : <span className="text-red-700">{sendResult.error}</span>}
+              </div>
+            )}
+
+            {/* ── Scheduling controls ────────────────────────────────── */}
+            <div className="border-t border-border-main pt-3 flex-shrink-0 space-y-2.5">
               {/* Mode toggle */}
-              <div className="flex gap-2">
-                {(["once", "periodic"] as const).map(m => (
-                  <button
-                    key={m}
-                    onClick={() => {
-                      setSchedMode(m);
-                      if (m === "once") stopSchedule();
-                    }}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                      schedMode === m
-                        ? "border-primary bg-indigo-50 text-primary"
-                        : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"
-                    }`}
-                  >
-                    {m === "once" ? "Разовая" : "Периодическая"}
-                  </button>
-                ))}
+              <div className="flex items-center gap-2">
+                <Timer className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+                <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Режим</span>
+                <div className="flex gap-1.5 ml-auto">
+                  {(["once", "periodic"] as const).map(m => (
+                    <button
+                      key={m}
+                      onClick={() => { setSchedMode(m); if (m === "once") stopSchedule(); }}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium border transition-all ${
+                        schedMode === m
+                          ? "border-primary bg-indigo-50 text-primary"
+                          : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"
+                      }`}
+                    >
+                      {m === "once" ? "Разовая" : "Периодическая"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {schedMode === "periodic" && (
                 <>
                   {/* Frequency chips */}
-                  <div>
-                    <label className={LABEL_CLS}>Частота</label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {FREQS.map(f => (
-                        <button
-                          key={f.secs}
-                          onClick={() => setSchedFreq(f.secs)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
-                            schedFreq === f.secs
-                              ? "border-primary bg-indigo-50 text-primary"
-                              : "border-border-main text-text-muted hover:border-primary/40"
-                          }`}
-                        >
-                          {f.label}
-                        </button>
-                      ))}
-                    </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {FREQS.map(f => (
+                      <button
+                        key={f.secs}
+                        onClick={() => setSchedFreq(f.secs)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                          schedFreq === f.secs
+                            ? "border-primary bg-indigo-50 text-primary"
+                            : "border-border-main text-text-muted hover:border-primary/40"
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
                   </div>
 
                   {/* Time range */}
-                  <div>
-                    <label className={LABEL_CLS}>Диапазон (необязательно)</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <span className="text-[10px] text-text-muted mb-1 block">С</span>
-                        <input
-                          type="datetime-local"
-                          value={schedFrom}
-                          onChange={e => setSchedFrom(e.target.value)}
-                          className={`${INPUT_CLS} text-xs`}
-                        />
-                      </div>
-                      <div>
-                        <span className="text-[10px] text-text-muted mb-1 block">По</span>
-                        <input
-                          type="datetime-local"
-                          value={schedTo}
-                          onChange={e => setSchedTo(e.target.value)}
-                          className={`${INPUT_CLS} text-xs`}
-                        />
-                      </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <span className="text-[10px] text-text-muted mb-1 block font-medium uppercase tracking-wide">С</span>
+                      <input type="datetime-local" value={schedFrom} onChange={e => setSchedFrom(e.target.value)} className={`${INPUT_CLS} text-xs py-1.5`} />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-text-muted mb-1 block font-medium uppercase tracking-wide">По</span>
+                      <input type="datetime-local" value={schedTo} onChange={e => setSchedTo(e.target.value)} className={`${INPUT_CLS} text-xs py-1.5`} />
                     </div>
                   </div>
+
+                  {/* Schedule status */}
+                  {(schedActive || schedCount > 0) && (
+                    <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium ${
+                      schedActive
+                        ? "bg-green-50 text-green-700 border border-green-200"
+                        : "bg-gray-50 text-text-muted border border-border-main"
+                    }`}>
+                      {schedActive && <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />}
+                      {schedActive
+                        ? `Работает · каждые ${freqLabel}${schedTo ? ` · до ${new Date(schedTo).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : ""} · отправлено: ${schedCount}`
+                        : `Остановлено · отправлено: ${schedCount}`}
+                    </div>
+                  )}
                 </>
               )}
             </div>
-          </div>
 
-          {/* Right: payload + actions + history */}
-          <div className="flex flex-col gap-4 min-h-0">
-            <div className="bg-white border border-border-main rounded-xl p-5 flex flex-col gap-3 flex-1 min-h-0">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-text-main">
-                    {selected.script_type === "a2a" ? "Alert Content" : "Payload"}
-                  </h3>
-                  {selected.script_type === "a2a" && (
-                    <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">
-                      A2A · JWT · JSON-RPC
-                    </span>
-                  )}
-                </div>
-                <span className="text-xs text-text-muted font-mono truncate max-w-[180px]">{topicOverride}</span>
-              </div>
+            {/* Action buttons */}
+            <div className="flex gap-2 flex-shrink-0">
+              <button
+                onClick={handleCopy}
+                disabled={!payload}
+                className={`flex items-center gap-1.5 text-sm px-3 py-1.5 border rounded-lg transition-all duration-150 active:scale-[0.97] disabled:opacity-40
+                  ${copied
+                    ? "bg-green-50 border-green-200 text-green-700"
+                    : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+              >
+                {copied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
+              </button>
 
-              {selected.script_type === "a2a" && (
-                <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-1.5">
-                  Контент алерта будет обёрнут в JSON-RPC 2.0 с JWT заголовками (Authorization, MessageToken, SystemCi…)
-                </p>
-              )}
-
-              <pre className="text-xs font-mono text-text-main bg-gray-50 rounded-lg p-3 overflow-auto flex-1 min-h-[140px] whitespace-pre-wrap break-all">
-                {payload || <span className="text-text-muted italic">Заполните параметры...</span>}
-              </pre>
-
-              {sendResult && (
-                <div className={`rounded-lg border p-3 flex items-start gap-2 text-sm ${
-                  sendResult.ok ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"
-                }`}>
-                  {sendResult.ok
-                    ? <CircleCheck className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
-                    : <CircleX     className="w-4 h-4 text-red-500   flex-shrink-0 mt-0.5" />}
-                  {sendResult.ok
-                    ? <span className="text-green-700 font-medium">
-                        Отправлено{sendResult.offset !== undefined && sendResult.offset !== null
-                          ? ` (offset: ${sendResult.offset})`
-                          : ""}
-                      </span>
-                    : <span className="text-red-700">{sendResult.error}</span>}
-                </div>
-              )}
-
-              {/* Schedule status banner */}
-              {schedMode === "periodic" && (schedActive || schedCount > 0) && (
-                <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium ${
-                  schedActive
-                    ? "bg-green-50 text-green-700 border border-green-200"
-                    : "bg-gray-50 text-text-muted border border-border-main"
-                }`}>
-                  {schedActive && (
-                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
-                  )}
-                  {schedActive
-                    ? `Работает · каждые ${freqLabel}${schedTo ? ` · до ${new Date(schedTo).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : ""} · отправлено: ${schedCount}`
-                    : `Остановлено · отправлено: ${schedCount}`}
-                </div>
-              )}
-
-              {/* Action buttons */}
-              <div className="flex gap-2">
+              {schedMode === "once" ? (
                 <button
-                  onClick={handleCopy}
-                  disabled={!payload}
-                  className={`flex items-center gap-1.5 text-sm px-3 py-1.5 border rounded-lg transition-all duration-150 active:scale-[0.97] disabled:opacity-40
-                    ${copied
-                      ? "bg-green-50 border-green-200 text-green-700"
-                      : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                  onClick={handleSend}
+                  disabled={sending || !payload}
+                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-primary text-white
+                    rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
+                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
                 >
-                  {copied
-                    ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано</>
-                    : <><Copy       className="w-3.5 h-3.5" /> Копировать</>}
+                  {sending
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
+                    : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
                 </button>
+              ) : schedActive ? (
+                <button
+                  onClick={stopSchedule}
+                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-red-500 text-white
+                    rounded-lg text-sm font-semibold hover:bg-red-600 transition-all duration-150
+                    active:scale-[0.99] shadow-sm"
+                >
+                  <Square className="w-4 h-4 fill-current" /> Остановить
+                </button>
+              ) : (
+                <button
+                  onClick={() => startSchedule(schedFreq)}
+                  disabled={!payload}
+                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-green-600 text-white
+                    rounded-lg text-sm font-semibold hover:bg-green-700 transition-all duration-150
+                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
+                >
+                  <Play className="w-4 h-4 fill-current" /> Запустить · {freqLabel}
+                </button>
+              )}
 
-                {schedMode === "once" ? (
-                  <button
-                    onClick={handleSend}
-                    disabled={sending || !payload}
-                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-primary text-white
-                      rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
-                      disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
-                  >
-                    {sending
-                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
-                      : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
-                  </button>
-                ) : schedActive ? (
-                  <button
-                    onClick={stopSchedule}
-                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-red-500 text-white
-                      rounded-lg text-sm font-semibold hover:bg-red-600 transition-all duration-150
-                      active:scale-[0.99] shadow-sm"
-                  >
-                    <Square className="w-4 h-4 fill-current" /> Остановить
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => startSchedule(schedFreq)}
-                    disabled={!payload}
-                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-green-600 text-white
-                      rounded-lg text-sm font-semibold hover:bg-green-700 transition-all duration-150
-                      disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
-                  >
-                    <Play className="w-4 h-4 fill-current" /> Запустить · {freqLabel}
-                  </button>
+              {/* Audit button */}
+              <button
+                onClick={handleOpenAudit}
+                className="relative flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
+                  text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150"
+                title="История отправок"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                Аудит
+                {history.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 bg-primary text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                    {history.length > 99 ? "99+" : history.length}
+                  </span>
                 )}
-              </div>
+              </button>
             </div>
-
-            {history.length > 0 && (
-              <div className="bg-white border border-border-main rounded-xl p-4">
-                <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
-                  История отправок
-                </h3>
-                <div className="space-y-1.5 max-h-48 overflow-y-auto scrollbar-thin">
-                  {history.slice(0, 10).map((e, i) => (
-                    <HistoryRow key={i} entry={e} />
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       ) : (
@@ -784,6 +733,10 @@ export default function AlertsSection() {
           onSave={handleModalSave}
           onClose={() => { setShowModal(false); setEditScript(null); }}
         />
+      )}
+
+      {showAudit && (
+        <AuditModal history={history} onClose={() => setShowAudit(false)} />
       )}
     </div>
   );

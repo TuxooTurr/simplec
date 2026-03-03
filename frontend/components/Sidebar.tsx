@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Zap, BookOpen, Bug, LogOut, User, Bell, BarChart2, Scale } from "lucide-react";
+import { Zap, BookOpen, Bug, LogOut, User, Bell, BarChart2, Scale, FlaskConical, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import { logout, getMe } from "@/lib/auth";
@@ -13,13 +13,20 @@ const PROVIDERS = [
   { id: "deepseek", label: "DeepSeek" },
 ];
 
-const NAV: { id: SectionId; href: string; label: string; Icon: React.ComponentType<{ className?: string; strokeWidth?: number }> }[] = [
-  { id: "generation", href: "/generation", label: "Генерация", Icon: Zap },
-  { id: "etalons",    href: "/etalons",    label: "Эталоны",   Icon: BookOpen },
-  { id: "bugs",       href: "/bugs",       label: "Дефекты",   Icon: Bug },
-  { id: "alerts",     href: "/alerts",     label: "Алерты",    Icon: Bell },
-  { id: "metrics",    href: "/metrics",    label: "Метрики",   Icon: BarChart2 },
-  { id: "revisor",    href: "/revisor",    label: "Ревизор",   Icon: Scale },
+const NAV: {
+  id: SectionId;
+  href: string;
+  label: string;
+  Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  disabled?: boolean;
+}[] = [
+  { id: "generation",  href: "/generation",  label: "Ручная тестовая модель", Icon: Zap },
+  { id: "auto_model",  href: "/auto-model",  label: "Авто тестовая модель",   Icon: FlaskConical, disabled: true },
+  { id: "bugs",        href: "/bugs",        label: "Дефекты",                Icon: Bug },
+  { id: "alerts",      href: "/alerts",      label: "Алерты",                 Icon: Bell },
+  { id: "metrics",     href: "/metrics",     label: "Метрики",                Icon: BarChart2 },
+  { id: "revisor",     href: "/revisor",     label: "Ревизор",                Icon: Scale },
+  { id: "etalons",     href: "/etalons",     label: "Эталоны",                Icon: BookOpen },
 ];
 
 export default function Sidebar() {
@@ -54,8 +61,27 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="px-3 py-3 border-b border-border-main">
-        {NAV.map(({ id, href, label, Icon }) => {
-          const active = pathname.startsWith(href);
+        {NAV.map(({ id, href, label, Icon, disabled }) => {
+          const active = !disabled && pathname.startsWith(href);
+
+          if (disabled) {
+            return (
+              <div
+                key={href}
+                className="relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-0.5 text-sm font-medium
+                  text-text-muted/50 cursor-not-allowed select-none"
+                title="В разработке"
+              >
+                <Icon className="w-4 h-4 flex-shrink-0 text-text-muted/40" strokeWidth={2} />
+                <span className="flex-1">{label}</span>
+                <span className="flex items-center gap-1 text-[10px] text-text-muted/50 bg-gray-100 px-1.5 py-0.5 rounded-full">
+                  <Lock className="w-2.5 h-2.5" />
+                  скоро
+                </span>
+              </div>
+            );
+          }
+
           return (
             <Link
               key={href}

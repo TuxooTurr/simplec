@@ -4,11 +4,12 @@ import { createContext, useContext, useState, ReactNode } from "react";
 
 export type SectionId =
   | "generation"
-  | "etalons"
+  | "auto_model"
   | "bugs"
   | "alerts"
   | "metrics"
-  | "revisor";
+  | "revisor"
+  | "etalons";
 
 interface WorkspaceCtx {
   /** Глобально выбранная LLM-модель */

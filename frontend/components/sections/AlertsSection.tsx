@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   Bell, Plus, Send, Copy, CheckCheck, Trash2, Pencil,
   CircleCheck, CircleX, Loader2, ChevronDown, X, Sparkles,
+  Play, Square, Timer,
 } from "lucide-react";
 import {
   getAlertScripts, saveAlertScript, deleteAlertScript,
@@ -20,7 +21,19 @@ const INPUT_CLS =
 
 const LABEL_CLS = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5";
 
-// ── Template resolver (client-side preview) ─────────────────────────────────
+// ── Schedule frequencies ──────────────────────────────────────────────────────
+
+const FREQS = [
+  { label: "10с",    secs: 10 },
+  { label: "30с",    secs: 30 },
+  { label: "1 мин",  secs: 60 },
+  { label: "5 мин",  secs: 300 },
+  { label: "10 мин", secs: 600 },
+  { label: "30 мин", secs: 1800 },
+  { label: "1 ч",    secs: 3600 },
+];
+
+// ── Template resolver ────────────────────────────────────────────────────────
 
 function resolveTemplate(template: string, values: Record<string, string>): string {
   const now = new Date().toISOString();
@@ -250,6 +263,7 @@ function HistoryRow({ entry }: { entry: AlertHistoryEntry }) {
 // ── Main component ───────────────────────────────────────────────────────────
 
 export default function AlertsSection() {
+  // Core state
   const [scripts,       setScripts]       = useState<AlertScript[]>([]);
   const [selectedId,    setSelectedId]    = useState<string | null>(null);
   const [values,        setValues]        = useState<Record<string, string>>({});
@@ -261,6 +275,32 @@ export default function AlertsSection() {
   const [showModal,     setShowModal]     = useState(false);
   const [editScript,    setEditScript]    = useState<AlertScript | null>(null);
   const [loadErr,       setLoadErr]       = useState("");
+
+  // Scheduling state
+  const [schedMode,   setSchedMode]   = useState<"once" | "periodic">("once");
+  const [schedFreq,   setSchedFreq]   = useState(30);
+  const [schedFrom,   setSchedFrom]   = useState("");
+  const [schedTo,     setSchedTo]     = useState("");
+  const [schedActive, setSchedActive] = useState(false);
+  const [schedCount,  setSchedCount]  = useState(0);
+
+  // Refs: avoid stale closures in scheduler
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sendingRef     = useRef(false);
+  const schedActiveRef = useRef(false);
+  const valuesRef      = useRef(values);
+  const topicRef       = useRef(topicOverride);
+  const selectedIdRef  = useRef(selectedId);
+  const scriptsRef     = useRef(scripts);
+  const schedFromRef   = useRef(schedFrom);
+  const schedToRef     = useRef(schedTo);
+
+  useEffect(() => { valuesRef.current = values; },        [values]);
+  useEffect(() => { topicRef.current = topicOverride; },  [topicOverride]);
+  useEffect(() => { selectedIdRef.current = selectedId; },[selectedId]);
+  useEffect(() => { scriptsRef.current = scripts; },      [scripts]);
+  useEffect(() => { schedFromRef.current = schedFrom; },  [schedFrom]);
+  useEffect(() => { schedToRef.current = schedTo; },      [schedTo]);
 
   const selected = scripts.find(s => s.id === selectedId) ?? null;
 
@@ -290,22 +330,20 @@ export default function AlertsSection() {
       .catch(() => {});
   }, [initValues]);
 
-  const handleSelectScript = (s: AlertScript) => {
-    setSelectedId(s.id);
-    initValues(s);
-  };
-
-  const payload = selected ? resolveTemplate(selected.payload_template, values) : "";
-
-  const handleSend = async () => {
-    if (!selected) return;
+  // Core send — reads from refs so safe to call from scheduler
+  const doSendCore = useCallback(async () => {
+    const sid = selectedIdRef.current;
+    const sel = scriptsRef.current.find(s => s.id === sid) ?? null;
+    if (!sel || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
     setSendResult(null);
     try {
+      const topic = topicRef.current;
       const res = await sendAlert({
-        script_id:      selected.id,
-        values,
-        topic_override: topicOverride !== selected.topic ? topicOverride : "",
+        script_id:      sel.id,
+        values:         valuesRef.current,
+        topic_override: topic !== sel.topic ? topic : "",
       });
       setSendResult({ ok: res.ok, error: res.error, offset: res.offset });
       getAlertHistory().then(setHistory).catch(() => {});
@@ -313,8 +351,56 @@ export default function AlertsSection() {
       setSendResult({ ok: false, error: String(e) });
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
+  }, []);
+
+  const stopSchedule = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    schedActiveRef.current = false;
+    setSchedActive(false);
+  }, []);
+
+  const startSchedule = useCallback((freqSecs: number) => {
+    stopSchedule();
+    let count = 0;
+    setSchedCount(0);
+    schedActiveRef.current = true;
+    setSchedActive(true);
+
+    const tick = async () => {
+      if (!schedActiveRef.current) return;
+      const now = new Date();
+      const from = schedFromRef.current;
+      const to   = schedToRef.current;
+      if (from && now < new Date(from)) return;       // не наступило
+      if (to   && now > new Date(to))   { stopSchedule(); return; } // истёк диапазон
+      await doSendCore();
+      count++;
+      setSchedCount(count);
+    };
+
+    tick(); // немедленная первая отправка
+    timerRef.current = setInterval(tick, freqSecs * 1000);
+  }, [stopSchedule, doSendCore]);
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, []);
+
+  const handleSelectScript = (s: AlertScript) => {
+    stopSchedule();
+    setSelectedId(s.id);
+    initValues(s);
   };
+
+  const payload = selected ? resolveTemplate(selected.payload_template, values) : "";
+
+  const handleSend = () => doSendCore();
 
   const handleCopy = async () => {
     await navigator.clipboard.writeText(payload);
@@ -361,6 +447,8 @@ export default function AlertsSection() {
       </div>
     );
   }
+
+  const freqLabel = FREQS.find(f => f.secs === schedFreq)?.label ?? `${schedFreq}с`;
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up h-full flex flex-col gap-4">
@@ -423,7 +511,7 @@ export default function AlertsSection() {
       {selected ? (
         <div className="grid grid-cols-2 gap-4 flex-1 min-h-0">
 
-          {/* Left: form */}
+          {/* Left: form + scheduling */}
           <div className="bg-white border border-border-main rounded-xl p-5 overflow-y-auto scrollbar-thin flex flex-col gap-4">
             <div>
               <p className="text-sm font-semibold text-text-main">{selected.name}</p>
@@ -480,6 +568,83 @@ export default function AlertsSection() {
                 className={INPUT_CLS}
               />
             </div>
+
+            {/* ── Scheduling ─────────────────────────────────────────── */}
+            <div className="border-t border-border-main pt-4 space-y-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <Timer className="w-3.5 h-3.5 text-text-muted" />
+                <span className={LABEL_CLS} style={{ marginBottom: 0 }}>Режим отправки</span>
+              </div>
+
+              {/* Mode toggle */}
+              <div className="flex gap-2">
+                {(["once", "periodic"] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      setSchedMode(m);
+                      if (m === "once") stopSchedule();
+                    }}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                      schedMode === m
+                        ? "border-primary bg-indigo-50 text-primary"
+                        : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"
+                    }`}
+                  >
+                    {m === "once" ? "Разовая" : "Периодическая"}
+                  </button>
+                ))}
+              </div>
+
+              {schedMode === "periodic" && (
+                <>
+                  {/* Frequency chips */}
+                  <div>
+                    <label className={LABEL_CLS}>Частота</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {FREQS.map(f => (
+                        <button
+                          key={f.secs}
+                          onClick={() => setSchedFreq(f.secs)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                            schedFreq === f.secs
+                              ? "border-primary bg-indigo-50 text-primary"
+                              : "border-border-main text-text-muted hover:border-primary/40"
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Time range */}
+                  <div>
+                    <label className={LABEL_CLS}>Диапазон (необязательно)</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[10px] text-text-muted mb-1 block">С</span>
+                        <input
+                          type="datetime-local"
+                          value={schedFrom}
+                          onChange={e => setSchedFrom(e.target.value)}
+                          className={`${INPUT_CLS} text-xs`}
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-text-muted mb-1 block">По</span>
+                        <input
+                          type="datetime-local"
+                          value={schedTo}
+                          onChange={e => setSchedTo(e.target.value)}
+                          className={`${INPUT_CLS} text-xs`}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Right: payload + actions + history */}
@@ -526,6 +691,23 @@ export default function AlertsSection() {
                 </div>
               )}
 
+              {/* Schedule status banner */}
+              {schedMode === "periodic" && (schedActive || schedCount > 0) && (
+                <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium ${
+                  schedActive
+                    ? "bg-green-50 text-green-700 border border-green-200"
+                    : "bg-gray-50 text-text-muted border border-border-main"
+                }`}>
+                  {schedActive && (
+                    <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+                  )}
+                  {schedActive
+                    ? `Работает · каждые ${freqLabel}${schedTo ? ` · до ${new Date(schedTo).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : ""} · отправлено: ${schedCount}`
+                    : `Остановлено · отправлено: ${schedCount}`}
+                </div>
+              )}
+
+              {/* Action buttons */}
               <div className="flex gap-2">
                 <button
                   onClick={handleCopy}
@@ -540,17 +722,38 @@ export default function AlertsSection() {
                     : <><Copy       className="w-3.5 h-3.5" /> Копировать</>}
                 </button>
 
-                <button
-                  onClick={handleSend}
-                  disabled={sending || !payload}
-                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-primary text-white
-                    rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
-                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
-                >
-                  {sending
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
-                    : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
-                </button>
+                {schedMode === "once" ? (
+                  <button
+                    onClick={handleSend}
+                    disabled={sending || !payload}
+                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-primary text-white
+                      rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
+                      disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
+                  >
+                    {sending
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
+                      : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
+                  </button>
+                ) : schedActive ? (
+                  <button
+                    onClick={stopSchedule}
+                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-red-500 text-white
+                      rounded-lg text-sm font-semibold hover:bg-red-600 transition-all duration-150
+                      active:scale-[0.99] shadow-sm"
+                  >
+                    <Square className="w-4 h-4 fill-current" /> Остановить
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => startSchedule(schedFreq)}
+                    disabled={!payload}
+                    className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-green-600 text-white
+                      rounded-lg text-sm font-semibold hover:bg-green-700 transition-all duration-150
+                      disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
+                  >
+                    <Play className="w-4 h-4 fill-current" /> Запустить · {freqLabel}
+                  </button>
+                )}
               </div>
             </div>
 

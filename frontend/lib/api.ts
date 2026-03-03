@@ -95,6 +95,76 @@ export async function getEtalonStats(): Promise<Record<string, number>> {
   return fetchJson("/api/etalons/stats");
 }
 
+// ─── Autotests ─────────────────────────────────────────────────────────────
+
+export interface Autotest {
+  id: string;
+  xml_text: string;
+  java_text: string;
+  feature: string;
+}
+
+export async function listAutotests(params?: {
+  feature?: string;
+  limit?: number;
+}): Promise<{ items: Autotest[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.feature) qs.set("feature", params.feature);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  return fetchJson(`/api/autotests?${qs.toString()}`);
+}
+
+export async function addAutotest(data: {
+  xml_text: string;
+  java_text: string;
+  feature?: string;
+}): Promise<{ id: string; status: string }> {
+  const body = new FormData();
+  body.append("xml_text", data.xml_text);
+  body.append("java_text", data.java_text);
+  if (data.feature) body.append("feature", data.feature);
+  return fetchJson("/api/autotests", { method: "POST", body });
+}
+
+export async function deleteAutotest(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/autotests/${id}`, { method: "DELETE" });
+}
+
+// ─── Defects ───────────────────────────────────────────────────────────────
+
+export interface Defect {
+  id: string;
+  description: string;
+  defect_body: string;
+  feature: string;
+}
+
+export async function listDefects(params?: {
+  feature?: string;
+  limit?: number;
+}): Promise<{ items: Defect[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.feature) qs.set("feature", params.feature);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  return fetchJson(`/api/defects?${qs.toString()}`);
+}
+
+export async function addDefect(data: {
+  description: string;
+  defect_body: string;
+  feature?: string;
+}): Promise<{ id: string; status: string }> {
+  const body = new FormData();
+  body.append("description", data.description);
+  body.append("defect_body", data.defect_body);
+  if (data.feature) body.append("feature", data.feature);
+  return fetchJson("/api/defects", { method: "POST", body });
+}
+
+export async function deleteDefect(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/defects/${id}`, { method: "DELETE" });
+}
+
 // ─── Alerts ────────────────────────────────────────────────────────────────
 
 export interface AlertParam {

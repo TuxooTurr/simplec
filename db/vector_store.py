@@ -57,6 +57,18 @@ class VectorStore:
             metadata={"description": "Пары требование-тест для обучения"},
             embedding_function=self.ef
         )
+        self.autotest_pairs = self.client.get_or_create_collection(
+            name="autotest_pairs",
+            metadata={"description": "Пары XML мануальный кейс → Java автотест"},
+            embedding_function=self.ef
+        )
+        self.defect_pairs = self.client.get_or_create_collection(
+            name="defect_pairs",
+            metadata={"description": "Пары описание дефекта → тело дефекта"},
+            embedding_function=self.ef
+        )
+
+    # ── Тест-кейсы (существующие) ─────────────────────────────────────────────
 
     def add_requirement(self, req_id: str, content: str, platform: str = "",
                         feature: str = "", content_type: str = "text",
@@ -120,6 +132,46 @@ class VectorStore:
         )
         return self._format_results(results)
 
+    # ── Автотесты ─────────────────────────────────────────────────────────────
+
+    def add_autotest_pair(self, pair_id: str, xml_text: str, java_text: str,
+                          feature: str = ""):
+        """Пара: XML мануальный кейс (документ) → Java автотест (metadata)."""
+        metadata = {
+            "java_text": java_text,
+            "feature": feature,
+        }
+        self.autotest_pairs.upsert(ids=[pair_id], documents=[xml_text], metadatas=[metadata])
+
+    def find_similar_autotests(self, query: str, n_results: int = 3,
+                                feature: str = "") -> List[Dict]:
+        where = {"feature": feature} if feature else None
+        results = self.autotest_pairs.query(
+            query_texts=[query], n_results=n_results, where=where
+        )
+        return self._format_results(results)
+
+    # ── Дефекты ───────────────────────────────────────────────────────────────
+
+    def add_defect_pair(self, pair_id: str, description: str, defect_body: str,
+                        feature: str = ""):
+        """Пара: описание дефекта (документ) → тело дефекта (metadata)."""
+        metadata = {
+            "defect_body": defect_body,
+            "feature": feature,
+        }
+        self.defect_pairs.upsert(ids=[pair_id], documents=[description], metadatas=[metadata])
+
+    def find_similar_defects(self, query: str, n_results: int = 3,
+                              feature: str = "") -> List[Dict]:
+        where = {"feature": feature} if feature else None
+        results = self.defect_pairs.query(
+            query_texts=[query], n_results=n_results, where=where
+        )
+        return self._format_results(results)
+
+    # ── Общие ─────────────────────────────────────────────────────────────────
+
     def _format_results(self, results) -> List[Dict]:
         formatted = []
         if not results or not results["ids"] or not results["ids"][0]:
@@ -139,11 +191,14 @@ class VectorStore:
             "requirements": self.requirements.count(),
             "test_cases": self.test_cases.count(),
             "pairs": self.pairs.count(),
+            "autotests": self.autotest_pairs.count(),
+            "defects": self.defect_pairs.count(),
         }
 
     def clear_all(self):
         self.client.delete_collection("requirements")
         self.client.delete_collection("test_cases")
         self.client.delete_collection("requirement_test_pairs")
+        self.client.delete_collection("autotest_pairs")
+        self.client.delete_collection("defect_pairs")
         self._init_collections()
-

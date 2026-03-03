@@ -19,15 +19,31 @@ const NAV: {
   label: string;
   Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   disabled?: boolean;
+  ai?: boolean;
 }[] = [
-  { id: "generation",  href: "/generation",  label: "Ручная тестовая модель", Icon: Zap },
-  { id: "auto_model",  href: "/auto-model",  label: "Авто тестовая модель",   Icon: FlaskConical, disabled: true },
-  { id: "bugs",        href: "/bugs",        label: "Дефекты",                Icon: Bug },
+  { id: "generation",  href: "/generation",  label: "Ручная тестовая модель", Icon: Zap,         ai: true },
+  { id: "auto_model",  href: "/auto-model",  label: "Авто тестовая модель",   Icon: FlaskConical, disabled: true, ai: true },
+  { id: "bugs",        href: "/bugs",        label: "Дефекты",                Icon: Bug,         ai: true },
   { id: "alerts",      href: "/alerts",      label: "Алерты",                 Icon: Bell },
   { id: "metrics",     href: "/metrics",     label: "Метрики",                Icon: BarChart2 },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                Icon: Scale },
   { id: "etalons",     href: "/etalons",     label: "Эталоны",                Icon: BookOpen },
 ];
+
+function AiBadge({ active }: { active: boolean }) {
+  return (
+    <sup
+      className={`inline-block text-[8px] font-bold leading-none px-[3px] py-[1px] rounded
+        transition-colors duration-200
+        ${active
+          ? "bg-indigo-200/70 text-indigo-600"
+          : "bg-gray-100 text-text-muted/60 group-hover:bg-indigo-100 group-hover:text-indigo-400"}`}
+      style={{ verticalAlign: "super" }}
+    >
+      ИИ
+    </sup>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -61,7 +77,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="px-3 py-3 border-b border-border-main">
-        {NAV.map(({ id, href, label, Icon, disabled }) => {
+        {NAV.map(({ id, href, label, Icon, disabled, ai }) => {
           const active = !disabled && pathname.startsWith(href);
 
           if (disabled) {
@@ -73,7 +89,10 @@ export default function Sidebar() {
                 title="В разработке"
               >
                 <Icon className="w-4 h-4 flex-shrink-0 text-text-muted/40" strokeWidth={2} />
-                <span className="flex-1">{label}</span>
+                <span className="flex-1 flex items-baseline gap-1">
+                  {label}
+                  {ai && <AiBadge active={false} />}
+                </span>
                 <span className="flex items-center gap-1 text-[10px] text-text-muted/50 bg-gray-100 px-1.5 py-0.5 rounded-full">
                   <Lock className="w-2.5 h-2.5" />
                   скоро
@@ -110,7 +129,10 @@ export default function Sidebar() {
                 }`}
                 strokeWidth={active ? 2.5 : 2}
               />
-              <span className="flex-1">{label}</span>
+              <span className="flex-1 flex items-baseline gap-1">
+                {label}
+                {ai && <AiBadge active={active} />}
+              </span>
               {/* Drag hint */}
               <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
                 ⠿

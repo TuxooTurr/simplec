@@ -160,6 +160,11 @@ async def send_alert(req: SendRequest) -> dict:
 
     # ── A2A протокол ─────────────────────────────────────────────────────
     if stype == "a2a":
+        # Если payload_template — полноценный JSON-шаблон (не "{{alert_text}}"),
+        # резолвим его и используем как alert_text для A2A-сообщения
+        tmpl = script.get("payload_template", "{{alert_text}}")
+        if tmpl and tmpl.strip() != "{{alert_text}}":
+            values["alert_text"] = _resolve_template(tmpl, values)
         try:
             meta, raw_payload = await asyncio.to_thread(
                 _send_a2a_sync, topic, values, partition

@@ -21,14 +21,20 @@
     "topic": "agent-in",
     "script_type": "a2a",
     "partition": 0,
-    "payload_template": "{{alert_text}}",
+    "payload_template": "{\n  \"url\": \"{{url}}\",\n  \"title\": \"{{title}}\",\n  \"status\": \"{{status}}\",\n  \"alertId\": \"{{alert_id}}\",\n  \"systems\": [\"{{as}}\"],\n  \"problemId\": \"{{problem_id}}\",\n  \"impactLevel\": \"{{impact}}\",\n  \"severityLevel\": \"{{severity}}\",\n  \"evidenceDetails\": {\"details\": [], \"totalCount\": 1},\n  \"alertSourceSystem\": \"CI02493683\"\n}",
     "params": [
-      {"key": "as",              "label": "КЭ/АС (systemCi)",  "type": "text",     "required": true,  "default": "CI0000000",                           "hint": "CI-код системы"},
-      {"key": "sender",          "label": "Sender",            "type": "text",     "required": true,  "default": "alert_service"},
-      {"key": "recipient",       "label": "Recipient",         "type": "text",     "required": true,  "default": "sber.support_platform.channel_agent"},
-      {"key": "sender_id_aef",   "label": "Sender ID AEF",     "type": "text",     "required": false, "default": "CI00213821"},
-      {"key": "recipient_id_aef","label": "Recipient ID AEF",  "type": "text",     "required": false, "default": "CI00293210"},
-      {"key": "alert_text",      "label": "Alert JSON",        "type": "textarea", "required": true,  "default": "", "hint": "JSON объект алерта из Рефлекс"}
+      {"key": "as",              "label": "КЭ/АС (systems[0])",  "type": "text",     "required": true,  "default": "CI0000000",                           "hint": "CI-код системы из поля systems"},
+      {"key": "title",           "label": "Заголовок алерта",    "type": "text",     "required": true,  "default": "Failure rate increase",               "hint": "Из поля title"},
+      {"key": "alert_id",        "label": "Alert ID",            "type": "text",     "required": true,  "default": "P-250000000",                         "hint": "Из поля alertId"},
+      {"key": "status",          "label": "Статус",              "type": "select",   "required": true,  "default": "OPEN",    "options": ["OPEN", "CLOSED"]},
+      {"key": "severity",        "label": "Severity Level",      "type": "select",   "required": true,  "default": "ERROR",   "options": ["ERROR", "CUSTOM_ALERT", "AVAILABILITY", "RESOURCE_CONTENTION"]},
+      {"key": "impact",          "label": "Impact Level",        "type": "select",   "required": true,  "default": "SERVICES","options": ["SERVICES", "ENVIRONMENT", "INFRASTRUCTURE"]},
+      {"key": "problem_id",      "label": "Problem ID",          "type": "text",     "required": false, "default": "",                                    "hint": "Из поля problemId"},
+      {"key": "url",             "label": "URL проблемы",        "type": "text",     "required": false, "default": "",                                    "hint": "Из поля url"},
+      {"key": "sender",          "label": "Sender",              "type": "text",     "required": true,  "default": "alert_service"},
+      {"key": "recipient",       "label": "Recipient",           "type": "text",     "required": true,  "default": "sber.support_platform.channel_agent"},
+      {"key": "sender_id_aef",   "label": "Sender ID AEF",       "type": "text",     "required": false, "default": "CI00213821"},
+      {"key": "recipient_id_aef","label": "Recipient ID AEF",    "type": "text",     "required": false, "default": "CI00293210"}
     ],
     "created_at": "2026-03-03T00:00:00Z",
     "builtin": true

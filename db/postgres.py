@@ -36,6 +36,16 @@ def get_db():
 
 
 def init_db():
-    """Создать все таблицы если не существуют (идемпотентно)."""
+    """Создать все таблицы если не существуют (идемпотентно).
+
+    В multi-worker uvicorn воркеры стартуют параллельно и оба вызывают
+    create_all. Первый успевает создать таблицы, второй получает IntegrityError
+    на pg_catalog — это нормально, таблицы уже есть.
+    """
     from db.metrics_models import Base as MetricsBase  # noqa: F401
-    MetricsBase.metadata.create_all(bind=engine)
+    from sqlalchemy.exc import IntegrityError
+    try:
+        MetricsBase.metadata.create_all(bind=engine)
+    except IntegrityError:
+        # Race condition: другой воркер уже создал таблицы — всё OK
+        pass

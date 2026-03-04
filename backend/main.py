@@ -23,12 +23,20 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import auth, generation, etalons, bugs, system, alerts
+from backend.api import auth, generation, etalons, bugs, system, alerts, metrics_systems, metrics_settings
 from backend.auth import require_auth
 from db.user_store import ensure_default_user
+from db.postgres import init_db
 
 # Создать пользователя по умолчанию если база пуста
 ensure_default_user()
+
+# Инициализировать таблицы PostgreSQL (идемпотентно)
+try:
+    init_db()
+except Exception as _e:
+    import warnings
+    warnings.warn(f"PostgreSQL недоступен, Генератор метрик не будет работать: {_e}")
 
 app = FastAPI(
     title="SimpleTest API",
@@ -58,10 +66,12 @@ app.include_router(system.router)
 # ─── Защищённые роутеры (require_auth) ──────────────────────────────────────
 _auth_dep = [Depends(require_auth)]
 
-app.include_router(generation.router, dependencies=_auth_dep)
-app.include_router(etalons.router,    dependencies=_auth_dep)
-app.include_router(bugs.router,       dependencies=_auth_dep)
-app.include_router(alerts.router,     dependencies=_auth_dep)
+app.include_router(generation.router,       dependencies=_auth_dep)
+app.include_router(etalons.router,          dependencies=_auth_dep)
+app.include_router(bugs.router,             dependencies=_auth_dep)
+app.include_router(alerts.router,           dependencies=_auth_dep)
+app.include_router(metrics_systems.router,  dependencies=_auth_dep)
+app.include_router(metrics_settings.router, dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

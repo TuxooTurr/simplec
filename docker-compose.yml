@@ -1,0 +1,29 @@
+# Docker Compose — локальная разработка (только PostgreSQL)
+# Для запуска: docker compose up -d
+#
+# На проде (Sбер-инфраструктура) DATABASE_URL указывает на выделенный PostgreSQL-сервер.
+# Этот файл используется только для локального поднятия БД.
+
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: simpletest_postgres
+    environment:
+      POSTGRES_DB: metrics
+      POSTGRES_USER: simpletest
+      POSTGRES_PASSWORD: simpletest
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simpletest -d metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

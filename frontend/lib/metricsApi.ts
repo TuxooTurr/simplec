@@ -47,6 +47,9 @@ export interface Metric {
   isActive:           boolean;
   lastSentAt:         string | null;
   createdAt:          string;
+  valuePattern:       string;
+  valueMin:           number;
+  valueMax:           number;
 }
 
 export interface MetricCreate {

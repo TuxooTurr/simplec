@@ -59,6 +59,7 @@ def _system_row(s: TestSystem, db: Session) -> dict:
 
 
 def _metric_row(m: TestMetric) -> dict:
+    vc = m.values_config
     return {
         "id":                 m.id,
         "testSystemId":       m.test_system_id,
@@ -79,6 +80,9 @@ def _metric_row(m: TestMetric) -> dict:
         "isActive":           m.is_active,
         "lastSentAt":         m.last_sent_at.isoformat() if m.last_sent_at else None,
         "createdAt":          m.created_at.isoformat(),
+        "valuePattern":       vc.pattern if vc else "random",
+        "valueMin":           float(vc.value_min) if vc else 0.0,
+        "valueMax":           float(vc.value_max) if vc else 100.0,
     }
 
 
@@ -165,16 +169,16 @@ async def toggle_system(system_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Услуга не найдена")
     s.is_active = not s.is_active
     db.commit()
+    all_metrics = db.query(TestMetric).filter(TestMetric.test_system_id == system_id).all()
     if s.is_active:
-        active_metrics = (
-            db.query(TestMetric)
-            .filter(TestMetric.test_system_id == system_id, TestMetric.is_active == True)
-            .all()
-        )
-        for m in active_metrics:
+        # Активируем все метрики услуги при включении
+        db.query(TestMetric).filter(TestMetric.test_system_id == system_id).update({"is_active": True})
+        db.commit()
+        for m in all_metrics:
             await scheduler.start_metric(m.id)
     else:
-        all_metrics = db.query(TestMetric).filter(TestMetric.test_system_id == system_id).all()
+        db.query(TestMetric).filter(TestMetric.test_system_id == system_id).update({"is_active": False})
+        db.commit()
         for m in all_metrics:
             await scheduler.stop_metric(m.id)
     return {"id": system_id, "isActive": s.is_active}
@@ -186,6 +190,7 @@ async def toggle_all(action: str = "start", db: Session = Depends(get_db)):
     from agents.metrics_scheduler import scheduler
     new_state = (action == "start")
     db.query(TestSystem).update({"is_active": new_state})
+    db.query(TestMetric).update({"is_active": new_state})
     db.commit()
     if new_state:
         await scheduler.start_all()

@@ -63,6 +63,37 @@ function fmtTime(iso: string | null): string {
   }
 }
 
+// ── Pattern Sparkline ─────────────────────────────────────────────────────────
+
+const _SINE_PTS: [number, number][] = Array.from({ length: 9 }, (_, i) => [
+  i * 8,
+  Math.round(50 + 45 * Math.sin((i / 8) * 2 * Math.PI)),
+] as [number, number]);
+
+const SPARKLINE_PTS: Record<string, [number, number][]> = {
+  constant: [[0, 50], [64, 50]],
+  sine:     _SINE_PTS,
+  spike:    [[0, 80], [26, 80], [34, 5], [42, 80], [64, 80]],
+  random:   [[0, 60], [8, 30], [16, 75], [24, 45], [32, 20], [40, 65], [48, 40], [56, 80], [64, 35]],
+};
+
+function PatternSparkline({ pattern }: { pattern: string }) {
+  const pts = SPARKLINE_PTS[pattern] ?? SPARKLINE_PTS.random;
+  const points = pts.map(([x, y]) => `${x},${y}`).join(" ");
+  return (
+    <svg width={64} height={20} viewBox="0 0 64 100" preserveAspectRatio="none">
+      <polyline
+        points={points}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 // ── Helper: Toggle ────────────────────────────────────────────────────────────
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
@@ -605,6 +636,11 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete }: MetricRow
           </span>
         </div>
       </div>
+      {metric.isActive && (
+        <div className="shrink-0 text-green-400 mr-0.5 opacity-70">
+          <PatternSparkline pattern={metric.valuePattern ?? "random"} />
+        </div>
+      )}
       <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={doToggle}
@@ -1312,17 +1348,17 @@ export default function MetricsSection() {
 
   // ── Load systems ──────────────────────────────────────────────────────────
 
-  const loadSystems = useCallback(async () => {
-    setLoading(true);
+  const loadSystems = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const d = await getSystems();
       setSystems(d.systems);
       setStats({ totalSystems: d.totalSystems, activeSystems: d.activeSystems, totalMetrics: d.totalMetrics, activeMetrics: d.activeMetrics });
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Ошибка загрузки");
+      if (!silent) setError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
@@ -1344,11 +1380,17 @@ export default function MetricsSection() {
 
   const handleSystemToggle = async (id: number) => {
     const r = await toggleSystem(id);
-    setSystems(prev => prev.map(s => s.id === id ? { ...s, isActive: r.isActive } : s));
-    setStats(prev => ({
-      ...prev,
-      activeSystems: r.isActive ? prev.activeSystems + 1 : prev.activeSystems - 1,
+    // Optimistically update service card
+    setSystems(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      return { ...s, isActive: r.isActive, metricsActive: r.isActive ? s.metricsTotal : 0 };
     }));
+    // When toggling the currently visible service, flip all its metrics locally
+    if (id === selectedId) {
+      setMetrics(prev => prev.map(m => ({ ...m, isActive: r.isActive })));
+    }
+    // Silently refresh stats
+    loadSystems(true);
   };
 
   const handleSystemDelete = async (id: number) => {
@@ -1373,7 +1415,11 @@ export default function MetricsSection() {
     setGlobalBusy(true);
     try {
       await toggleAll(action);
-      await loadSystems();
+      const isActive = action === "start";
+      // Locally flip all metrics of the selected system
+      setMetrics(prev => prev.map(m => ({ ...m, isActive })));
+      // Reload everything silently to get accurate counts
+      await loadSystems(true);
     } finally {
       setGlobalBusy(false);
     }
@@ -1401,7 +1447,7 @@ export default function MetricsSection() {
           docker compose up -d
         </code>
       </div>
-      <button className={BTN_GHOST} onClick={loadSystems}>
+      <button className={BTN_GHOST} onClick={() => loadSystems()}>
         <RefreshCw className="w-3.5 h-3.5" /> Повторить
       </button>
     </div>
@@ -1436,7 +1482,7 @@ export default function MetricsSection() {
         <button className={BTN_GHOST} onClick={() => handleToggleAll("stop")} disabled={globalBusy}>
           <Square className="w-3.5 h-3.5 text-orange-500" /> Все стоп
         </button>
-        <button className={BTN_GHOST} onClick={loadSystems} disabled={loading}>
+        <button className={BTN_GHOST} onClick={() => loadSystems()} disabled={loading}>
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Обновить
         </button>
 

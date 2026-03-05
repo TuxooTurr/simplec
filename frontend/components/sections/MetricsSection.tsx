@@ -5,15 +5,15 @@ import {
   BarChart2, Plus, Trash2, Play, Square, Settings2,
   Loader2, RefreshCw, ChevronRight, ToggleLeft, ToggleRight,
   AlertTriangle, Database, Wifi, Save, X, Zap, Eye,
-  CheckCircle, XCircle,
+  CheckCircle, XCircle, Pencil,
 } from "lucide-react";
 import {
-  getSystems, createSystem, deleteSystem, toggleSystem, toggleAll,
-  getSystemMetrics, createMetric, deleteMetric, toggleMetric,
+  getSystems, createSystem, updateSystem, deleteSystem, toggleSystem, toggleAll,
+  getSystemMetrics, createMetric, updateMetric, deleteMetric, toggleMetric,
   getMetricsSettings, saveMetricsSettings,
   getMetricBuilder, saveValuesConfig, saveBaselineConfig,
   saveThresholdsConfig, saveHealthConfig, sendNow, previewMessage, getMetricLogs,
-  type System, type Metric, type MetricCreate, type SettingsMap,
+  type System, type Metric, type MetricCreate, type MetricUpdate, type SettingsMap,
   type BuilderConfig, type ValuesConfig, type BaselineConfig,
   type ThresholdsConfig, type ThresholdRow, type HealthConfig,
   type LogEntry, type SendNowResult, type PreviewResult,
@@ -61,6 +61,18 @@ function fmtTime(iso: string | null): string {
   } catch {
     return iso;
   }
+}
+
+function fmtAgo(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    const diffMs = Date.now() - d.getTime();
+    if (diffMs < 60_000)  return "только что";
+    if (diffMs < 3_600_000) return `${Math.floor(diffMs / 60_000)} мин`;
+    if (diffMs < 86_400_000) return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" });
+  } catch { return ""; }
 }
 
 // ── Pattern Sparkline ─────────────────────────────────────────────────────────
@@ -197,10 +209,186 @@ function AddSystemModal({ onSave, onClose }: AddSystemModalProps) {
   );
 }
 
+// ── Modal: Edit System ────────────────────────────────────────────────────────
+
+interface EditSystemModalProps {
+  system:  System;
+  onSave:  (s: System) => void;
+  onClose: () => void;
+}
+
+function EditSystemModal({ system, onSave, onClose }: EditSystemModalProps) {
+  const [name,        setName]        = useState(system.name);
+  const [monSystemCi, setMonSystemCi] = useState(system.monSystemCi);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState("");
+
+  const handleSave = async () => {
+    setErr("");
+    if (!name.trim()) { setErr("Название обязательно"); return; }
+    setSaving(true);
+    try {
+      const s = await updateSystem(system.id, { name: name.trim(), monSystemCi: monSystemCi.trim() || undefined });
+      onSave(s);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-text-main">Редактировать услугу</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className={LABEL_CLS}>КЭ Услуги</label>
+            <input className={INPUT_CLS + " bg-bg-subtle text-text-muted cursor-not-allowed"}
+              value={system.itServiceCi} readOnly />
+            <p className="text-xs text-text-muted mt-1">Нельзя изменить после создания</p>
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Название услуги *</label>
+            <input className={INPUT_CLS} value={name} onChange={e => setName(e.target.value)} autoFocus />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>КЭ Системы мониторинга</label>
+            <input className={INPUT_CLS} placeholder="CI00000002" value={monSystemCi}
+              onChange={e => setMonSystemCi(e.target.value)} />
+          </div>
+        </div>
+
+        {err && <p className="text-xs text-red-500">{err}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button className={BTN_GHOST} onClick={onClose}>Отмена</button>
+          <button className={BTN_PRIMARY} onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            Сохранить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Modal: Edit Metric ────────────────────────────────────────────────────────
+
+interface EditMetricModalProps {
+  metric:  Metric;
+  onSave:  (m: Metric) => void;
+  onClose: () => void;
+}
+
+function EditMetricModal({ metric, onSave, onClose }: EditMetricModalProps) {
+  const [name,    setName]    = useState(metric.metricName);
+  const [type,    setType]    = useState(metric.metricType);
+  const [unit,    setUnit]    = useState(metric.metricUnit);
+  const [period,  setPeriod]  = useState(metric.metricPeriodSec);
+  const [pattern, setPattern] = useState(metric.valuePattern ?? "random");
+  const [min,     setMin]     = useState(metric.valueMin ?? 0);
+  const [max,     setMax]     = useState(metric.valueMax ?? 100);
+  const [ke,      setKe]      = useState(metric.objectCi ?? metric.objectName ?? "");
+  const [saving,  setSaving]  = useState(false);
+  const [err,     setErr]     = useState("");
+
+  const handleSave = async () => {
+    setErr("");
+    if (!name.trim()) { setErr("Название обязательно"); return; }
+    if (period < 10)  { setErr("Период не менее 10 секунд"); return; }
+    setSaving(true);
+    try {
+      const body: MetricUpdate = {
+        metricName:      name.trim(),
+        metricType:      type,
+        metricUnit:      unit,
+        metricPeriodSec: period,
+        ke:              ke.trim() || "",
+        valueMin:        min,
+        valueMax:        max,
+        valuePattern:    pattern,
+      };
+      const updated = await updateMetric(metric.id, body);
+      onSave(updated);
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-text-main">Редактировать метрику</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2">
+            <label className={LABEL_CLS}>Название *</label>
+            <input className={INPUT_CLS} value={name} onChange={e => setName(e.target.value)} autoFocus />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Тип *</label>
+            <select className={INPUT_CLS} value={type} onChange={e => setType(e.target.value)}>
+              {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Ед. измерения</label>
+            <input className={INPUT_CLS} placeholder="%" value={unit} onChange={e => setUnit(e.target.value)} />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Период (сек) *</label>
+            <input type="number" min={10} className={INPUT_CLS} value={period}
+              onChange={e => setPeriod(Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Паттерн</label>
+            <select className={INPUT_CLS} value={pattern} onChange={e => setPattern(e.target.value)}>
+              {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Min</label>
+            <input type="number" className={INPUT_CLS} value={min} onChange={e => setMin(Number(e.target.value))} />
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Max</label>
+            <input type="number" className={INPUT_CLS} value={max} onChange={e => setMax(Number(e.target.value))} />
+          </div>
+          <div className="col-span-2">
+            <label className={LABEL_CLS}>КЭ (CI-код или название)</label>
+            <input className={INPUT_CLS} placeholder="CI00000001 или оставить пустым" value={ke}
+              onChange={e => setKe(e.target.value)} />
+          </div>
+        </div>
+
+        {err && <p className="text-xs text-red-500">{err}</p>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button className={BTN_GHOST} onClick={onClose}>Отмена</button>
+          <button className={BTN_PRIMARY} onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            Сохранить
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Modal: Batch Add Metrics ──────────────────────────────────────────────────
 
-const METRIC_TYPES    = ["Availability", "Errors", "Latency", "Traffic", "Saturation", "Other"];
-const METRIC_PATTERNS = ["random", "constant", "sine", "spike"];
+const METRIC_TYPES_LIST    = ["Availability", "Errors", "Latency", "Traffic", "Saturation", "Other"];
+const METRIC_PATTERNS_LIST = ["random", "constant", "sine", "spike"];
 
 interface BatchRow {
   id:      string;
@@ -374,7 +562,7 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Тип</p>
                   <select className={INPUT_SM} value={defaults.type}
                     onChange={e => setDefault("type", e.target.value)}>
-                    {METRIC_TYPES.map(t => <option key={t}>{t}</option>)}
+                    {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
                   </select>
                 </div>
                 <div>
@@ -396,7 +584,7 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Паттерн</p>
                   <select className={INPUT_SM} value={defaults.pattern}
                     onChange={e => setDefault("pattern", e.target.value)}>
-                    {METRIC_PATTERNS.map(p => <option key={p}>{p}</option>)}
+                    {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
                   </select>
                 </div>
                 <div>
@@ -444,7 +632,7 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                       onChange={e => setRow(row.id, "unit", e.target.value)} />
                     <select className={INPUT_SM} value={row.type}
                       onChange={e => setRow(row.id, "type", e.target.value)}>
-                      {METRIC_TYPES.map(t => <option key={t}>{t}</option>)}
+                      {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
                     </select>
                     <input type="number" min={10} className={INPUT_SM} value={row.period}
                       onChange={e => setRow(row.id, "period", Number(e.target.value))} />
@@ -454,7 +642,7 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                       onChange={e => setRow(row.id, "max", Number(e.target.value))} />
                     <select className={INPUT_SM} value={row.pattern}
                       onChange={e => setRow(row.id, "pattern", e.target.value)}>
-                      {METRIC_PATTERNS.map(p => <option key={p}>{p}</option>)}
+                      {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
                     </select>
                     <input type="text" className={INPUT_SM} placeholder="CI или название" value={row.ke}
                       onChange={e => setRow(row.id, "ke", e.target.value)} />
@@ -599,9 +787,10 @@ interface MetricRowProps {
   onSelect:  () => void;
   onToggle:  (id: number) => Promise<void>;
   onDelete:  (id: number) => Promise<void>;
+  onEdit:    (m: Metric) => void;
 }
 
-function MetricRow({ metric, selected, onSelect, onToggle, onDelete }: MetricRowProps) {
+function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: MetricRowProps) {
   const [busy, setBusy] = useState(false);
 
   const doToggle = async (e: React.MouseEvent) => {
@@ -618,6 +807,8 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete }: MetricRow
     try { await onDelete(metric.id); }
     finally { setBusy(false); }
   };
+
+  const ago = fmtAgo(metric.lastSentAt);
 
   return (
     <div
@@ -644,6 +835,9 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete }: MetricRow
           <span className={`text-[10px] px-1 rounded font-semibold ${metric.isActive ? "text-green-600" : "text-text-muted"}`}>
             {metric.isActive ? "●" : "○"}
           </span>
+          {ago && (
+            <span className="text-[10px] text-text-muted tabular-nums">{ago}</span>
+          )}
         </div>
       </div>
       {metric.isActive && (
@@ -652,6 +846,14 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete }: MetricRow
         </div>
       )}
       <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={e => { e.stopPropagation(); onEdit(metric); }}
+          disabled={busy}
+          className="p-1 rounded hover:bg-bg-muted text-text-muted hover:text-primary transition-colors"
+          title="Редактировать"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
         <button
           onClick={doToggle}
           disabled={busy}
@@ -684,9 +886,10 @@ interface SystemCardProps {
   onSelect:   () => void;
   onToggle:   (id: number) => Promise<void>;
   onDelete:   (id: number) => Promise<void>;
+  onEdit:     (s: System) => void;
 }
 
-function SystemCard({ system, selected, onSelect, onToggle, onDelete }: SystemCardProps) {
+function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit }: SystemCardProps) {
   const [busy, setBusy] = useState(false);
 
   const doToggle = async (e: React.MouseEvent) => {
@@ -707,7 +910,7 @@ function SystemCard({ system, selected, onSelect, onToggle, onDelete }: SystemCa
   return (
     <div
       onClick={onSelect}
-      className={`flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer transition-colors border ${
+      className={`flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer transition-colors border group ${
         selected
           ? "bg-primary/5 border-primary/20"
           : "border-transparent hover:bg-bg-subtle hover:border-border-main"
@@ -722,6 +925,14 @@ function SystemCard({ system, selected, onSelect, onToggle, onDelete }: SystemCa
         </p>
       </div>
       <div className="flex items-center gap-1 shrink-0">
+        <button
+          onClick={e => { e.stopPropagation(); onEdit(system); }}
+          disabled={busy}
+          className="p-1 rounded hover:bg-bg-muted text-text-muted hover:text-primary transition-colors opacity-0 group-hover:opacity-100"
+          title="Редактировать"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
         <button
           onClick={doToggle}
           disabled={busy}
@@ -1355,6 +1566,8 @@ export default function MetricsSection() {
   const [showBatchMetrics, setShowBatchMetrics]  = useState(false);
   const [globalBusy,       setGlobalBusy]       = useState(false);
   const [selectedMetricId, setSelectedMetricId] = useState<number | null>(null);
+  const [editingMetric,    setEditingMetric]     = useState<Metric | null>(null);
+  const [editingSystem,    setEditingSystem]     = useState<System | null>(null);
 
   // ── Load systems ──────────────────────────────────────────────────────────
 
@@ -1433,6 +1646,16 @@ export default function MetricsSection() {
     } finally {
       setGlobalBusy(false);
     }
+  };
+
+  const handleSystemSaved = (updated: System) => {
+    setSystems(prev => prev.map(s => s.id === updated.id ? updated : s));
+    setEditingSystem(null);
+  };
+
+  const handleMetricSaved = (updated: Metric) => {
+    setMetrics(prev => prev.map(m => m.id === updated.id ? updated : m));
+    setEditingMetric(null);
   };
 
   const selectedSystem = systems.find(s => s.id === selectedId) ?? null;
@@ -1542,6 +1765,7 @@ export default function MetricsSection() {
                     onSelect={() => setSelectedId(s.id)}
                     onToggle={handleSystemToggle}
                     onDelete={handleSystemDelete}
+                    onEdit={setEditingSystem}
                   />
                 ))
               )}
@@ -1590,6 +1814,7 @@ export default function MetricsSection() {
                           onSelect={() => setSelectedMetricId(prev => prev === m.id ? null : m.id)}
                           onToggle={handleMetricToggle}
                           onDelete={handleMetricDelete}
+                          onEdit={setEditingMetric}
                         />
                       ))
                     )}
@@ -1631,6 +1856,22 @@ export default function MetricsSection() {
             loadSystems();
           }}
           onClose={() => setShowBatchMetrics(false)}
+        />
+      )}
+
+      {editingSystem && (
+        <EditSystemModal
+          system={editingSystem}
+          onSave={handleSystemSaved}
+          onClose={() => setEditingSystem(null)}
+        />
+      )}
+
+      {editingMetric && (
+        <EditMetricModal
+          metric={editingMetric}
+          onSave={handleMetricSaved}
+          onClose={() => setEditingMetric(null)}
         />
       )}
 

@@ -212,6 +212,17 @@ class MetricCreate(BaseModel):
     valuePattern:    str = "random"
 
 
+class MetricUpdate(BaseModel):
+    metricName:      Optional[str]   = None
+    metricType:      Optional[str]   = None
+    metricUnit:      Optional[str]   = None
+    metricPeriodSec: Optional[int]   = None
+    ke:              Optional[str]   = None
+    valueMin:        Optional[float] = None
+    valueMax:        Optional[float] = None
+    valuePattern:    Optional[str]   = None
+
+
 VALID_TYPES    = {"Availability", "Errors", "Latency", "Traffic", "Saturation", "Other"}
 VALID_PATTERNS = {"constant", "random", "sine", "spike"}
 CI_METRIC_RE   = re.compile(r"^CI\d{8}$")
@@ -310,6 +321,60 @@ def get_metric(metric_id: int, db: Session = Depends(get_db)):
     m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
     if not m:
         raise HTTPException(404, "Метрика не найдена")
+    return _metric_row(m)
+
+
+@router.patch("/api/metrics/metrics/{metric_id}")
+async def update_metric(metric_id: int, body: MetricUpdate, db: Session = Depends(get_db)):
+    m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
+    if not m:
+        raise HTTPException(404, "Метрика не найдена")
+
+    period_changed = False
+
+    if body.metricName is not None:
+        if not body.metricName.strip():
+            raise HTTPException(400, "metricName не может быть пустым")
+        m.metric_name = body.metricName.strip()
+    if body.metricType is not None:
+        if body.metricType not in VALID_TYPES:
+            raise HTTPException(400, f"metricType должен быть одним из: {', '.join(sorted(VALID_TYPES))}")
+        m.metric_type = body.metricType
+    if body.metricUnit is not None:
+        m.metric_unit = body.metricUnit.strip()
+    if body.metricPeriodSec is not None:
+        if body.metricPeriodSec < 10:
+            raise HTTPException(400, "Минимальный период отправки — 10 секунд")
+        if m.metric_period_sec != body.metricPeriodSec:
+            period_changed = True
+        m.metric_period_sec = body.metricPeriodSec
+    if body.ke is not None:
+        ke = body.ke.strip()
+        ke_is_ci = bool(CI_METRIC_RE.match(ke)) if ke else False
+        s = db.query(TestSystem).filter(TestSystem.id == m.test_system_id).first()
+        m.object_ci   = ke if ke_is_ci else None
+        m.object_id   = ke if ke_is_ci else (s.it_service_ci if s else m.object_id)
+        m.object_name = ke if ke else (s.name if s else m.object_name)
+
+    # Обновляем ValuesConfig
+    vc = m.values_config
+    if vc:
+        if body.valueMin is not None:
+            vc.value_min = body.valueMin
+        if body.valueMax is not None:
+            vc.value_max = body.valueMax
+        if body.valuePattern is not None:
+            vc.pattern = body.valuePattern if body.valuePattern in VALID_PATTERNS else "random"
+
+    db.commit()
+    db.refresh(m)
+
+    # Перезапускаем планировщик если изменился период и метрика активна
+    if period_changed and m.is_active:
+        from agents.metrics_scheduler import scheduler
+        await scheduler.stop_metric(metric_id)
+        await scheduler.start_metric(metric_id)
+
     return _metric_row(m)
 
 

@@ -63,6 +63,17 @@ export interface MetricCreate {
   valuePattern?:   string;
 }
 
+export interface MetricUpdate {
+  metricName?:      string;
+  metricType?:      string;
+  metricUnit?:      string;
+  metricPeriodSec?: number;
+  ke?:              string;
+  valueMin?:        number;
+  valueMax?:        number;
+  valuePattern?:    string;
+}
+
 export interface KafkaSetting {
   value:       string;
   description: string;
@@ -142,6 +153,20 @@ export async function createMetric(systemId: number, body: MetricCreate): Promis
   if (!r.ok) {
     const d = await r.json().catch(() => ({}));
     throw new Error(d.detail ?? "Ошибка создания метрики");
+  }
+  return r.json();
+}
+
+export async function updateMetric(id: number, body: MetricUpdate): Promise<Metric> {
+  const r = await fetch(`${BASE}/metrics/${id}`, {
+    method: "PATCH",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error((d as { detail?: string }).detail ?? "Ошибка обновления метрики");
   }
   return r.json();
 }

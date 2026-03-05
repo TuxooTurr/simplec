@@ -65,28 +65,29 @@ function fmtTime(iso: string | null): string {
 
 // ── Pattern Sparkline ─────────────────────────────────────────────────────────
 
+// Y-координаты в диапазоне 0–20 (реальные пиксели, viewBox совпадает с size)
 const _SINE_PTS: [number, number][] = Array.from({ length: 9 }, (_, i) => [
   i * 8,
-  Math.round(50 + 45 * Math.sin((i / 8) * 2 * Math.PI)),
+  Math.round(10 + 9 * Math.sin((i / 8) * 2 * Math.PI)),
 ] as [number, number]);
 
 const SPARKLINE_PTS: Record<string, [number, number][]> = {
-  constant: [[0, 50], [64, 50]],
+  constant: [[0, 10], [64, 10]],
   sine:     _SINE_PTS,
-  spike:    [[0, 80], [26, 80], [34, 5], [42, 80], [64, 80]],
-  random:   [[0, 60], [8, 30], [16, 75], [24, 45], [32, 20], [40, 65], [48, 40], [56, 80], [64, 35]],
+  spike:    [[0, 16], [26, 16], [34, 1], [42, 16], [64, 16]],
+  random:   [[0, 12], [8,  6], [16, 15], [24,  9], [32,  4], [40, 13], [48,  8], [56, 16], [64,  7]],
 };
 
 function PatternSparkline({ pattern }: { pattern: string }) {
   const pts = SPARKLINE_PTS[pattern] ?? SPARKLINE_PTS.random;
   const points = pts.map(([x, y]) => `${x},${y}`).join(" ");
   return (
-    <svg width={64} height={20} viewBox="0 0 64 100" preserveAspectRatio="none">
+    <svg width={64} height={20} viewBox="0 0 64 20" className="overflow-visible">
       <polyline
         points={points}
         fill="none"
         stroke="currentColor"
-        strokeWidth="6"
+        strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -311,10 +312,10 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
       <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0 bg-white">
           <div>
             <h3 className="font-semibold text-text-main">Добавить метрики</h3>
-            <p className="text-xs text-text-muted mt-0.5">Услуга: {systemName}</p>
+            <p className="text-xs text-text-muted mt-0.5">Услуга: <span className="font-medium text-text-main">{systemName}</span></p>
           </div>
           <button onClick={onClose} disabled={phase === "creating"}
             className="text-text-muted hover:text-text-main disabled:opacity-40">
@@ -362,55 +363,64 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
         ) : (
           /* Edit mode */
           <>
-            {/* Defaults block */}
-            <div className="shrink-0 px-6 py-3 border-b border-border-main bg-bg-subtle">
-              <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">Дефолты для новых строк</p>
-              <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Тип</span>
-                  <select className={INPUT_SM + " w-32"} value={defaults.type}
+            {/* ── Шаблон (дефолты) ──────────────────────────────────────────── */}
+            <div className="shrink-0 px-6 pt-4 pb-3 border-b-2 border-border-main bg-indigo-50/40">
+              <div className="flex items-center gap-2 mb-3">
+                <Settings2 className="w-3.5 h-3.5 text-primary/70" />
+                <p className="text-xs font-semibold text-primary/80 uppercase tracking-wide">Шаблон — дефолтные значения для новых строк</p>
+              </div>
+              <div className="grid grid-cols-[110px_60px_56px_56px_100px_72px_1fr] gap-x-4 gap-y-2">
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Тип</p>
+                  <select className={INPUT_SM} value={defaults.type}
                     onChange={e => setDefault("type", e.target.value)}>
                     {METRIC_TYPES.map(t => <option key={t}>{t}</option>)}
                   </select>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Период</span>
-                  <input type="number" min={10} className={INPUT_SM + " w-16"} value={defaults.period}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Период, с</p>
+                  <input type="number" min={10} className={INPUT_SM} value={defaults.period}
                     onChange={e => setDefault("period", Number(e.target.value))} />
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Min</span>
-                  <input type="number" className={INPUT_SM + " w-16"} value={defaults.min}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Min</p>
+                  <input type="number" className={INPUT_SM} value={defaults.min}
                     onChange={e => setDefault("min", Number(e.target.value))} />
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Max</span>
-                  <input type="number" className={INPUT_SM + " w-16"} value={defaults.max}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Max</p>
+                  <input type="number" className={INPUT_SM} value={defaults.max}
                     onChange={e => setDefault("max", Number(e.target.value))} />
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Паттерн</span>
-                  <select className={INPUT_SM + " w-24"} value={defaults.pattern}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Паттерн</p>
+                  <select className={INPUT_SM} value={defaults.pattern}
                     onChange={e => setDefault("pattern", e.target.value)}>
                     {METRIC_PATTERNS.map(p => <option key={p}>{p}</option>)}
                   </select>
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">Ед.изм</span>
-                  <input type="text" className={INPUT_SM + " w-16"} placeholder="%" value={defaults.unit}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Ед. изм.</p>
+                  <input type="text" className={INPUT_SM} placeholder="%" value={defaults.unit}
                     onChange={e => setDefault("unit", e.target.value)} />
                 </div>
-                <div className="flex items-center gap-1">
-                  <span className="text-xs text-text-muted">КЭ</span>
-                  <input type="text" className={INPUT_SM + " w-28"} placeholder="CI или название" value={defaults.ke}
+                <div>
+                  <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">КЭ (опц.)</p>
+                  <input type="text" className={INPUT_SM} placeholder="CI00000001 или название" value={defaults.ke}
                     onChange={e => setDefault("ke", e.target.value)} />
                 </div>
               </div>
             </div>
 
-            {/* Table */}
+            {/* ── Таблица метрик ─────────────────────────────────────────────── */}
             <div className="flex-1 overflow-y-auto px-6 py-3">
               {/* Table header */}
+              <div className="flex items-center gap-2 mb-2">
+                <BarChart2 className="w-3.5 h-3.5 text-text-muted" />
+                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                  Добавляемые метрики
+                </p>
+              </div>
               <div className="grid grid-cols-[1fr_64px_110px_60px_56px_56px_90px_96px_28px] gap-1.5 mb-1.5 px-1">
                 {["Название *", "Ед.изм", "Тип", "Период", "Min", "Max", "Паттерн", "КЭ", ""].map(h => (
                   <span key={h} className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">{h}</span>

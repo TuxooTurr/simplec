@@ -231,7 +231,7 @@ def get_system_metrics(system_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/metrics/systems/{system_id}/metrics", status_code=201)
-def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_db)):
+async def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_db)):
     s = db.query(TestSystem).filter(TestSystem.id == system_id).first()
     if not s:
         raise HTTPException(404, "Услуга не найдена")
@@ -277,7 +277,8 @@ def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_
         mon_system_metric_id = mon_sm_id,
         purpose_type_hint    = None,
         spec_version         = "1.0",
-        is_active            = False,
+        # Наследуем состояние услуги: если услуга запущена — метрика сразу активна
+        is_active            = s.is_active,
     )
     db.add(m)
     db.flush()
@@ -295,6 +296,12 @@ def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_
 
     db.commit()
     db.refresh(m)
+
+    # Если услуга активна — сразу запускаем метрику в планировщике
+    if m.is_active:
+        from agents.metrics_scheduler import scheduler
+        await scheduler.start_metric(m.id)
+
     return _metric_row(m)
 
 

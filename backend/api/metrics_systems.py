@@ -5,6 +5,7 @@ CRUD для услуг и метрик Генератора метрик.
 
 import hashlib
 import re
+import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -196,23 +197,19 @@ async def toggle_all(action: str = "start", db: Session = Depends(get_db)):
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 class MetricCreate(BaseModel):
-    metricName: str
-    metricDescription: str
-    metricType: str          # Availability | Errors | Latency | Traffic | Saturation | Other
-    metricGroup: str         # App | Infra
-    metricUnit: str
+    metricName:      str
+    metricType:      str           # Availability | Errors | Latency | Traffic | Saturation | Other
+    metricUnit:      str = ""
     metricPeriodSec: int = 60
-    objectCi: Optional[str] = None
-    objectId: str
-    objectName: str
-    objectType: Optional[str] = None   # null | AI-AGENT
-    monSystemMetricId: str
-    purposeTypeHint: Optional[int] = None
-    specVersion: str = "1.0"
+    ke:              Optional[str] = None   # КЭ: CI-код (CI\d{8}) или название
+    valueMin:        float = 0.0
+    valueMax:        float = 100.0
+    valuePattern:    str = "random"
 
 
-VALID_TYPES  = {"Availability", "Errors", "Latency", "Traffic", "Saturation", "Other"}
-VALID_GROUPS = {"App", "Infra"}
+VALID_TYPES    = {"Availability", "Errors", "Latency", "Traffic", "Saturation", "Other"}
+VALID_PATTERNS = {"constant", "random", "sine", "spike"}
+CI_METRIC_RE   = re.compile(r"^CI\d{8}$")
 
 
 @router.get("/api/metrics/systems/{system_id}/metrics")
@@ -235,9 +232,7 @@ def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_
         raise HTTPException(404, "Услуга не найдена")
 
     if body.metricType not in VALID_TYPES:
-        raise HTTPException(400, f"metricType должен быть одним из: {', '.join(VALID_TYPES)}")
-    if body.metricGroup not in VALID_GROUPS:
-        raise HTTPException(400, f"metricGroup должен быть одним из: {', '.join(VALID_GROUPS)}")
+        raise HTTPException(400, f"metricType должен быть одним из: {', '.join(sorted(VALID_TYPES))}")
     if body.metricPeriodSec < 10:
         raise HTTPException(400, "Минимальный период отправки — 10 секунд")
 
@@ -249,33 +244,46 @@ def create_metric(system_id: int, body: MetricCreate, db: Session = Depends(get_
     if total_count >= 1000:
         raise HTTPException(400, "Достигнут глобальный лимит в 1000 метрик")
 
-    metric_hash = _compute_hash(s.it_service_ci, s.mon_system_ci, body.objectId, body.monSystemMetricId)
-    if db.query(TestMetric).filter(TestMetric.metric_hash == metric_hash).first():
-        raise HTTPException(409, "Метрика с такими ключевыми полями уже существует (hash совпадает)")
+    # Автогенерация полей объекта из КЭ или услуги
+    ke = (body.ke or "").strip()
+    ke_is_ci   = bool(CI_METRIC_RE.match(ke)) if ke else False
+    object_id  = ke if ke_is_ci else s.it_service_ci
+    object_name = ke if ke else s.name
+    object_ci  = ke if ke_is_ci else None
+    mon_sm_id  = uuid.uuid4().hex[:16]     # временно; заменит NetWall на контуре ИФТ
+
+    metric_hash = _compute_hash(s.it_service_ci, s.mon_system_ci, object_id, mon_sm_id)
+
+    pattern = body.valuePattern if body.valuePattern in VALID_PATTERNS else "random"
 
     m = TestMetric(
         test_system_id       = system_id,
         metric_hash          = metric_hash,
         metric_name          = body.metricName.strip(),
-        metric_description   = body.metricDescription.strip(),
+        metric_description   = "",
         metric_type          = body.metricType,
-        metric_group         = body.metricGroup,
+        metric_group         = "App",
         metric_unit          = body.metricUnit.strip(),
         metric_period_sec    = body.metricPeriodSec,
-        object_ci            = body.objectCi or None,
-        object_id            = body.objectId.strip(),
-        object_name          = body.objectName.strip(),
-        object_type          = body.objectType or None,
-        mon_system_metric_id = body.monSystemMetricId.strip(),
-        purpose_type_hint    = body.purposeTypeHint,
-        spec_version         = body.specVersion or "1.0",
+        object_ci            = object_ci,
+        object_id            = object_id,
+        object_name          = object_name,
+        object_type          = None,
+        mon_system_metric_id = mon_sm_id,
+        purpose_type_hint    = None,
+        spec_version         = "1.0",
         is_active            = False,
     )
     db.add(m)
     db.flush()
 
-    # Создаём дефолтные конфиги для всех секций
-    db.add(TestMetricValuesConfig(test_metric_id=m.id))
+    # Создаём конфиги: ValuesConfig с реальными min/max/pattern, остальные — дефолтные
+    db.add(TestMetricValuesConfig(
+        test_metric_id     = m.id,
+        pattern            = pattern,
+        value_min          = body.valueMin,
+        value_max          = body.valueMax,
+    ))
     db.add(TestMetricBaselineConfig(test_metric_id=m.id))
     db.add(TestMetricThresholdsConfig(test_metric_id=m.id))
     db.add(TestMetricHealthConfig(test_metric_id=m.id))

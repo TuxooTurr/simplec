@@ -50,19 +50,14 @@ export interface Metric {
 }
 
 export interface MetricCreate {
-  metricName:         string;
-  metricDescription:  string;
-  metricType:         string;
-  metricGroup:        string;
-  metricUnit:         string;
-  metricPeriodSec:    number;
-  objectCi?:          string;
-  objectId:           string;
-  objectName:         string;
-  objectType?:        string;
-  monSystemMetricId:  string;
-  purposeTypeHint?:   number;
-  specVersion?:       string;
+  metricName:      string;
+  metricType:      string;
+  metricUnit?:     string;
+  metricPeriodSec: number;
+  ke?:             string;   // КЭ: CI-код или название (опционально)
+  valueMin?:       number;
+  valueMax?:       number;
+  valuePattern?:   string;
 }
 
 export interface KafkaSetting {

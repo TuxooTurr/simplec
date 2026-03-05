@@ -5,10 +5,12 @@ FastAPI точка входа.
     uvicorn backend.main:app --reload --port 8000
 
 Запуск (prod):
-    uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2
+    uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 1
 """
 
 import sys
+import warnings
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Добавляем корень проекта (SimpleC/) в sys.path, чтобы импортировать agents/ и db/
@@ -23,7 +25,10 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from backend.api import auth, generation, etalons, bugs, system, alerts, metrics_systems, metrics_settings
+from backend.api import (
+    auth, generation, etalons, bugs, system, alerts,
+    metrics_systems, metrics_settings, metrics_builder,
+)
 from backend.auth import require_auth
 from db.user_store import ensure_default_user
 from db.postgres import init_db
@@ -35,13 +40,31 @@ ensure_default_user()
 try:
     init_db()
 except Exception as _e:
-    import warnings
     warnings.warn(f"PostgreSQL недоступен, Генератор метрик не будет работать: {_e}")
+
+
+@asynccontextmanager
+async def lifespan(app_: FastAPI):
+    # Startup: запустить планировщик метрик
+    try:
+        from agents.metrics_scheduler import scheduler
+        await scheduler.start_all()
+    except Exception as _e:
+        warnings.warn(f"Scheduler failed to start: {_e}")
+    yield
+    # Shutdown: остановить все задачи
+    try:
+        from agents.metrics_scheduler import scheduler
+        await scheduler.stop_all()
+    except Exception:
+        pass
+
 
 app = FastAPI(
     title="SimpleTest API",
     description="AI-генератор тест-кейсов для Jira Zephyr Scale",
-    version="2.1.0",
+    version="2.2.0",
+    lifespan=lifespan,
 )
 
 # CORS — разрешаем только свой домен + localhost для разработки
@@ -72,6 +95,7 @@ app.include_router(bugs.router,             dependencies=_auth_dep)
 app.include_router(alerts.router,           dependencies=_auth_dep)
 app.include_router(metrics_systems.router,  dependencies=_auth_dep)
 app.include_router(metrics_settings.router, dependencies=_auth_dep)
+app.include_router(metrics_builder.router,  dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

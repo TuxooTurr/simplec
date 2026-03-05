@@ -157,23 +157,39 @@ def delete_system(system_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/metrics/systems/{system_id}/toggle")
-def toggle_system(system_id: int, db: Session = Depends(get_db)):
+async def toggle_system(system_id: int, db: Session = Depends(get_db)):
+    from agents.metrics_scheduler import scheduler
     s = db.query(TestSystem).filter(TestSystem.id == system_id).first()
     if not s:
         raise HTTPException(404, "Услуга не найдена")
     s.is_active = not s.is_active
-    # TODO iteration 2: start/stop scheduler for all metrics of this system
     db.commit()
+    if s.is_active:
+        active_metrics = (
+            db.query(TestMetric)
+            .filter(TestMetric.test_system_id == system_id, TestMetric.is_active == True)
+            .all()
+        )
+        for m in active_metrics:
+            await scheduler.start_metric(m.id)
+    else:
+        all_metrics = db.query(TestMetric).filter(TestMetric.test_system_id == system_id).all()
+        for m in all_metrics:
+            await scheduler.stop_metric(m.id)
     return {"id": system_id, "isActive": s.is_active}
 
 
 @router.post("/api/metrics/toggle-all")
-def toggle_all(action: str = "start", db: Session = Depends(get_db)):
+async def toggle_all(action: str = "start", db: Session = Depends(get_db)):
     """action: 'start' | 'stop'"""
+    from agents.metrics_scheduler import scheduler
     new_state = (action == "start")
     db.query(TestSystem).update({"is_active": new_state})
-    # TODO iteration 2: start/stop scheduler
     db.commit()
+    if new_state:
+        await scheduler.start_all()
+    else:
+        await scheduler.stop_all()
     return {"action": action, "ok": True}
 
 
@@ -288,13 +304,17 @@ def delete_metric(metric_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/metrics/metrics/{metric_id}/toggle")
-def toggle_metric(metric_id: int, db: Session = Depends(get_db)):
+async def toggle_metric(metric_id: int, db: Session = Depends(get_db)):
+    from agents.metrics_scheduler import scheduler
     m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
     if not m:
         raise HTTPException(404, "Метрика не найдена")
     m.is_active = not m.is_active
-    # TODO iteration 2: start/stop scheduler for this metric
     db.commit()
+    if m.is_active:
+        await scheduler.start_metric(metric_id)
+    else:
+        await scheduler.stop_metric(metric_id)
     return {"id": metric_id, "isActive": m.is_active}
 
 

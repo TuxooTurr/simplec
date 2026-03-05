@@ -176,3 +176,161 @@ export async function saveMetricsSettings(settings: Record<string, string>): Pro
   });
   if (!r.ok) throw new Error(await r.text());
 }
+
+// ── Builder types ─────────────────────────────────────────────────────────────
+
+export interface ValuesConfig {
+  pattern:            "constant" | "random" | "sine" | "spike";
+  value_min:          number;
+  value_max:          number;
+  sine_period_min:    number | null;
+  spike_interval_min: number | null;
+}
+
+export interface BaselineConfig {
+  enabled:      boolean;
+  calc_method:  "fixed" | "offset";
+  fixed_value:  number | null;
+  offset_value: number | null;
+}
+
+export interface ThresholdRow {
+  id?:         number;
+  health_type: number;
+  min_value:   number | null;
+  max_value:   number | null;
+  is_percent:  boolean;
+}
+
+export interface ThresholdsConfig {
+  enabled:              boolean;
+  combination_selector: "best" | "worst";
+  threshold_type:       "threshold" | "baseline";
+  exceed_enabled:       boolean;
+  exceed_level:         number | null;
+  exceed_mode:          string | null;
+  exceed_interval_min:  number | null;
+  rows:                 ThresholdRow[];
+}
+
+export interface HealthConfig {
+  enabled:           boolean;
+  calc_method:       "auto" | "fixed" | "pattern";
+  fixed_status:      number | null;
+  health_pattern:    "stable_ok" | "degrading" | "flapping" | null;
+  flap_interval_min: number | null;
+  degrade_hours:     number | null;
+}
+
+export interface BuilderConfig {
+  metricId:          number;
+  metricName:        string;
+  metricPeriodSec:   number;
+  isActive:          boolean;
+  valuesConfig:      ValuesConfig;
+  baselineConfig:    BaselineConfig;
+  thresholdsConfig:  ThresholdsConfig;
+  healthConfig:      HealthConfig;
+}
+
+export interface LogEntry {
+  id:             number;
+  sentAt:         string | null;
+  valueSent:      number | null;
+  baselineSent:   number | null;
+  healthSent:     number | null;
+  thresholdsSent: boolean;
+  kafkaOffset:    number | null;
+  status:         "success" | "error";
+  errorMessage:   string | null;
+  messageJson:    string | null;
+}
+
+export interface SendNowResult {
+  ok:           boolean;
+  value?:       number;
+  baseline?:    number | null;
+  health?:      number | null;
+  offset?:      number | null;
+  partition?:   number | null;
+  topic?:       string;
+  messageJson?: string;
+  error?:       string;
+}
+
+export interface PreviewResult {
+  value:               number;
+  baseline:            number | null;
+  health:              number | null;
+  thresholds_included: boolean;
+  message_json:        string;
+}
+
+// ── Builder API functions ─────────────────────────────────────────────────────
+
+export async function getMetricBuilder(id: number): Promise<BuilderConfig> {
+  const r = await fetch(`${BASE}/metrics/${id}/builder`, { credentials: "include" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function saveValuesConfig(id: number, data: ValuesConfig): Promise<ValuesConfig> {
+  const r = await fetch(`${BASE}/metrics/${id}/values-config`, {
+    method: "PUT", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error((d as {detail?: string}).detail ?? "Ошибка"); }
+  return r.json();
+}
+
+export async function saveBaselineConfig(id: number, data: BaselineConfig): Promise<BaselineConfig> {
+  const r = await fetch(`${BASE}/metrics/${id}/baseline-config`, {
+    method: "PUT", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error((d as {detail?: string}).detail ?? "Ошибка"); }
+  return r.json();
+}
+
+export async function saveThresholdsConfig(id: number, data: ThresholdsConfig): Promise<ThresholdsConfig> {
+  const r = await fetch(`${BASE}/metrics/${id}/thresholds-config`, {
+    method: "PUT", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error((d as {detail?: string}).detail ?? "Ошибка"); }
+  return r.json();
+}
+
+export async function saveHealthConfig(id: number, data: HealthConfig): Promise<HealthConfig> {
+  const r = await fetch(`${BASE}/metrics/${id}/health-config`, {
+    method: "PUT", credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error((d as {detail?: string}).detail ?? "Ошибка"); }
+  return r.json();
+}
+
+export async function sendNow(id: number): Promise<SendNowResult> {
+  const r = await fetch(`${BASE}/metrics/${id}/send-now`, {
+    method: "POST", credentials: "include",
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function previewMessage(id: number): Promise<PreviewResult> {
+  const r = await fetch(`${BASE}/metrics/${id}/preview`, { credentials: "include" });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function getMetricLogs(id: number, limit = 20): Promise<LogEntry[]> {
+  const r = await fetch(`${BASE}/metrics/${id}/logs?limit=${limit}`, { credentials: "include" });
+  if (!r.ok) throw new Error(await r.text());
+  const d = await r.json();
+  return (d as { logs: LogEntry[] }).logs;
+}

@@ -59,7 +59,7 @@ def _system_row(s: TestSystem, db: Session) -> dict:
     }
 
 
-def _metric_row(m: TestMetric, last_value: float | None = None) -> dict:
+def _metric_row(m: TestMetric, last_value: float | None = None, last_health: int | None = None) -> dict:
     vc = m.values_config
     return {
         "id":                 m.id,
@@ -81,6 +81,7 @@ def _metric_row(m: TestMetric, last_value: float | None = None) -> dict:
         "isActive":           m.is_active,
         "lastSentAt":         m.last_sent_at.isoformat() if m.last_sent_at else None,
         "lastSentValue":      last_value,
+        "lastSentHealth":     last_health,
         "createdAt":          m.created_at.isoformat(),
         "valuePattern":       vc.pattern if vc else "random",
         "valueMin":           float(vc.value_min) if vc else 0.0,
@@ -88,22 +89,25 @@ def _metric_row(m: TestMetric, last_value: float | None = None) -> dict:
     }
 
 
-def _last_value(metric_id: int, db: Session) -> float | None:
-    """Последнее отправленное значение из GenerationLog (один запрос)."""
+def _last_value(metric_id: int, db: Session) -> tuple[float | None, int | None]:
+    """Последнее отправленное значение + health из GenerationLog."""
     log = (
-        db.query(GenerationLog.value_sent)
+        db.query(GenerationLog.value_sent, GenerationLog.health_sent)
         .filter(GenerationLog.test_metric_id == metric_id)
         .order_by(GenerationLog.id.desc())
         .first()
     )
-    return float(log.value_sent) if log and log.value_sent is not None else None
+    if not log:
+        return None, None
+    val = float(log.value_sent) if log.value_sent is not None else None
+    hlt = int(log.health_sent) if log.health_sent is not None else None
+    return val, hlt
 
 
-def _last_values_bulk(metric_ids: list[int], db: Session) -> dict[int, float | None]:
-    """Batch-версия: один запрос для всего списка метрик."""
+def _last_values_bulk(metric_ids: list[int], db: Session) -> dict[int, tuple[float | None, int | None]]:
+    """Batch-версия: один запрос для всего списка метрик, возвращает (value, health)."""
     if not metric_ids:
         return {}
-    from sqlalchemy import select
     sub = (
         db.query(
             GenerationLog.test_metric_id,
@@ -114,11 +118,17 @@ def _last_values_bulk(metric_ids: list[int], db: Session) -> dict[int, float | N
         .subquery()
     )
     rows = (
-        db.query(GenerationLog.test_metric_id, GenerationLog.value_sent)
+        db.query(GenerationLog.test_metric_id, GenerationLog.value_sent, GenerationLog.health_sent)
         .join(sub, GenerationLog.id == sub.c.lid)
         .all()
     )
-    return {r.test_metric_id: (float(r.value_sent) if r.value_sent is not None else None) for r in rows}
+    return {
+        r.test_metric_id: (
+            float(r.value_sent) if r.value_sent is not None else None,
+            int(r.health_sent) if r.health_sent is not None else None,
+        )
+        for r in rows
+    }
 
 
 # ── Systems ───────────────────────────────────────────────────────────────────
@@ -274,7 +284,7 @@ def get_system_metrics(system_id: int, db: Session = Depends(get_db)):
         .all()
     )
     last_val = _last_values_bulk([m.id for m in metrics], db)
-    return {"metrics": [_metric_row(m, last_val.get(m.id)) for m in metrics]}
+    return {"metrics": [_metric_row(m, *last_val.get(m.id, (None, None))) for m in metrics]}
 
 
 @router.post("/api/metrics/systems/{system_id}/metrics", status_code=201)
@@ -357,7 +367,7 @@ def get_metric(metric_id: int, db: Session = Depends(get_db)):
     m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
     if not m:
         raise HTTPException(404, "Метрика не найдена")
-    return _metric_row(m, _last_value(m.id, db))
+    return _metric_row(m, *_last_value(m.id, db))
 
 
 @router.patch("/api/metrics/metrics/{metric_id}")
@@ -411,7 +421,7 @@ async def update_metric(metric_id: int, body: MetricUpdate, db: Session = Depend
         await scheduler.stop_metric(metric_id)
         await scheduler.start_metric(metric_id)
 
-    return _metric_row(m, _last_value(m.id, db))
+    return _metric_row(m, *_last_value(m.id, db))
 
 
 @router.delete("/api/metrics/metrics/{metric_id}")

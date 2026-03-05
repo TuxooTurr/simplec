@@ -47,6 +47,7 @@ export interface Metric {
   isActive:           boolean;
   lastSentAt:         string | null;
   lastSentValue:      number | null;
+  lastSentHealth:     number | null;
   createdAt:          string;
   valuePattern:       string;
   valueMin:           number;

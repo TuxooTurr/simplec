@@ -779,6 +779,26 @@ function KafkaSettingsTab() {
   );
 }
 
+// ── Health Badge ──────────────────────────────────────────────────────────────
+
+const HEALTH_META: Record<number, { label: string; cls: string }> = {
+  1: { label: "OK",       cls: "bg-green-50  text-green-700  border-green-200"  },
+  2: { label: "OK-",      cls: "bg-lime-50   text-lime-700   border-lime-200"   },
+  3: { label: "WARN",     cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+  4: { label: "DEGRAD",   cls: "bg-orange-50 text-orange-700 border-orange-200" },
+  5: { label: "CRIT",     cls: "bg-red-50    text-red-700    border-red-200"    },
+};
+
+function HealthBadge({ health }: { health: number }) {
+  const meta = HEALTH_META[health];
+  if (!meta) return null;
+  return (
+    <span className={`shrink-0 self-center text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.cls}`}>
+      {meta.label}
+    </span>
+  );
+}
+
 // ── Metric Row ───────────────────────────────────────────────────────────────
 
 interface MetricRowProps {
@@ -845,6 +865,9 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
           )}
         </div>
       </div>
+      {metric.isActive && metric.lastSentHealth != null && (
+        <HealthBadge health={metric.lastSentHealth} />
+      )}
       {metric.isActive && (
         <div className="shrink-0 flex flex-col items-end gap-0.5 mr-0.5">
           <div className="text-green-400 opacity-70">
@@ -1621,7 +1644,7 @@ export default function MetricsSection() {
           setMetrics(prev => prev.map(m => {
             const f = fresh.find(u => u.id === m.id);
             if (!f) return m;
-            return { ...m, lastSentAt: f.lastSentAt, lastSentValue: f.lastSentValue };
+            return { ...m, lastSentAt: f.lastSentAt, lastSentValue: f.lastSentValue, lastSentHealth: f.lastSentHealth };
           }));
         })
         .catch(() => {});

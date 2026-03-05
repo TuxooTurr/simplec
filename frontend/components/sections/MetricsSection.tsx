@@ -1750,7 +1750,7 @@ export default function MetricsSection() {
           <div className="h-full flex">
 
             {/* Systems list */}
-            <div className="w-52 shrink-0 border-r border-border-main overflow-y-auto flex flex-col gap-1 p-2">
+            <div className="w-72 shrink-0 border-r border-border-main overflow-y-auto flex flex-col gap-1 p-2">
               {systems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center gap-2 py-16 text-center px-4">
                   <Settings2 className="w-8 h-8 text-text-muted/40" />
@@ -1772,7 +1772,7 @@ export default function MetricsSection() {
             </div>
 
             {/* Metrics panel */}
-            <div className={`${selectedMetricId != null ? "w-64" : "flex-1"} shrink-0 border-r border-border-main overflow-hidden flex flex-col transition-all`}>
+            <div className={`${selectedMetricId != null ? "w-80" : "flex-1"} shrink-0 border-r border-border-main overflow-hidden flex flex-col transition-all`}>
               {!selectedSystem ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center p-8">
                   <ChevronRight className="w-8 h-8 text-text-muted/40 -rotate-90" />

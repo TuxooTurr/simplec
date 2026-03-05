@@ -92,6 +92,7 @@ const SPARKLINE_PTS: Record<string, [number, number][]> = {
 };
 
 const THRESHOLD_STROKE: Record<number, string> = {
+  0: "#3b82f6", // blue-500  (baseline)
   1: "#4ade80", // green-400
   2: "#a3e635", // lime-400
   3: "#facc15", // yellow-400

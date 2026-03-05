@@ -64,13 +64,18 @@ def _system_row(s: TestSystem, db: Session) -> dict:
 
 
 def _threshold_lines(m: TestMetric) -> list[int]:
-    """Уникальные health-типы из включённых порогов, отсортированные по возрастанию.
-    Frontend раскладывает линии равномерно — позиция не несёт смысловой нагрузки.
+    """Маркеры для спарклайна:
+    0 = baseline (синий), 1-5 = health-типы порогов.
+    Frontend раскладывает равномерно — позиция не несёт смысловой нагрузки.
     """
+    lines: list[int] = []
+    bc = m.baseline_config
+    if bc and bc.enabled:
+        lines.append(0)
     tc = m.thresholds_config
-    if not tc or not tc.enabled or not tc.threshold_rows:
-        return []
-    return sorted({row.health_type for row in tc.threshold_rows})
+    if tc and tc.enabled and tc.threshold_rows:
+        lines.extend(sorted({row.health_type for row in tc.threshold_rows}))
+    return lines
 
 
 def _metric_row(m: TestMetric, last_value: float | None = None, last_health: int | None = None) -> dict:

@@ -91,7 +91,6 @@ const SPARKLINE_PTS: Record<string, [number, number][]> = {
   random:   [[0, 12], [8,  6], [16, 15], [24,  9], [32,  4], [40, 13], [48,  8], [56, 16], [64,  7]],
 };
 
-// pct=0 → низ (valueMin, y=20), pct=1 → верх (valueMax, y=0)
 const THRESHOLD_STROKE: Record<number, string> = {
   1: "#4ade80", // green-400
   2: "#a3e635", // lime-400
@@ -105,20 +104,21 @@ function PatternSparkline({
   thresholds,
 }: {
   pattern: string;
-  thresholds?: { healthType: number; pct: number }[];
+  thresholds?: number[];  // отсортированные health-типы
 }) {
   const pts = SPARKLINE_PTS[pattern] ?? SPARKLINE_PTS.random;
   const points = pts.map(([x, y]) => `${x},${y}`).join(" ");
+  const n = thresholds?.length ?? 0;
   return (
     <svg width={64} height={20} viewBox="0 0 64 20" className="overflow-visible">
-      {/* Threshold lines — behind the sparkline curve */}
-      {thresholds?.map((t, i) => {
-        const y = +(20 - t.pct * 20).toFixed(1);
+      {/* Линии порогов — равномерно, health 1 → верх, 5 → низ */}
+      {thresholds?.map((ht, i) => {
+        const y = +((i + 1) * 20 / (n + 1)).toFixed(1);
         return (
           <line
             key={i}
             x1="0" y1={y} x2="64" y2={y}
-            stroke={THRESHOLD_STROKE[t.healthType] ?? "#aaa"}
+            stroke={THRESHOLD_STROKE[ht] ?? "#aaa"}
             strokeWidth="1"
             strokeDasharray="3 2"
             opacity="0.85"

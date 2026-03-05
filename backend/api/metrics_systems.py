@@ -63,34 +63,14 @@ def _system_row(s: TestSystem, db: Session) -> dict:
     }
 
 
-def _threshold_lines(m: TestMetric) -> list[dict]:
-    """Горизонтальные линии порогов для спарклайна.
-    Возвращает [{healthType, pct}] где pct=0 — низ (valueMin), pct=1 — верх (valueMax).
-    Только абсолютные пороги (is_percent=False). Дубликаты и выход за диапазон — отброс.
+def _threshold_lines(m: TestMetric) -> list[int]:
+    """Уникальные health-типы из включённых порогов, отсортированные по возрастанию.
+    Frontend раскладывает линии равномерно — позиция не несёт смысловой нагрузки.
     """
     tc = m.thresholds_config
     if not tc or not tc.enabled or not tc.threshold_rows:
         return []
-    vc = m.values_config
-    val_min = float(vc.value_min) if vc else 0.0
-    val_max = float(vc.value_max) if vc else 100.0
-    if val_max == val_min:
-        return []
-    lines, seen = [], set()
-    for row in tc.threshold_rows:
-        if row.is_percent:
-            continue
-        for raw in (row.min_value, row.max_value):
-            if raw is None:
-                continue
-            pct = round((float(raw) - val_min) / (val_max - val_min), 3)
-            if pct < 0 or pct > 1:
-                continue
-            key = (row.health_type, pct)
-            if key not in seen:
-                seen.add(key)
-                lines.append({"healthType": row.health_type, "pct": pct})
-    return lines
+    return sorted({row.health_type for row in tc.threshold_rows})
 
 
 def _metric_row(m: TestMetric, last_value: float | None = None, last_health: int | None = None) -> dict:

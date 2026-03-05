@@ -61,7 +61,7 @@ export interface Metric {
   lastSentAt:         string | null;
   lastSentValue:      number | null;
   lastSentHealth:     number | null;
-  thresholdLines:     { healthType: number; pct: number }[];
+  thresholdLines:     number[];  // отсортированные health-типы 1–5, позиция равномерная
   createdAt:          string;
   valuePattern:       string;
   valueMin:           number;

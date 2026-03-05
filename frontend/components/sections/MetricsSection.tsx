@@ -782,18 +782,18 @@ function KafkaSettingsTab() {
 // ── Health Badge ──────────────────────────────────────────────────────────────
 
 const HEALTH_META: Record<number, { label: string; cls: string }> = {
-  1: { label: "OK",       cls: "bg-green-50  text-green-700  border-green-200"  },
-  2: { label: "OK-",      cls: "bg-lime-50   text-lime-700   border-lime-200"   },
-  3: { label: "WARN",     cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
-  4: { label: "DEGRAD",   cls: "bg-orange-50 text-orange-700 border-orange-200" },
-  5: { label: "CRIT",     cls: "bg-red-50    text-red-700    border-red-200"    },
+  1: { label: "OK",        cls: "bg-green-50  text-green-700  border-green-200"  },
+  2: { label: "OK пониж.", cls: "bg-lime-50   text-lime-700   border-lime-200"   },
+  3: { label: "Warning",   cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+  4: { label: "Degraded",  cls: "bg-orange-50 text-orange-700 border-orange-200" },
+  5: { label: "Critical",  cls: "bg-red-50    text-red-700    border-red-200"    },
 };
 
 function HealthBadge({ health }: { health: number }) {
   const meta = HEALTH_META[health];
   if (!meta) return null;
   return (
-    <span className={`shrink-0 self-center text-[9px] font-bold px-1.5 py-0.5 rounded border ${meta.cls}`}>
+    <span className={`shrink-0 self-center whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded border ${meta.cls}`}>
       {meta.label}
     </span>
   );

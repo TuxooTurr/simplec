@@ -137,6 +137,10 @@ class MetricsScheduler:
         from agents.kafka_client import KafkaClient
 
         db = SessionLocal()
+        # Инициализируем до try — чтобы передать в error-лог даже при ошибке Kafka
+        value: Optional[float]    = None
+        baseline: Optional[float] = None
+        health: Optional[int]     = None
         try:
             m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
             if not m or not m.is_active:
@@ -243,6 +247,9 @@ class MetricsScheduler:
             try:
                 db.add(GenerationLog(
                     test_metric_id=metric_id,
+                    value_sent=value,
+                    baseline_sent=baseline,
+                    health_sent=health,
                     status="error",
                     error_message=str(e)[:2000],
                 ))

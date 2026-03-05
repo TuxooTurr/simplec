@@ -13,10 +13,23 @@ export interface System {
   name:          string;
   monSystemCi:   string;
   isActive:      boolean;
+  startedBy:     string | null;
+  startedAt:     string | null;
   metricsTotal:  number;
   metricsActive: number;
   lastSentAt:    string | null;
   createdAt:     string;
+}
+
+export interface AccessRequest {
+  id:         number;
+  fromUser:   string;
+  systemId:   number;
+  systemName: string;
+  reqType:    "stop" | "add";
+  message:    string | null;
+  status:     "pending" | "resolved";
+  createdAt:  string;
 }
 
 export interface SystemsResponse {
@@ -125,7 +138,7 @@ export async function deleteSystem(id: number): Promise<void> {
   if (!r.ok) throw new Error(await r.text());
 }
 
-export async function toggleSystem(id: number): Promise<{ id: number; isActive: boolean }> {
+export async function toggleSystem(id: number): Promise<{ id: number; isActive: boolean; startedBy: string | null; startedAt: string | null }> {
   const r = await fetch(`${BASE}/systems/${id}/toggle`, { method: "POST", credentials: "include" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
@@ -358,4 +371,39 @@ export async function getMetricLogs(id: number, limit = 20): Promise<LogEntry[]>
   if (!r.ok) throw new Error(await r.text());
   const d = await r.json();
   return (d as { logs: LogEntry[] }).logs;
+}
+
+// ── Access Requests ───────────────────────────────────────────────────────────
+
+export async function createAccessRequest(
+  systemId: number,
+  reqType: "stop" | "add",
+  message: string,
+): Promise<AccessRequest> {
+  const r = await fetch(`${BASE}/systems/${systemId}/request`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ req_type: reqType, message }),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error((d as { detail?: string }).detail ?? "Ошибка отправки запроса");
+  }
+  return r.json();
+}
+
+export async function getMyRequests(): Promise<AccessRequest[]> {
+  const r = await fetch(`${BASE}/requests`, { credentials: "include" });
+  if (!r.ok) throw new Error(await r.text());
+  const d = await r.json();
+  return (d as { requests: AccessRequest[] }).requests;
+}
+
+export async function resolveRequest(reqId: number): Promise<void> {
+  const r = await fetch(`${BASE}/requests/${reqId}/resolve`, {
+    method: "PATCH",
+    credentials: "include",
+  });
+  if (!r.ok) throw new Error(await r.text());
 }

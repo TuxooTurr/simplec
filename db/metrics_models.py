@@ -20,11 +20,12 @@ class TestSystem(Base):
     name           = Column(String(255), nullable=False)
     mon_system_ci  = Column(String(20), nullable=False)
     is_active      = Column(Boolean, default=False, nullable=False)
+    started_by     = Column(String(255), nullable=True)   # username who activated
+    started_at     = Column(DateTime, nullable=True)
     created_at     = Column(DateTime, server_default=func.now(), nullable=False)
 
-    metrics = relationship(
-        "TestMetric", back_populates="system", cascade="all, delete-orphan"
-    )
+    metrics  = relationship("TestMetric", back_populates="system", cascade="all, delete-orphan")
+    requests = relationship("MetricAccessRequest", back_populates="system", cascade="all, delete-orphan")
 
 
 class TestMetric(Base):
@@ -167,3 +168,22 @@ class MetricsSettings(Base):
     value       = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
     updated_at  = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class MetricAccessRequest(Base):
+    """Запросы пользователей к владельцу активной генерации.
+    Тип: stop — попросить остановить, add — попросить добавить метрику.
+    """
+    __tablename__ = "metric_access_requests"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    from_user   = Column(String(255), nullable=False)          # кто запрашивает
+    to_user     = Column(String(255), nullable=False)          # владелец генерации
+    system_id   = Column(Integer, ForeignKey("test_systems.id"), nullable=False, index=True)
+    req_type    = Column(String(20), nullable=False)           # stop | add
+    message     = Column(Text, nullable=True)
+    status      = Column(String(20), default="pending", nullable=False)  # pending | resolved
+    created_at  = Column(DateTime, server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+
+    system = relationship("TestSystem", back_populates="requests")

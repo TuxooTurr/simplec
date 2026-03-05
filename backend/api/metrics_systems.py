@@ -63,6 +63,36 @@ def _system_row(s: TestSystem, db: Session) -> dict:
     }
 
 
+def _threshold_lines(m: TestMetric) -> list[dict]:
+    """Горизонтальные линии порогов для спарклайна.
+    Возвращает [{healthType, pct}] где pct=0 — низ (valueMin), pct=1 — верх (valueMax).
+    Только абсолютные пороги (is_percent=False). Дубликаты и выход за диапазон — отброс.
+    """
+    tc = m.thresholds_config
+    if not tc or not tc.enabled or not tc.threshold_rows:
+        return []
+    vc = m.values_config
+    val_min = float(vc.value_min) if vc else 0.0
+    val_max = float(vc.value_max) if vc else 100.0
+    if val_max == val_min:
+        return []
+    lines, seen = [], set()
+    for row in tc.threshold_rows:
+        if row.is_percent:
+            continue
+        for raw in (row.min_value, row.max_value):
+            if raw is None:
+                continue
+            pct = round((float(raw) - val_min) / (val_max - val_min), 3)
+            if pct < 0 or pct > 1:
+                continue
+            key = (row.health_type, pct)
+            if key not in seen:
+                seen.add(key)
+                lines.append({"healthType": row.health_type, "pct": pct})
+    return lines
+
+
 def _metric_row(m: TestMetric, last_value: float | None = None, last_health: int | None = None) -> dict:
     vc = m.values_config
     return {
@@ -86,6 +116,7 @@ def _metric_row(m: TestMetric, last_value: float | None = None, last_health: int
         "lastSentAt":         m.last_sent_at.isoformat() if m.last_sent_at else None,
         "lastSentValue":      last_value,
         "lastSentHealth":     last_health,
+        "thresholdLines":     _threshold_lines(m),
         "createdAt":          m.created_at.isoformat(),
         "valuePattern":       vc.pattern if vc else "random",
         "valueMin":           float(vc.value_min) if vc else 0.0,

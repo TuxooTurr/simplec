@@ -61,6 +61,7 @@ export interface Metric {
   lastSentAt:         string | null;
   lastSentValue:      number | null;
   lastSentHealth:     number | null;
+  thresholdLines:     { healthType: number; pct: number }[];
   createdAt:          string;
   valuePattern:       string;
   valueMin:           number;

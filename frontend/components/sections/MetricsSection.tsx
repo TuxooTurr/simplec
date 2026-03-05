@@ -91,11 +91,40 @@ const SPARKLINE_PTS: Record<string, [number, number][]> = {
   random:   [[0, 12], [8,  6], [16, 15], [24,  9], [32,  4], [40, 13], [48,  8], [56, 16], [64,  7]],
 };
 
-function PatternSparkline({ pattern }: { pattern: string }) {
+// pct=0 → низ (valueMin, y=20), pct=1 → верх (valueMax, y=0)
+const THRESHOLD_STROKE: Record<number, string> = {
+  1: "#4ade80", // green-400
+  2: "#a3e635", // lime-400
+  3: "#facc15", // yellow-400
+  4: "#fb923c", // orange-400
+  5: "#ef4444", // red-500
+};
+
+function PatternSparkline({
+  pattern,
+  thresholds,
+}: {
+  pattern: string;
+  thresholds?: { healthType: number; pct: number }[];
+}) {
   const pts = SPARKLINE_PTS[pattern] ?? SPARKLINE_PTS.random;
   const points = pts.map(([x, y]) => `${x},${y}`).join(" ");
   return (
     <svg width={64} height={20} viewBox="0 0 64 20" className="overflow-visible">
+      {/* Threshold lines — behind the sparkline curve */}
+      {thresholds?.map((t, i) => {
+        const y = +(20 - t.pct * 20).toFixed(1);
+        return (
+          <line
+            key={i}
+            x1="0" y1={y} x2="64" y2={y}
+            stroke={THRESHOLD_STROKE[t.healthType] ?? "#aaa"}
+            strokeWidth="1"
+            strokeDasharray="3 2"
+            opacity="0.85"
+          />
+        );
+      })}
       <polyline
         points={points}
         fill="none"
@@ -872,7 +901,10 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
       {metric.isActive && (
         <div className="shrink-0 flex flex-col items-end gap-0.5 mr-0.5">
           <div className="text-green-400 opacity-70">
-            <PatternSparkline pattern={metric.valuePattern ?? "random"} />
+            <PatternSparkline
+              pattern={metric.valuePattern ?? "random"}
+              thresholds={metric.thresholdLines}
+            />
           </div>
           {lastVal != null && (
             <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">

@@ -18,6 +18,7 @@ from db.metrics_models import (
     TestSystem, TestMetric,
     TestMetricValuesConfig, TestMetricBaselineConfig,
     TestMetricThresholdsConfig, TestMetricHealthConfig,
+    GenerationLog,
 )
 
 router = APIRouter()
@@ -58,7 +59,7 @@ def _system_row(s: TestSystem, db: Session) -> dict:
     }
 
 
-def _metric_row(m: TestMetric) -> dict:
+def _metric_row(m: TestMetric, last_value: float | None = None) -> dict:
     vc = m.values_config
     return {
         "id":                 m.id,
@@ -79,11 +80,45 @@ def _metric_row(m: TestMetric) -> dict:
         "specVersion":        m.spec_version,
         "isActive":           m.is_active,
         "lastSentAt":         m.last_sent_at.isoformat() if m.last_sent_at else None,
+        "lastSentValue":      last_value,
         "createdAt":          m.created_at.isoformat(),
         "valuePattern":       vc.pattern if vc else "random",
         "valueMin":           float(vc.value_min) if vc else 0.0,
         "valueMax":           float(vc.value_max) if vc else 100.0,
     }
+
+
+def _last_value(metric_id: int, db: Session) -> float | None:
+    """Последнее отправленное значение из GenerationLog (один запрос)."""
+    log = (
+        db.query(GenerationLog.value_sent)
+        .filter(GenerationLog.test_metric_id == metric_id)
+        .order_by(GenerationLog.id.desc())
+        .first()
+    )
+    return float(log.value_sent) if log and log.value_sent is not None else None
+
+
+def _last_values_bulk(metric_ids: list[int], db: Session) -> dict[int, float | None]:
+    """Batch-версия: один запрос для всего списка метрик."""
+    if not metric_ids:
+        return {}
+    from sqlalchemy import select
+    sub = (
+        db.query(
+            GenerationLog.test_metric_id,
+            func.max(GenerationLog.id).label("lid"),
+        )
+        .filter(GenerationLog.test_metric_id.in_(metric_ids))
+        .group_by(GenerationLog.test_metric_id)
+        .subquery()
+    )
+    rows = (
+        db.query(GenerationLog.test_metric_id, GenerationLog.value_sent)
+        .join(sub, GenerationLog.id == sub.c.lid)
+        .all()
+    )
+    return {r.test_metric_id: (float(r.value_sent) if r.value_sent is not None else None) for r in rows}
 
 
 # ── Systems ───────────────────────────────────────────────────────────────────
@@ -238,7 +273,8 @@ def get_system_metrics(system_id: int, db: Session = Depends(get_db)):
         .order_by(TestMetric.created_at.desc())
         .all()
     )
-    return {"metrics": [_metric_row(m) for m in metrics]}
+    last_val = _last_values_bulk([m.id for m in metrics], db)
+    return {"metrics": [_metric_row(m, last_val.get(m.id)) for m in metrics]}
 
 
 @router.post("/api/metrics/systems/{system_id}/metrics", status_code=201)
@@ -313,7 +349,7 @@ async def create_metric(system_id: int, body: MetricCreate, db: Session = Depend
         from agents.metrics_scheduler import scheduler
         await scheduler.start_metric(m.id)
 
-    return _metric_row(m)
+    return _metric_row(m)   # lastSentValue=None для только что созданной метрики
 
 
 @router.get("/api/metrics/metrics/{metric_id}")
@@ -321,7 +357,7 @@ def get_metric(metric_id: int, db: Session = Depends(get_db)):
     m = db.query(TestMetric).filter(TestMetric.id == metric_id).first()
     if not m:
         raise HTTPException(404, "Метрика не найдена")
-    return _metric_row(m)
+    return _metric_row(m, _last_value(m.id, db))
 
 
 @router.patch("/api/metrics/metrics/{metric_id}")
@@ -375,7 +411,7 @@ async def update_metric(metric_id: int, body: MetricUpdate, db: Session = Depend
         await scheduler.stop_metric(metric_id)
         await scheduler.start_metric(metric_id)
 
-    return _metric_row(m)
+    return _metric_row(m, _last_value(m.id, db))
 
 
 @router.delete("/api/metrics/metrics/{metric_id}")

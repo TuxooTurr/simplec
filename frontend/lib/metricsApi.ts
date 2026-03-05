@@ -46,6 +46,7 @@ export interface Metric {
   specVersion:        string;
   isActive:           boolean;
   lastSentAt:         string | null;
+  lastSentValue:      number | null;
   createdAt:          string;
   valuePattern:       string;
   valueMin:           number;

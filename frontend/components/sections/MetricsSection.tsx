@@ -809,6 +809,11 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
   };
 
   const ago = fmtAgo(metric.lastSentAt);
+  const lastVal = metric.lastSentValue != null
+    ? metric.lastSentValue % 1 === 0
+      ? metric.lastSentValue.toFixed(0)
+      : metric.lastSentValue.toFixed(2)
+    : null;
 
   return (
     <div
@@ -841,8 +846,15 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
         </div>
       </div>
       {metric.isActive && (
-        <div className="shrink-0 text-green-400 mr-0.5 opacity-70">
-          <PatternSparkline pattern={metric.valuePattern ?? "random"} />
+        <div className="shrink-0 flex flex-col items-end gap-0.5 mr-0.5">
+          <div className="text-green-400 opacity-70">
+            <PatternSparkline pattern={metric.valuePattern ?? "random"} />
+          </div>
+          {lastVal != null && (
+            <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">
+              {lastVal}{metric.metricUnit ? ` ${metric.metricUnit}` : ""}
+            </span>
+          )}
         </div>
       )}
       <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1599,6 +1611,25 @@ export default function MetricsSection() {
     setSelectedMetricId(null);
   }, [selectedId]);
 
+  // ── Auto-poll: обновляем lastSentAt + lastSentValue каждые 30 сек ─────────
+
+  useEffect(() => {
+    if (selectedId == null) return;
+    const intervalId = setInterval(() => {
+      getSystemMetrics(selectedId)
+        .then(fresh => {
+          setMetrics(prev => prev.map(m => {
+            const f = fresh.find(u => u.id === m.id);
+            if (!f) return m;
+            return { ...m, lastSentAt: f.lastSentAt, lastSentValue: f.lastSentValue };
+          }));
+        })
+        .catch(() => {});
+      loadSystems(true);
+    }, 30_000);
+    return () => clearInterval(intervalId);
+  }, [selectedId, loadSystems]);
+
   // ── Handlers ──────────────────────────────────────────────────────────────
 
   const handleSystemToggle = async (id: number) => {
@@ -1625,6 +1656,12 @@ export default function MetricsSection() {
   const handleMetricToggle = async (id: number) => {
     const r = await toggleMetric(id);
     setMetrics(prev => prev.map(m => m.id === id ? { ...m, isActive: r.isActive } : m));
+    // Обновляем счётчик metricsActive в карточке услуги
+    setSystems(prev => prev.map(s => {
+      if (s.id !== selectedId) return s;
+      const delta = r.isActive ? 1 : -1;
+      return { ...s, metricsActive: Math.max(0, Math.min(s.metricsTotal, s.metricsActive + delta)) };
+    }));
   };
 
   const handleMetricDelete = async (id: number) => {

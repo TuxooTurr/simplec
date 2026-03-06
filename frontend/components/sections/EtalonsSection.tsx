@@ -596,15 +596,13 @@ function AutotestsTab() {
               <div className="flex items-center gap-3 px-4 py-3">
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                   className="flex-1 text-left min-w-0">
-                  <p className="text-sm font-medium text-text-main font-mono truncate">
-                    {item.xml_text.slice(0, 80)}{item.xml_text.length > 80 ? "..." : ""}
+                  <p className="text-sm font-medium text-text-main truncate">
+                    {item.feature || "Автотест"}
                   </p>
-                  <div className="flex items-center gap-3 mt-0.5">
-                    {item.feature && (
-                      <span className="flex items-center gap-1 text-xs text-text-muted">
-                        <Tag className="w-3 h-3" />{item.feature}
-                      </span>
-                    )}
+                  <p className="text-xs text-text-muted font-mono truncate mt-0.5">
+                    {item.xml_text.slice(0, 70)}{item.xml_text.length > 70 ? "…" : ""}
+                  </p>
+                  <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-xs text-violet-500 flex items-center gap-1">
                       <Code2 className="w-3 h-3" /> Java
                     </span>

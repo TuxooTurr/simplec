@@ -20,8 +20,8 @@ const NAV: {
   Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
   ai?: boolean;
 }[] = [
-  { id: "generation",  href: "/generation",  label: "Ручная тестовая модель",  Icon: Zap,         ai: true },
-  { id: "auto_model",  href: "/auto-model",  label: "Авто тестовая модель",    Icon: FlaskConical, ai: true },
+  { id: "generation",  href: "/generation",  label: "Ручное тестирование",   Icon: Zap,          ai: true },
+  { id: "auto_model",  href: "/auto-model",  label: "Автотестирование",       Icon: FlaskConical, ai: true },
   { id: "bugs",        href: "/bugs",        label: "Дефекты",                 Icon: Bug,         ai: true },
   { id: "alerts",      href: "/alerts",      label: "Генератор алертов",       Icon: Bell },
   { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2 },
@@ -102,7 +102,7 @@ export default function Sidebar() {
                 }`}
                 strokeWidth={active ? 2.5 : 2}
               />
-              <span className="flex-1 min-w-0 truncate">{label}</span>
+              <span className="flex-1 min-w-0">{label}</span>
               {ai && <AiBadge />}
               <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
                 ⠿

@@ -392,18 +392,33 @@ export default function BugsSection() {
           <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-text-main">Баг-репорт</h3>
-              <button
-                onClick={handleCopy}
-                className={`flex items-center gap-1.5 text-sm px-3 py-1.5 border rounded-lg
-                  transition-all duration-150 active:scale-[0.97]
-                  ${copied
-                    ? "bg-green-50 border-green-200 text-green-700"
-                    : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
-              >
-                {copied
-                  ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
-                  : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    setReport("");
+                    setDescription("");
+                    setFeature("");
+                    setBugError(null);
+                    setPlatform("Back");
+                  }}
+                  className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
+                    text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 active:scale-[0.97]"
+                >
+                  <Bug className="w-3.5 h-3.5" /> Новый дефект
+                </button>
+                <button
+                  onClick={handleCopy}
+                  className={`flex items-center gap-1.5 text-sm px-3 py-1.5 border rounded-lg
+                    transition-all duration-150 active:scale-[0.97]
+                    ${copied
+                      ? "bg-green-50 border-green-200 text-green-700"
+                      : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                >
+                  {copied
+                    ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
+                    : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
+                </button>
+              </div>
             </div>
             <pre className="text-sm text-text-main whitespace-pre-wrap font-sans leading-relaxed">
               {report}

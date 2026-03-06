@@ -5,7 +5,7 @@ import { Scale, Search, Settings, RefreshCw, X, AlertCircle } from "lucide-react
 import {
   getRevisorData, getStands,
   podStatus, rowMatchStatus,
-  type RevisorData, type StandConfig, type PodInfo, type PodStatus,
+  type RevisorData, type StandConfig, type PodInfo, type PodStatus, type ServiceRow,
 } from "@/lib/revisorApi";
 
 /* ── Shared style constants (same as Metrics/Alerts/Generation) ── */
@@ -29,13 +29,6 @@ const ROW_ACCENT: Record<"green" | "yellow" | "grey", string> = {
   grey:   "border-l-2 border-l-transparent",
 };
 
-// Subtle row background tint
-const ROW_TINT: Record<"green" | "yellow" | "grey", string> = {
-  green:  "bg-green-50/30",
-  yellow: "bg-amber-50/30",
-  grey:   "",
-};
-
 // Badge for the match-status column
 const ROW_BADGE: Record<"green" | "yellow" | "grey", { cls: string; label: string }> = {
   green:  { cls: "text-green-700  bg-green-50  border border-green-200",  label: "Синхр." },
@@ -43,8 +36,17 @@ const ROW_BADGE: Record<"green" | "yellow" | "grey", { cls: string; label: strin
   grey:   { cls: "text-gray-500   bg-gray-50   border border-gray-200",   label: "—"       },
 };
 
+/* ── Majority version helper ─────────────────────────────────────── */
+function getMajorityVersion(row: ServiceRow, stands: string[]): string {
+  const versions = stands.map(s => row.stands[s]?.version ?? "").filter(Boolean);
+  if (versions.length === 0) return "";
+  const counts: Record<string, number> = {};
+  for (const v of versions) counts[v] = (counts[v] ?? 0) + 1;
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+}
+
 /* ── Pod cell ─────────────────────────────────────────────────────── */
-function PodCell({ info }: { info: PodInfo | undefined }) {
+function PodCell({ info, highlight = false }: { info: PodInfo | undefined; highlight?: boolean }) {
   if (!info) {
     return <span className="text-xs text-text-muted/40">—</span>;
   }
@@ -54,7 +56,11 @@ function PodCell({ info }: { info: PodInfo | undefined }) {
     <div className="flex items-center gap-2 min-w-0">
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${POD_DOT[st]}`} />
       <div className="min-w-0 flex flex-col">
-        <span className={`text-xs font-mono truncate ${noData ? "text-text-muted/50" : "text-text-main"}`}>
+        <span className={`text-xs font-mono truncate ${
+          highlight  ? "text-amber-700 font-semibold" :
+          noData     ? "text-text-muted/50" :
+                       "text-text-main"
+        }`}>
           {info.version || "—"}
         </span>
         {info.total > 0 && (
@@ -305,12 +311,13 @@ export default function RevisorSection() {
               {search ? `Ничего не найдено по запросу «${search}»` : "Нет данных"}
             </div>
           ) : filtered.map(row => {
-            const ms = rowMatchStatus(row, standNames);
-            const badge = ROW_BADGE[ms];
+            const ms       = rowMatchStatus(row, standNames);
+            const badge    = ROW_BADGE[ms];
+            const majority = getMajorityVersion(row, standNames);
             return (
               <div
                 key={row.name}
-                className={`grid border-b border-border-main last:border-0 transition-colors ${ROW_TINT[ms]}`}
+                className="grid border-b border-border-main last:border-0"
                 style={{ gridTemplateColumns: colTemplate }}
               >
                 {/* Service name with left-border accent */}
@@ -320,12 +327,21 @@ export default function RevisorSection() {
                   </span>
                 </div>
 
-                {/* Per-stand pod cells */}
-                {standNames.map(stand => (
-                  <div key={stand} className="px-4 py-3 border-l border-border-main">
-                    <PodCell info={row.stands[stand]} />
-                  </div>
-                ))}
+                {/* Per-stand pod cells — highlight only mismatching cells */}
+                {standNames.map(stand => {
+                  const info      = row.stands[stand];
+                  const isMismatch = !!(majority && info?.version && info.version !== majority);
+                  return (
+                    <div
+                      key={stand}
+                      className={`px-4 py-3 border-l border-border-main transition-colors ${
+                        isMismatch ? "bg-amber-50/70" : ""
+                      }`}
+                    >
+                      <PodCell info={info} highlight={isMismatch} />
+                    </div>
+                  );
+                })}
 
                 {/* Status badge */}
                 <div className="px-3 py-3 border-l border-border-main flex items-center justify-center">

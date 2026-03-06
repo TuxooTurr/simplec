@@ -29,14 +29,10 @@ const NAV: {
   { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen },
 ];
 
-function AiBadge({ active }: { active: boolean }) {
+function AiBadge() {
   return (
     <sup
-      className={`inline-block text-[8px] font-bold leading-none px-[3px] py-[1px] rounded
-        transition-colors duration-200
-        ${active
-          ? "bg-indigo-200/70 text-indigo-600"
-          : "bg-gray-100 text-text-muted/60 group-hover:bg-indigo-100 group-hover:text-indigo-400"}`}
+      className="inline-block text-[8px] font-bold leading-none px-[3px] py-[1px] rounded bg-indigo-100 text-indigo-500"
       style={{ verticalAlign: "super" }}
     >
       AI
@@ -106,9 +102,11 @@ export default function Sidebar() {
                 }`}
                 strokeWidth={active ? 2.5 : 2}
               />
-              <span className="flex-1 flex items-baseline gap-1">
-                {label}
-                {ai && <AiBadge active={active} />}
+              <span className="flex-1 flex items-center min-w-0">
+                <span className="flex items-baseline gap-1">
+                  {label}
+                  {ai && <AiBadge />}
+                </span>
               </span>
               <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
                 ⠿

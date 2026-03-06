@@ -4,17 +4,17 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
-  StopCircle,
+  StopCircle, History, ChevronLeft,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
 import FileDropZone from "@/components/FileDropZone";
-import { useGeneration } from "@/lib/useGeneration";
+import { useGeneration, type Case } from "@/lib/useGeneration";
 import { parseFile } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
-type Stage = "input" | "generating" | "review" | "export";
+type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
 
 const DEPTHS = [
   { id: "smoke",      label: "Smoke",      sub: "1-5 e2e",      hint: "~30–60 сек" },
@@ -29,6 +29,56 @@ const PLATFORMS = [
   { id: "iOS",     label: "iOS" },
   { id: "Android", label: "Android" },
 ];
+
+/* ── History helpers ─────────────────────────────────────────────── */
+
+interface HistEntry {
+  id: string;
+  timestamp: number;
+  depth: string;
+  feature: string;
+  platform: string[];
+  project: string;
+  team: string;
+  ke: string;
+  elapsed: number;
+  caseCount: number;
+  cases: Case[];
+  qaDoc: string;
+}
+
+function loadHistory(): HistEntry[] {
+  try {
+    const raw = localStorage.getItem("st_gen_history");
+    return raw ? (JSON.parse(raw) as HistEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+const HIST_GROUPS = ["Сегодня", "Вчера", "На этой неделе", "Ранее"] as const;
+
+function getDateGroup(ts: number): string {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const t = todayStart.getTime();
+  if (ts >= t) return "Сегодня";
+  if (ts >= t - 86400000) return "Вчера";
+  if (ts >= t - 6 * 86400000) return "На этой неделе";
+  return "Ранее";
+}
+
+function formatHistTime(ts: number): string {
+  const d = new Date(ts);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const hm = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+  if (ts >= todayStart.getTime()) return hm;
+  if (ts >= todayStart.getTime() - 86400000) return `вчера ${hm}`;
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) + " " + hm;
+}
+
+/* ── End history helpers ─────────────────────────────────────────── */
 
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none " +
@@ -370,6 +420,37 @@ export default function GenerationSection() {
   // Shake animation state for settings button
   const [settingsShake, setSettingsShake] = useState(false);
 
+  // ── Generation history ─────────────────────────────────────────
+  const [histEntries, setHistEntries] = useState<HistEntry[]>(() => loadHistory());
+  const [histView, setHistView] = useState<HistEntry | null>(null);
+  const [histFromStage, setHistFromStage] = useState<Stage>("input");
+  const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string } | null>(null);
+  const [exportBackStage, setExportBackStage] = useState<Stage>("review");
+  const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[] });
+  const historySavedRef = useRef(false);
+
+  const saveHistEntry = useCallback((entry: HistEntry) => {
+    setHistEntries(prev => {
+      const next = [entry, ...prev].slice(0, 30);
+      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const deleteHistEntry = useCallback((id: string) => {
+    setHistEntries(prev => {
+      const next = prev.filter(e => e.id !== id);
+      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    setHistEntries([]);
+    try { localStorage.removeItem("st_gen_history"); } catch {}
+  }, []);
+  // ── End history ────────────────────────────────────────────────
+
   const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, exporting, reset } =
     useGeneration();
 
@@ -403,10 +484,31 @@ export default function GenerationSection() {
     if (state === "generating") setStage("generating");
     if (state === "done") {
       const lastDone = events.find((e) => e.type === "layer_done" && e.layer === 2);
-      setElapsedFinal(lastDone?.elapsed ?? 0);
+      const elapsed = lastDone?.elapsed ?? 0;
+      setElapsedFinal(elapsed);
       setStage("review");
+      // Save to history (once per generation)
+      if (!historySavedRef.current && cases.length > 0) {
+        historySavedRef.current = true;
+        const meta = genMetaRef.current;
+        saveHistEntry({
+          id: Date.now().toString(),
+          timestamp: Date.now(),
+          depth: meta.depth,
+          feature: meta.feature,
+          platform: meta.platform,
+          project: meta.project,
+          team: meta.team,
+          ke: meta.ke,
+          elapsed,
+          caseCount: cases.length,
+          cases,
+          qaDoc,
+        });
+      }
     }
     if (state === "error") setStage("review");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, events]);
 
   const handleGenerate = () => {
@@ -417,6 +519,8 @@ export default function GenerationSection() {
     }
     const text = requirement.trim();
     if (!text) return;
+    genMetaRef.current = { feature, project, team, ke, depth, platform };
+    historySavedRef.current = false;
     start({ requirement: text, feature, depth, provider, platform: platform.join(", ") });
   };
 
@@ -433,6 +537,7 @@ export default function GenerationSection() {
   };
 
   const handleReset = () => {
+    historySavedRef.current = false;
     reset();
     setStage("input");
     setRequirement("");
@@ -466,7 +571,18 @@ export default function GenerationSection() {
       {/* ── INPUT ── */}
       {stage === "input" && (
         <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-          <h1 className="text-xl font-bold text-text-main mb-1">Генерация тест-кейсов</h1>
+          <div className="flex items-start justify-between mb-1 gap-4">
+            <h1 className="text-xl font-bold text-text-main">Генерация тест-кейсов</h1>
+            {histEntries.length > 0 && (
+              <button
+                onClick={() => { setHistFromStage("input"); setStage("history"); }}
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
+              >
+                <History className="w-3.5 h-3.5" />
+                История ({histEntries.length})
+              </button>
+            )}
+          </div>
           <p className="text-sm text-text-muted mb-4">
             Вставьте требование или загрузите файл — AI создаст тест-кейсы для Zephyr Scale.
           </p>
@@ -650,6 +766,16 @@ export default function GenerationSection() {
               )}
             </div>
             <div className="flex gap-2">
+              {histEntries.length > 0 && (
+                <button
+                  onClick={() => { setHistFromStage("review"); setStage("history"); }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
+                    text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150"
+                >
+                  <History className="w-3.5 h-3.5" />
+                  История
+                </button>
+              )}
               <button
                 onClick={handleReset}
                 className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
@@ -660,7 +786,7 @@ export default function GenerationSection() {
               </button>
               {cases.length > 0 && (
                 <button
-                  onClick={() => setStage("export")}
+                  onClick={() => { setExportSource(null); setExportBackStage("review"); setStage("export"); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
                     hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
                 >
@@ -719,17 +845,187 @@ export default function GenerationSection() {
         </div>
       )}
 
+      {/* ── HISTORY LIST ── */}
+      {stage === "history" && (
+        <div className="p-6 animate-slide-up">
+          <div className="flex items-center justify-between mb-4 max-w-2xl">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setStage(histFromStage)}
+                className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group"
+              >
+                <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+                Назад
+              </button>
+              <span className="text-text-muted/40">·</span>
+              <h1 className="text-xl font-bold text-text-main">История генераций</h1>
+            </div>
+            {histEntries.length > 0 && (
+              <button
+                onClick={clearHistory}
+                className="text-xs text-text-muted hover:text-red-500 transition-colors"
+              >
+                Очистить всё
+              </button>
+            )}
+          </div>
+
+          {histEntries.length === 0 ? (
+            <div className="max-w-2xl flex flex-col items-center justify-center py-16 text-text-muted">
+              <History className="w-10 h-10 mb-3 opacity-20" />
+              <p className="text-sm">История пуста — завершите генерацию, чтобы она появилась здесь</p>
+            </div>
+          ) : (
+            <div className="max-w-2xl space-y-5">
+              {HIST_GROUPS
+                .map(g => [g, histEntries.filter(e => getDateGroup(e.timestamp) === g)] as [string, HistEntry[]])
+                .filter(([, entries]) => entries.length > 0)
+                .map(([group, entries]) => (
+                  <div key={group}>
+                    <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">{group}</p>
+                    <div className="bg-white border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
+                      {entries.map(entry => (
+                        <div
+                          key={entry.id}
+                          className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 cursor-pointer group transition-colors"
+                          onClick={() => { setHistView(entry); setStage("histitem"); }}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-text-main truncate">{entry.feature || "Без названия"}</p>
+                            <p className="text-xs text-text-muted mt-0.5">
+                              {entry.caseCount} кейсов
+                              {" · "}
+                              {DEPTHS.find(d => d.id === entry.depth)?.label ?? entry.depth}
+                              {" · "}
+                              {entry.platform.join(", ")}
+                              {entry.project ? ` · ${entry.project}` : ""}
+                            </p>
+                          </div>
+                          <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.timestamp)}</span>
+                          <button
+                            onClick={e => { e.stopPropagation(); deleteHistEntry(entry.id); }}
+                            className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── HISTORY ITEM ── */}
+      {stage === "histitem" && histView && (
+        <div className="p-6 animate-slide-up">
+          <div className="flex items-start justify-between mb-4 max-w-3xl gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                onClick={() => setStage("history")}
+                className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group flex-shrink-0"
+              >
+                <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+                История
+              </button>
+              <span className="text-text-muted/40 flex-shrink-0">·</span>
+              <h1 className="text-lg font-bold text-text-main truncate">{histView.feature || "Без названия"}</h1>
+            </div>
+            {histView.cases.length > 0 && (
+              <button
+                onClick={() => {
+                  setExportSource({ cases: histView.cases, qaDoc: histView.qaDoc });
+                  setExportBackStage("histitem");
+                  setStage("export");
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                  hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm flex-shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Экспорт
+              </button>
+            )}
+          </div>
+
+          <div className="max-w-3xl">
+            {/* Meta badges */}
+            <div className="flex items-center gap-2 flex-wrap mb-4">
+              <span className="text-xs bg-indigo-50 text-primary border border-indigo-100 px-2 py-1 rounded-md font-medium">
+                {DEPTHS.find(d => d.id === histView.depth)?.label ?? histView.depth}
+              </span>
+              {histView.platform.map(p => (
+                <span key={p} className="text-xs bg-gray-50 text-text-muted border border-border-main px-2 py-1 rounded-md">
+                  {p}
+                </span>
+              ))}
+              <span className="text-xs text-text-muted">
+                {histView.caseCount} кейсов{histView.elapsed > 0 ? ` · за ${histView.elapsed}с` : ""}
+              </span>
+              {histView.project && <span className="text-xs text-text-muted">{histView.project}</span>}
+              {histView.team && <span className="text-xs text-text-muted">{histView.team}</span>}
+              <span className="text-xs text-text-muted ml-auto">{formatHistTime(histView.timestamp)}</span>
+            </div>
+
+            {/* QA Doc */}
+            {histView.qaDoc && (
+              <div className="mb-4 bg-white border border-border-main rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setQaExpanded(v => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
+                    text-text-main hover:bg-gray-50/70 transition-colors group"
+                >
+                  <span className="flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-text-muted" />
+                    QA Документация
+                  </span>
+                  <ChevronDown
+                    className={`w-4 h-4 text-text-muted transition-transform duration-200 ${qaExpanded ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {qaExpanded && (
+                  <div className="px-4 pb-4 border-t border-border-main animate-fade-in">
+                    <pre className="text-xs text-text-muted whitespace-pre-wrap mt-3 font-mono overflow-x-auto leading-relaxed">
+                      {histView.qaDoc}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Cases */}
+            {histView.cases.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
+                  {histView.caseCount} тест-кейсов
+                </p>
+                {histView.cases.map((c, i) => (
+                  <CaseCard
+                    key={i}
+                    index={i + 1}
+                    case_={c}
+                    className="animate-slide-up"
+                    style={{ animationDelay: `${Math.min(i * 30, 300)}ms` } as React.CSSProperties}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── EXPORT ── */}
       {stage === "export" && (
         <div className="p-6">
           <div className="max-w-2xl">
             <ExportPanel
-              cases={cases}
-              qaDoc={qaDoc}
+              cases={exportSource?.cases ?? cases}
+              qaDoc={exportSource?.qaDoc ?? qaDoc}
               onExport={exportCases}
               result={exportResult}
               exporting={exporting}
-              onBack={() => setStage("review")}
+              onBack={() => { setExportSource(null); setStage(exportBackStage); }}
               initialProject={project}
               initialTeam={team}
               initialSystem={ke}

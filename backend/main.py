@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.api import (
     auth, generation, etalons, bugs, system, alerts,
     metrics_systems, metrics_settings, metrics_builder,
+    revisor,
 )
 from backend.auth import require_auth
 from db.user_store import ensure_default_user
@@ -96,6 +97,7 @@ app.include_router(alerts.router,           dependencies=_auth_dep)
 app.include_router(metrics_systems.router,  dependencies=_auth_dep)
 app.include_router(metrics_settings.router, dependencies=_auth_dep)
 app.include_router(metrics_builder.router,  dependencies=_auth_dep)
+app.include_router(revisor.router,          dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import {
   Bell, Plus, Send, Copy, CheckCheck, Trash2, Pencil,
   CircleCheck, CircleX, Loader2, ChevronDown, X, Sparkles,
   Play, Square, Timer, Clock,
 } from "lucide-react";
 import {
-  getAlertScripts, saveAlertScript, deleteAlertScript,
-  sendAlert, getAlertHistory,
+  saveAlertScript, deleteAlertScript,
+  getAlertHistory,
   type AlertScript, type AlertParam, type AlertHistoryEntry,
 } from "@/lib/api";
+import { useAlertsScheduler } from "@/contexts/AlertsSchedulerContext";
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 
@@ -260,45 +261,29 @@ function AuditModal({ history, onClose }: { history: AlertHistoryEntry[]; onClos
 // ── Main component ───────────────────────────────────────────────────────────
 
 export default function AlertsSection() {
-  // Core state
-  const [scripts,       setScripts]       = useState<AlertScript[]>([]);
-  const [selectedId,    setSelectedId]    = useState<string | null>(null);
-  const [values,        setValues]        = useState<Record<string, string>>({});
-  const [topicOverride, setTopicOverride] = useState("");
-  const [sending,       setSending]       = useState(false);
-  const [sendResult,    setSendResult]    = useState<{ ok: boolean; error?: string; offset?: number } | null>(null);
-  const [history,       setHistory]       = useState<AlertHistoryEntry[]>([]);
-  const [copied,        setCopied]        = useState(false);
-  const [showModal,     setShowModal]     = useState(false);
-  const [showAudit,     setShowAudit]     = useState(false);
-  const [editScript,    setEditScript]    = useState<AlertScript | null>(null);
-  const [loadErr,       setLoadErr]       = useState("");
+  // Persistent state from context (survives page navigation)
+  const {
+    scripts, setScripts,
+    history, setHistory,
+    loadErr,
+    selectedId, setSelectedId,
+    values, setValues,
+    topicOverride, setTopicOverride,
+    sending,
+    sendResult, setSendResult,
+    schedMode, setSchedMode,
+    schedFreq, setSchedFreq,
+    schedFrom, setSchedFrom,
+    schedTo, setSchedTo,
+    schedActive, schedCount,
+    doSendCore, startSchedule, stopSchedule,
+  } = useAlertsScheduler();
 
-  // Scheduling state
-  const [schedMode,   setSchedMode]   = useState<"once" | "periodic">("once");
-  const [schedFreq,   setSchedFreq]   = useState(30);
-  const [schedFrom,   setSchedFrom]   = useState("");
-  const [schedTo,     setSchedTo]     = useState("");
-  const [schedActive, setSchedActive] = useState(false);
-  const [schedCount,  setSchedCount]  = useState(0);
-
-  // Refs: avoid stale closures in scheduler
-  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sendingRef     = useRef(false);
-  const schedActiveRef = useRef(false);
-  const valuesRef      = useRef(values);
-  const topicRef       = useRef(topicOverride);
-  const selectedIdRef  = useRef(selectedId);
-  const scriptsRef     = useRef(scripts);
-  const schedFromRef   = useRef(schedFrom);
-  const schedToRef     = useRef(schedTo);
-
-  useEffect(() => { valuesRef.current = values; },        [values]);
-  useEffect(() => { topicRef.current = topicOverride; },  [topicOverride]);
-  useEffect(() => { selectedIdRef.current = selectedId; },[selectedId]);
-  useEffect(() => { scriptsRef.current = scripts; },      [scripts]);
-  useEffect(() => { schedFromRef.current = schedFrom; },  [schedFrom]);
-  useEffect(() => { schedToRef.current = schedTo; },      [schedTo]);
+  // UI-only state (fine to reset on navigation)
+  const [copied,     setCopied]     = useState(false);
+  const [showModal,  setShowModal]  = useState(false);
+  const [showAudit,  setShowAudit]  = useState(false);
+  const [editScript, setEditScript] = useState<AlertScript | null>(null);
 
   const selected = scripts.find(s => s.id === selectedId) ?? null;
 
@@ -310,73 +295,7 @@ export default function AlertsSection() {
     setValues(v);
     setTopicOverride(s.topic);
     setSendResult(null);
-  }, []);
-
-  useEffect(() => {
-    getAlertScripts()
-      .then(data => {
-        setScripts(data);
-        if (data.length > 0) { setSelectedId(data[0].id); initValues(data[0]); }
-      })
-      .catch(e => setLoadErr(String(e)));
-    getAlertHistory().then(setHistory).catch(() => {});
-  }, [initValues]);
-
-  // Core send — reads from refs (safe in scheduler)
-  const doSendCore = useCallback(async () => {
-    const sid = selectedIdRef.current;
-    const sel = scriptsRef.current.find(s => s.id === sid) ?? null;
-    if (!sel || sendingRef.current) return;
-    sendingRef.current = true;
-    setSending(true);
-    setSendResult(null);
-    try {
-      const topic = topicRef.current;
-      const res = await sendAlert({
-        script_id:      sel.id,
-        values:         valuesRef.current,
-        topic_override: topic !== sel.topic ? topic : "",
-      });
-      setSendResult({ ok: res.ok, error: res.error, offset: res.offset });
-      getAlertHistory().then(setHistory).catch(() => {});
-    } catch (e) {
-      setSendResult({ ok: false, error: String(e) });
-    } finally {
-      setSending(false);
-      sendingRef.current = false;
-    }
-  }, []);
-
-  const stopSchedule = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    schedActiveRef.current = false;
-    setSchedActive(false);
-  }, []);
-
-  const startSchedule = useCallback((freqSecs: number) => {
-    stopSchedule();
-    let count = 0;
-    setSchedCount(0);
-    schedActiveRef.current = true;
-    setSchedActive(true);
-
-    const tick = async () => {
-      if (!schedActiveRef.current) return;
-      const now = new Date();
-      const from = schedFromRef.current;
-      const to   = schedToRef.current;
-      if (from && now < new Date(from)) return;
-      if (to   && now > new Date(to))   { stopSchedule(); return; }
-      await doSendCore();
-      count++;
-      setSchedCount(count);
-    };
-
-    tick();
-    timerRef.current = setInterval(tick, freqSecs * 1000);
-  }, [stopSchedule, doSendCore]);
-
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  }, [setValues, setTopicOverride, setSendResult]);
 
   const handleSelectScript = (s: AlertScript) => {
     stopSchedule();

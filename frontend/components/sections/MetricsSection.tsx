@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useMetricsUi } from "@/contexts/MetricsUiContext";
 import {
   BarChart2, Plus, Trash2, Play, Square, Settings2,
   Loader2, RefreshCw, ChevronRight, ToggleLeft, ToggleRight,
@@ -1727,10 +1728,17 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export default function MetricsSection() {
+  // Persistent UI selection — survives page navigation
+  const {
+    selectedServiceId: selectedId,
+    setSelectedServiceId: setSelectedId,
+    selectedMetricId,
+    setSelectedMetricId,
+  } = useMetricsUi();
+
   const [tab,              setTab]              = useState<"systems" | "kafka">("systems");
   const [systems,          setSystems]          = useState<System[]>([]);
   const [stats,            setStats]            = useState({ totalSystems: 0, activeSystems: 0, totalMetrics: 0, activeMetrics: 0 });
-  const [selectedId,       setSelectedId]       = useState<number | null>(null);
   const [metrics,          setMetrics]          = useState<Metric[]>([]);
   const [loading,          setLoading]          = useState(true);
   const [metricsLoading,   setMetricsLoading]   = useState(false);
@@ -1738,7 +1746,6 @@ export default function MetricsSection() {
   const [showAddSystem,    setShowAddSystem]     = useState(false);
   const [showBatchMetrics, setShowBatchMetrics]  = useState(false);
   const [globalBusy,       setGlobalBusy]       = useState(false);
-  const [selectedMetricId, setSelectedMetricId] = useState<number | null>(null);
   const [editingMetric,    setEditingMetric]     = useState<Metric | null>(null);
   const [editingSystem,    setEditingSystem]     = useState<System | null>(null);
   const [currentUser,      setCurrentUser]       = useState<string | null>(null);

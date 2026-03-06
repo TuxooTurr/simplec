@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles } from "lucide-react";
 import type { Case, ExportResult } from "@/lib/useGeneration";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface ExportPanelProps {
   cases: Case[];
@@ -46,13 +47,13 @@ const DOWNLOAD_BUTTONS = [
 ] as const;
 
 export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialSystem, initialCritRegress }: ExportPanelProps) {
+  const { provider } = useWorkspace();
   const [project, setProject]       = useState(initialProject ?? "SBER911");
   const [system, setSystem]         = useState(initialSystem ?? "");
   const [team, setTeam]             = useState(initialTeam ?? "");
   const [domain, setDomain]         = useState("");
   const [folder, setFolder]         = useState("Новая ТМ");
   const [useLlm, setUseLlm]         = useState(false);
-  const [provider]                  = useState("gigachat");
   const [critRegress, setCritRegress] = useState(initialCritRegress ?? false);
   const [loading, setLoading]       = useState(false);
 

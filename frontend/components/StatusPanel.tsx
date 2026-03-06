@@ -7,6 +7,7 @@ interface StatusPanelProps {
   events: GenEvent[];
   progress: Progress | null;
   done?: boolean;
+  error?: boolean;
   elapsed?: number;
 }
 
@@ -16,7 +17,7 @@ const LAYER_NAMES: Record<number, string> = {
   3: "Детальные кейсы",
 };
 
-export default function StatusPanel({ events, progress, done, elapsed }: StatusPanelProps) {
+export default function StatusPanel({ events, progress, done, error, elapsed }: StatusPanelProps) {
   return (
     <div className="bg-white border border-border-main rounded-xl p-5">
       {/* Header */}
@@ -28,6 +29,11 @@ export default function StatusPanel({ events, progress, done, elapsed }: StatusP
               Готово
               {elapsed ? <span className="text-text-muted font-normal ml-1">за {elapsed}с</span> : ""}
             </h3>
+          </>
+        ) : error ? (
+          <>
+            <XCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+            <h3 className="text-sm font-semibold text-text-main">Ошибка генерации</h3>
           </>
         ) : (
           <>
@@ -41,6 +47,9 @@ export default function StatusPanel({ events, progress, done, elapsed }: StatusP
       <div className="space-y-2">
         {events.map((ev, i) => {
           if (ev.type === "layer_start") {
+            const layerDone = events.slice(i + 1).some(
+              e => e.type === "layer_done" && e.layer === ev.layer
+            );
             return (
               <div key={i} className="flex items-center gap-2.5 text-sm animate-fade-in">
                 <div className="w-5 h-5 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
@@ -49,7 +58,9 @@ export default function StatusPanel({ events, progress, done, elapsed }: StatusP
                 <span className="text-text-muted">
                   Слой {ev.layer} — {ev.name ?? LAYER_NAMES[ev.layer ?? 0]}
                 </span>
-                <Loader2 className="w-3 h-3 text-primary animate-spin ml-auto flex-shrink-0" />
+                {!layerDone && (
+                  <Loader2 className="w-3 h-3 text-primary animate-spin ml-auto flex-shrink-0" />
+                )}
               </div>
             );
           }

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
+  StopCircle,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
@@ -322,7 +323,16 @@ export default function GenerationSection() {
   const { provider } = useWorkspace();
 
   const [requirement, setRequirement] = useState("");
-  const [depth, setDepth]             = useState("smoke");
+
+  // Depth and platform persist across navigation via localStorage
+  const [depth, setDepthState] = useState<string>(() => {
+    try { return localStorage.getItem("st_depth") ?? "smoke"; } catch { return "smoke"; }
+  });
+  const setDepth = (d: string) => {
+    setDepthState(d);
+    try { localStorage.setItem("st_depth", d); } catch {}
+  };
+
   const [stage, setStage]             = useState<Stage>("input");
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
@@ -331,7 +341,13 @@ export default function GenerationSection() {
 
   // Settings state (persists between generations)
   const [settingsOpen, setSettingsOpen]     = useState(false);
-  const [platform, setPlatform]             = useState<string[]>(["Web"]);
+  const [platform, setPlatformState]        = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem("st_platform") ?? '["Web"]'); } catch { return ["Web"]; }
+  });
+  const setPlatform = (p: string[]) => {
+    setPlatformState(p);
+    try { localStorage.setItem("st_platform", JSON.stringify(p)); } catch {}
+  };
   const [feature, setFeature]               = useState("");
   const [team, setTeam]                     = useState("");
   const [project, setProject]               = useState("");
@@ -354,8 +370,21 @@ export default function GenerationSection() {
   // Shake animation state for settings button
   const [settingsShake, setSettingsShake] = useState(false);
 
-  const { state, events, progress, cases, qaDoc, start, exportCases, exportResult, reset } =
+  const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, reset } =
     useGeneration();
+
+  // Restore stage immediately (before paint) when returning to this page
+  useLayoutEffect(() => {
+    if (state === "generating") {
+      setStage("generating");
+    } else if (state === "done" || state === "error") {
+      const lastDone = events.find((e) => e.type === "layer_done" && e.layer === 2);
+      setElapsedFinal(lastDone?.elapsed ?? 0);
+      setStage("review");
+    }
+    // state === "idle" → keep "input"
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only on mount — ongoing transitions handled by useEffect below
 
   const settingsDone =
     feature.trim().length > 0 &&
@@ -576,14 +605,24 @@ export default function GenerationSection() {
       {/* ── GENERATING ── */}
       {stage === "generating" && (
         <div className="p-6 animate-fade-in">
-          <div className="flex items-center gap-3 mb-4">
-            <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
-            {currentDepth && (
-              <span className="text-sm text-text-muted flex items-center gap-1">
-                <Clock className="w-3.5 h-3.5" />
-                {currentDepth.hint}
-              </span>
-            )}
+          <div className="flex items-center justify-between mb-4 max-w-2xl">
+            <div className="flex items-center gap-3">
+              <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
+              {currentDepth && (
+                <span className="text-sm text-text-muted flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5" />
+                  {currentDepth.hint}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={cancel}
+              className="flex items-center gap-1.5 px-3.5 py-2 border border-red-200 rounded-lg text-sm
+                text-red-500 hover:bg-red-50 hover:border-red-300 transition-all duration-150 group"
+            >
+              <StopCircle className="w-3.5 h-3.5 transition-transform group-hover:scale-110 duration-200" />
+              Отменить
+            </button>
           </div>
           <div className="max-w-2xl">
             <StatusPanel events={events} progress={progress} />
@@ -635,7 +674,7 @@ export default function GenerationSection() {
           <div className="max-w-3xl">
             {events.length > 0 && (
               <div className="mb-4">
-                <StatusPanel events={events} progress={null} done={state === "done"} elapsed={elapsedFinal} />
+                <StatusPanel events={events} progress={null} done={state === "done"} error={state === "error"} elapsed={elapsedFinal} />
               </div>
             )}
             {qaDoc && (

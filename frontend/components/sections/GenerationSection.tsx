@@ -47,6 +47,7 @@ interface HistEntry {
   qaDoc: string;
   requirement?: string;
   exportResult?: ExportResult;
+  loadedAsEtalon?: boolean;
 }
 
 function stripMarkdown(text: string): string {
@@ -505,7 +506,11 @@ export default function GenerationSection() {
         feature: entry.feature,
       });
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-      setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
+      setHistEntries(prev => {
+        const next = prev.map(e => e.id === entry.id ? { ...e, loadedAsEtalon: true } : e);
+        try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
+        return next;
+      });
     } catch {
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
       setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
@@ -999,15 +1004,15 @@ export default function GenerationSection() {
                           <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.timestamp)}</span>
                           {/* Загрузить в эталон */}
                           {(() => {
+                            if (entry.loadedAsEtalon) return (
+                              <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              </span>
+                            );
                             const st = etalonStatus[entry.id];
                             if (st === "loading") return (
                               <span className="flex-shrink-0 p-0.5 text-text-muted">
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              </span>
-                            );
-                            if (st === "done") return (
-                              <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
                               </span>
                             );
                             if (st === "error") return (

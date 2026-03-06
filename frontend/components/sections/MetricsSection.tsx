@@ -140,7 +140,9 @@ function PatternSparkline({
 
 // ── Threshold Dots ────────────────────────────────────────────────────────────
 
+// type 0 = baseline (синий), 1-5 = health-типы порогов
 const THRESHOLD_DOT_COLOR: Record<number, string> = {
+  0: "bg-blue-500",
   1: "bg-green-400",
   2: "bg-lime-400",
   3: "bg-yellow-400",
@@ -148,11 +150,11 @@ const THRESHOLD_DOT_COLOR: Record<number, string> = {
   5: "bg-red-500",
 };
 
-function ThresholdDots({ types }: { types: number[] }) {
-  if (!types.length) return null;
+function ThresholdDots({ lines }: { lines: number[] }) {
+  if (!lines.length) return null;
   return (
     <div className="flex flex-col gap-0.5 items-center justify-center shrink-0 self-center">
-      {types.map((ht, i) => (
+      {lines.map((ht, i) => (
         <div key={i} className={`w-2 h-1 rounded-sm ${THRESHOLD_DOT_COLOR[ht] ?? "bg-gray-300"}`} />
       ))}
     </div>
@@ -917,8 +919,8 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
           )}
         </div>
       </div>
-      {metric.thresholdLines.includes(0) && metric.thresholdLines.some(t => t > 0) && (
-        <ThresholdDots types={metric.thresholdLines.filter(t => t > 0)} />
+      {metric.thresholdLines.length > 0 && (
+        <ThresholdDots lines={metric.thresholdLines} />
       )}
       {metric.isActive && metric.lastSentHealth != null && (
         <HealthBadge health={metric.lastSentHealth} />

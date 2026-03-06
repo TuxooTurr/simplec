@@ -138,6 +138,27 @@ function PatternSparkline({
   );
 }
 
+// ── Threshold Dots ────────────────────────────────────────────────────────────
+
+const THRESHOLD_DOT_COLOR: Record<number, string> = {
+  1: "bg-green-400",
+  2: "bg-lime-400",
+  3: "bg-yellow-400",
+  4: "bg-orange-400",
+  5: "bg-red-500",
+};
+
+function ThresholdDots({ types }: { types: number[] }) {
+  if (!types.length) return null;
+  return (
+    <div className="flex flex-col gap-0.5 items-center justify-center shrink-0 self-center">
+      {types.map((ht, i) => (
+        <div key={i} className={`w-2 h-1 rounded-sm ${THRESHOLD_DOT_COLOR[ht] ?? "bg-gray-300"}`} />
+      ))}
+    </div>
+  );
+}
+
 // ── Helper: Toggle ────────────────────────────────────────────────────────────
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
@@ -896,6 +917,9 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
           )}
         </div>
       </div>
+      {metric.thresholdLines.includes(0) && metric.thresholdLines.some(t => t > 0) && (
+        <ThresholdDots types={metric.thresholdLines.filter(t => t > 0)} />
+      )}
       {metric.isActive && metric.lastSentHealth != null && (
         <HealthBadge health={metric.lastSentHealth} />
       )}
@@ -1121,7 +1145,7 @@ function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit, cu
 
 // ── Builder: Values Tab ───────────────────────────────────────────────────────
 
-function ValuesTab({ metricId, initial }: { metricId: number; initial: ValuesConfig }) {
+function ValuesTab({ metricId, initial, onSaved }: { metricId: number; initial: ValuesConfig; onSaved?: () => void }) {
   const [form, setForm] = useState<ValuesConfig>(initial);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
@@ -1132,6 +1156,7 @@ function ValuesTab({ metricId, initial }: { metricId: number; initial: ValuesCon
     try {
       await saveValuesConfig(metricId, form);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+      onSaved?.();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -1195,7 +1220,7 @@ function ValuesTab({ metricId, initial }: { metricId: number; initial: ValuesCon
 
 // ── Builder: Baseline Tab ─────────────────────────────────────────────────────
 
-function BaselineTab({ metricId, initial }: { metricId: number; initial: BaselineConfig }) {
+function BaselineTab({ metricId, initial, onSaved }: { metricId: number; initial: BaselineConfig; onSaved?: () => void }) {
   const [form, setForm] = useState<BaselineConfig>(initial);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
@@ -1206,6 +1231,7 @@ function BaselineTab({ metricId, initial }: { metricId: number; initial: Baselin
     try {
       await saveBaselineConfig(metricId, form);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+      onSaved?.();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -1257,7 +1283,7 @@ function BaselineTab({ metricId, initial }: { metricId: number; initial: Baselin
 
 const EMPTY_ROW: ThresholdRow = { health_type: 3, min_value: null, max_value: null, is_percent: false };
 
-function ThresholdsTab({ metricId, initial }: { metricId: number; initial: ThresholdsConfig }) {
+function ThresholdsTab({ metricId, initial, onSaved }: { metricId: number; initial: ThresholdsConfig; onSaved?: () => void }) {
   const [form, setForm] = useState<ThresholdsConfig>(initial);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
@@ -1268,6 +1294,7 @@ function ThresholdsTab({ metricId, initial }: { metricId: number; initial: Thres
     try {
       await saveThresholdsConfig(metricId, form);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+      onSaved?.();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -1373,7 +1400,7 @@ function ThresholdsTab({ metricId, initial }: { metricId: number; initial: Thres
 
 // ── Builder: Health Tab ───────────────────────────────────────────────────────
 
-function HealthTab({ metricId, initial }: { metricId: number; initial: HealthConfig }) {
+function HealthTab({ metricId, initial, onSaved }: { metricId: number; initial: HealthConfig; onSaved?: () => void }) {
   const [form, setForm] = useState<HealthConfig>(initial);
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
@@ -1384,6 +1411,7 @@ function HealthTab({ metricId, initial }: { metricId: number; initial: HealthCon
     try {
       await saveHealthConfig(metricId, form);
       setSaved(true); setTimeout(() => setSaved(false), 2500);
+      onSaved?.();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -1516,9 +1544,10 @@ const BUILDER_TABS: { key: BuilderTabKey; label: string }[] = [
 interface BuilderPanelProps {
   metricId: number;
   onClose:  () => void;
+  onSaved?: () => void;
 }
 
-function BuilderPanel({ metricId, onClose }: BuilderPanelProps) {
+function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
   const [config,      setConfig]      = useState<BuilderConfig | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [tab,         setTab]         = useState<BuilderTabKey>("values");
@@ -1688,10 +1717,10 @@ function BuilderPanel({ metricId, onClose }: BuilderPanelProps) {
 
           {/* Tab content */}
           <div className="border border-border-main rounded-b-xl rounded-tr-xl mx-4 p-4 bg-white">
-            {tab === "values"     && <ValuesTab     metricId={metricId} initial={config.valuesConfig}     />}
-            {tab === "baseline"   && <BaselineTab   metricId={metricId} initial={config.baselineConfig}   />}
-            {tab === "thresholds" && <ThresholdsTab metricId={metricId} initial={config.thresholdsConfig} />}
-            {tab === "health"     && <HealthTab     metricId={metricId} initial={config.healthConfig}     />}
+            {tab === "values"     && <ValuesTab     metricId={metricId} initial={config.valuesConfig}     onSaved={onSaved} />}
+            {tab === "baseline"   && <BaselineTab   metricId={metricId} initial={config.baselineConfig}   onSaved={onSaved} />}
+            {tab === "thresholds" && <ThresholdsTab metricId={metricId} initial={config.thresholdsConfig} onSaved={onSaved} />}
+            {tab === "health"     && <HealthTab     metricId={metricId} initial={config.healthConfig}     onSaved={onSaved} />}
           </div>
 
           {/* Logs section */}
@@ -1761,6 +1790,11 @@ export default function MetricsSection() {
   }, []);
 
   useEffect(() => { loadSystems(); }, [loadSystems]);
+
+  const reloadMetrics = useCallback(() => {
+    if (selectedId == null) return;
+    getSystemMetrics(selectedId).then(setMetrics).catch(() => {});
+  }, [selectedId]);
 
   // ── Load metrics for selected system ─────────────────────────────────────
 
@@ -2094,6 +2128,7 @@ export default function MetricsSection() {
                   key={selectedMetricId}
                   metricId={selectedMetricId}
                   onClose={() => setSelectedMetricId(null)}
+                  onSaved={reloadMetrics}
                 />
               </div>
             )}

@@ -102,9 +102,8 @@ export default function Sidebar() {
                 }`}
                 strokeWidth={active ? 2.5 : 2}
               />
-              <span className="flex-1 min-w-0">
-                {label}{ai && <AiBadge />}
-              </span>
+              <span className="flex-1 min-w-0 truncate">{label}</span>
+              {ai && <AiBadge />}
               <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
                 ⠿
               </span>

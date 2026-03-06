@@ -10,7 +10,7 @@ import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
 import FileDropZone from "@/components/FileDropZone";
-import { useGeneration, type Case } from "@/lib/useGeneration";
+import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import { parseFile, addEtalon } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -45,18 +45,29 @@ interface HistEntry {
   caseCount: number;
   cases: Case[];
   qaDoc: string;
-  requirement?: string;  // сохраняется начиная с этой версии
+  requirement?: string;
+  exportResult?: ExportResult;
 }
 
-function casesToMarkdown(cases: Case[]): string {
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/```[\w]*\n?/g, "").replace(/```/g, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .trim();
+}
+
+function casesToText(cases: Case[]): string {
   return cases.map((c, i) => {
     const lines = [
-      `## ${i + 1}. ${c.name}`,
+      `${i + 1}. ${c.name}`,
       `Приоритет: ${c.priority} | Тип: ${c.case_type}`,
       "",
     ];
     c.steps.forEach((s, si) => {
-      lines.push(`### Шаг ${si + 1}: ${s.action}`);
+      lines.push(`Шаг ${si + 1}: ${s.action}`);
       if (s.test_data) lines.push(`Тест-данные: ${s.test_data}`);
       if (s.ui)        lines.push(`UI: ${s.ui}`);
       if (s.api)       lines.push(`API: ${s.api}`);
@@ -65,6 +76,14 @@ function casesToMarkdown(cases: Case[]): string {
     });
     return lines.join("\n");
   }).join("\n---\n\n");
+}
+
+function downloadBlob(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
 }
 
 function loadHistory(): HistEntry[] {
@@ -448,6 +467,8 @@ export default function GenerationSection() {
   const [exportBackStage, setExportBackStage] = useState<Stage>("review");
   const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[], requirement: "" });
   const historySavedRef = useRef(false);
+  const currentHistIdRef = useRef<string | null>(null);
+  const exportingHistIdRef = useRef<string | null>(null);
 
   const saveHistEntry = useCallback((entry: HistEntry) => {
     setHistEntries(prev => {
@@ -477,9 +498,9 @@ export default function GenerationSection() {
     setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
     try {
       await addEtalon({
-        req_text: entry.requirement ?? entry.qaDoc ?? "",
-        tc_text: casesToMarkdown(entry.cases),
-        qa_doc: entry.qaDoc,
+        req_text: stripMarkdown(entry.requirement ?? entry.qaDoc ?? ""),
+        tc_text: casesToText(entry.cases),
+        qa_doc: stripMarkdown(entry.qaDoc),
         platform: entry.platform.join(", "),
         feature: entry.feature,
       });
@@ -494,6 +515,18 @@ export default function GenerationSection() {
 
   const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, exporting, reset } =
     useGeneration();
+
+  // Сохраняем exportResult в запись истории, когда экспорт завершён
+  useEffect(() => {
+    if (!exportResult || !exportingHistIdRef.current) return;
+    const hid = exportingHistIdRef.current;
+    setHistEntries(prev => {
+      const next = prev.map(e => e.id === hid ? { ...e, exportResult } : e);
+      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exportResult]);
 
   // Restore stage immediately (before paint) when returning to this page
   useLayoutEffect(() => {
@@ -532,8 +565,10 @@ export default function GenerationSection() {
       if (!historySavedRef.current && cases.length > 0) {
         historySavedRef.current = true;
         const meta = genMetaRef.current;
+        const histId = Date.now().toString();
+        currentHistIdRef.current = histId;
         saveHistEntry({
-          id: Date.now().toString(),
+          id: histId,
           timestamp: Date.now(),
           depth: meta.depth,
           feature: meta.feature,
@@ -823,12 +858,12 @@ export default function GenerationSection() {
                 className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
                   text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 group"
               >
-                <RotateCcw className="w-3.5 h-3.5 transition-transform group-hover:-rotate-90 duration-300" />
-                Сбросить
+                <Plus className="w-3.5 h-3.5" />
+                Новая генерация
               </button>
               {cases.length > 0 && (
                 <button
-                  onClick={() => { setExportSource(null); setExportBackStage("review"); setStage("export"); }}
+                  onClick={() => { exportingHistIdRef.current = currentHistIdRef.current; setExportSource(null); setExportBackStage("review"); setStage("export"); }}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
                     hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
                 >
@@ -904,7 +939,7 @@ export default function GenerationSection() {
             </div>
             {histEntries.length > 0 && (
               <button
-                onClick={clearHistory}
+                onClick={() => { if (window.confirm("Удалить всю историю генераций?")) clearHistory(); }}
                 className="text-xs text-text-muted hover:text-red-500 transition-colors"
               >
                 Очистить всё
@@ -942,6 +977,24 @@ export default function GenerationSection() {
                               {entry.platform.join(", ")}
                               {entry.project ? ` · ${entry.project}` : ""}
                             </p>
+                            {entry.exportResult && (
+                              <div className="flex items-center gap-2 mt-1" onClick={e => e.stopPropagation()}>
+                                <button onClick={() => downloadBlob(entry.exportResult!.xml, `cases_${entry.id}.xml`, "application/xml")}
+                                  className="text-[11px] font-medium text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 transition-colors">
+                                  <Download className="w-2.5 h-2.5" /> XML
+                                </button>
+                                <span className="text-text-muted/40">·</span>
+                                <button onClick={() => downloadBlob(entry.exportResult!.csv, `cases_${entry.id}.csv`, "text/csv")}
+                                  className="text-[11px] font-medium text-emerald-500 hover:text-emerald-700 flex items-center gap-0.5 transition-colors">
+                                  <Download className="w-2.5 h-2.5" /> CSV
+                                </button>
+                                <span className="text-text-muted/40">·</span>
+                                <button onClick={() => downloadBlob(entry.exportResult!.md, `cases_${entry.id}.md`, "text/markdown")}
+                                  className="text-[11px] font-medium text-violet-500 hover:text-violet-700 flex items-center gap-0.5 transition-colors">
+                                  <Download className="w-2.5 h-2.5" /> MD
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.timestamp)}</span>
                           {/* Загрузить в эталон */}
@@ -973,7 +1026,7 @@ export default function GenerationSection() {
                             );
                           })()}
                           <button
-                            onClick={e => { e.stopPropagation(); deleteHistEntry(entry.id); }}
+                            onClick={e => { e.stopPropagation(); if (window.confirm("Удалить эту запись из истории?")) deleteHistEntry(entry.id); }}
                             className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1006,6 +1059,7 @@ export default function GenerationSection() {
             {histView.cases.length > 0 && (
               <button
                 onClick={() => {
+                  exportingHistIdRef.current = histView.id;
                   setExportSource({ cases: histView.cases, qaDoc: histView.qaDoc });
                   setExportBackStage("histitem");
                   setStage("export");
@@ -1088,6 +1142,17 @@ export default function GenerationSection() {
       {/* ── EXPORT ── */}
       {stage === "export" && (
         <div className="p-6">
+          {exportBackStage !== "histitem" && (
+            <div className="max-w-2xl flex justify-end mb-2">
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors"
+              >
+                <Plus className="w-3 h-3" />
+                Новая генерация
+              </button>
+            </div>
+          )}
           <div className="max-w-2xl">
             <ExportPanel
               cases={exportSource?.cases ?? cases}

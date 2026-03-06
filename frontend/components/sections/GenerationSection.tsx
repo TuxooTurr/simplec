@@ -4,14 +4,14 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
-  StopCircle, History, ChevronLeft,
+  StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
 import FileDropZone from "@/components/FileDropZone";
 import { useGeneration, type Case } from "@/lib/useGeneration";
-import { parseFile } from "@/lib/api";
+import { parseFile, addEtalon } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
@@ -45,6 +45,26 @@ interface HistEntry {
   caseCount: number;
   cases: Case[];
   qaDoc: string;
+  requirement?: string;  // сохраняется начиная с этой версии
+}
+
+function casesToMarkdown(cases: Case[]): string {
+  return cases.map((c, i) => {
+    const lines = [
+      `## ${i + 1}. ${c.name}`,
+      `Приоритет: ${c.priority} | Тип: ${c.case_type}`,
+      "",
+    ];
+    c.steps.forEach((s, si) => {
+      lines.push(`### Шаг ${si + 1}: ${s.action}`);
+      if (s.test_data) lines.push(`Тест-данные: ${s.test_data}`);
+      if (s.ui)        lines.push(`UI: ${s.ui}`);
+      if (s.api)       lines.push(`API: ${s.api}`);
+      if (s.db)        lines.push(`DB: ${s.db}`);
+      lines.push("");
+    });
+    return lines.join("\n");
+  }).join("\n---\n\n");
 }
 
 function loadHistory(): HistEntry[] {
@@ -426,7 +446,7 @@ export default function GenerationSection() {
   const [histFromStage, setHistFromStage] = useState<Stage>("input");
   const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string } | null>(null);
   const [exportBackStage, setExportBackStage] = useState<Stage>("review");
-  const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[] });
+  const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[], requirement: "" });
   const historySavedRef = useRef(false);
 
   const saveHistEntry = useCallback((entry: HistEntry) => {
@@ -448,6 +468,27 @@ export default function GenerationSection() {
   const clearHistory = useCallback(() => {
     setHistEntries([]);
     try { localStorage.removeItem("st_gen_history"); } catch {}
+  }, []);
+
+  const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+
+  const handleLoadAsEtalon = useCallback(async (entry: HistEntry, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
+    try {
+      await addEtalon({
+        req_text: entry.requirement ?? entry.qaDoc ?? "",
+        tc_text: casesToMarkdown(entry.cases),
+        qa_doc: entry.qaDoc,
+        platform: entry.platform.join(", "),
+        feature: entry.feature,
+      });
+      setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
+      setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
+    } catch {
+      setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
+      setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
+    }
   }, []);
   // ── End history ────────────────────────────────────────────────
 
@@ -504,6 +545,7 @@ export default function GenerationSection() {
           caseCount: cases.length,
           cases,
           qaDoc,
+          requirement: meta.requirement,
         });
       }
     }
@@ -519,7 +561,7 @@ export default function GenerationSection() {
     }
     const text = requirement.trim();
     if (!text) return;
-    genMetaRef.current = { feature, project, team, ke, depth, platform };
+    genMetaRef.current = { feature, project, team, ke, depth, platform, requirement: text };
     historySavedRef.current = false;
     start({ requirement: text, feature, depth, provider, platform: platform.join(", ") });
   };
@@ -902,6 +944,34 @@ export default function GenerationSection() {
                             </p>
                           </div>
                           <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.timestamp)}</span>
+                          {/* Загрузить в эталон */}
+                          {(() => {
+                            const st = etalonStatus[entry.id];
+                            if (st === "loading") return (
+                              <span className="flex-shrink-0 p-0.5 text-text-muted">
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              </span>
+                            );
+                            if (st === "done") return (
+                              <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              </span>
+                            );
+                            if (st === "error") return (
+                              <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
+                                <XCircle className="w-3.5 h-3.5" />
+                              </span>
+                            );
+                            return (
+                              <button
+                                onClick={e => handleLoadAsEtalon(entry, e)}
+                                title="Загрузить в эталон"
+                                className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
+                              >
+                                <BookmarkPlus className="w-3.5 h-3.5" />
+                              </button>
+                            );
+                          })()}
                           <button
                             onClick={e => { e.stopPropagation(); deleteHistEntry(entry.id); }}
                             className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"

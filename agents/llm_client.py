@@ -91,19 +91,35 @@ class LLMClient:
             return self._chat_lmstudio(messages, temperature, max_tokens)
 
     def _chat_gigachat(self, messages, temperature, max_tokens):
+        import time
         from gigachat.models import Chat, Messages
         chat = Chat(
             messages=[Messages(role=m.role, content=m.content) for m in messages],
             temperature=temperature,
             max_tokens=max_tokens
         )
-        response = self.client.chat(chat)
-        return LLMResponse(
-            content=response.choices[0].message.content,
-            model=response.model,
-            usage={},
-            finish_reason=str(response.choices[0].finish_reason or "stop"),
-        )
+        _TRANSIENT = ("peer closed", "incomplete chunked", "remoteprotocol",
+                      "remote protocol", "connection reset", "server disconnected",
+                      "incomplete read", "chunked encoding")
+        last_err = None
+        for attempt in range(3):
+            try:
+                response = self.client.chat(chat)
+                return LLMResponse(
+                    content=response.choices[0].message.content,
+                    model=response.model,
+                    usage={},
+                    finish_reason=str(response.choices[0].finish_reason or "stop"),
+                )
+            except Exception as e:
+                emsg = str(e).lower()
+                if any(x in emsg for x in _TRANSIENT):
+                    last_err = e
+                    if attempt < 2:
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                raise
+        raise last_err
 
     def _chat_deepseek(self, messages, temperature, max_tokens):
         payload = {
@@ -175,7 +191,10 @@ class LLMClient:
             return True, "Ой! Превышен лимит запросов к LLM-провайдеру. Подождите немного или смените провайдера."
         if any(x in msg for x in ("connectionerror", "connection refused", "connection error",
                                    "econnrefused", "timeout", "timed out", "read timeout",
-                                   "connect timeout", "connection reset")):
+                                   "connect timeout", "connection reset",
+                                   "peer closed connection", "incomplete chunked read",
+                                   "remoteprotocol", "remote protocol", "server disconnected",
+                                   "chunked encoding", "incomplete read")):
             return True, "Ой! Не удалось подключиться к LLM-провайдеру. Проверьте настройки соединения или смените провайдера."
         if "500" in msg or "502" in msg or "503" in msg or "504" in msg or "bad gateway" in msg or "service unavailable" in msg:
             return True, "Ой! LLM-провайдер временно недоступен. Попробуйте позже или смените провайдера."

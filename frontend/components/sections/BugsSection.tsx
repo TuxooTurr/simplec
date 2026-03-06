@@ -305,9 +305,9 @@ export default function BugsSection() {
           {histEntries.length > 0 && (
             <button
               onClick={() => setStage("history")}
-              className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors flex-shrink-0 mt-1"
+              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
             >
-              <History className="w-4 h-4" />
+              <History className="w-3.5 h-3.5" />
               История ({histEntries.length})
             </button>
           )}

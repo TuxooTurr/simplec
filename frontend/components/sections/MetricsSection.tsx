@@ -896,15 +896,15 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
           )}
         </div>
       </div>
-      {metric.isActive && metric.lastSentHealth != null && (
-        <HealthBadge health={metric.lastSentHealth} />
-      )}
       {metric.isActive && (
-        <div className="shrink-0 flex items-center gap-1.5">
+        <div className="shrink-0 flex items-center gap-1.5 self-center">
           {metric.thresholdLines.includes(0) && (
             <span className="whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded border bg-blue-50 text-blue-500 border-blue-200">
               baseline
             </span>
+          )}
+          {metric.lastSentHealth != null && (
+            <HealthBadge health={metric.lastSentHealth} />
           )}
           <div className="flex flex-col items-end gap-0.5 mr-0.5">
             <div className="text-green-400 opacity-70">
@@ -913,11 +913,11 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
                 thresholds={metric.thresholdLines}
               />
             </div>
-          {lastVal != null && (
-            <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">
-              {lastVal}{metric.metricUnit ? ` ${metric.metricUnit}` : ""}
-            </span>
-          )}
+            {lastVal != null && (
+              <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">
+                {lastVal}{metric.metricUnit ? ` ${metric.metricUnit}` : ""}
+              </span>
+            )}
           </div>
         </div>
       )}

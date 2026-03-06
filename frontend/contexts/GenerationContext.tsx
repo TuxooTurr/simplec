@@ -71,6 +71,7 @@ interface GenerationCtx {
   cases: Case[];
   qaDoc: string;
   exportResult: ExportResult | null;
+  exporting: boolean;
   start: (params: {
     requirement: string;
     feature: string;
@@ -102,6 +103,7 @@ const GenerationContext = createContext<GenerationCtx>({
   cases: [],
   qaDoc: "",
   exportResult: null,
+  exporting: false,
   start: async () => {},
   exportCases: async () => {},
   cancel: () => {},
@@ -117,6 +119,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
   const [cases, setCases] = useState<Case[]>([]);
   const [qaDoc, setQaDoc] = useState("");
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exporting, setExporting] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   const getWs = useCallback((): Promise<WebSocket> => {
@@ -216,19 +219,24 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
 
   const exportCases = useCallback(
     async (params: ExportParams) => {
+      setExporting(true);
+      setExportResult(null);
       try {
         const ws = await getWs();
         ws.onmessage = (event) => {
           const msg = JSON.parse(event.data as string);
           if (msg.type === "export_done") {
             setExportResult({ xml: msg.xml, csv: msg.csv, md: msg.md });
+            setExporting(false);
           } else if (msg.type === "error") {
             addEvent({ type: "error", message: msg.message, llm_error: msg.llm_error ?? false });
+            setExporting(false);
           }
         };
         ws.send(JSON.stringify({ action: "export", ...params }));
       } catch (err) {
         addEvent({ type: "error", message: String(err) });
+        setExporting(false);
       }
     },
     [getWs, addEvent]
@@ -259,7 +267,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
 
   return (
     <GenerationContext.Provider
-      value={{ state, events, progress, cases, qaDoc, exportResult, start, exportCases, cancel, reset }}
+      value={{ state, events, progress, cases, qaDoc, exportResult, exporting, start, exportCases, cancel, reset }}
     >
       {children}
     </GenerationContext.Provider>

@@ -370,7 +370,7 @@ export default function GenerationSection() {
   // Shake animation state for settings button
   const [settingsShake, setSettingsShake] = useState(false);
 
-  const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, reset } =
+  const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, exporting, reset } =
     useGeneration();
 
   // Restore stage immediately (before paint) when returning to this page
@@ -728,6 +728,7 @@ export default function GenerationSection() {
               qaDoc={qaDoc}
               onExport={exportCases}
               result={exportResult}
+              exporting={exporting}
               onBack={() => setStage("review")}
               initialProject={project}
               initialTeam={team}

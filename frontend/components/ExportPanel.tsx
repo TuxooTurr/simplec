@@ -10,6 +10,7 @@ interface ExportPanelProps {
   qaDoc: string;
   onExport: (params: ExportPanelParams) => void;
   result: ExportResult | null;
+  exporting?: boolean;
   onBack: () => void;
   initialProject?: string;
   initialTeam?: string;
@@ -46,7 +47,7 @@ const DOWNLOAD_BUTTONS = [
   { key: "md",  label: "Markdown",    mime: "text/markdown",    ext: "md",  Icon: FileText,  color: "text-violet-600 border-violet-200 hover:bg-violet-50" },
 ] as const;
 
-export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, initialProject, initialTeam, initialSystem, initialCritRegress }: ExportPanelProps) {
+export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack, initialProject, initialTeam, initialSystem, initialCritRegress }: ExportPanelProps) {
   const { provider } = useWorkspace();
   const [project, setProject]       = useState(initialProject ?? "SBER911");
   const [system, setSystem]         = useState(initialSystem ?? "");
@@ -55,12 +56,9 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
   const [folder, setFolder]         = useState("Новая ТМ");
   const [useLlm, setUseLlm]         = useState(false);
   const [critRegress, setCritRegress] = useState(initialCritRegress ?? false);
-  const [loading, setLoading]       = useState(false);
 
-  const handleExport = async () => {
-    setLoading(true);
+  const handleExport = () => {
     onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider, crit_regress: critRegress });
-    setLoading(false);
   };
 
   const ts = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
@@ -71,7 +69,8 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
       <div className="flex items-center gap-3">
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group"
+          disabled={exporting}
+          className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group disabled:opacity-40 disabled:pointer-events-none"
         >
           <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
           Назад
@@ -146,12 +145,12 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, onBack, in
 
         <button
           onClick={handleExport}
-          disabled={loading}
+          disabled={exporting}
           className="mt-4 w-full flex items-center justify-center gap-2 bg-primary text-white
             rounded-lg py-2.5 text-sm font-medium hover:bg-primary-dark transition-all duration-150
             disabled:opacity-50 active:scale-[0.99]"
         >
-          {loading ? (
+          {exporting ? (
             <><Loader2 className="w-4 h-4 animate-spin" /> Генерирую XML...</>
           ) : (
             <><Download className="w-4 h-4" /> Сгенерировать XML</>

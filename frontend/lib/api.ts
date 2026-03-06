@@ -246,3 +246,17 @@ export async function formatBug(params: {
     body: JSON.stringify({ provider: "gigachat", ...params }),
   });
 }
+
+// ─── Autotest generation ────────────────────────────────────────────────────
+
+export async function generateAutotest(params: {
+  cases: string;
+  feature?: string;
+  provider?: string;
+}): Promise<{ code: string }> {
+  const body = new FormData();
+  body.append("cases", params.cases);
+  if (params.feature) body.append("feature", params.feature);
+  if (params.provider) body.append("provider", params.provider);
+  return fetchJson("/api/autotests/generate", { method: "POST", body });
+}

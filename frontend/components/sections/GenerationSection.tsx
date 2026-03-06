@@ -4,7 +4,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
-  StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle,
+  StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
@@ -867,14 +867,30 @@ export default function GenerationSection() {
                 Новая генерация
               </button>
               {cases.length > 0 && (
-                <button
-                  onClick={() => { exportingHistIdRef.current = currentHistIdRef.current; setExportSource(null); setExportBackStage("review"); setStage("export"); }}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
-                    hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Экспорт
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      const entry = histEntries[0];
+                      const text = entry?.exportResult?.xml ?? casesToText(cases);
+                      sessionStorage.setItem("st_automodel_prefill",
+                        JSON.stringify({ text, feature: entry?.feature ?? feature }));
+                      window.location.href = "/auto-model";
+                    }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
+                      text-text-muted hover:bg-gray-50 hover:text-violet-600 transition-all duration-150"
+                  >
+                    <FlaskConical className="w-3.5 h-3.5" />
+                    В автотесты
+                  </button>
+                  <button
+                    onClick={() => { exportingHistIdRef.current = currentHistIdRef.current; setExportSource(null); setExportBackStage("review"); setStage("export"); }}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                      hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Экспорт
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -1062,19 +1078,34 @@ export default function GenerationSection() {
               <h1 className="text-lg font-bold text-text-main truncate">{histView.feature || "Без названия"}</h1>
             </div>
             {histView.cases.length > 0 && (
-              <button
-                onClick={() => {
-                  exportingHistIdRef.current = histView.id;
-                  setExportSource({ cases: histView.cases, qaDoc: histView.qaDoc });
-                  setExportBackStage("histitem");
-                  setStage("export");
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
-                  hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm flex-shrink-0"
-              >
-                <Download className="w-3.5 h-3.5" />
-                Экспорт
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    const text = histView.exportResult?.xml ?? casesToText(histView.cases);
+                    sessionStorage.setItem("st_automodel_prefill",
+                      JSON.stringify({ text, feature: histView.feature }));
+                    window.location.href = "/auto-model";
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
+                    text-text-muted hover:bg-gray-50 hover:text-violet-600 transition-all duration-150 flex-shrink-0"
+                >
+                  <FlaskConical className="w-3.5 h-3.5" />
+                  В автотесты
+                </button>
+                <button
+                  onClick={() => {
+                    exportingHistIdRef.current = histView.id;
+                    setExportSource({ cases: histView.cases, qaDoc: histView.qaDoc });
+                    setExportBackStage("histitem");
+                    setStage("export");
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                    hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm flex-shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Экспорт
+                </button>
+              </>
             )}
           </div>
 

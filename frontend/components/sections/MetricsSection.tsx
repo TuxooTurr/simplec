@@ -138,29 +138,6 @@ function PatternSparkline({
   );
 }
 
-// ── Threshold Dots ────────────────────────────────────────────────────────────
-
-// type 0 = baseline (синий), 1-5 = health-типы порогов
-const THRESHOLD_DOT_COLOR: Record<number, string> = {
-  0: "bg-blue-500",
-  1: "bg-green-400",
-  2: "bg-lime-400",
-  3: "bg-yellow-400",
-  4: "bg-orange-400",
-  5: "bg-red-500",
-};
-
-function ThresholdDots({ lines }: { lines: number[] }) {
-  if (!lines.length) return null;
-  return (
-    <div className="flex flex-col gap-0.5 items-center justify-center shrink-0 self-center">
-      {lines.map((ht, i) => (
-        <div key={i} className={`w-2 h-1 rounded-sm ${THRESHOLD_DOT_COLOR[ht] ?? "bg-gray-300"}`} />
-      ))}
-    </div>
-  );
-}
-
 // ── Helper: Toggle ────────────────────────────────────────────────────────────
 
 function Toggle({ label, value, onChange }: { label: string; value: boolean; onChange: (v: boolean) => void }) {
@@ -919,25 +896,29 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
           )}
         </div>
       </div>
-      {metric.thresholdLines.length > 0 && (
-        <ThresholdDots lines={metric.thresholdLines} />
-      )}
       {metric.isActive && metric.lastSentHealth != null && (
         <HealthBadge health={metric.lastSentHealth} />
       )}
       {metric.isActive && (
-        <div className="shrink-0 flex flex-col items-end gap-0.5 mr-0.5">
-          <div className="text-green-400 opacity-70">
-            <PatternSparkline
-              pattern={metric.valuePattern ?? "random"}
-              thresholds={metric.thresholdLines}
-            />
-          </div>
+        <div className="shrink-0 flex items-center gap-1.5">
+          {metric.thresholdLines.includes(0) && (
+            <span className="whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded border bg-blue-50 text-blue-500 border-blue-200">
+              baseline
+            </span>
+          )}
+          <div className="flex flex-col items-end gap-0.5 mr-0.5">
+            <div className="text-green-400 opacity-70">
+              <PatternSparkline
+                pattern={metric.valuePattern ?? "random"}
+                thresholds={metric.thresholdLines}
+              />
+            </div>
           {lastVal != null && (
             <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">
               {lastVal}{metric.metricUnit ? ` ${metric.metricUnit}` : ""}
             </span>
           )}
+          </div>
         </div>
       )}
       <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">

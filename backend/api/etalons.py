@@ -52,6 +52,7 @@ def list_etalons(platform: str = "", feature: str = "", limit: int = 50, offset:
                 "qa_doc": meta.get("qa_doc", "") or None,
                 "platform": meta.get("platform", ""),
                 "feature": meta.get("feature", ""),
+                "name": meta.get("name", ""),
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
@@ -71,6 +72,7 @@ async def add_etalon(
     qa_doc: str = Form(""),
     platform: str = Form(""),
     feature: str = Form(""),
+    name: str = Form(""),
     req_file: Optional[UploadFile] = File(None),
     tc_file: Optional[UploadFile] = File(None),
 ):
@@ -98,6 +100,7 @@ async def add_etalon(
             qa_doc=qa_doc,
             platform=platform,
             feature=feature,
+            name=name,
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:
@@ -141,6 +144,7 @@ def list_autotests(feature: str = "", limit: int = 50, offset: int = 0):
                 "xml_text":  docs[i] if i < len(docs) else "",
                 "java_text": meta.get("java_text", ""),
                 "feature":   meta.get("feature", ""),
+                "name":      meta.get("name", ""),
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
@@ -152,6 +156,7 @@ async def add_autotest(
     xml_text:  str = Form(""),
     java_text: str = Form(""),
     feature:   str = Form(""),
+    name:      str = Form(""),
     xml_file:  Optional[UploadFile] = File(None),
     java_file: Optional[UploadFile] = File(None),
 ):
@@ -177,6 +182,7 @@ async def add_autotest(
             xml_text=xml_text,
             java_text=java_text,
             feature=feature,
+            name=name,
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:
@@ -220,6 +226,7 @@ def list_defects(feature: str = "", limit: int = 50, offset: int = 0):
                 "description": docs[i] if i < len(docs) else "",
                 "defect_body": meta.get("defect_body", ""),
                 "feature":     meta.get("feature", ""),
+                "name":        meta.get("name", ""),
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
@@ -231,6 +238,7 @@ async def add_defect(
     description: str = Form(""),
     defect_body: str = Form(""),
     feature:     str = Form(""),
+    name:        str = Form(""),
 ):
     """Добавить пару описание дефекта → тело дефекта."""
     if not description or not defect_body:
@@ -244,6 +252,7 @@ async def add_defect(
             description=description,
             defect_body=defect_body,
             feature=feature,
+            name=name,
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:

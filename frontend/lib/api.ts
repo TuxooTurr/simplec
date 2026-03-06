@@ -55,6 +55,7 @@ export interface Etalon {
   qa_doc?: string;
   platform: string;
   feature: string;
+  name: string;
 }
 
 export async function listEtalons(params?: {
@@ -77,6 +78,7 @@ export async function addEtalon(data: {
   qa_doc?: string;
   platform?: string;
   feature?: string;
+  name?: string;
 }): Promise<{ id: string; status: string }> {
   const body = new FormData();
   body.append("req_text", data.req_text);
@@ -84,6 +86,7 @@ export async function addEtalon(data: {
   if (data.qa_doc) body.append("qa_doc", data.qa_doc);
   if (data.platform) body.append("platform", data.platform);
   if (data.feature) body.append("feature", data.feature);
+  if (data.name) body.append("name", data.name);
   return fetchJson("/api/etalons", { method: "POST", body });
 }
 
@@ -102,6 +105,7 @@ export interface Autotest {
   xml_text: string;
   java_text: string;
   feature: string;
+  name: string;
 }
 
 export async function listAutotests(params?: {
@@ -118,11 +122,13 @@ export async function addAutotest(data: {
   xml_text: string;
   java_text: string;
   feature?: string;
+  name?: string;
 }): Promise<{ id: string; status: string }> {
   const body = new FormData();
   body.append("xml_text", data.xml_text);
   body.append("java_text", data.java_text);
   if (data.feature) body.append("feature", data.feature);
+  if (data.name) body.append("name", data.name);
   return fetchJson("/api/autotests", { method: "POST", body });
 }
 
@@ -137,6 +143,7 @@ export interface Defect {
   description: string;
   defect_body: string;
   feature: string;
+  name: string;
 }
 
 export async function listDefects(params?: {
@@ -153,11 +160,13 @@ export async function addDefect(data: {
   description: string;
   defect_body: string;
   feature?: string;
+  name?: string;
 }): Promise<{ id: string; status: string }> {
   const body = new FormData();
   body.append("description", data.description);
   body.append("defect_body", data.defect_body);
   if (data.feature) body.append("feature", data.feature);
+  if (data.name) body.append("name", data.name);
   return fetchJson("/api/defects", { method: "POST", body });
 }
 

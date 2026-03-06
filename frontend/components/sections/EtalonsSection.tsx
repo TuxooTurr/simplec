@@ -71,6 +71,7 @@ function TestCasesTab() {
 
   const [addPlatforms, setAddPlatforms] = useState<string[]>([]);
   const [addFeature, setAddFeature]     = useState("");
+  const [addName, setAddName]           = useState("");
   const [addLoading, setAddLoading]     = useState(false);
 
   const load = async (isRefresh = false) => {
@@ -111,9 +112,10 @@ function TestCasesTab() {
         qa_doc: qaText.trim() || undefined,
         platform: addPlatforms.join(", "),
         feature: addFeature,
+        name: addName,
       });
       setReqText(""); setQaText(""); setTcText("");
-      setAddPlatforms([]); setAddFeature("");
+      setAddPlatforms([]); setAddFeature(""); setAddName("");
       setShowAdd(false);
       setReqMode("text"); setQaMode("text"); setTcMode("text");
       await load();
@@ -184,6 +186,12 @@ function TestCasesTab() {
               className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
               <X className="w-4 h-4" />
             </button>
+          </div>
+
+          <div className="mb-3">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>Название <span className="normal-case font-normal text-text-muted/60">(необязательно)</span></label>
+            <input value={addName} onChange={(e) => setAddName(e.target.value)}
+              className={INPUT_CLS} placeholder="Например: Авторизация через СберID..." />
           </div>
 
           <div className="mb-3">
@@ -325,21 +333,26 @@ function TestCasesTab() {
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                   className="flex-1 text-left min-w-0">
                   <p className="text-sm font-medium text-text-main truncate">
-                    {item.req_text.slice(0, 80)}{item.req_text.length > 80 ? "..." : ""}
+                    {item.name || item.req_text.slice(0, 80) + (item.req_text.length > 80 ? "..." : "")}
                   </p>
                   <div className="flex items-center gap-3 mt-0.5">
+                    {item.name && (
+                      <span className="text-xs text-text-muted truncate max-w-[240px]">
+                        {item.req_text.slice(0, 60)}{item.req_text.length > 60 ? "…" : ""}
+                      </span>
+                    )}
                     {item.platform && (
-                      <span className="flex items-center gap-1 text-xs text-text-muted">
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
                         <Smartphone className="w-3 h-3" />{item.platform}
                       </span>
                     )}
                     {item.feature && (
-                      <span className="flex items-center gap-1 text-xs text-text-muted">
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
                         <Tag className="w-3 h-3" />{item.feature}
                       </span>
                     )}
                     {item.qa_doc && (
-                      <span className="flex items-center gap-1 text-xs text-indigo-400">
+                      <span className="flex items-center gap-1 text-xs text-indigo-400 flex-shrink-0">
                         <FileText className="w-3 h-3" />QA doc
                       </span>
                     )}
@@ -408,6 +421,7 @@ function AutotestsTab() {
   const [javaFileLoading, setJavaFileLoading] = useState(false);
 
   const [addFeature, setAddFeature] = useState("");
+  const [addName, setAddName]       = useState("");
   const [addLoading, setAddLoading] = useState(false);
 
   const load = async (isRefresh = false) => {
@@ -438,8 +452,8 @@ function AutotestsTab() {
     if (!xmlText.trim() || !javaText.trim()) return;
     setAddLoading(true);
     try {
-      await addAutotest({ xml_text: xmlText, java_text: javaText, feature: addFeature });
-      setXmlText(""); setJavaText(""); setAddFeature("");
+      await addAutotest({ xml_text: xmlText, java_text: javaText, feature: addFeature, name: addName });
+      setXmlText(""); setJavaText(""); setAddFeature(""); setAddName("");
       setShowAdd(false); setXmlMode("text"); setJavaMode("text");
       await load();
     } catch (err) { alert("Ошибка: " + String(err)); }
@@ -498,6 +512,12 @@ function AutotestsTab() {
               className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
               <X className="w-4 h-4" />
             </button>
+          </div>
+
+          <div className="mb-3">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>Название <span className="normal-case font-normal text-text-muted/60">(необязательно)</span></label>
+            <input value={addName} onChange={(e) => setAddName(e.target.value)}
+              className={INPUT_CLS} placeholder="Например: Авторизация — позитивный сценарий..." />
           </div>
 
           <div className="mb-4">
@@ -597,7 +617,7 @@ function AutotestsTab() {
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                   className="flex-1 text-left min-w-0">
                   <p className="text-sm font-medium text-text-main truncate">
-                    {item.feature || "Автотест"}
+                    {item.name || item.feature || "Автотест"}
                   </p>
                   <p className="text-xs text-text-muted font-mono truncate mt-0.5">
                     {item.xml_text.slice(0, 70)}{item.xml_text.length > 70 ? "…" : ""}
@@ -655,6 +675,7 @@ function DefectsTab() {
   const [description, setDescription] = useState("");
   const [defectBody, setDefectBody]   = useState("");
   const [addFeature, setAddFeature]   = useState("");
+  const [addName, setAddName]         = useState("");
   const [addLoading, setAddLoading]   = useState(false);
 
   const load = async (isRefresh = false) => {
@@ -675,8 +696,8 @@ function DefectsTab() {
     if (!description.trim() || !defectBody.trim()) return;
     setAddLoading(true);
     try {
-      await addDefect({ description, defect_body: defectBody, feature: addFeature });
-      setDescription(""); setDefectBody(""); setAddFeature("");
+      await addDefect({ description, defect_body: defectBody, feature: addFeature, name: addName });
+      setDescription(""); setDefectBody(""); setAddFeature(""); setAddName("");
       setShowAdd(false);
       await load();
     } catch (err) { alert("Ошибка: " + String(err)); }
@@ -735,6 +756,12 @@ function DefectsTab() {
               className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
               <X className="w-4 h-4" />
             </button>
+          </div>
+
+          <div className="mb-3">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>Название <span className="normal-case font-normal text-text-muted/60">(необязательно)</span></label>
+            <input value={addName} onChange={(e) => setAddName(e.target.value)}
+              className={INPUT_CLS} placeholder="Например: Ошибка при оплате картой..." />
           </div>
 
           <div className="mb-4">
@@ -801,15 +828,20 @@ function DefectsTab() {
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
                   className="flex-1 text-left min-w-0">
                   <p className="text-sm font-medium text-text-main truncate">
-                    {item.description.slice(0, 80)}{item.description.length > 80 ? "..." : ""}
+                    {item.name || item.description.slice(0, 80) + (item.description.length > 80 ? "..." : "")}
                   </p>
                   <div className="flex items-center gap-3 mt-0.5">
+                    {item.name && (
+                      <span className="text-xs text-text-muted truncate max-w-[240px]">
+                        {item.description.slice(0, 60)}{item.description.length > 60 ? "…" : ""}
+                      </span>
+                    )}
                     {item.feature && (
-                      <span className="flex items-center gap-1 text-xs text-text-muted">
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
                         <Tag className="w-3 h-3" />{item.feature}
                       </span>
                     )}
-                    <span className="text-xs text-rose-500 flex items-center gap-1">
+                    <span className="text-xs text-rose-500 flex items-center gap-1 flex-shrink-0">
                       <Bug className="w-3 h-3" /> дефект
                     </span>
                   </div>

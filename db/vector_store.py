@@ -113,12 +113,13 @@ class VectorStore:
         return self._format_results(results)
 
     def add_pair(self, pair_id: str, requirement_text: str, test_case_xml: str,
-                 platform: str = "", feature: str = "", tags: List[str] = None,
-                 qa_doc: str = ""):
+                 platform: str = "", feature: str = "", name: str = "",
+                 tags: List[str] = None, qa_doc: str = ""):
         metadata = {
             "test_case_xml": test_case_xml,
             "platform": platform,
             "feature": feature,
+            "name": name,
             "tags": json.dumps(tags or [], ensure_ascii=False),
             "qa_doc": qa_doc or "",
         }
@@ -135,11 +136,12 @@ class VectorStore:
     # ── Автотесты ─────────────────────────────────────────────────────────────
 
     def add_autotest_pair(self, pair_id: str, xml_text: str, java_text: str,
-                          feature: str = ""):
+                          feature: str = "", name: str = ""):
         """Пара: XML мануальный кейс (документ) → Java автотест (metadata)."""
         metadata = {
             "java_text": java_text,
             "feature": feature,
+            "name": name,
         }
         self.autotest_pairs.upsert(ids=[pair_id], documents=[xml_text], metadatas=[metadata])
 
@@ -154,11 +156,12 @@ class VectorStore:
     # ── Дефекты ───────────────────────────────────────────────────────────────
 
     def add_defect_pair(self, pair_id: str, description: str, defect_body: str,
-                        feature: str = ""):
+                        feature: str = "", name: str = ""):
         """Пара: описание дефекта (документ) → тело дефекта (metadata)."""
         metadata = {
             "defect_body": defect_body,
             "feature": feature,
+            "name": name,
         }
         self.defect_pairs.upsert(ids=[pair_id], documents=[description], metadatas=[metadata])
 

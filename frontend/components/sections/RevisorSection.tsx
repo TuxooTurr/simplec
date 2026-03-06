@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Scale, Search, Settings, RefreshCw, X, AlertCircle } from "lucide-react";
 import {
   getRevisorData, getStands,
@@ -138,6 +138,14 @@ REVISOR_NT_NAMESPACE=production`
   );
 }
 
+/* ── Auto-refresh intervals ──────────────────────────────────────── */
+const INTERVALS = [
+  { label: "Выкл",  secs: 0   },
+  { label: "30 с",  secs: 30  },
+  { label: "1 мин", secs: 60  },
+  { label: "5 мин", secs: 300 },
+] as const;
+
 /* ═══════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════ */
@@ -149,6 +157,11 @@ export default function RevisorSection() {
   const [error,        setError]        = useState("");
   const [search,       setSearch]       = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [intervalSecs, setIntervalSecs] = useState(0);   // 0 = off
+  const [countdown,    setCountdown]    = useState(0);   // seconds until next refresh
+  const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countRef   = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastLoadAt = useRef<number>(0);
 
   const loadData = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -158,6 +171,7 @@ export default function RevisorSection() {
       const [rev, st] = await Promise.all([getRevisorData(), getStands()]);
       setData(rev);
       setStands(st.stands);
+      lastLoadAt.current = Date.now();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -166,7 +180,34 @@ export default function RevisorSection() {
     }
   }, []);
 
+  // Initial load
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-refresh polling
+  useEffect(() => {
+    if (timerRef.current)  clearInterval(timerRef.current);
+    if (countRef.current)  clearInterval(countRef.current);
+    if (intervalSecs === 0) { setCountdown(0); return; }
+
+    // Reset countdown immediately
+    setCountdown(intervalSecs);
+
+    // Tick down every second
+    countRef.current = setInterval(() => {
+      setCountdown(prev => (prev <= 1 ? intervalSecs : prev - 1));
+    }, 1000);
+
+    // Fire reload on interval
+    timerRef.current = setInterval(() => {
+      loadData(true);
+    }, intervalSecs * 1000);
+
+    return () => {
+      if (timerRef.current)  clearInterval(timerRef.current);
+      if (countRef.current)  clearInterval(countRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intervalSecs]);
 
   const standNames = data?.stands ?? [];
   const filtered   = (data?.services ?? []).filter(s =>
@@ -217,12 +258,28 @@ export default function RevisorSection() {
       <div className="p-6 animate-slide-up overflow-x-auto">
 
         {/* ── Page header ──────────────────────────────────────── */}
-        <div className="flex items-start justify-between mb-1 gap-4">
+        <div className="flex items-start justify-between mb-1 gap-4 flex-wrap">
           <h1 className="text-xl font-bold text-text-main flex items-center gap-2">
             <Scale className="w-5 h-5 text-primary" />
             Ревизор стендов
           </h1>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+            {/* Interval pills */}
+            <div className="flex items-center gap-1 bg-gray-100/80 rounded-lg p-1">
+              {INTERVALS.map(iv => (
+                <button
+                  key={iv.secs}
+                  onClick={() => setIntervalSecs(iv.secs)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all duration-150 ${
+                    intervalSecs === iv.secs
+                      ? "bg-white text-text-main shadow-sm"
+                      : "text-text-muted hover:text-text-main"
+                  }`}
+                >
+                  {iv.label}
+                </button>
+              ))}
+            </div>
             <button
               onClick={() => setSettingsOpen(true)}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
@@ -232,7 +289,7 @@ export default function RevisorSection() {
               Настройки
             </button>
             <button
-              onClick={() => loadData(true)}
+              onClick={() => { loadData(true); if (intervalSecs > 0) setCountdown(intervalSecs); }}
               disabled={refreshing}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
                 text-sm text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150
@@ -243,6 +300,21 @@ export default function RevisorSection() {
             </button>
           </div>
         </div>
+
+        {/* ── Auto-refresh progress bar ─────────────────────────── */}
+        {intervalSecs > 0 && (
+          <div className="mb-2 flex items-center gap-2">
+            <div className="flex-1 h-0.5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary/40 rounded-full transition-all duration-1000 ease-linear"
+                style={{ width: `${(1 - countdown / intervalSecs) * 100}%` }}
+              />
+            </div>
+            <span className="text-[11px] text-text-muted tabular-nums flex-shrink-0">
+              {countdown}с
+            </span>
+          </div>
+        )}
 
         {/* ── Subtitle / stats ─────────────────────────────────── */}
         <p className="text-sm text-text-muted mb-4 flex items-center gap-3 flex-wrap">

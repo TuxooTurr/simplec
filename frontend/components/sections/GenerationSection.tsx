@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
-  AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2,
+  AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
@@ -36,6 +36,123 @@ const INPUT_CLS =
 const LABEL_CLS = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2";
 
 /* ═══════════════════════════════════════════════════════════════
+   EDITABLE DROPDOWN — комбобокс с редактируемым списком (localStorage)
+═══════════════════════════════════════════════════════════════ */
+
+interface EditableDropdownProps {
+  value: string;
+  onChange: (v: string) => void;
+  list: string[];
+  onListChange: (list: string[]) => void;
+  placeholder?: string;
+  invalid?: boolean;
+}
+
+function EditableDropdown({ value, onChange, list, onListChange, placeholder, invalid }: EditableDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState(value);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Sync external value → input when closed
+  useEffect(() => { if (!open) setInput(value); }, [value, open]);
+
+  // Click outside → close
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const filtered = list.filter(s => s.toLowerCase().includes(input.toLowerCase()));
+  const canAdd = input.trim() && !list.includes(input.trim());
+
+  const select = (item: string) => {
+    onChange(item);
+    setInput(item);
+    setOpen(false);
+  };
+
+  const addToList = () => {
+    const v = input.trim();
+    if (!v || list.includes(v)) return;
+    const next = [...list, v];
+    onListChange(next);
+    onChange(v);
+    setOpen(false);
+  };
+
+  const removeFromList = (item: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onListChange(list.filter(s => s !== item));
+    if (value === item) onChange("");
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <div className={`flex items-center gap-1 border rounded-lg px-3 py-2 transition-shadow duration-150
+        ${invalid ? "border-red-300 focus-within:border-red-400 focus-within:ring-2 focus-within:ring-red-100"
+                  : "border-border-main focus-within:ring-2 focus-within:ring-primary/30 focus-within:border-primary/40"}`}>
+        <input
+          className="flex-1 text-sm outline-none bg-transparent min-w-0"
+          value={input}
+          placeholder={placeholder}
+          onChange={e => { setInput(e.target.value); onChange(e.target.value); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); canAdd ? addToList() : filtered[0] && select(filtered[0]); }
+            if (e.key === "Escape") setOpen(false);
+          }}
+        />
+        {input && (
+          <button type="button" onClick={() => { onChange(""); setInput(""); setOpen(true); }}
+            className="text-text-muted hover:text-text-main shrink-0">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+        <button type="button" onClick={() => setOpen(o => !o)}
+          className="text-text-muted hover:text-text-main shrink-0">
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="absolute z-50 w-full mt-1 bg-white border border-border-main rounded-lg shadow-lg overflow-hidden">
+          {filtered.length > 0 && (
+            <ul className="max-h-48 overflow-y-auto divide-y divide-border-main">
+              {filtered.map(item => (
+                <li key={item}
+                  className="flex items-center gap-2 px-3 py-2 hover:bg-bg-subtle cursor-pointer group"
+                  onClick={() => select(item)}>
+                  <span className="flex-1 text-sm text-text-main truncate">{item}</span>
+                  <button type="button"
+                    onClick={e => removeFromList(item, e)}
+                    className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity shrink-0">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canAdd && (
+            <button type="button" onClick={addToList}
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary hover:bg-indigo-50 border-t border-border-main">
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Добавить «{input.trim()}»</span>
+            </button>
+          )}
+          {filtered.length === 0 && !canAdd && (
+            <p className="px-3 py-2 text-xs text-text-muted text-center">Список пуст — введите значение</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
    SETTINGS MODAL — вынесен на уровень модуля (не внутри функции),
    чтобы React не создавал новый тип компонента на каждый рендер
    и не делал unmount/remount с потерей фокуса.
@@ -45,9 +162,9 @@ interface SettingsModalProps {
   onClose: () => void;
   platform: string[]; onPlatform: (v: string[]) => void;
   feature: string;  onFeature:  (v: string) => void;
-  team: string;     onTeam:     (v: string) => void;
-  project: string;  onProject:  (v: string) => void;
-  ke: string;       onKe:       (v: string) => void;
+  team: string;     onTeam:     (v: string) => void;    teamList: string[];    onTeamList:    (l: string[]) => void;
+  project: string;  onProject:  (v: string) => void;   projectList: string[]; onProjectList: (l: string[]) => void;
+  ke: string;       onKe:       (v: string) => void;   keList: string[];      onKeList:      (l: string[]) => void;
   critRegress: boolean; onCritRegress: (v: boolean) => void;
   settingsDone: boolean;
   filledCount: number;
@@ -59,9 +176,9 @@ function SettingsModal({
   open, onClose,
   platform, onPlatform,
   feature, onFeature,
-  team, onTeam,
-  project, onProject,
-  ke, onKe,
+  team, onTeam, teamList, onTeamList,
+  project, onProject, projectList, onProjectList,
+  ke, onKe, keList, onKeList,
   critRegress, onCritRegress,
   settingsDone, filledCount, touched, onApply,
 }: SettingsModalProps) {
@@ -126,33 +243,33 @@ function SettingsModal({
           {/* Team */}
           <div>
             <label className={LABEL_CLS}>Команда <span className="text-red-400">*</span></label>
-            <input
-              value={team}
-              onChange={(e) => onTeam(e.target.value)}
+            <EditableDropdown
+              value={team} onChange={onTeam}
+              list={teamList} onListChange={onTeamList}
               placeholder="Например: Team Alpha"
-              className={`${INPUT_CLS} ${touched && !team.trim() ? "border-red-300 focus:border-red-400 focus:ring-red-100" : ""}`}
+              invalid={touched && !team.trim()}
             />
           </div>
 
           {/* Project */}
           <div>
             <label className={LABEL_CLS}>Проект <span className="text-red-400">*</span></label>
-            <input
-              value={project}
-              onChange={(e) => onProject(e.target.value)}
+            <EditableDropdown
+              value={project} onChange={onProject}
+              list={projectList} onListChange={onProjectList}
               placeholder="Например: SBER911"
-              className={`${INPUT_CLS} ${touched && !project.trim() ? "border-red-300 focus:border-red-400 focus:ring-red-100" : ""}`}
+              invalid={touched && !project.trim()}
             />
           </div>
 
           {/* АС / КЭ */}
           <div>
             <label className={LABEL_CLS}>АС / КЭ <span className="text-red-400">*</span></label>
-            <input
-              value={ke}
-              onChange={(e) => onKe(e.target.value)}
+            <EditableDropdown
+              value={ke} onChange={onKe}
+              list={keList} onListChange={onKeList}
               placeholder="Например: ЛК Физ. лица"
-              className={`${INPUT_CLS} ${touched && !ke.trim() ? "border-red-300 focus:border-red-400 focus:ring-red-100" : ""}`}
+              invalid={touched && !ke.trim()}
             />
           </div>
 
@@ -221,6 +338,18 @@ export default function GenerationSection() {
   const [ke, setKe]                         = useState("");
   const [critRegress, setCritRegress]       = useState(false);
   const [settingsTouched, setSettingsTouched] = useState(false);
+
+  // Editable dropdown lists (localStorage-backed)
+  const loadList = (key: string): string[] => {
+    try { return JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { return []; }
+  };
+  const [teamList,    setTeamListState]    = useState<string[]>(() => loadList("st_teams"));
+  const [projectList, setProjectListState] = useState<string[]>(() => loadList("st_projects"));
+  const [keList,      setKeListState]      = useState<string[]>(() => loadList("st_ke"));
+
+  const setTeamList    = useCallback((l: string[]) => { setTeamListState(l);    localStorage.setItem("st_teams",    JSON.stringify(l)); }, []);
+  const setProjectList = useCallback((l: string[]) => { setProjectListState(l); localStorage.setItem("st_projects", JSON.stringify(l)); }, []);
+  const setKeList      = useCallback((l: string[]) => { setKeListState(l);      localStorage.setItem("st_ke",       JSON.stringify(l)); }, []);
 
   // Shake animation state for settings button
   const [settingsShake, setSettingsShake] = useState(false);
@@ -292,9 +421,9 @@ export default function GenerationSection() {
         onClose={() => setSettingsOpen(false)}
         platform={platform}   onPlatform={setPlatform}
         feature={feature}     onFeature={setFeature}
-        team={team}           onTeam={setTeam}
-        project={project}     onProject={setProject}
-        ke={ke}               onKe={setKe}
+        team={team}           onTeam={setTeam}    teamList={teamList}       onTeamList={setTeamList}
+        project={project}     onProject={setProject} projectList={projectList} onProjectList={setProjectList}
+        ke={ke}               onKe={setKe}        keList={keList}           onKeList={setKeList}
         critRegress={critRegress} onCritRegress={setCritRegress}
         settingsDone={settingsDone}
         filledCount={filledCount}

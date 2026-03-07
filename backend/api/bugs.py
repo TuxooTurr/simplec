@@ -2,8 +2,9 @@
 Эндпоинт форматирования баг-репортов через LLM.
 """
 import asyncio
-from fastapi import APIRouter, HTTPException
-from backend.schemas import BugFormatRequest, BugFormatResponse
+from typing import List
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from backend.schemas import BugFormatResponse
 
 router = APIRouter()
 
@@ -75,11 +76,34 @@ def _format_bug_sync(platform: str, feature: str, description: str, provider: st
 
 
 @router.post("/api/bugs/format", response_model=BugFormatResponse)
-async def format_bug(req: BugFormatRequest):
+async def format_bug(
+    platform: str = Form(...),
+    feature: str = Form(""),
+    description: str = Form(...),
+    provider: str = Form("gigachat"),
+    attachments: List[UploadFile] = File(default=[]),
+):
+    from agents.file_parser import parse_file
+
+    # Парсим вложения и добавляем их текст к описанию
+    attachment_texts = []
+    for f in attachments:
+        if f and f.filename:
+            try:
+                data = await f.read()
+                text = parse_file(data, f.filename)
+                attachment_texts.append(f"[{f.filename}]:\n{text}")
+            except Exception as e:
+                attachment_texts.append(f"[{f.filename}]: не удалось прочитать — {e}")
+
+    full_description = description
+    if attachment_texts:
+        full_description += "\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)
+
     try:
         report = await asyncio.to_thread(
             _format_bug_sync,
-            req.platform, req.feature, req.description, req.provider
+            platform, feature, full_description, provider
         )
         return {"report": report}
     except Exception as e:

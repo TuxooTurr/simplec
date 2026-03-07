@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone,
   BarChart2, Palette, GitBranch, PlugZap,
   History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle, Trash2,
+  Paperclip, Image as ImageIcon, FileText, File as FileIcon,
 } from "lucide-react";
 import { formatBug, addDefect } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -66,6 +67,56 @@ const PLATFORMS = [
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
+const ATTACH_ACCEPT = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg"]);
+
+function fileExt(name: string) {
+  return name.includes(".") ? name.split(".").pop()!.toLowerCase() : "";
+}
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} КБ`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function FileChip({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const ext = fileExt(file.name);
+  const isImage = IMAGE_EXTS.has(ext);
+  const [src, setSrc] = useState<string | null>(null);
+
+  // генерируем превью для картинок один раз
+  if (isImage && !src) {
+    const reader = new FileReader();
+    reader.onload = (e) => setSrc(e.target?.result as string);
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 pl-1.5 pr-1 py-1 bg-gray-50 border border-border-main rounded-lg text-xs text-text-muted max-w-[200px] group">
+      {isImage && src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" className="w-5 h-5 rounded object-cover flex-shrink-0" />
+      ) : isImage ? (
+        <ImageIcon className="w-3.5 h-3.5 flex-shrink-0 text-indigo-400" />
+      ) : ext === "pdf" ? (
+        <FileText className="w-3.5 h-3.5 flex-shrink-0 text-red-400" />
+      ) : (
+        <FileIcon className="w-3.5 h-3.5 flex-shrink-0 text-text-muted" />
+      )}
+      <span className="truncate flex-1 min-w-0">{file.name}</span>
+      <span className="text-[10px] text-text-muted/60 flex-shrink-0">{fileSize(file.size)}</span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="flex-shrink-0 w-4 h-4 rounded flex items-center justify-center hover:bg-red-50 hover:text-red-500 transition-colors"
+      >
+        <XCircle className="w-3 h-3" />
+      </button>
+    </div>
+  );
+}
+
 /* ── Component ────────────────────────────────────────────────────── */
 
 export default function BugsSection() {
@@ -79,6 +130,8 @@ export default function BugsSection() {
   const [report, setReport]           = useState("");
   const [copied, setCopied]           = useState(false);
   const [bugError, setBugError]       = useState<{ message: string; llm_error: boolean } | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [histEntries, setHistEntries] = useState<BugHistEntry[]>(() => loadBugHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
@@ -139,8 +192,9 @@ export default function BugsSection() {
     setReport("");
     setBugError(null);
     try {
-      const res = await formatBug({ platform, feature, description, provider });
+      const res = await formatBug({ platform, feature, description, provider, files: attachedFiles });
       setReport(res.report);
+      setAttachedFiles([]);
       saveHistEntry({
         id: Date.now().toString(),
         timestamp: Date.now(),
@@ -358,6 +412,48 @@ export default function BugsSection() {
               className={`${INPUT_CLS} resize-none`}
             />
           </div>
+
+          {/* Вложения */}
+          <div className="mt-3">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept={ATTACH_ACCEPT}
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                setAttachedFiles((prev) => {
+                  const names = new Set(prev.map((f) => f.name));
+                  return [...prev, ...files.filter((f) => !names.has(f.name))].slice(0, 10);
+                });
+                e.target.value = "";
+              }}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 border border-dashed border-border-main rounded-lg
+                  text-xs text-text-muted hover:border-primary/50 hover:text-primary transition-all duration-150"
+              >
+                <Paperclip className="w-3.5 h-3.5" />
+                Прикрепить файл
+              </button>
+              {attachedFiles.map((f, i) => (
+                <FileChip
+                  key={f.name + i}
+                  file={f}
+                  onRemove={() => setAttachedFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                />
+              ))}
+            </div>
+            {attachedFiles.length > 0 && (
+              <p className="text-[11px] text-text-muted mt-1.5">
+                {attachedFiles.length} файл{attachedFiles.length === 1 ? "" : attachedFiles.length < 5 ? "а" : "ов"} · текст будет извлечён и добавлен в контекст
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Error */}
@@ -400,6 +496,7 @@ export default function BugsSection() {
                     setFeature("");
                     setBugError(null);
                     setPlatform("Back");
+                    setAttachedFiles([]);
                   }}
                   className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
                     text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 active:scale-[0.97]"

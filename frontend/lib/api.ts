@@ -248,12 +248,19 @@ export async function formatBug(params: {
   feature: string;
   description: string;
   provider?: string;
+  files?: File[];
 }): Promise<{ report: string }> {
-  return fetchJson("/api/bugs/format", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider: "gigachat", ...params }),
-  });
+  const body = new FormData();
+  body.append("platform", params.platform);
+  body.append("feature", params.feature);
+  body.append("description", params.description);
+  body.append("provider", params.provider ?? "gigachat");
+  if (params.files) {
+    for (const f of params.files) {
+      body.append("attachments", f);
+    }
+  }
+  return fetchJson("/api/bugs/format", { method: "POST", body });
 }
 
 // ─── Autotest generation ────────────────────────────────────────────────────

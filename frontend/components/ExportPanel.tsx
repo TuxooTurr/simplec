@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles } from "lucide-react";
+import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles, Copy, CheckCheck } from "lucide-react";
 import type { Case, ExportResult } from "@/lib/useGeneration";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -56,6 +56,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
   const [folder, setFolder]         = useState("Новая ТМ");
   const [useLlm, setUseLlm]         = useState(false);
   const [critRegress, setCritRegress] = useState(initialCritRegress ?? false);
+  const [xmlCopied, setXmlCopied]   = useState(false);
 
   const handleExport = () => {
     onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider, crit_regress: critRegress });
@@ -178,6 +179,33 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* XML preview */}
+      {result?.xml && (
+        <div className="bg-white border border-border-main rounded-xl p-5 animate-slide-up">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">XML для Zephyr</p>
+            <button
+              onClick={async () => {
+                await navigator.clipboard.writeText(result.xml);
+                setXmlCopied(true);
+                setTimeout(() => setXmlCopied(false), 2000);
+              }}
+              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150 active:scale-[0.97]
+                ${xmlCopied
+                  ? "bg-green-50 border-green-200 text-green-700"
+                  : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+            >
+              {xmlCopied
+                ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
+                : <><Copy className="w-3.5 h-3.5" /> Копировать XML</>}
+            </button>
+          </div>
+          <pre className="text-xs font-mono text-text-main bg-gray-50 rounded-lg p-3 overflow-x-auto max-h-72 overflow-y-auto leading-relaxed whitespace-pre-wrap">
+            {result.xml}
+          </pre>
         </div>
       )}
     </div>

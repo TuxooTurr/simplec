@@ -1,12 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Plus, RefreshCw, Trash2, ChevronDown,
-  Loader2, Smartphone, Tag, X, Save, AlignLeft, Paperclip, FileText,
+  Loader2, Smartphone, Tag, X, Save, Paperclip, FileText,
   Code2, Bug,
 } from "lucide-react";
-import FileDropZone from "@/components/FileDropZone";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
   listAutotests, addAutotest, deleteAutotest,
@@ -21,24 +20,38 @@ const LABEL_CLS = "text-xs font-semibold text-text-muted uppercase tracking-wide
 
 type Tab = "testcases" | "autotests" | "defects";
 
-/** Мини-тоглер Текст/Файл */
-function ModeToggle({ mode, onMode }: { mode: "text" | "file"; onMode: (m: "text" | "file") => void }) {
+const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
+
+/** Кнопка «Загрузить из файла» + чип с именем файла */
+function FileAttachRow({
+  loading, fileName,
+  onPick, onClear,
+}: {
+  loading: boolean; fileName: string;
+  onPick: () => void; onClear: () => void;
+}) {
   return (
-    <div className="flex rounded-md border border-border-main overflow-hidden text-[11px]">
+    <div className="mt-2 flex flex-wrap items-center gap-2">
       <button
-        onClick={() => onMode("text")}
-        className={`flex items-center gap-1 px-2 py-1 transition-colors
-          ${mode === "text" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
+        type="button"
+        onClick={onPick}
+        disabled={loading}
+        className="flex items-center gap-1.5 px-2.5 py-1 border border-dashed border-border-main rounded-lg
+          text-xs text-text-muted hover:border-primary/50 hover:text-primary disabled:opacity-50 transition-all duration-150"
       >
-        <AlignLeft className="w-3 h-3" /> Текст
+        {loading
+          ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
+          : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
       </button>
-      <button
-        onClick={() => onMode("file")}
-        className={`flex items-center gap-1 px-2 py-1 border-l border-border-main transition-colors
-          ${mode === "file" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
-      >
-        <Paperclip className="w-3 h-3" /> Файл
-      </button>
+      {fileName && !loading && (
+        <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+          <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
+          {fileName}
+          <button type="button" onClick={onClear} className="ml-0.5 hover:text-red-500 transition-colors">
+            <X className="w-3 h-3" />
+          </button>
+        </span>
+      )}
     </div>
   );
 }
@@ -57,17 +70,20 @@ function TestCasesTab() {
   const [refreshing, setRefreshing]     = useState(false);
   const [showAdd, setShowAdd]           = useState(false);
 
-  const [reqMode, setReqMode]           = useState<"text" | "file">("text");
   const [reqText, setReqText]           = useState("");
   const [reqFileLoading, setReqFileLoading] = useState(false);
+  const [reqFileName, setReqFileName]   = useState("");
+  const reqFileRef = useRef<HTMLInputElement>(null);
 
-  const [qaMode, setQaMode]             = useState<"text" | "file">("text");
   const [qaText, setQaText]             = useState("");
   const [qaFileLoading, setQaFileLoading]   = useState(false);
+  const [qaFileName, setQaFileName]     = useState("");
+  const qaFileRef = useRef<HTMLInputElement>(null);
 
-  const [tcMode, setTcMode]             = useState<"text" | "file">("text");
   const [tcText, setTcText]             = useState("");
   const [tcFileLoading, setTcFileLoading]   = useState(false);
+  const [tcFileName, setTcFileName]     = useState("");
+  const tcFileRef = useRef<HTMLInputElement>(null);
 
   const [addPlatforms, setAddPlatforms] = useState<string[]>([]);
   const [addFeature, setAddFeature]     = useState("");
@@ -92,14 +108,18 @@ function TestCasesTab() {
 
   useEffect(() => { load(); }, [filterPlatforms.join(","), filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const makeFileHandler = (
+  const makeInputHandler = (
     setText: (v: string) => void,
     setFileLoading: (v: boolean) => void,
-  ) => async (file: File) => {
+    setFileName: (v: string) => void,
+  ) => async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setFileLoading(true);
+    setFileName(file.name);
     try { const r = await parseFile(file); setText(r.text); }
-    catch (err) { alert("Ошибка: " + String(err)); }
-    finally { setFileLoading(false); }
+    catch (err) { alert("Ошибка: " + String(err)); setFileName(""); }
+    finally { setFileLoading(false); if (e.target) e.target.value = ""; }
   };
 
   const handleAdd = async () => {
@@ -115,9 +135,9 @@ function TestCasesTab() {
         name: addName,
       });
       setReqText(""); setQaText(""); setTcText("");
+      setReqFileName(""); setQaFileName(""); setTcFileName("");
       setAddPlatforms([]); setAddFeature(""); setAddName("");
       setShowAdd(false);
-      setReqMode("text"); setQaMode("text"); setTcMode("text");
       await load();
     } catch (err) { alert("Ошибка: " + String(err)); }
     finally { setAddLoading(false); }
@@ -219,79 +239,49 @@ function TestCasesTab() {
               className={INPUT_CLS} placeholder="Оплата картой..." />
           </div>
 
-          <div className="grid grid-cols-2 gap-3 mb-3 items-stretch">
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between mb-1.5 h-7">
-                <label className={LABEL_CLS}>
-                  Требование <span className="text-red-400 normal-case font-normal">*</span>
-                </label>
-                <ModeToggle mode={reqMode} onMode={setReqMode} />
-              </div>
-              {reqMode === "text" ? (
-                <textarea value={reqText} onChange={(e) => setReqText(e.target.value)}
-                  className={`${INPUT_CLS} resize-none flex-1 min-h-[160px]`}
-                  placeholder="Текст требования, user story..." />
-              ) : (
-                <div className="flex flex-col gap-2 flex-1">
-                  <FileDropZone onFile={makeFileHandler(setReqText, setReqFileLoading)}
-                    loading={reqFileLoading} className="flex-1 min-h-[136px]" />
-                  {reqText && !reqFileLoading && (
-                    <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                      Извлечено {reqText.length.toLocaleString()} симв.
-                    </p>
-                  )}
-                </div>
-              )}
+          <div className="grid grid-cols-2 gap-3 mb-3 items-start">
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>
+                Требование <span className="text-red-400 normal-case font-normal">*</span>
+              </label>
+              <input ref={reqFileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+                onChange={makeInputHandler(setReqText, setReqFileLoading, setReqFileName)} />
+              <textarea value={reqText} onChange={(e) => setReqText(e.target.value)}
+                className={`${INPUT_CLS} resize-none min-h-[160px]`}
+                placeholder="Текст требования, user story..." />
+              <FileAttachRow loading={reqFileLoading} fileName={reqFileName}
+                onPick={() => reqFileRef.current?.click()}
+                onClear={() => { setReqText(""); setReqFileName(""); }} />
             </div>
 
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between mb-1.5 h-7">
-                <label className={LABEL_CLS}>
-                  QA Документация
-                  <span className="ml-1 text-[10px] text-text-muted/60 normal-case font-normal">(необязательно)</span>
-                </label>
-                <ModeToggle mode={qaMode} onMode={setQaMode} />
-              </div>
-              {qaMode === "text" ? (
-                <textarea value={qaText} onChange={(e) => setQaText(e.target.value)}
-                  className={`${INPUT_CLS} resize-none flex-1 min-h-[160px]`}
-                  placeholder="Промежуточная QA документация..." />
-              ) : (
-                <div className="flex flex-col gap-2 flex-1">
-                  <FileDropZone onFile={makeFileHandler(setQaText, setQaFileLoading)}
-                    loading={qaFileLoading} className="flex-1 min-h-[136px]" />
-                  {qaText && !qaFileLoading && (
-                    <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                      Извлечено {qaText.length.toLocaleString()} симв.
-                    </p>
-                  )}
-                </div>
-              )}
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>
+                QA Документация
+                <span className="ml-1 text-[10px] text-text-muted/60 normal-case font-normal">(необязательно)</span>
+              </label>
+              <input ref={qaFileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+                onChange={makeInputHandler(setQaText, setQaFileLoading, setQaFileName)} />
+              <textarea value={qaText} onChange={(e) => setQaText(e.target.value)}
+                className={`${INPUT_CLS} resize-none min-h-[160px]`}
+                placeholder="Промежуточная QA документация..." />
+              <FileAttachRow loading={qaFileLoading} fileName={qaFileName}
+                onPick={() => qaFileRef.current?.click()}
+                onClear={() => { setQaText(""); setQaFileName(""); }} />
             </div>
           </div>
 
-          <div className="flex flex-col mb-4">
-            <div className="flex items-center justify-between mb-1.5 h-7">
-              <label className={LABEL_CLS}>
-                XML кейсов <span className="text-red-400 normal-case font-normal">*</span>
-              </label>
-              <ModeToggle mode={tcMode} onMode={setTcMode} />
-            </div>
-            {tcMode === "text" ? (
-              <textarea value={tcText} onChange={(e) => setTcText(e.target.value)}
-                className={`${INPUT_CLS} resize-none font-mono text-xs min-h-[140px]`}
-                placeholder="XML или текст тест-кейса..." />
-            ) : (
-              <div className="flex flex-col gap-2">
-                <FileDropZone onFile={makeFileHandler(setTcText, setTcFileLoading)}
-                  loading={tcFileLoading} className="min-h-[120px]" />
-                {tcText && !tcFileLoading && (
-                  <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                    Извлечено {tcText.length.toLocaleString()} симв.
-                  </p>
-                )}
-              </div>
-            )}
+          <div className="mb-4">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>
+              XML кейсов <span className="text-red-400 normal-case font-normal">*</span>
+            </label>
+            <input ref={tcFileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+              onChange={makeInputHandler(setTcText, setTcFileLoading, setTcFileName)} />
+            <textarea value={tcText} onChange={(e) => setTcText(e.target.value)}
+              className={`${INPUT_CLS} resize-none font-mono text-xs min-h-[140px]`}
+              placeholder="XML или текст тест-кейса..." />
+            <FileAttachRow loading={tcFileLoading} fileName={tcFileName}
+              onPick={() => tcFileRef.current?.click()}
+              onClear={() => { setTcText(""); setTcFileName(""); }} />
           </div>
 
           <div className="flex gap-2 justify-end">
@@ -412,13 +402,15 @@ function AutotestsTab() {
   const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd]     = useState(false);
 
-  const [xmlMode, setXmlMode]     = useState<"text" | "file">("text");
   const [xmlText, setXmlText]     = useState("");
   const [xmlFileLoading, setXmlFileLoading] = useState(false);
+  const [xmlFileName, setXmlFileName]   = useState("");
+  const xmlFileRef = useRef<HTMLInputElement>(null);
 
-  const [javaMode, setJavaMode]   = useState<"text" | "file">("text");
   const [javaText, setJavaText]   = useState("");
   const [javaFileLoading, setJavaFileLoading] = useState(false);
+  const [javaFileName, setJavaFileName] = useState("");
+  const javaFileRef = useRef<HTMLInputElement>(null);
 
   const [addFeature, setAddFeature] = useState("");
   const [addName, setAddName]       = useState("");
@@ -438,14 +430,18 @@ function AutotestsTab() {
 
   useEffect(() => { load(); }, [filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const makeFileHandler = (
+  const makeInputHandler = (
     setText: (v: string) => void,
     setFileLoading: (v: boolean) => void,
-  ) => async (file: File) => {
+    setFileName: (v: string) => void,
+  ) => async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
     setFileLoading(true);
+    setFileName(file.name);
     try { const r = await parseFile(file); setText(r.text); }
-    catch (err) { alert("Ошибка: " + String(err)); }
-    finally { setFileLoading(false); }
+    catch (err) { alert("Ошибка: " + String(err)); setFileName(""); }
+    finally { setFileLoading(false); if (e.target) e.target.value = ""; }
   };
 
   const handleAdd = async () => {
@@ -454,7 +450,8 @@ function AutotestsTab() {
     try {
       await addAutotest({ xml_text: xmlText, java_text: javaText, feature: addFeature, name: addName });
       setXmlText(""); setJavaText(""); setAddFeature(""); setAddName("");
-      setShowAdd(false); setXmlMode("text"); setJavaMode("text");
+      setXmlFileName(""); setJavaFileName("");
+      setShowAdd(false);
       await load();
     } catch (err) { alert("Ошибка: " + String(err)); }
     finally { setAddLoading(false); }
@@ -526,55 +523,35 @@ function AutotestsTab() {
               className={INPUT_CLS} placeholder="Авторизация, оплата..." />
           </div>
 
-          <div className="grid grid-cols-2 gap-3 mb-4 items-stretch">
+          <div className="grid grid-cols-2 gap-3 mb-4 items-start">
             {/* XML */}
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between mb-1.5 h-7">
-                <label className={LABEL_CLS}>
-                  Мануальные кейсы (XML) <span className="text-red-400 normal-case font-normal">*</span>
-                </label>
-                <ModeToggle mode={xmlMode} onMode={setXmlMode} />
-              </div>
-              {xmlMode === "text" ? (
-                <textarea value={xmlText} onChange={(e) => setXmlText(e.target.value)}
-                  className={`${INPUT_CLS} resize-none font-mono text-xs flex-1 min-h-[200px]`}
-                  placeholder="<?xml version=..." />
-              ) : (
-                <div className="flex flex-col gap-2 flex-1">
-                  <FileDropZone onFile={makeFileHandler(setXmlText, setXmlFileLoading)}
-                    loading={xmlFileLoading} className="flex-1 min-h-[176px]" />
-                  {xmlText && !xmlFileLoading && (
-                    <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                      Извлечено {xmlText.length.toLocaleString()} симв.
-                    </p>
-                  )}
-                </div>
-              )}
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>
+                Мануальные кейсы (XML) <span className="text-red-400 normal-case font-normal">*</span>
+              </label>
+              <input ref={xmlFileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+                onChange={makeInputHandler(setXmlText, setXmlFileLoading, setXmlFileName)} />
+              <textarea value={xmlText} onChange={(e) => setXmlText(e.target.value)}
+                className={`${INPUT_CLS} resize-none font-mono text-xs min-h-[200px]`}
+                placeholder="<?xml version=..." />
+              <FileAttachRow loading={xmlFileLoading} fileName={xmlFileName}
+                onPick={() => xmlFileRef.current?.click()}
+                onClear={() => { setXmlText(""); setXmlFileName(""); }} />
             </div>
 
             {/* Java */}
-            <div className="flex flex-col">
-              <div className="flex items-center justify-between mb-1.5 h-7">
-                <label className={LABEL_CLS}>
-                  Java автотест <span className="text-red-400 normal-case font-normal">*</span>
-                </label>
-                <ModeToggle mode={javaMode} onMode={setJavaMode} />
-              </div>
-              {javaMode === "text" ? (
-                <textarea value={javaText} onChange={(e) => setJavaText(e.target.value)}
-                  className={`${INPUT_CLS} resize-none font-mono text-xs flex-1 min-h-[200px]`}
-                  placeholder="@Test&#10;public void testLogin() {..." />
-              ) : (
-                <div className="flex flex-col gap-2 flex-1">
-                  <FileDropZone onFile={makeFileHandler(setJavaText, setJavaFileLoading)}
-                    loading={javaFileLoading} className="flex-1 min-h-[176px]" />
-                  {javaText && !javaFileLoading && (
-                    <p className="text-[11px] text-green-700 bg-green-50 rounded-lg px-2.5 py-1.5">
-                      Извлечено {javaText.length.toLocaleString()} симв.
-                    </p>
-                  )}
-                </div>
-              )}
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>
+                Java автотест <span className="text-red-400 normal-case font-normal">*</span>
+              </label>
+              <input ref={javaFileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+                onChange={makeInputHandler(setJavaText, setJavaFileLoading, setJavaFileName)} />
+              <textarea value={javaText} onChange={(e) => setJavaText(e.target.value)}
+                className={`${INPUT_CLS} resize-none font-mono text-xs min-h-[200px]`}
+                placeholder="@Test&#10;public void testLogin() {..." />
+              <FileAttachRow loading={javaFileLoading} fileName={javaFileName}
+                onPick={() => javaFileRef.current?.click()}
+                onClear={() => { setJavaText(""); setJavaFileName(""); }} />
             </div>
           </div>
 

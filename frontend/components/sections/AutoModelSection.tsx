@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
-  FlaskConical, Loader2, Copy, CheckCheck, AlignLeft, Paperclip,
+  FlaskConical, Loader2, Copy, CheckCheck, Paperclip, FileText,
   PlugZap, History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle,
   Trash2, X,
 } from "lucide-react";
@@ -67,7 +67,6 @@ export default function AutoModelSection() {
   const { provider } = useWorkspace();
 
   const [stage, setStage]         = useState<"input" | "history">("input");
-  const [inputMode, setInputMode] = useState<"text" | "file">("text");
   const [feature, setFeature]     = useState("");
   const [inputText, setInputText] = useState("");
   const [fileName, setFileName]   = useState("");
@@ -90,7 +89,6 @@ export default function AutoModelSection() {
         const { text, feature: f } = JSON.parse(raw) as { text: string; feature: string };
         setInputText(text || "");
         setFeature(f || "");
-        setInputMode("text");
         sessionStorage.removeItem("st_automodel_prefill");
       }
     } catch { /* ignore */ }
@@ -155,7 +153,6 @@ export default function AutoModelSection() {
     try {
       const res = await parseFile(file);
       setInputText(res.text);
-      setInputMode("text");
     } catch (err) {
       setGenError({ message: String(err), llm_error: false });
     } finally {
@@ -253,7 +250,6 @@ export default function AutoModelSection() {
                           setFeature(entry.feature);
                           setInputText(entry.inputText);
                           setCode(entry.code);
-                          setInputMode("text");
                           setStage("input");
                         }}
                       >
@@ -356,47 +352,6 @@ export default function AutoModelSection() {
             />
           </div>
 
-          {/* Input mode toggle */}
-          <div className="flex items-center gap-1 mb-3">
-            <button
-              onClick={() => setInputMode("text")}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
-                ${inputMode === "text"
-                  ? "border-primary bg-indigo-50 text-primary"
-                  : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
-            >
-              <AlignLeft className="w-3.5 h-3.5" /> Текст
-            </button>
-            <button
-              onClick={() => { setInputMode("file"); fileInputRef.current?.click(); }}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
-                ${inputMode === "file"
-                  ? "border-primary bg-indigo-50 text-primary"
-                  : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
-            >
-              <Paperclip className="w-3.5 h-3.5" />
-              {fileLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</> : "Файл"}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={ACCEPT}
-              className="hidden"
-              onChange={handleFileChange}
-            />
-            {fileName && (
-              <span className="flex items-center gap-1 text-xs text-text-muted ml-1">
-                {fileName}
-                <button
-                  onClick={() => { setFileName(""); setInputText(""); setInputMode("text"); }}
-                  className="hover:text-red-500 transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            )}
-          </div>
-
           {/* Textarea */}
           <div>
             <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
@@ -409,6 +364,39 @@ export default function AutoModelSection() {
               placeholder={"Вставьте ручные тест-кейсы в любом формате:\n\n1. Тест: Авторизация\n   Шаг 1: Открыть страницу входа\n   Шаг 2: Ввести логин и пароль\n   Шаг 3: Нажать «Войти»\n   Ожидаемый результат: Пользователь авторизован\n\n2. Тест: Неверный пароль\n   ..."}
               className={`${INPUT_CLS} resize-none font-mono text-xs`}
             />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={ACCEPT}
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={fileLoading}
+                className="flex items-center gap-1.5 px-2.5 py-1 border border-dashed border-border-main rounded-lg
+                  text-xs text-text-muted hover:border-primary/50 hover:text-primary disabled:opacity-50 transition-all duration-150"
+              >
+                {fileLoading
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
+                  : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
+              </button>
+              {fileName && !fileLoading && (
+                <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+                  <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
+                  {fileName}
+                  <button
+                    type="button"
+                    onClick={() => { setFileName(""); setInputText(""); }}
+                    className="ml-0.5 hover:text-red-500 transition-colors"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

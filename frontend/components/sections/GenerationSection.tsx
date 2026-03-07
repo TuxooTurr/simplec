@@ -3,13 +3,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
-  AlignLeft, Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
+  Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
   StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
-import FileDropZone from "@/components/FileDropZone";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import { parseFile, addEtalon } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -427,7 +426,8 @@ export default function GenerationSection() {
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
-  const [inputMode, setInputMode]     = useState<"text" | "file">("text");
+  const [fileName, setFileName]       = useState("");
+  const reqFileRef = useRef<HTMLInputElement>(null);
 
   // Settings state (persists between generations)
   const [settingsOpen, setSettingsOpen]     = useState(false);
@@ -606,17 +606,6 @@ export default function GenerationSection() {
     start({ requirement: text, feature, depth, provider, platform: platform.join(", ") });
   };
 
-  const handleFileUpload = async (file: File) => {
-    setFileLoading(true);
-    try {
-      const result = await parseFile(file);
-      setRequirement(result.text);
-    } catch (err) {
-      alert("Ошибка при парсинге файла: " + String(err));
-    } finally {
-      setFileLoading(false);
-    }
-  };
 
   const handleReset = () => {
     historySavedRef.current = false;
@@ -724,52 +713,67 @@ export default function GenerationSection() {
 
           {/* Requirement input */}
           <div className="bg-white border border-border-main rounded-xl p-5 mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-xs font-semibold text-text-muted uppercase tracking-wide">Требование</label>
-              <div className="flex rounded-lg border border-border-main overflow-hidden text-xs">
+            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">Требование</label>
+            <textarea
+              value={requirement}
+              onChange={(e) => setRequirement(e.target.value)}
+              placeholder="Вставьте текст требования, user story или описание функционала..."
+              rows={10}
+              className={`${INPUT_CLS} resize-none font-mono`}
+            />
+            <input
+              ref={reqFileRef}
+              type="file"
+              accept=".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                setFileLoading(true);
+                setFileName(file.name);
+                try {
+                  const result = await parseFile(file);
+                  setRequirement(result.text);
+                } catch (err) {
+                  alert("Ошибка: " + String(err));
+                  setFileName("");
+                } finally {
+                  setFileLoading(false);
+                  if (e.target) e.target.value = "";
+                }
+              }}
+            />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  onClick={() => setInputMode("text")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 transition-colors duration-150
-                    ${inputMode === "text" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
+                  type="button"
+                  onClick={() => reqFileRef.current?.click()}
+                  disabled={fileLoading}
+                  className="flex items-center gap-1.5 px-2.5 py-1 border border-dashed border-border-main rounded-lg
+                    text-xs text-text-muted hover:border-primary/50 hover:text-primary disabled:opacity-50 transition-all duration-150"
                 >
-                  <AlignLeft className="w-3.5 h-3.5" />
-                  Текст
+                  {fileLoading
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
+                    : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
                 </button>
-                <button
-                  onClick={() => setInputMode("file")}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 border-l border-border-main transition-colors duration-150
-                    ${inputMode === "file" ? "bg-indigo-50 text-primary font-semibold" : "text-text-muted hover:bg-gray-50"}`}
-                >
-                  <Paperclip className="w-3.5 h-3.5" />
-                  Файл
-                </button>
-              </div>
-            </div>
-            {inputMode === "text" ? (
-              <>
-                <textarea
-                  value={requirement}
-                  onChange={(e) => setRequirement(e.target.value)}
-                  placeholder="Вставьте текст требования, user story или описание функционала..."
-                  rows={10}
-                  className={`${INPUT_CLS} resize-none font-mono`}
-                />
-                <div className="flex justify-end mt-2">
-                  <span className="text-xs text-text-muted tabular-nums">
-                    {requirement.length.toLocaleString()} симв.
+                {fileName && !fileLoading && (
+                  <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+                    <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
+                    {fileName}
+                    <button
+                      type="button"
+                      onClick={() => { setFileName(""); setRequirement(""); }}
+                      className="ml-0.5 hover:text-red-500 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
                   </span>
-                </div>
-              </>
-            ) : (
-              <div className="space-y-3">
-                <FileDropZone onFile={handleFileUpload} loading={fileLoading} className="h-48" />
-                {requirement && !fileLoading && (
-                  <p className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                    Текст извлечён: {requirement.length.toLocaleString()} симв. — готов к генерации
-                  </p>
                 )}
               </div>
-            )}
+              <span className="text-xs text-text-muted tabular-nums">
+                {requirement.length.toLocaleString()} симв.
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center justify-between">

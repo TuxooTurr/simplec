@@ -588,39 +588,6 @@ export default function AlertsSection() {
                 {copied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
               </button>
 
-              {schedMode === "once" ? (
-                <button
-                  onClick={handleSend}
-                  disabled={sending || !payload}
-                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-primary text-white
-                    rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
-                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
-                >
-                  {sending
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
-                    : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
-                </button>
-              ) : schedActive ? (
-                <button
-                  onClick={stopSchedule}
-                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-red-500 text-white
-                    rounded-lg text-sm font-semibold hover:bg-red-600 transition-all duration-150
-                    active:scale-[0.99] shadow-sm"
-                >
-                  <Square className="w-4 h-4 fill-current" /> Остановить
-                </button>
-              ) : (
-                <button
-                  onClick={() => startSchedule(schedFreq)}
-                  disabled={!payload}
-                  className="flex flex-1 items-center justify-center gap-2 px-4 py-1.5 bg-green-600 text-white
-                    rounded-lg text-sm font-semibold hover:bg-green-700 transition-all duration-150
-                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
-                >
-                  <Play className="w-4 h-4 fill-current" /> Запустить · {freqLabel}
-                </button>
-              )}
-
               {/* Audit button */}
               <button
                 onClick={handleOpenAudit}
@@ -636,6 +603,39 @@ export default function AlertsSection() {
                   </span>
                 )}
               </button>
+
+              {schedMode === "once" ? (
+                <button
+                  onClick={handleSend}
+                  disabled={sending || !payload}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white
+                    rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all duration-150
+                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
+                >
+                  {sending
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Отправляю...</>
+                    : <><Send    className="w-4 h-4" /> Отправить в Kafka</>}
+                </button>
+              ) : schedActive ? (
+                <button
+                  onClick={stopSchedule}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-red-500 text-white
+                    rounded-lg text-sm font-semibold hover:bg-red-600 transition-all duration-150
+                    active:scale-[0.99] shadow-sm"
+                >
+                  <Square className="w-4 h-4 fill-current" /> Остановить
+                </button>
+              ) : (
+                <button
+                  onClick={() => startSchedule(schedFreq)}
+                  disabled={!payload}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-green-600 text-white
+                    rounded-lg text-sm font-semibold hover:bg-green-700 transition-all duration-150
+                    disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99] shadow-sm"
+                >
+                  <Play className="w-4 h-4 fill-current" /> Запустить · {freqLabel}
+                </button>
+              )}
             </div>
           </div>
         </div>

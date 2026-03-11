@@ -872,7 +872,10 @@ export default function EtalonsSection() {
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
       <div className="w-full">
         {/* Заголовок */}
-        <h1 className="text-xl font-bold text-text-main mb-4">Эталоны</h1>
+        <div className="mb-5">
+          <h1 className="text-xl font-bold text-text-main mb-1">Эталоны</h1>
+          <p className="text-sm text-text-muted">База знаний для RAG: примеры тест-кейсов, повышающие качество генерации.</p>
+        </div>
 
         {/* Вкладки */}
         <div className="flex gap-1 bg-gray-100 rounded-xl p-1 mb-6 w-fit">

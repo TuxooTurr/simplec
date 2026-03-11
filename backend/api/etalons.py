@@ -4,10 +4,13 @@ CRUD эндпоинты для эталонных пар:
   - Автотесты:   /api/autotests  (XML мануальный кейс → Java)
   - Дефекты:     /api/defects    (описание → тело дефекта)
 """
+import logging
 import uuid
 from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from backend.schemas import EtalonAddRequest
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -56,7 +59,8 @@ def list_etalons(platform: str = "", feature: str = "", limit: int = 50, offset:
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.get("/api/etalons/stats")
@@ -104,7 +108,8 @@ async def add_etalon(
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.delete("/api/etalons/{pair_id}")
@@ -114,7 +119,8 @@ def delete_etalon(pair_id: str):
         store.pairs.delete(ids=[pair_id])
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -148,7 +154,8 @@ def list_autotests(feature: str = "", limit: int = 50, offset: int = 0):
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.post("/api/autotests")
@@ -186,7 +193,8 @@ async def add_autotest(
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.delete("/api/autotests/{pair_id}")
@@ -196,7 +204,8 @@ def delete_autotest(pair_id: str):
         store.autotest_pairs.delete(ids=[pair_id])
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -230,7 +239,8 @@ def list_defects(feature: str = "", limit: int = 50, offset: int = 0):
             })
         return {"items": items, "total": len(items)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.post("/api/defects")
@@ -256,7 +266,8 @@ async def add_defect(
         )
         return {"id": pair_id, "status": "added"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
 
 
 @router.delete("/api/defects/{pair_id}")
@@ -266,4 +277,5 @@ def delete_defect(pair_id: str):
         store.defect_pairs.delete(ids=[pair_id])
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка в эндпоинте эталонов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")

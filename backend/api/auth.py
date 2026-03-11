@@ -3,8 +3,12 @@
 """
 
 import os as _os
+import re
+import time
+from collections import defaultdict
+from threading import Lock
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from backend.auth import (
@@ -18,6 +22,43 @@ from db.user_store import get_user, verify_password, create_user
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 _SECURE = _os.getenv("COOKIE_SECURE", "1") != "0"
+
+# ─── Простой in-memory rate limiter ─────────────────────────────────────────
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_login_lock = Lock()
+_LOGIN_LIMIT = 10       # попыток
+_LOGIN_WINDOW = 60      # секунд
+
+
+def _check_rate_limit(ip: str) -> None:
+    now = time.time()
+    with _login_lock:
+        attempts = [t for t in _login_attempts[ip] if now - t < _LOGIN_WINDOW]
+        if len(attempts) >= _LOGIN_LIMIT:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Слишком много попыток входа. Попробуйте через минуту.",
+            )
+        attempts.append(now)
+        _login_attempts[ip] = attempts
+
+
+def _validate_password(password: str) -> None:
+    if len(password) < 12:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Пароль должен содержать минимум 12 символов",
+        )
+    if not re.search(r"[A-Za-zА-Яа-яЁё]", password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Пароль должен содержать хотя бы одну букву",
+        )
+    if not re.search(r"\d", password):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Пароль должен содержать хотя бы одну цифру",
+        )
 
 
 def _set_auth_cookie(response: Response, username: str) -> None:
@@ -44,7 +85,8 @@ class RegisterRequest(BaseModel):
 
 
 @router.post("/login")
-def login(req: LoginRequest, response: Response):
+def login(req: LoginRequest, response: Response, request: Request):
+    _check_rate_limit(request.client.host if request.client else "unknown")
     user = get_user(req.username)
     if not user or not verify_password(req.password, user["password_hash"]):
         raise HTTPException(
@@ -62,11 +104,7 @@ def register(req: RegisterRequest, response: Response):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Логин должен содержать минимум 3 символа",
         )
-    if len(req.password) < 6:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Пароль должен содержать минимум 6 символов",
-        )
+    _validate_password(req.password)
     try:
         create_user(req.username.strip(), req.password)
     except ValueError as e:

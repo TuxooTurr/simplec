@@ -24,6 +24,8 @@ load_dotenv(_ROOT / ".env")
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarletteRequest
 
 from backend.api import (
     auth, generation, etalons, bugs, system, alerts,
@@ -64,9 +66,26 @@ async def lifespan(app_: FastAPI):
 app = FastAPI(
     title="SimpleTest API",
     description="AI-генератор тест-кейсов для Jira Zephyr Scale",
-    version="2.2.0",
+    version="3.1.0",
     lifespan=lifespan,
+    # Отключаем автогенерацию документации на проде (опционально)
+    # docs_url=None, redoc_url=None,
 )
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Добавляет стандартные security-заголовки ко всем ответам."""
+    async def dispatch(self, request: StarletteRequest, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        return response
+
+
+app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS — разрешаем только свой домен + localhost для разработки
 app.add_middleware(
@@ -77,8 +96,8 @@ app.add_middleware(
         "http://localhost:3000",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
 )
 
 # ─── Открытые роутеры (без авторизации) ─────────────────────────────────────

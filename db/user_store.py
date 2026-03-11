@@ -9,10 +9,13 @@
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import bcrypt as _bcrypt_lib
+
+logger = logging.getLogger(__name__)
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _USERS_FILE = _DATA_DIR / "users.json"
@@ -76,6 +79,9 @@ def ensure_default_user() -> None:
     if _load():
         return
     admin_user = os.getenv("ADMIN_USER", "admin")
-    admin_pass = os.getenv("ADMIN_PASS", "simpletest")
+    admin_pass = os.getenv("ADMIN_PASS", "")
+    if not admin_pass:
+        logger.warning("[auth] ADMIN_PASS не задан — первый пользователь не создан. Задайте ADMIN_PASS в .env")
+        return
     create_user(admin_user, admin_pass)
-    print(f"[auth] Создан пользователь '{admin_user}' (из ADMIN_USER/ADMIN_PASS)")
+    logger.info("[auth] Создан первый пользователь из переменных окружения")

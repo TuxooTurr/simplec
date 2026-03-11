@@ -21,8 +21,11 @@ WebSocket протокол:
 import asyncio
 import csv
 import io
+import logging
 import time
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from backend.auth import ws_require_auth
@@ -113,14 +116,25 @@ def _dict_to_tc(d: dict):
 # ──────────────────────────────────────────────────────────────────────────────
 
 async def _handle_generation(ws: WebSocket, data: dict):
-    requirement = data.get("requirement", "")
-    feature = data.get("feature", "Feature")
+    from agents.prompt_guard import sanitize_input
+
+    raw_requirement = data.get("requirement", "")
+    raw_feature = data.get("feature", "Feature")
     depth = data.get("depth", "smoke")
     provider = data.get("provider", "gigachat")
     platform = data.get("platform", "W")
 
-    if not requirement:
+    if not raw_requirement:
         await ws.send_json({"type": "error", "message": "Требование не может быть пустым"})
+        return
+
+    req_result = sanitize_input(raw_requirement)
+    feat_result = sanitize_input(raw_feature)
+    requirement = req_result["text"]
+    feature = feat_result["text"]
+
+    if req_result.get("blocked"):
+        await ws.send_json({"type": "error", "message": "Входные данные не прошли проверку безопасности"})
         return
 
     t_start = time.time()
@@ -259,4 +273,5 @@ async def parse_file_endpoint(file: UploadFile = File(...)):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Ошибка при парсинге файла")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")

@@ -65,7 +65,7 @@
     "params": [
       {"key": "id",               "label": "ID МпР",           "type": "text",     "required": true,  "default": "",                                    "hint": "Уникальный идентификатор МпР"},
       {"key": "service_ci",       "label": "CI системы",       "type": "text",     "required": true,  "default": "CI0000000",                           "hint": "CI-код системы (service_ci)"},
-      {"key": "service_name",     "label": "Название услуги",  "type": "text",     "required": true,  "default": ""},
+      {"key": "service_name",     "label": "Название услуги",  "type": "text",     "required": true,  "default": "Тестовая ИТ-услуга"},
       {"key": "deadline",         "label": "Дедлайн",          "type": "text",     "required": false, "default": "",                                    "hint": "ISO 8601, напр. 2026-03-11T23:59:00Z"},
       {"key": "description",      "label": "Описание",         "type": "textarea", "required": false, "default": ""},
       {"key": "action",           "label": "Действие",         "type": "select",   "required": false, "default": "OPEN",   "options": ["OPEN", "CLOSE", "UPDATE"]},

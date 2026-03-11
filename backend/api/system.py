@@ -17,13 +17,11 @@ def get_providers():
     providers_raw = LLMClient.get_available_providers()
     result = []
     for p in providers_raw:
-        hc = LLMClient.health_check(p["id"])
-        result.append({
-            "id": p["id"],
-            "name": p["name"],
-            "status": hc["status"],
-            "message": hc["message"],
-        })
+        if p.get("status") == "no_key":
+            result.append({"id": p["id"], "name": p["name"], "status": "red", "message": "Нет ключа"})
+        else:
+            hc = LLMClient.health_check(p["id"])
+            result.append({"id": p["id"], "name": p["name"], "status": hc["status"], "message": hc["message"]})
     return result
 
 

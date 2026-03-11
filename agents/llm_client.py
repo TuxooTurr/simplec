@@ -442,12 +442,18 @@ class LLMClient:
 
         if os.getenv("DEEPSEEK_API_KEY"):
             providers.append({"id": "deepseek", "name": "DeepSeek", "status": "ready"})
+        else:
+            providers.append({"id": "deepseek", "name": "DeepSeek", "status": "no_key"})
 
         if os.getenv("OPENAI_API_KEY"):
             providers.append({"id": "openai", "name": "OpenAI", "status": "ready"})
+        else:
+            providers.append({"id": "openai", "name": "OpenAI", "status": "no_key"})
 
         if os.getenv("ANTHROPIC_API_KEY"):
             providers.append({"id": "claude", "name": "Claude", "status": "ready"})
+        else:
+            providers.append({"id": "claude", "name": "Claude", "status": "no_key"})
 
         # Local providers — show only if actually reachable on this machine
         try:

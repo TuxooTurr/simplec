@@ -1539,6 +1539,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
   const [sendResult,  setSendResult]  = useState<SendNowResult | null>(null);
   const [previewing,  setPreviewing]  = useState(false);
   const [preview,     setPreview]     = useState<PreviewResult | null>(null);
+  const [previewTab,  setPreviewTab]  = useState<"data" | "metadata" | "thresholds">("data");
   const [logs,        setLogs]        = useState<LogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
 
@@ -1630,15 +1631,30 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
           {sendResult.ok
             ? <CheckCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             : <XCircle    className="w-3.5 h-3.5 mt-0.5 shrink-0" />}
-          <div className="flex-1 min-w-0">
-            {sendResult.ok ? (
-              <span>
-                Отправлено · value={sendResult.value?.toFixed(4)}
+          <div className="flex-1 min-w-0 space-y-0.5">
+            {sendResult.ok ? (<>
+              <div>
+                <span className="font-semibold">DATA</span>
+                {` · value=${sendResult.value?.toFixed(4)}`}
                 {sendResult.health != null && ` · health=${sendResult.health}`}
-                {sendResult.offset != null && ` · offset=${sendResult.offset}`}
-                {sendResult.topic && ` · topic=${sendResult.topic}`}
-              </span>
-            ) : (
+                {sendResult.data_offset != null && ` · offset=${sendResult.data_offset}`}
+                {sendResult.data_topic && <span className="opacity-60"> → {sendResult.data_topic}</span>}
+              </div>
+              {sendResult.metadata_topic && (
+                <div className="opacity-75">
+                  <span className="font-semibold">METADATA</span>
+                  {sendResult.metadata_offset != null && ` · offset=${sendResult.metadata_offset}`}
+                  <span className="opacity-60"> → {sendResult.metadata_topic}</span>
+                </div>
+              )}
+              {sendResult.thresholds_topic && (
+                <div className="opacity-75">
+                  <span className="font-semibold">THRESHOLDS</span>
+                  {sendResult.thresholds_offset != null && ` · offset=${sendResult.thresholds_offset}`}
+                  <span className="opacity-60"> → {sendResult.thresholds_topic}</span>
+                </div>
+              )}
+            </>) : (
               <span>{sendResult.error ?? "Ошибка отправки"}</span>
             )}
           </div>
@@ -1650,8 +1666,9 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
 
       {preview && (
         <div className="shrink-0 mx-4 mt-3 border border-border-main rounded-lg overflow-hidden">
+          {/* Шапка: значение + здоровье + закрыть */}
           <div className="flex items-center justify-between px-3 py-2 bg-bg-subtle border-b border-border-main">
-            <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Превью сообщения</span>
+            <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Превью сообщений</span>
             <div className="flex items-center gap-3 text-xs">
               <span className="text-text-main">value=<strong>{preview.value.toFixed(4)}</strong></span>
               {preview.baseline != null && <span className="text-text-muted">baseline={preview.baseline.toFixed(4)}</span>}
@@ -1663,8 +1680,35 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
               <button onClick={() => setPreview(null)} className="text-text-muted hover:text-text-main"><X className="w-3 h-3" /></button>
             </div>
           </div>
-          <pre className="text-xs font-mono p-3 max-h-48 overflow-y-auto bg-white text-text-main leading-relaxed">
-            {preview.message_json}
+          {/* Табы: DATA / METADATA / THRESHOLDS */}
+          <div className="flex items-center gap-1 px-3 pt-2 bg-white border-b border-border-main">
+            {(["data", "metadata", "thresholds"] as const).map(t => {
+              const disabled = t === "thresholds" && !preview.thresholds_message_json;
+              return (
+                <button
+                  key={t}
+                  onClick={() => !disabled && setPreviewTab(t)}
+                  disabled={disabled}
+                  className={`px-2.5 py-1 text-[10px] font-semibold rounded-t uppercase tracking-wide transition-colors ${
+                    previewTab === t
+                      ? "bg-indigo-600 text-white"
+                      : disabled
+                        ? "text-text-muted/30 cursor-not-allowed"
+                        : "text-text-muted hover:text-text-main hover:bg-bg-subtle"
+                  }`}
+                >
+                  {t === "data" ? "DATA" : t === "metadata" ? "METADATA" : "THRESHOLDS"}
+                </button>
+              );
+            })}
+          </div>
+          {/* JSON */}
+          <pre className="text-xs font-mono p-3 max-h-52 overflow-y-auto bg-white text-text-main leading-relaxed">
+            {previewTab === "data"
+              ? preview.data_message_json
+              : previewTab === "metadata"
+                ? preview.metadata_message_json
+                : preview.thresholds_message_json ?? "— пороги не настроены —"}
           </pre>
         </div>
       )}

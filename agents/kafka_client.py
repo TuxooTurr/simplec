@@ -1,13 +1,15 @@
 """
 Обёртка над kafka-python KafkaProducer.
 
-Конфигурация через env-переменные:
+Конфигурация через env-переменные (fallback):
   KAFKA_BOOTSTRAP_SERVERS  — хост:порт (через запятую), по умолчанию localhost:9092
   KAFKA_SECURITY_PROTOCOL  — PLAINTEXT | SSL | SASL_PLAINTEXT | SASL_SSL
   KAFKA_SASL_MECHANISM     — PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
   KAFKA_SASL_USERNAME      — логин
   KAFKA_SASL_PASSWORD      — пароль
   KAFKA_SSL_CAFILE         — путь к CA-файлу
+
+Или через явный kafka_cfg: dict (приоритет над env).
 """
 
 import os
@@ -17,11 +19,12 @@ from typing import Optional
 class KafkaClient:
 
     @staticmethod
-    def _build_producer():
+    def _build_producer(kafka_cfg: Optional[dict] = None):
         from kafka import KafkaProducer  # type: ignore
 
-        servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-        protocol = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").upper()
+        cfg = kafka_cfg or {}
+        servers  = cfg.get("kafka_bootstrap_servers") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        protocol = (cfg.get("kafka_security_protocol") or os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")).upper()
 
         kwargs: dict = {
             "bootstrap_servers": [s.strip() for s in servers.split(",")],
@@ -31,15 +34,15 @@ class KafkaClient:
         }
 
         if protocol in ("SASL_PLAINTEXT", "SASL_SSL"):
-            mechanism = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
-            username   = os.getenv("KAFKA_SASL_USERNAME", "")
-            password   = os.getenv("KAFKA_SASL_PASSWORD", "")
+            mechanism = cfg.get("kafka_sasl_mechanism") or os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
+            username   = cfg.get("kafka_sasl_username") or os.getenv("KAFKA_SASL_USERNAME", "")
+            password   = cfg.get("kafka_sasl_password") or os.getenv("KAFKA_SASL_PASSWORD", "")
             kwargs["sasl_mechanism"] = mechanism
             kwargs["sasl_plain_username"] = username
             kwargs["sasl_plain_password"] = password
 
         if protocol in ("SSL", "SASL_SSL"):
-            cafile = os.getenv("KAFKA_SSL_CAFILE", "")
+            cafile = cfg.get("kafka_ssl_cafile") or os.getenv("KAFKA_SSL_CAFILE", "")
             if cafile:
                 kwargs["ssl_cafile"] = cafile
 
@@ -53,6 +56,7 @@ class KafkaClient:
         key:       Optional[str] = None,
         headers:   Optional[list[tuple[str, bytes]]] = None,
         partition: Optional[int] = None,
+        kafka_cfg: Optional[dict] = None,
     ) -> dict:
         """
         Отправить сообщение в Kafka.
@@ -61,11 +65,12 @@ class KafkaClient:
             headers:   Kafka headers — list of (name: str, value: bytes).
                        Используется для A2A-протокола (JWT заголовки).
             partition: Явный номер партиции. None = автовыбор по ключу/round-robin.
+            kafka_cfg: Опциональный конфиг из БД. Если None — читает из os.getenv.
 
         Returns:
             {"offset": int, "partition": int, "timestamp": int}
         """
-        producer = cls._build_producer()
+        producer = cls._build_producer(kafka_cfg)
         try:
             key_bytes   = key.encode("utf-8") if key else None
             value_bytes = payload.encode("utf-8")

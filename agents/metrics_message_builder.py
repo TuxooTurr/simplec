@@ -1,6 +1,11 @@
 """
 Генератор значений метрик и построитель Kafka-сообщений для Sber911.
 Чистые функции без доступа к БД.
+
+Sber911 — 3 раздельных потока:
+  DATA       — значения метрик (каждый period_sec)
+  METADATA   — описание метрики (при старте + каждые 24 ч)
+  THRESHOLDS — пороги/базалайн (при старте + каждые 24 ч, если включены)
 """
 
 import json
@@ -9,6 +14,17 @@ import random
 import time
 from datetime import datetime, timezone
 from typing import Optional
+
+
+# ── Health int → Sber911 status string ───────────────────────────────────────
+
+HEALTH_TO_STATUS: dict[int, str] = {
+    1: "normal",
+    2: "warning",
+    3: "high",
+    4: "critical",
+    5: "wide_ranging",
+}
 
 
 # ── Value generation ──────────────────────────────────────────────────────────
@@ -159,101 +175,115 @@ def calculate_health(
     return 1
 
 
-# ── Kafka message builder ─────────────────────────────────────────────────────
+# ── DATA message ──────────────────────────────────────────────────────────────
 
-def build_kafka_message(
+def build_data_message(
     metric_hash: str,
+    value: float,
+    baseline: Optional[float],
+    health: Optional[int],
+    version: str = "1.0",
+) -> dict:
+    """DATA-сообщение: значение метрики. Отправляется каждый period_sec."""
+    return {
+        "version": version,
+        "metrics": {
+            "data": [{
+                "metric_hash":    metric_hash,
+                "metric_value":   value,
+                "baseline_value": baseline,
+                "metric_ts":      int(time.time()),
+                "metric_status":  HEALTH_TO_STATUS.get(health) if health is not None else None,
+            }]
+        },
+    }
+
+
+# ── METADATA message ──────────────────────────────────────────────────────────
+
+def build_metadata_message(
+    metric_hash: str,
+    mon_system_ci: str,
+    it_service_ci: str,
+    object_ci: Optional[str],
+    object_id: str,
+    object_name: str,
+    object_type: Optional[str],
+    metric_id: str,
     metric_name: str,
     metric_description: str,
     metric_type: str,
     metric_group: str,
     metric_unit: str,
     metric_period_sec: int,
-    object_ci: Optional[str],
-    object_id: str,
-    object_name: str,
-    object_type: Optional[str],
-    mon_system_metric_id: str,
-    purpose_type_hint: Optional[int],
-    spec_version: str,
-    it_service_ci: str,
-    mon_system_ci: str,
-    value: float,
-    baseline: Optional[float],
-    health: Optional[int],
-    thresholds_enabled: bool = False,
-    threshold_rows: Optional[list[dict]] = None,
-    combination_selector: str = "worst",
-    threshold_type: str = "threshold",
+    version: str = "1.0",
 ) -> dict:
-    """Строит полное JSON-сообщение для Kafka (формат Sber911 metadata-топика)."""
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    msg: dict = {
-        "specVersion":       spec_version or "1.0",
-        "metricHash":        metric_hash,
-        "itServiceCi":       it_service_ci,
-        "monSystemCi":       mon_system_ci,
-        "metricName":        metric_name,
-        "metricDescription": metric_description,
-        "metricType":        metric_type,
-        "metricGroup":       metric_group,
-        "metricUnit":        metric_unit,
-        "metricPeriodSec":   metric_period_sec,
-        "objectId":          object_id,
-        "objectName":        object_name,
-        "monSystemMetricId": mon_system_metric_id,
-        "timestamp":         now_iso,
-        "value":             value,
+    """METADATA-сообщение: описание метрики. При регистрации + каждые 24 ч."""
+    return {
+        "version":            version,
+        "metric_hash":        metric_hash,
+        "mon_system_ci":      mon_system_ci,
+        "it_service_ci":      it_service_ci,
+        "object_ci":          object_ci,
+        "object_id":          object_id,
+        "object_name":        object_name,
+        "object_type":        object_type,
+        "metric_id":          metric_id,
+        "metric_name":        metric_name,
+        "metric_description": metric_description,
+        "metric_type":        metric_type,
+        "metric_group":       metric_group,
+        "metric_unit":        metric_unit,
+        "metric_period_sec":  metric_period_sec,
     }
 
-    if object_ci:
-        msg["objectCi"] = object_ci
-    if object_type:
-        msg["objectType"] = object_type
-    if purpose_type_hint is not None:
-        msg["purposeTypeHint"] = purpose_type_hint
-    if baseline is not None:
-        msg["baseline"] = baseline
-    if health is not None:
-        msg["healthStatus"] = health
 
-    if thresholds_enabled and threshold_rows:
-        msg["thresholds"] = {
-            "combinationSelector": combination_selector,
-            "thresholdType":       threshold_type,
-            "rows": [
-                {
-                    "healthType": r["health_type"],
-                    "minValue":   r["min_value"],
-                    "maxValue":   r["max_value"],
-                    "isPercent":  r.get("is_percent", False),
-                }
-                for r in threshold_rows
-            ],
-        }
+# ── THRESHOLDS message ────────────────────────────────────────────────────────
 
-    return msg
+def build_thresholds_message(
+    metric_hash: str,
+    threshold_rows: list[dict],
+    combination_selector: str = "worst",
+    baseline_deviation: Optional[float] = None,
+    version: str = "1.0",
+) -> dict:
+    """THRESHOLDS-сообщение: пороги. При старте + каждые 24 ч (если включены)."""
+    thresholds = []
+    for row in threshold_rows:
+        ht = int(row["health_type"])
+        thresholds.append({
+            "min":    float(row["min_value"]) if row.get("min_value") is not None else None,
+            "max":    float(row["max_value"]) if row.get("max_value") is not None else None,
+            "status": HEALTH_TO_STATUS.get(ht, "normal"),
+        })
+    return {
+        "version":             version,
+        "metric_hash":         metric_hash,
+        "threshold":           thresholds,
+        "combination_selector": combination_selector,
+        "baseline_deviation":  baseline_deviation,
+        "threshold_ts":        int(time.time()),
+    }
 
+
+# ── Preview (все 3 сообщения без отправки) ────────────────────────────────────
 
 def build_preview(
     metric_id: int,
     metric_hash: str,
+    mon_system_ci: str,
+    it_service_ci: str,
+    object_ci: Optional[str],
+    object_id: str,
+    object_name: str,
+    object_type: Optional[str],
+    mon_system_metric_id: str,
     metric_name: str,
     metric_description: str,
     metric_type: str,
     metric_group: str,
     metric_unit: str,
     metric_period_sec: int,
-    object_ci: Optional[str],
-    object_id: str,
-    object_name: str,
-    object_type: Optional[str],
-    mon_system_metric_id: str,
-    purpose_type_hint: Optional[int],
-    spec_version: str,
-    it_service_ci: str,
-    mon_system_ci: str,
     metric_created_at: Optional[datetime],
     values_cfg: dict,
     baseline_cfg: dict,
@@ -261,7 +291,7 @@ def build_preview(
     thresholds_cfg: dict,
     threshold_rows: list[dict],
 ) -> dict:
-    """Строит превью сообщения для UI (без отправки)."""
+    """Строит превью всех 3 сообщений для UI (без отправки в Kafka)."""
     value = generate_value(
         pattern=values_cfg.get("pattern", "random"),
         value_min=float(values_cfg.get("value_min", 0)),
@@ -293,26 +323,49 @@ def build_preview(
         threshold_rows=threshold_rows,
     )
 
-    msg = build_kafka_message(
-        metric_hash=metric_hash, metric_name=metric_name,
-        metric_description=metric_description, metric_type=metric_type,
-        metric_group=metric_group, metric_unit=metric_unit,
-        metric_period_sec=metric_period_sec, object_ci=object_ci,
-        object_id=object_id, object_name=object_name, object_type=object_type,
-        mon_system_metric_id=mon_system_metric_id,
-        purpose_type_hint=purpose_type_hint, spec_version=spec_version,
-        it_service_ci=it_service_ci, mon_system_ci=mon_system_ci,
-        value=value, baseline=baseline, health=health,
-        thresholds_enabled=thresholds_cfg.get("enabled", False),
-        threshold_rows=threshold_rows,
-        combination_selector=thresholds_cfg.get("combination_selector", "worst"),
-        threshold_type=thresholds_cfg.get("threshold_type", "threshold"),
+    data_msg = build_data_message(metric_hash, value, baseline, health)
+
+    meta_msg = build_metadata_message(
+        metric_hash=metric_hash,
+        mon_system_ci=mon_system_ci,
+        it_service_ci=it_service_ci,
+        object_ci=object_ci,
+        object_id=object_id,
+        object_name=object_name,
+        object_type=object_type,
+        metric_id=mon_system_metric_id,
+        metric_name=metric_name,
+        metric_description=metric_description,
+        metric_type=metric_type,
+        metric_group=metric_group,
+        metric_unit=metric_unit,
+        metric_period_sec=metric_period_sec,
     )
 
+    thr_msg_json: Optional[str] = None
+    if thresholds_cfg.get("enabled") and threshold_rows:
+        baseline_deviation: Optional[float] = None
+        if baseline_cfg.get("enabled"):
+            cm = baseline_cfg.get("calc_method", "offset")
+            if cm == "offset":
+                ov = baseline_cfg.get("offset_value")
+                baseline_deviation = float(ov) if ov is not None else None
+            elif cm == "fixed":
+                fv = baseline_cfg.get("fixed_value")
+                baseline_deviation = float(fv) if fv is not None else None
+        thr_msg = build_thresholds_message(
+            metric_hash=metric_hash,
+            threshold_rows=threshold_rows,
+            combination_selector=thresholds_cfg.get("combination_selector", "worst"),
+            baseline_deviation=baseline_deviation,
+        )
+        thr_msg_json = json.dumps(thr_msg, ensure_ascii=False, indent=2)
+
     return {
-        "value":               value,
-        "baseline":            baseline,
-        "health":              health,
-        "thresholds_included": thresholds_cfg.get("enabled", False),
-        "message_json":        json.dumps(msg, ensure_ascii=False, indent=2),
+        "value":                   value,
+        "baseline":                baseline,
+        "health":                  health,
+        "data_message_json":       json.dumps(data_msg, ensure_ascii=False, indent=2),
+        "metadata_message_json":   json.dumps(meta_msg, ensure_ascii=False, indent=2),
+        "thresholds_message_json": thr_msg_json,
     }

@@ -8,8 +8,10 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+_RESEND_INTERVAL = timedelta(hours=24)
 
 logger = logging.getLogger(__name__)
 
@@ -124,20 +126,25 @@ class MetricsScheduler:
 
     @staticmethod
     def _do_send(metric_id: int) -> None:
-        """Синхронная отправка — выполняется в отдельном потоке."""
+        """Синхронная отправка — выполняется в отдельном потоке.
+
+        Sber911: 3 топика:
+          DATA       — отправляется всегда (каждый period_sec)
+          METADATA   — при первом запуске + каждые 24 ч
+          THRESHOLDS — при первом запуске + каждые 24 ч (если включены)
+        """
         from db.postgres import SessionLocal
         from db.metrics_models import (
-            TestMetric, TestMetricValuesConfig, TestMetricBaselineConfig,
-            TestMetricThresholdsConfig, TestMetricHealthConfig, GenerationLog,
+            TestMetric, GenerationLog,
         )
         from backend.api.metrics_settings import get_kafka_config
         from agents.metrics_message_builder import (
-            generate_value, calculate_baseline, calculate_health, build_kafka_message,
+            generate_value, calculate_baseline, calculate_health,
+            build_data_message, build_metadata_message, build_thresholds_message,
         )
         from agents.kafka_client import KafkaClient
 
         db = SessionLocal()
-        # Инициализируем до try — чтобы передать в error-лог даже при ошибке Kafka
         value: Optional[float]    = None
         baseline: Optional[float] = None
         health: Optional[int]     = None
@@ -196,51 +203,89 @@ class MetricsScheduler:
                 threshold_rows=rows,
             )
 
-            msg = build_kafka_message(
-                metric_hash=m.metric_hash,
-                metric_name=m.metric_name,
-                metric_description=m.metric_description,
-                metric_type=m.metric_type,
-                metric_group=m.metric_group,
-                metric_unit=m.metric_unit,
-                metric_period_sec=m.metric_period_sec,
-                object_ci=m.object_ci,
-                object_id=m.object_id,
-                object_name=m.object_name,
-                object_type=m.object_type,
-                mon_system_metric_id=m.mon_system_metric_id,
-                purpose_type_hint=m.purpose_type_hint,
-                spec_version=m.spec_version,
-                it_service_ci=system.it_service_ci,
-                mon_system_ci=system.mon_system_ci,
-                value=value,
-                baseline=baseline,
-                health=health,
-                thresholds_enabled=tc.enabled if tc else False,
-                threshold_rows=rows,
-                combination_selector=tc.combination_selector if tc else "worst",
-                threshold_type=tc.threshold_type if tc else "threshold",
-            )
-            msg_str = json.dumps(msg, ensure_ascii=False)
-
             cfg = get_kafka_config(db)
-            topic = cfg.get("kafka_topic", "metadata")
+            topic_data       = cfg.get("kafka_topic_data",       "sber911.data")
+            topic_metadata   = cfg.get("kafka_topic_metadata",   "sber911.metadata")
+            topic_thresholds = cfg.get("kafka_topic_thresholds", "sber911.thresholds")
 
-            result = KafkaClient.send(topic, msg_str, key=m.metric_hash)
+            now = datetime.now(timezone.utc)
 
-            m.last_sent_at = datetime.now(timezone.utc)
+            # ── DATA (всегда) ─────────────────────────────────────────────────
+            data_msg = build_data_message(m.metric_hash, value, baseline, health)
+            data_str = json.dumps(data_msg, ensure_ascii=False)
+            data_result = KafkaClient.send(topic_data, data_str, key=m.metric_hash, kafka_cfg=cfg)
+
+            # ── METADATA (при первом запуске или раз в 24 ч) ──────────────────
+            sent_metadata = False
+            if (m.last_metadata_sent_at is None
+                    or now - m.last_metadata_sent_at >= _RESEND_INTERVAL):
+                meta_msg = build_metadata_message(
+                    metric_hash=m.metric_hash,
+                    mon_system_ci=system.mon_system_ci,
+                    it_service_ci=system.it_service_ci,
+                    object_ci=m.object_ci,
+                    object_id=m.object_id,
+                    object_name=m.object_name,
+                    object_type=m.object_type,
+                    metric_id=m.mon_system_metric_id,
+                    metric_name=m.metric_name,
+                    metric_description=m.metric_description,
+                    metric_type=m.metric_type,
+                    metric_group=m.metric_group,
+                    metric_unit=m.metric_unit,
+                    metric_period_sec=m.metric_period_sec,
+                )
+                KafkaClient.send(
+                    topic_metadata,
+                    json.dumps(meta_msg, ensure_ascii=False),
+                    key=m.metric_hash,
+                    kafka_cfg=cfg,
+                )
+                m.last_metadata_sent_at = now
+                sent_metadata = True
+
+            # ── THRESHOLDS (если включены, при первом запуске или раз в 24 ч) ─
+            sent_thresholds = False
+            if tc and tc.enabled and rows:
+                if (m.last_thresholds_sent_at is None
+                        or now - m.last_thresholds_sent_at >= _RESEND_INTERVAL):
+                    baseline_deviation: Optional[float] = None
+                    if bc and bc.enabled:
+                        if bc.calc_method == "offset" and bc.offset_value is not None:
+                            baseline_deviation = float(bc.offset_value)
+                        elif bc.calc_method == "fixed" and bc.fixed_value is not None:
+                            baseline_deviation = float(bc.fixed_value)
+                    thr_msg = build_thresholds_message(
+                        metric_hash=m.metric_hash,
+                        threshold_rows=rows,
+                        combination_selector=tc.combination_selector,
+                        baseline_deviation=baseline_deviation,
+                    )
+                    KafkaClient.send(
+                        topic_thresholds,
+                        json.dumps(thr_msg, ensure_ascii=False),
+                        key=m.metric_hash,
+                        kafka_cfg=cfg,
+                    )
+                    m.last_thresholds_sent_at = now
+                    sent_thresholds = True
+
+            m.last_sent_at = now
             db.add(GenerationLog(
                 test_metric_id=metric_id,
                 value_sent=value,
                 baseline_sent=baseline,
                 health_sent=health,
-                thresholds_sent=bool(tc and tc.enabled),
-                kafka_offset=result.get("offset"),
+                thresholds_sent=sent_thresholds,
+                kafka_offset=data_result.get("offset"),
                 status="success",
-                message_json=msg_str,
+                message_json=data_str,
             ))
             db.commit()
-            logger.debug(f"[Scheduler] metric_id={metric_id} sent ok, value={value}")
+            logger.debug(
+                f"[Scheduler] metric_id={metric_id} sent ok"
+                f" value={value} metadata={sent_metadata} thresholds={sent_thresholds}"
+            )
 
         except Exception as e:
             logger.error(f"[Scheduler] metric_id={metric_id} send error: {e}")

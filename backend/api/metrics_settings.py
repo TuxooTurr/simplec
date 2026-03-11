@@ -23,9 +23,17 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "value":       os.getenv("KAFKA_BOOTSTRAP_SERVERS", ""),
         "description": "Адрес Kafka-брокера (host:port или host1:port1,host2:port2)",
     },
-    "kafka_topic": {
-        "value":       "metadata",
-        "description": "Kafka-топик для отправки метрик (стенд Sber911 читает 'metadata')",
+    "kafka_topic_data": {
+        "value":       "sber911.data",
+        "description": "Kafka-топик DATA — значения метрик (каждый period_sec)",
+    },
+    "kafka_topic_metadata": {
+        "value":       "sber911.metadata",
+        "description": "Kafka-топик METADATA — описание метрики (при старте + каждые 24 ч)",
+    },
+    "kafka_topic_thresholds": {
+        "value":       "sber911.thresholds",
+        "description": "Kafka-топик THRESHOLDS — пороги (при старте + каждые 24 ч, если включены)",
     },
     "kafka_security_protocol": {
         "value":       os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),

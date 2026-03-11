@@ -21,10 +21,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from db.alerts_store import AlertsStore
+from db.postgres import get_db
 
 router = APIRouter()
 
@@ -74,15 +76,16 @@ def _resolve_template(template: str, values: dict[str, str]) -> str:
     return result
 
 
-def _send_simple_sync(topic: str, payload: str, partition: Optional[int]) -> dict:
+def _send_simple_sync(topic: str, payload: str, partition: Optional[int], kafka_cfg: Optional[dict] = None) -> dict:
     from agents.kafka_client import KafkaClient
-    return KafkaClient.send(topic, payload, partition=partition)
+    return KafkaClient.send(topic, payload, partition=partition, kafka_cfg=kafka_cfg)
 
 
 def _send_a2a_sync(
     topic: str,
     values: dict[str, str],
     partition: Optional[int],
+    kafka_cfg: Optional[dict] = None,
 ) -> tuple[dict, str]:
     """
     Строит A2A-сообщение (JWT headers + JSON-RPC wrapper) и отправляет в Kafka.
@@ -112,6 +115,7 @@ def _send_a2a_sync(
         key=key,
         headers=kafka_headers,
         partition=partition,
+        kafka_cfg=kafka_cfg,
     )
     return meta, payload_str
 
@@ -142,7 +146,12 @@ def remove_script(script_id: str) -> dict:
 
 
 @router.post("/api/alerts/send")
-async def send_alert(req: SendRequest) -> dict:
+async def send_alert(req: SendRequest, db: Session = Depends(get_db)) -> dict:
+    from backend.api.app_settings import get_alerts_kafka_config
+    kafka_cfg_raw = get_alerts_kafka_config(db)
+    # None → KafkaClient falls back to os.getenv
+    kafka_cfg: Optional[dict] = kafka_cfg_raw if kafka_cfg_raw else None
+
     script = AlertsStore.get_script(req.script_id)
     if not script:
         raise HTTPException(status_code=404, detail=f"Скрипт '{req.script_id}' не найден")
@@ -167,7 +176,7 @@ async def send_alert(req: SendRequest) -> dict:
             values["alert_text"] = _resolve_template(tmpl, values)
         try:
             meta, raw_payload = await asyncio.to_thread(
-                _send_a2a_sync, topic, values, partition
+                _send_a2a_sync, topic, values, partition, kafka_cfg
             )
             AlertsStore.add_history({
                 "script_id":   req.script_id,
@@ -207,7 +216,7 @@ async def send_alert(req: SendRequest) -> dict:
         )
 
     try:
-        meta = await asyncio.to_thread(_send_simple_sync, topic, raw_payload, partition)
+        meta = await asyncio.to_thread(_send_simple_sync, topic, raw_payload, partition, kafka_cfg)
         AlertsStore.add_history({
             "script_id":   req.script_id,
             "script_name": script.get("name", req.script_id),

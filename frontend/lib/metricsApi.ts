@@ -286,23 +286,32 @@ export interface LogEntry {
 }
 
 export interface SendNowResult {
-  ok:           boolean;
-  value?:       number;
-  baseline?:    number | null;
-  health?:      number | null;
-  offset?:      number | null;
-  partition?:   number | null;
-  topic?:       string;
-  messageJson?: string;
-  error?:       string;
+  ok:                   boolean;
+  value?:               number;
+  baseline?:            number | null;
+  health?:              number | null;
+  // DATA
+  data_offset?:         number | null;
+  data_partition?:      number | null;
+  data_topic?:          string;
+  // METADATA
+  metadata_offset?:     number | null;
+  metadata_partition?:  number | null;
+  metadata_topic?:      string;
+  // THRESHOLDS (null если не включены)
+  thresholds_offset?:     number | null;
+  thresholds_partition?:  number | null;
+  thresholds_topic?:      string | null;
+  error?:               string;
 }
 
 export interface PreviewResult {
-  value:               number;
-  baseline:            number | null;
-  health:              number | null;
-  thresholds_included: boolean;
-  message_json:        string;
+  value:                    number;
+  baseline:                 number | null;
+  health:                   number | null;
+  data_message_json:        string;
+  metadata_message_json:    string;
+  thresholds_message_json:  string | null;
 }
 
 // ── Builder API functions ─────────────────────────────────────────────────────

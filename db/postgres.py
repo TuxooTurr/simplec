@@ -40,8 +40,12 @@ def _apply_column_migrations():
     create_all не трогает уже существующие таблицы — этот шаг необходим.
     """
     stmts = [
-        "ALTER TABLE test_systems ADD COLUMN IF NOT EXISTS started_by  VARCHAR(255)",
-        "ALTER TABLE test_systems ADD COLUMN IF NOT EXISTS started_at  TIMESTAMP",
+        "ALTER TABLE test_systems ADD COLUMN IF NOT EXISTS started_by              VARCHAR(255)",
+        "ALTER TABLE test_systems ADD COLUMN IF NOT EXISTS started_at              TIMESTAMP",
+        "ALTER TABLE test_metrics ADD COLUMN IF NOT EXISTS last_metadata_sent_at   TIMESTAMP",
+        "ALTER TABLE test_metrics ADD COLUMN IF NOT EXISTS last_thresholds_sent_at TIMESTAMP",
+        # Удалить устаревший единый топик (заменён на 3 отдельных)
+        "DELETE FROM metrics_settings WHERE key = 'kafka_topic'",
     ]
     with engine.begin() as conn:
         for stmt in stmts:

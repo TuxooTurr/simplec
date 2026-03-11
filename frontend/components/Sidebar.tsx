@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Zap, BookOpen, Bug, LogOut, User, Bell, BarChart2, Scale, FlaskConical } from "lucide-react";
+import { Zap, BookOpen, Bug, LogOut, User, Bell, BarChart2, Scale, FlaskConical, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import { logout, getMe } from "@/lib/auth";
@@ -146,6 +146,13 @@ export default function Sidebar() {
               <User className="w-3.5 h-3.5 text-primary" />
             </div>
             <span className="text-xs text-text-muted flex-1 truncate">{username}</span>
+            <Link
+              href="/settings"
+              title="Настройки"
+              className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-primary transition-colors"
+            >
+              <Settings className="w-3.5 h-3.5" />
+            </Link>
             <button
               onClick={handleLogout}
               title="Выйти"

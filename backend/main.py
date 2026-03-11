@@ -30,7 +30,7 @@ from starlette.requests import Request as StarletteRequest
 from backend.api import (
     auth, generation, etalons, bugs, system, alerts,
     metrics_systems, metrics_settings, metrics_builder,
-    revisor, autotests_gen,
+    revisor, autotests_gen, app_settings,
 )
 from backend.auth import require_auth
 from db.user_store import ensure_default_user
@@ -48,6 +48,14 @@ except Exception as _e:
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    # Startup: применить настройки из БД к os.environ
+    try:
+        from db.postgres import SessionLocal
+        _db = SessionLocal()
+        app_settings.apply_saved_settings_to_env(_db)
+        _db.close()
+    except Exception as _e:
+        warnings.warn(f"Settings load failed: {_e}")
     # Startup: запустить планировщик метрик
     try:
         from agents.metrics_scheduler import scheduler
@@ -118,6 +126,7 @@ app.include_router(metrics_settings.router, dependencies=_auth_dep)
 app.include_router(metrics_builder.router,  dependencies=_auth_dep)
 app.include_router(revisor.router,          dependencies=_auth_dep)
 app.include_router(autotests_gen.router,    dependencies=_auth_dep)
+app.include_router(app_settings.router,     dependencies=_auth_dep)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

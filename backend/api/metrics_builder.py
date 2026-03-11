@@ -296,9 +296,10 @@ def update_health(metric_id: int, body: HealthConfigUpdate, db: Session = Depend
 
 @router.post("/api/metrics/metrics/{metric_id}/send-now")
 async def send_now(metric_id: int, db: Session = Depends(get_db)):
-    """Немедленная отправка одного сообщения (вне расписания)."""
+    """Немедленная отправка всех 3 сообщений (DATA + METADATA + THRESHOLDS если включены)."""
     from agents.metrics_message_builder import (
-        generate_value, calculate_baseline, calculate_health, build_kafka_message,
+        generate_value, calculate_baseline, calculate_health,
+        build_data_message, build_metadata_message, build_thresholds_message,
     )
     from backend.api.metrics_settings import get_kafka_config
     from agents.kafka_client import KafkaClient
@@ -343,52 +344,92 @@ async def send_now(metric_id: int, db: Session = Depends(get_db)):
         threshold_rows=rows,
     )
 
-    msg = build_kafka_message(
-        metric_hash=m.metric_hash, metric_name=m.metric_name,
-        metric_description=m.metric_description, metric_type=m.metric_type,
-        metric_group=m.metric_group, metric_unit=m.metric_unit,
-        metric_period_sec=m.metric_period_sec, object_ci=m.object_ci,
-        object_id=m.object_id, object_name=m.object_name, object_type=m.object_type,
-        mon_system_metric_id=m.mon_system_metric_id,
-        purpose_type_hint=m.purpose_type_hint, spec_version=m.spec_version,
-        it_service_ci=system.it_service_ci, mon_system_ci=system.mon_system_ci,
-        value=value, baseline=baseline, health=health,
-        thresholds_enabled=tc.enabled if tc else False,
-        threshold_rows=rows,
-        combination_selector=tc.combination_selector if tc else "worst",
-        threshold_type=tc.threshold_type if tc else "threshold",
-    )
-    msg_str = json.dumps(msg, ensure_ascii=False)
-
     kafka_cfg = get_kafka_config(db)
-    topic = kafka_cfg.get("kafka_topic", "metadata")
+    topic_data       = kafka_cfg.get("kafka_topic_data",       "sber911.data")
+    topic_metadata   = kafka_cfg.get("kafka_topic_metadata",   "sber911.metadata")
+    topic_thresholds = kafka_cfg.get("kafka_topic_thresholds", "sber911.thresholds")
 
-    def _send_sync():
-        return KafkaClient.send(topic, msg_str, key=m.metric_hash)
+    # Сообщения
+    data_msg = build_data_message(m.metric_hash, value, baseline, health)
+    data_str = json.dumps(data_msg, ensure_ascii=False)
+
+    meta_msg = build_metadata_message(
+        metric_hash=m.metric_hash,
+        mon_system_ci=system.mon_system_ci,
+        it_service_ci=system.it_service_ci,
+        object_ci=m.object_ci,
+        object_id=m.object_id,
+        object_name=m.object_name,
+        object_type=m.object_type,
+        metric_id=m.mon_system_metric_id,
+        metric_name=m.metric_name,
+        metric_description=m.metric_description,
+        metric_type=m.metric_type,
+        metric_group=m.metric_group,
+        metric_unit=m.metric_unit,
+        metric_period_sec=m.metric_period_sec,
+    )
+    meta_str = json.dumps(meta_msg, ensure_ascii=False)
+
+    thr_str: Optional[str] = None
+    if tc and tc.enabled and rows:
+        baseline_deviation: Optional[float] = None
+        if bc and bc.enabled:
+            if bc.calc_method == "offset" and bc.offset_value is not None:
+                baseline_deviation = float(bc.offset_value)
+            elif bc.calc_method == "fixed" and bc.fixed_value is not None:
+                baseline_deviation = float(bc.fixed_value)
+        thr_msg = build_thresholds_message(
+            metric_hash=m.metric_hash,
+            threshold_rows=rows,
+            combination_selector=tc.combination_selector,
+            baseline_deviation=baseline_deviation,
+        )
+        thr_str = json.dumps(thr_msg, ensure_ascii=False)
+
+    def _send_all():
+        now = datetime.now(timezone.utc)
+        data_r = KafkaClient.send(topic_data, data_str, key=m.metric_hash, kafka_cfg=kafka_cfg)
+        meta_r = KafkaClient.send(topic_metadata, meta_str, key=m.metric_hash, kafka_cfg=kafka_cfg)
+        thr_r: Optional[dict] = None
+        if thr_str:
+            thr_r = KafkaClient.send(topic_thresholds, thr_str, key=m.metric_hash, kafka_cfg=kafka_cfg)
+        return data_r, meta_r, thr_r, now
 
     try:
-        result = await asyncio.to_thread(_send_sync)
-        m.last_sent_at = datetime.now(timezone.utc)
+        data_r, meta_r, thr_r, sent_at = await asyncio.to_thread(_send_all)
+        m.last_sent_at          = sent_at
+        m.last_metadata_sent_at = sent_at
+        if thr_r:
+            m.last_thresholds_sent_at = sent_at
         db.add(GenerationLog(
             test_metric_id=metric_id,
             value_sent=value,
             baseline_sent=baseline,
             health_sent=health,
-            thresholds_sent=bool(tc and tc.enabled),
-            kafka_offset=result.get("offset"),
+            thresholds_sent=bool(thr_r),
+            kafka_offset=data_r.get("offset"),
             status="success",
-            message_json=msg_str,
+            message_json=data_str,
         ))
         db.commit()
         return {
-            "ok":         True,
-            "value":      value,
-            "baseline":   baseline,
-            "health":     health,
-            "offset":     result.get("offset"),
-            "partition":  result.get("partition"),
-            "topic":      topic,
-            "messageJson": msg_str,
+            "ok":              True,
+            "value":           value,
+            "baseline":        baseline,
+            "health":          health,
+            # DATA
+            "data_offset":     data_r.get("offset"),
+            "data_partition":  data_r.get("partition"),
+            "data_topic":      topic_data,
+            # METADATA
+            "metadata_offset":    meta_r.get("offset"),
+            "metadata_partition": meta_r.get("partition"),
+            "metadata_topic":     topic_metadata,
+            # THRESHOLDS (null если не включены)
+            "thresholds_offset":    thr_r.get("offset")    if thr_r else None,
+            "thresholds_partition": thr_r.get("partition") if thr_r else None,
+            "thresholds_topic":     topic_thresholds        if thr_r else None,
         }
     except Exception as e:
         db.add(GenerationLog(
@@ -415,7 +456,7 @@ def get_logs(metric_id: int, limit: int = 20, db: Session = Depends(get_db)):
 
 @router.get("/api/metrics/metrics/{metric_id}/preview")
 def preview_message(metric_id: int, db: Session = Depends(get_db)):
-    """Генерирует превью сообщения без отправки в Kafka."""
+    """Генерирует превью всех 3 Kafka-сообщений без отправки."""
     from agents.metrics_message_builder import build_preview
 
     m = _get_metric_or_404(metric_id, db)
@@ -428,14 +469,20 @@ def preview_message(metric_id: int, db: Session = Depends(get_db)):
 
     return build_preview(
         metric_id=metric_id,
-        metric_hash=m.metric_hash, metric_name=m.metric_name,
-        metric_description=m.metric_description, metric_type=m.metric_type,
-        metric_group=m.metric_group, metric_unit=m.metric_unit,
-        metric_period_sec=m.metric_period_sec, object_ci=m.object_ci,
-        object_id=m.object_id, object_name=m.object_name, object_type=m.object_type,
+        metric_hash=m.metric_hash,
+        mon_system_ci=system.mon_system_ci,
+        it_service_ci=system.it_service_ci,
+        object_ci=m.object_ci,
+        object_id=m.object_id,
+        object_name=m.object_name,
+        object_type=m.object_type,
         mon_system_metric_id=m.mon_system_metric_id,
-        purpose_type_hint=m.purpose_type_hint, spec_version=m.spec_version,
-        it_service_ci=system.it_service_ci, mon_system_ci=system.mon_system_ci,
+        metric_name=m.metric_name,
+        metric_description=m.metric_description,
+        metric_type=m.metric_type,
+        metric_group=m.metric_group,
+        metric_unit=m.metric_unit,
+        metric_period_sec=m.metric_period_sec,
         metric_created_at=m.created_at,
         values_cfg=_ser_values(m.values_config),
         baseline_cfg=_ser_baseline(m.baseline_config),

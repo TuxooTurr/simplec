@@ -36,6 +36,19 @@ const FREQS = [
 
 // ── Template resolver ────────────────────────────────────────────────────────
 
+function buildMprPreview(values: Record<string, string>): string {
+  const mprData = {
+    id:           values.id           ?? "",
+    service_ci:   values.service_ci   ?? "CI0000000",
+    service_name: values.service_name ?? "",
+    deadline:     values.deadline     ?? "",
+    description:  values.description  ?? "",
+    action:       values.action       ?? "OPEN",
+    status:       values.status       ?? "ACTIVE",
+  };
+  return JSON.stringify({ type: "mpr", value: mprData }, null, 2);
+}
+
 function resolveTemplate(template: string, values: Record<string, string>): string {
   const now = new Date().toISOString();
   let result = template.replace(/\{\{(\w+)\}\}/g, (_, k) => {
@@ -303,7 +316,11 @@ export default function AlertsSection() {
     initValues(s);
   };
 
-  const payload = selected ? resolveTemplate(selected.payload_template, values) : "";
+  const payload = selected
+    ? selected.script_type === "a2a_mpr"
+      ? buildMprPreview(values)
+      : resolveTemplate(selected.payload_template, values)
+    : "";
   const handleSend = () => doSendCore();
 
   const handleCopy = async () => {
@@ -371,7 +388,7 @@ export default function AlertsSection() {
               >
                 <Bell className="w-3.5 h-3.5" />
                 {s.name}
-                {s.script_type === "a2a" && (
+                {(s.script_type === "a2a" || s.script_type === "a2a_mpr") && (
                   <span className="text-[9px] font-bold px-1 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">A2A</span>
                 )}
               </button>
@@ -466,9 +483,10 @@ export default function AlertsSection() {
             <div className="flex items-center justify-between flex-shrink-0">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-semibold text-text-main">
-                  {selected.script_type === "a2a" ? "Alert Content" : "Payload"}
+                  {selected.script_type === "a2a"     ? "Alert Content" :
+                   selected.script_type === "a2a_mpr" ? "МпР Data"      : "Payload"}
                 </h3>
-                {selected.script_type === "a2a" && (
+                {(selected.script_type === "a2a" || selected.script_type === "a2a_mpr") && (
                   <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-violet-100 text-violet-600 leading-none">
                     A2A · JWT · JSON-RPC
                   </span>
@@ -480,6 +498,13 @@ export default function AlertsSection() {
             {selected.script_type === "a2a" && (
               <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-1.5 flex-shrink-0">
                 Контент алерта будет обёрнут в JSON-RPC 2.0 с JWT заголовками (Authorization, MessageToken, SystemCi…)
+              </p>
+            )}
+            {selected.script_type === "a2a_mpr" && (
+              <p className="text-xs text-violet-600 bg-violet-50 rounded-lg px-3 py-1.5 flex-shrink-0">
+                МпР-данные будут обёрнуты в JSON-RPC 2.0 с JWT заголовками и parts{" "}
+                <span className="font-mono">kind=&quot;data&quot;</span> — contextId:{" "}
+                <span className="font-mono">mpr#&lt;uuid&gt;</span>
               </p>
             )}
 

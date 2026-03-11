@@ -1612,10 +1612,6 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
           {previewing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Eye className="w-3.5 h-3.5" />}
           Превью
         </button>
-        <button className={BTN_PRIMARY} onClick={handleSendNow} disabled={sending || loading}>
-          {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-          Отправить
-        </button>
         <button onClick={onClose} className="p-1 rounded hover:bg-bg-muted text-text-muted transition-colors ml-1" title="Закрыть">
           <X className="w-4 h-4" />
         </button>

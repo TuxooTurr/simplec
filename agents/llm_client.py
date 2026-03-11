@@ -28,7 +28,7 @@ class LLMResponse:
 
 
 class LLMClient:
-    SUPPORTED_PROVIDERS = ["gigachat", "deepseek", "ollama", "lmstudio"]
+    SUPPORTED_PROVIDERS = ["gigachat", "deepseek", "openai", "claude", "ollama", "lmstudio"]
 
     def __init__(self, provider: str = "ollama"):
         self.provider = provider.lower()
@@ -44,6 +44,10 @@ class LLMClient:
             self._init_gigachat()
         elif self.provider == "deepseek":
             self._init_deepseek()
+        elif self.provider == "openai":
+            self._init_openai()
+        elif self.provider == "claude":
+            self._init_claude()
         elif self.provider == "ollama":
             self._init_ollama()
         elif self.provider == "lmstudio":
@@ -69,6 +73,22 @@ class LLMClient:
         self.client = httpx.Client(timeout=120.0)
         self.base_url = "https://api.deepseek.com/v1"
 
+    def _init_openai(self):
+        import httpx
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
+            raise ValueError("OPENAI_API_KEY not found in .env")
+        self.client = httpx.Client(timeout=120.0)
+        self.base_url = "https://api.openai.com/v1"
+
+    def _init_claude(self):
+        import httpx
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not self.api_key:
+            raise ValueError("ANTHROPIC_API_KEY not found in .env")
+        self.client = httpx.Client(timeout=120.0)
+        self.base_url = "https://api.anthropic.com/v1"
+
     def _init_ollama(self):
         import ollama
         self.client = ollama
@@ -85,6 +105,10 @@ class LLMClient:
             return self._chat_gigachat(messages, temperature, max_tokens)
         elif self.provider == "deepseek":
             return self._chat_deepseek(messages, temperature, max_tokens)
+        elif self.provider == "openai":
+            return self._chat_openai(messages, temperature, max_tokens)
+        elif self.provider == "claude":
+            return self._chat_claude(messages, temperature, max_tokens)
         elif self.provider == "ollama":
             return self._chat_ollama(messages, temperature, max_tokens)
         elif self.provider == "lmstudio":
@@ -143,6 +167,69 @@ class LLMClient:
             content=data["choices"][0]["message"]["content"],
             model="deepseek-chat",
             usage=data.get("usage", {})
+        )
+
+    def _chat_openai(self, messages, temperature, max_tokens):
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        payload = {
+            "model": model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        response = self.client.post(
+            self.base_url + "/chat/completions",
+            json=payload,
+            headers={"Authorization": "Bearer " + self.api_key},
+        )
+        if response.status_code == 402:
+            raise ValueError("OpenAI: недостаточно средств (402 Payment Required).")
+        if response.status_code == 429:
+            raise ValueError("OpenAI: превышен лимит запросов (429 Too Many Requests).")
+        response.raise_for_status()
+        data = response.json()
+        return LLMResponse(
+            content=data["choices"][0]["message"]["content"],
+            model=model,
+            usage=data.get("usage", {}),
+        )
+
+    def _chat_claude(self, messages, temperature, max_tokens):
+        model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        system_text = None
+        anthropic_messages = []
+        for m in messages:
+            if m.role == "system":
+                system_text = m.content
+            else:
+                anthropic_messages.append({"role": m.role, "content": m.content})
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages,
+        }
+        if system_text:
+            payload["system"] = system_text
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        response = self.client.post(
+            self.base_url + "/messages",
+            json=payload,
+            headers=headers,
+        )
+        if response.status_code == 402:
+            raise ValueError("Claude: недостаточно средств (402 Payment Required).")
+        if response.status_code == 429:
+            raise ValueError("Claude: превышен лимит запросов (429 Too Many Requests).")
+        response.raise_for_status()
+        data = response.json()
+        return LLMResponse(
+            content=data["content"][0]["text"],
+            model=model,
+            usage=data.get("usage", {}),
         )
 
     def _chat_ollama(self, messages, temperature, max_tokens):
@@ -263,6 +350,52 @@ class LLMClient:
                 else:
                     return {"status": "red", "message": "HTTP " + str(r.status_code)}
 
+            elif provider_id == "openai":
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    return {"status": "red", "message": "Нет ключа OPENAI_API_KEY"}
+                import httpx
+                r = httpx.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json={"model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+                          "messages": [{"role": "user", "content": "1"}],
+                          "max_tokens": 5},
+                    headers={"Authorization": "Bearer " + api_key},
+                    timeout=15.0,
+                )
+                if r.status_code == 200:
+                    return {"status": "green", "message": "OK"}
+                elif r.status_code == 402:
+                    return {"status": "yellow", "message": "Нет средств (402)"}
+                elif r.status_code == 429:
+                    return {"status": "yellow", "message": "Rate limit (429)"}
+                else:
+                    return {"status": "red", "message": "HTTP " + str(r.status_code)}
+
+            elif provider_id == "claude":
+                api_key = os.getenv("ANTHROPIC_API_KEY")
+                if not api_key:
+                    return {"status": "red", "message": "Нет ключа ANTHROPIC_API_KEY"}
+                import httpx
+                r = httpx.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json={"model": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+                          "max_tokens": 5,
+                          "messages": [{"role": "user", "content": "1"}]},
+                    headers={"x-api-key": api_key,
+                             "anthropic-version": "2023-06-01",
+                             "content-type": "application/json"},
+                    timeout=15.0,
+                )
+                if r.status_code == 200:
+                    return {"status": "green", "message": "OK"}
+                elif r.status_code == 402:
+                    return {"status": "yellow", "message": "Нет средств (402)"}
+                elif r.status_code == 429:
+                    return {"status": "yellow", "message": "Rate limit (429)"}
+                else:
+                    return {"status": "red", "message": "HTTP " + str(r.status_code)}
+
             elif provider_id == "ollama":
                 try:
                     import ollama
@@ -309,6 +442,12 @@ class LLMClient:
 
         if os.getenv("DEEPSEEK_API_KEY"):
             providers.append({"id": "deepseek", "name": "DeepSeek", "status": "ready"})
+
+        if os.getenv("OPENAI_API_KEY"):
+            providers.append({"id": "openai", "name": "OpenAI", "status": "ready"})
+
+        if os.getenv("ANTHROPIC_API_KEY"):
+            providers.append({"id": "claude", "name": "Claude", "status": "ready"})
 
         # Local providers — show only if actually reachable on this machine
         try:

@@ -21,6 +21,8 @@ const MASKED_PLACEHOLDER = "●●●●●●●●●●●●";
 const SECRET_KEYS = new Set([
   "gigachat_auth_key",
   "deepseek_api_key",
+  "openai_api_key",
+  "anthropic_api_key",
   "alerts_kafka_sasl_password",
   "kafka_sasl_password",
 ]);
@@ -40,11 +42,15 @@ const LLM_FIELDS: FieldDef[] = [
     key: "gigachat_scope", label: "GigaChat Scope", type: "select",
     options: ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
   },
-  { key: "deepseek_api_key", label: "DeepSeek API Key", type: "password" },
-  { key: "deepseek_model", label: "Модель DeepSeek" },
-  { key: "ollama_model",    label: "Модель Ollama" },
-  { key: "lmstudio_url",    label: "LM Studio URL" },
-  { key: "lmstudio_model",  label: "Модель LM Studio" },
+  { key: "deepseek_api_key",   label: "DeepSeek API Key",  type: "password" },
+  { key: "deepseek_model",     label: "Модель DeepSeek" },
+  { key: "openai_api_key",     label: "OpenAI API Key",    type: "password" },
+  { key: "openai_model",       label: "Модель OpenAI" },
+  { key: "anthropic_api_key",  label: "Anthropic API Key", type: "password" },
+  { key: "anthropic_model",    label: "Модель Claude" },
+  { key: "ollama_model",       label: "Модель Ollama" },
+  { key: "lmstudio_url",       label: "LM Studio URL" },
+  { key: "lmstudio_model",     label: "Модель LM Studio" },
 ];
 
 const ALERTS_KAFKA_FIELDS: FieldDef[] = [

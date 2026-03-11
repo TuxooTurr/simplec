@@ -30,6 +30,8 @@ router = APIRouter()
 _SECRET_FIELDS = {
     "gigachat_auth_key",
     "deepseek_api_key",
+    "openai_api_key",
+    "anthropic_api_key",
     "alerts_kafka_sasl_password",
     "kafka_sasl_password",
 }
@@ -58,6 +60,26 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
     "deepseek_model": {
         "value":       os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
         "description": "Модель DeepSeek: deepseek-chat или deepseek-reasoner",
+        "group":       "llm",
+    },
+    "openai_api_key": {
+        "value":       os.getenv("OPENAI_API_KEY", ""),
+        "description": "OpenAI API Key (platform.openai.com → API keys)",
+        "group":       "llm",
+    },
+    "openai_model": {
+        "value":       os.getenv("OPENAI_MODEL", "gpt-4o"),
+        "description": "Модель OpenAI: gpt-4o, gpt-4o-mini, o1, o3-mini и др.",
+        "group":       "llm",
+    },
+    "anthropic_api_key": {
+        "value":       os.getenv("ANTHROPIC_API_KEY", ""),
+        "description": "Anthropic API Key (console.anthropic.com → API keys)",
+        "group":       "llm",
+    },
+    "anthropic_model": {
+        "value":       os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+        "description": "Модель Claude: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5 и др.",
         "group":       "llm",
     },
     "ollama_model": {
@@ -114,6 +136,10 @@ _ENV_MAP: Dict[str, str] = {
     "gigachat_scope":                 "GIGACHAT_SCOPE",
     "deepseek_api_key":               "DEEPSEEK_API_KEY",
     "deepseek_model":                 "DEEPSEEK_MODEL",
+    "openai_api_key":                 "OPENAI_API_KEY",
+    "openai_model":                   "OPENAI_MODEL",
+    "anthropic_api_key":              "ANTHROPIC_API_KEY",
+    "anthropic_model":                "ANTHROPIC_MODEL",
     "ollama_model":                   "OLLAMA_MODEL",
     "lmstudio_url":                   "LMSTUDIO_URL",
     "lmstudio_model":                 "LMSTUDIO_MODEL",

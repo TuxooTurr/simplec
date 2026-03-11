@@ -11,6 +11,8 @@ import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 const PROVIDERS = [
   { id: "gigachat", label: "GigaChat" },
   { id: "deepseek", label: "DeepSeek" },
+  { id: "openai",   label: "OpenAI"   },
+  { id: "claude",   label: "Claude"   },
 ];
 
 const NAV: {

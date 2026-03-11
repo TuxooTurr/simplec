@@ -5,7 +5,7 @@ import { useMetricsUi } from "@/contexts/MetricsUiContext";
 import {
   BarChart2, Plus, Trash2, Play, Square, Settings2,
   Loader2, RefreshCw, ChevronRight, ToggleLeft, ToggleRight,
-  AlertTriangle, Database, Wifi, Save, X, Zap, Eye,
+  AlertTriangle, Database, Save, X, Zap, Eye,
   CheckCircle, XCircle, Pencil, Bell, MessageSquare,
 } from "lucide-react";
 import {
@@ -1776,7 +1776,6 @@ export default function MetricsSection() {
     setSelectedMetricId,
   } = useMetricsUi();
 
-  const [tab,              setTab]              = useState<"systems" | "kafka">("systems");
   const [systems,          setSystems]          = useState<System[]>([]);
   const [stats,            setStats]            = useState({ totalSystems: 0, activeSystems: 0, totalMetrics: 0, activeMetrics: 0 });
   const [metrics,          setMetrics]          = useState<Metric[]>([]);
@@ -2045,34 +2044,11 @@ export default function MetricsSection() {
           )}
         </div>
 
-        <div className="ml-auto flex items-center gap-1 p-0.5 bg-bg-subtle border border-border-main rounded-lg">
-          <button
-            onClick={() => setTab("systems")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              tab === "systems" ? "bg-white shadow-sm text-text-main" : "text-text-muted hover:text-text-main"
-            }`}
-          >
-            <BarChart2 className="w-3.5 h-3.5" /> Услуги
-          </button>
-          <button
-            onClick={() => setTab("kafka")}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
-              tab === "kafka" ? "bg-white shadow-sm text-text-main" : "text-text-muted hover:text-text-main"
-            }`}
-          >
-            <Wifi className="w-3.5 h-3.5" /> Kafka
-          </button>
-        </div>
       </div>
 
       {/* ── Content ────────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">
 
-        {tab === "kafka" ? (
-          <div className="h-full overflow-y-auto p-4">
-            <KafkaSettingsTab />
-          </div>
-        ) : (
           <div className="h-full flex">
 
             {/* Systems list */}
@@ -2164,7 +2140,6 @@ export default function MetricsSection() {
             )}
 
           </div>
-        )}
       </div>
 
       {/* ── Modals ─────────────────────────────────────────────────────────── */}

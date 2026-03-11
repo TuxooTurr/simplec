@@ -366,12 +366,14 @@ function SettingsModal({
           {/* Критичный регресс */}
           <div>
             <label className={LABEL_CLS}>Критичный регресс</label>
-            <label className="flex items-center gap-3 cursor-pointer group select-none">
+            <div
+              className="flex items-center gap-3 cursor-pointer group select-none"
+              onClick={() => onCritRegress(!critRegress)}
+            >
               <button
                 type="button"
                 role="switch"
                 aria-checked={critRegress}
-                onClick={() => onCritRegress(!critRegress)}
                 className={`relative w-10 h-5 rounded-full transition-colors duration-200 flex-shrink-0
                   ${critRegress ? "bg-primary" : "bg-gray-200 group-hover:bg-gray-300"}`}
               >
@@ -383,7 +385,7 @@ function SettingsModal({
               <span className="text-sm text-text-muted group-hover:text-text-main transition-colors leading-tight">
                 LLM оценивает критичность для регресса
               </span>
-            </label>
+            </div>
           </div>
         </div>
 

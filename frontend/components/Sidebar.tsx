@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import { logout, getMe } from "@/lib/auth";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
+import { getProviders } from "@/lib/api";
 
 const PROVIDERS = [
   { id: "gigachat", label: "GigaChat" },
@@ -46,10 +47,23 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [username, setUsername] = useState<string | null>(null);
+  const [availableIds, setAvailableIds] = useState<Set<string>>(new Set());
   const { provider, setProvider, setDragging } = useWorkspace();
 
   useEffect(() => {
     getMe().then((me) => setUsername(me?.username ?? null));
+  }, []);
+
+  useEffect(() => {
+    getProviders()
+      .then((statuses) => {
+        const ids = new Set(statuses.filter((s) => s.status === "green").map((s) => s.id));
+        setAvailableIds(ids);
+        if (ids.size > 0 && !ids.has(provider)) {
+          setProvider([...ids][0]);
+        }
+      })
+      .catch(() => setAvailableIds(new Set()));
   }, []);
 
   async function handleLogout() {
@@ -120,7 +134,7 @@ export default function Sidebar() {
           Модель
         </label>
         <div className="grid grid-cols-2 gap-1.5">
-          {PROVIDERS.map((p) => (
+          {PROVIDERS.filter((p) => availableIds.size === 0 || availableIds.has(p.id)).map((p) => (
             <button
               key={p.id}
               onClick={() => setProvider(p.id)}

@@ -81,6 +81,54 @@ def _send_simple_sync(topic: str, payload: str, partition: Optional[int], kafka_
     return KafkaClient.send(topic, payload, partition=partition, kafka_cfg=kafka_cfg)
 
 
+def _send_a2a_mpr_sync(
+    topic: str,
+    values: dict[str, str],
+    partition: Optional[int],
+    kafka_cfg: Optional[dict] = None,
+) -> tuple[dict, str]:
+    """
+    Строит A2A-сообщение для МпР (data-части) и отправляет в Kafka.
+    Returns: (record_meta, raw_payload_str)
+    """
+    from agents.kafka_client import KafkaClient
+    from agents.a2a_builder import build_a2a_mpr_message
+
+    system_ci        = values.get("service_ci", values.get("as", ""))
+    sender           = values.get("sender", "sber911.mpr_generator")
+    recipient        = values.get("recipient", "sber.support_platform.channel_agent")
+    sender_id_aef    = values.get("sender_id_aef", "CI00213821")
+    recipient_id_aef = values.get("recipient_id_aef", "CI00293210")
+
+    mpr_data = {
+        "id":           values.get("id", str(uuid.uuid4())),
+        "service_ci":   system_ci,
+        "service_name": values.get("service_name", ""),
+        "deadline":     values.get("deadline", ""),
+        "description":  values.get("description", ""),
+        "action":       values.get("action", "OPEN"),
+        "status":       values.get("status", "ACTIVE"),
+    }
+
+    jwt_secret = os.getenv("A2A_JWT_SECRET", "SBER911_SECRET_KEY")
+
+    payload_str, kafka_headers = build_a2a_mpr_message(
+        system_ci, sender, recipient,
+        sender_id_aef, recipient_id_aef,
+        mpr_data, jwt_secret,
+    )
+
+    key = str(uuid.uuid4())
+    meta = KafkaClient.send(
+        topic, payload_str,
+        key=key,
+        headers=kafka_headers,
+        partition=partition,
+        kafka_cfg=kafka_cfg,
+    )
+    return meta, payload_str
+
+
 def _send_a2a_sync(
     topic: str,
     values: dict[str, str],
@@ -166,6 +214,38 @@ async def send_alert(req: SendRequest, db: Session = Depends(get_db)) -> dict:
     topic      = req.topic_override.strip() or script.get("topic", "alerts.default")
     stype      = script.get("script_type", "simple")
     partition  = script.get("partition")
+
+    # ── A2A МпР протокол ─────────────────────────────────────────────────
+    if stype == "a2a_mpr":
+        try:
+            meta, raw_payload = await asyncio.to_thread(
+                _send_a2a_mpr_sync, topic, values, partition, kafka_cfg
+            )
+            AlertsStore.add_history({
+                "script_id":   req.script_id,
+                "script_name": script.get("name", req.script_id),
+                "topic":       topic,
+                "payload":     raw_payload,
+                "status":      "ok",
+            })
+            return {
+                "ok":        True,
+                "payload":   raw_payload,
+                "topic":     topic,
+                "offset":    meta.get("offset"),
+                "partition": meta.get("partition"),
+            }
+        except Exception as e:
+            err = str(e)
+            AlertsStore.add_history({
+                "script_id":   req.script_id,
+                "script_name": script.get("name", req.script_id),
+                "topic":       topic,
+                "payload":     "",
+                "status":      "error",
+                "error":       err,
+            })
+            return {"ok": False, "payload": "", "topic": topic, "error": err}
 
     # ── A2A протокол ─────────────────────────────────────────────────────
     if stype == "a2a":

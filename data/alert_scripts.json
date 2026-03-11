@@ -57,14 +57,23 @@
   {
     "id": "mpr",
     "name": "МпР",
-    "description": "Отправка мероприятия по регламенту",
-    "topic": "alerts.mpr.v1",
-    "payload_template": "{\n  \"as\": \"{{as}}\",\n  \"eventType\": \"MPR\",\n  \"workType\": \"{{work_type}}\",\n  \"timeWindow\": \"{{time_window}}\",\n  \"timestamp\": \"{{timestamp}}\"\n}",
+    "description": "Мероприятие по регламенту — A2A протокол (JWT заголовки + JSON-RPC 2.0 + data-части)",
+    "topic": "agent-in",
+    "script_type": "a2a_mpr",
+    "partition": 0,
+    "payload_template": "",
     "params": [
-      {"key": "as",          "label": "КЭ/АС",          "type": "text",   "required": true,  "default": "CI0000000", "hint": "CI-код системы"},
-      {"key": "work_type",   "label": "Тип работ",      "type": "select", "required": true,  "default": "PLANNED", "options": ["PLANNED", "EMERGENCY", "REGULAR"]},
-      {"key": "time_window", "label": "Временное окно", "type": "text",   "required": false, "default": "", "hint": "Пример: 2026-03-03T10:00/2026-03-03T12:00"},
-      {"key": "timestamp",   "label": "Timestamp",      "type": "text",   "required": false, "default": "__now__", "hint": "ISO 8601"}
+      {"key": "id",               "label": "ID МпР",           "type": "text",     "required": true,  "default": "",                                    "hint": "Уникальный идентификатор МпР"},
+      {"key": "service_ci",       "label": "CI системы",       "type": "text",     "required": true,  "default": "CI0000000",                           "hint": "CI-код системы (service_ci)"},
+      {"key": "service_name",     "label": "Название услуги",  "type": "text",     "required": true,  "default": ""},
+      {"key": "deadline",         "label": "Дедлайн",          "type": "text",     "required": false, "default": "",                                    "hint": "ISO 8601, напр. 2026-03-11T23:59:00Z"},
+      {"key": "description",      "label": "Описание",         "type": "textarea", "required": false, "default": ""},
+      {"key": "action",           "label": "Действие",         "type": "select",   "required": false, "default": "OPEN",   "options": ["OPEN", "CLOSE", "UPDATE"]},
+      {"key": "status",           "label": "Статус",           "type": "select",   "required": false, "default": "ACTIVE", "options": ["ACTIVE", "COMPLETED", "CANCELLED"]},
+      {"key": "sender",           "label": "Sender",           "type": "text",     "required": false, "default": "sber911.mpr_generator"},
+      {"key": "recipient",        "label": "Recipient",        "type": "text",     "required": false, "default": "sber.support_platform.channel_agent"},
+      {"key": "sender_id_aef",    "label": "Sender ID AEF",    "type": "text",     "required": false, "default": "CI00213821"},
+      {"key": "recipient_id_aef", "label": "Recipient ID AEF", "type": "text",     "required": false, "default": "CI00293210"}
     ],
     "created_at": "2026-03-03T00:00:00Z",
     "builtin": true

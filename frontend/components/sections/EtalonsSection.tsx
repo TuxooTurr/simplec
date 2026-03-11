@@ -153,6 +153,12 @@ function TestCasesTab() {
 
   return (
     <div>
+      {/* Описание */}
+      <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 mb-4 text-xs text-indigo-700">
+        Пары <span className="font-semibold">требование → тест-кейсы</span> используются как контекст
+        для LLM при генерации ручных тест-кейсов (RAG).
+      </div>
+
       {/* Header row */}
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-text-muted">

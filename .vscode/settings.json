@@ -1,0 +1,5 @@
+{
+    "yaml.schemas": {
+        "https://www.schemastore.org/json-patch.json": "file:///Users/stefanzastylov/Downloads/web-api-gate-incidentit.yaml"
+    }
+}

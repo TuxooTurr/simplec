@@ -1,8 +1,9 @@
 """
-PostgreSQL-соединение для Генератора метрик.
+Соединение с БД для SimpleTest.
 
-DATABASE_URL задаётся через .env — при переезде на Сбер-инфраструктуру
-меняется только эта переменная, код не трогается.
+DATABASE_URL задаётся через .env:
+  PostgreSQL:  postgresql://user:pass@localhost:5432/metrics
+  SQLite:      sqlite:///./simpletest.db   (без Docker, для локального запуска)
 """
 
 import os
@@ -14,12 +15,22 @@ DATABASE_URL = os.getenv(
     "postgresql://simpletest:simpletest@localhost:5432/metrics",
 )
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,   # авто-переконнект при обрыве
-    pool_size=5,
-    max_overflow=10,
-)
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+if _is_sqlite:
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,   # авто-переконнект при обрыве
+        pool_size=5,
+        max_overflow=10,
+    )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -58,12 +69,15 @@ def init_db():
     В multi-worker uvicorn воркеры стартуют параллельно и оба вызывают
     create_all. Первый успевает создать таблицы, второй получает IntegrityError
     на pg_catalog — это нормально, таблицы уже есть.
+
+    Для SQLite миграции пропускаются: create_all создаёт схему сразу актуальной.
     """
     from db.metrics_models import Base as MetricsBase  # noqa: F401
     from sqlalchemy.exc import IntegrityError
     try:
         MetricsBase.metadata.create_all(bind=engine)
-        _apply_column_migrations()
+        if not _is_sqlite:
+            _apply_column_migrations()
     except IntegrityError:
         # Race condition: другой воркер уже создал таблицы — всё OK
         pass

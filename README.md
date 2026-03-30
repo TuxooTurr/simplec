@@ -147,9 +147,34 @@ SimpleTest/
 ### Требования
 - Python 3.12+
 - Node.js 20+
-- Docker (для PostgreSQL)
+- Docker — **не обязателен** (можно использовать SQLite)
 
-### Бэкенд
+### Вариант 1 — без Docker (SQLite)
+
+Самый простой способ: база данных создаётся автоматически как файл `simpletest.db`.
+
+```bash
+git clone https://github.com/TuxooTurr/simplec.git
+cd SimpleTest
+
+python3.12 -m venv .venv
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate         # Windows
+
+pip install -r requirements.txt
+
+cp .env.example .env
+# Отредактировать .env:
+#   APP_SECRET=<случайная строка>
+#   ADMIN_PASS=<пароль>
+#   DEEPSEEK_API_KEY=<ключ>      # или другой провайдер
+#   DATABASE_URL=sqlite:///./simpletest.db   # уже стоит по умолчанию
+#   COOKIE_SECURE=0              # для локального HTTP
+
+uvicorn backend.main:app --reload --port 8000
+```
+
+### Вариант 2 — с Docker (PostgreSQL)
 
 ```bash
 git clone https://github.com/TuxooTurr/simplec.git
@@ -161,14 +186,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Отредактировать .env: добавить ключи LLM, APP_SECRET и т.д.
+# Раскомментировать PostgreSQL-строку в .env:
+#   DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
 
-docker compose up -d          # Поднять PostgreSQL
+docker compose up -d             # Поднять PostgreSQL
 
 uvicorn backend.main:app --reload --port 8000
 ```
 
-### Фронтенд
+### Фронтенд (оба варианта)
 
 ```bash
 cd frontend

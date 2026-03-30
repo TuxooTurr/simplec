@@ -171,7 +171,7 @@ cp .env.example .env
 #   DATABASE_URL=sqlite:///./simpletest.db   # уже стоит по умолчанию
 #   COOKIE_SECURE=0              # для локального HTTP
 
-uvicorn backend.main:app --reload --port 8000
+python3.12 -m uvicorn backend.main:app --reload --port 8000
 ```
 
 ### Вариант 2 — с Docker (PostgreSQL)
@@ -191,7 +191,7 @@ cp .env.example .env
 
 docker compose up -d             # Поднять PostgreSQL
 
-uvicorn backend.main:app --reload --port 8000
+python3.12 -m uvicorn backend.main:app --reload --port 8000
 ```
 
 ### Фронтенд (оба варианта)

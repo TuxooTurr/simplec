@@ -179,7 +179,7 @@ interface AddSystemModalProps {
 function AddSystemModal({ onSave, onClose }: AddSystemModalProps) {
   const [itServiceCi, setItServiceCi] = useState("");
   const [name,        setName]        = useState("");
-  const [monSystemCi, setMonSystemCi] = useState("");
+  const [monSystemCi, setMonSystemCi] = useState("CI00221084");
   const [saving,      setSaving]      = useState(false);
   const [err,         setErr]         = useState("");
 

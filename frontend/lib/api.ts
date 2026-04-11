@@ -176,27 +176,27 @@ export async function deleteDefect(id: string): Promise<{ status: string }> {
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
 
-export interface AlertParam {
-  key:      string;
-  label:    string;
-  type:     "text" | "select" | "textarea";
-  required: boolean;
-  default:  string;
-  hint?:    string;
-  options?: string[];
+export interface NotebookCell {
+  id:     string;
+  /** markdown — текст; init — однократный код; loop — цикличный код; code — legacy alias init */
+  type:   "markdown" | "init" | "loop" | "code";
+  source: string;
+}
+
+export interface DynamicParam {
+  id:          string;
+  label:       string;       // Отображаемое имя
+  code_key:    string;       // Информационно: ключ в коде (напр. "systems")
+  placeholder: string;       // Значение для замены в коде (напр. "CI0000000")
 }
 
 export interface AlertScript {
-  id:               string;
-  name:             string;
-  description:      string;
-  topic:            string;
-  script_type?:     "simple" | "a2a" | "a2a_mpr";
-  partition?:       number | null;
-  payload_template: string;
-  params:           AlertParam[];
-  created_at?:      string;
-  builtin?:         boolean;
+  id:             string;
+  name:           string;
+  topic:          string;
+  notebook:       NotebookCell[];
+  dynamic_params: DynamicParam[];
+  created_at?:    string;
 }
 
 export interface AlertHistoryEntry {
@@ -226,8 +226,8 @@ export async function deleteAlertScript(id: string): Promise<{ status: string }>
 }
 
 export async function sendAlert(params: {
-  script_id:      string;
-  values:         Record<string, string>;
+  script_id:       string;
+  values:          Record<string, string>;
   topic_override?: string;
 }): Promise<{ ok: boolean; payload: string; topic: string; offset?: number; error?: string }> {
   return fetchJson("/api/alerts/send", {
@@ -239,6 +239,34 @@ export async function sendAlert(params: {
 
 export async function getAlertHistory(limit = 20): Promise<AlertHistoryEntry[]> {
   return fetchJson(`/api/alerts/history?limit=${limit}`);
+}
+
+export async function parseNotebook(file: File): Promise<{ cells: NotebookCell[] }> {
+  const body = new FormData();
+  body.append("file", file);
+  return fetchJson("/api/alerts/parse-notebook", { method: "POST", body });
+}
+
+// ─── Kernel ────────────────────────────────────────────────────────────────
+
+export async function kernelStart(scriptId: string): Promise<{ status: string; kernel_id: string }> {
+  return fetchJson(`/api/kernel/start/${scriptId}`, { method: "POST" });
+}
+
+export async function kernelStop(scriptId: string): Promise<{ status: string }> {
+  return fetchJson(`/api/kernel/stop/${scriptId}`, { method: "DELETE" });
+}
+
+export async function kernelStatus(scriptId: string): Promise<{ alive: boolean; kernel_id?: string }> {
+  return fetchJson(`/api/kernel/status/${scriptId}`);
+}
+
+export async function kernelExecute(scriptId: string, code: string, timeout = 60): Promise<{ output: string; error: string | null }> {
+  return fetchJson(`/api/kernel/execute/${scriptId}`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ code, timeout }),
+  });
 }
 
 // ─── Bugs ──────────────────────────────────────────────────────────────────
@@ -269,10 +297,12 @@ export async function generateAutotest(params: {
   cases: string;
   feature?: string;
   provider?: string;
+  test_type?: string;
 }): Promise<{ code: string }> {
   const body = new FormData();
   body.append("cases", params.cases);
   if (params.feature) body.append("feature", params.feature);
   if (params.provider) body.append("provider", params.provider);
+  if (params.test_type) body.append("test_type", params.test_type);
   return fetchJson("/api/autotests/generate", { method: "POST", body });
 }

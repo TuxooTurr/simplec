@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import { getProviders, type ProviderStatus } from "@/lib/api";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 const STATUS_CONFIG: Record<string, { dot: string; ring: string; label: string }> = {
   green:  { dot: "bg-green-500",  ring: "bg-green-400/30",  label: "Работает" },
@@ -11,15 +12,17 @@ const STATUS_CONFIG: Record<string, { dot: string; ring: string; label: string }
 };
 
 export default function LLMStatusBar() {
+  const { providersRefreshKey } = useWorkspace();
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     getProviders()
       .then(setProviders)
       .catch(() => setProviders([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [providersRefreshKey]);
 
   if (loading) {
     return (

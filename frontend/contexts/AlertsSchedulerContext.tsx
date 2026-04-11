@@ -3,180 +3,279 @@
 /**
  * AlertsSchedulerContext
  *
- * Persists Kafka-alert scheduler state (timer, selected script, form values,
- * send results, history) across page navigations.
- * The periodic setInterval survives unmount because it lives here, not in
- * the AlertsSection component.
+ * Управляет состоянием Jupyter-ядра и планировщика для алертов.
+ * Выживает между навигациями (провайдер выше страниц).
+ *
+ * Логика выполнения:
+ *  1. connect()  → POST /api/kernel/start/{id}  — запустить ядро
+ *  2. execute()  → выполнить init-ячейки (если не выполнялись или params изменились)
+ *                → выполнить loop-ячейки на каждом тике
+ *  3. disconnect → DELETE /api/kernel/stop/{id}
  */
 
 import {
-  createContext,
-  useContext,
-  useState,
-  useRef,
-  useCallback,
-  useEffect,
-  ReactNode,
+  createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode,
 } from "react";
 import {
-  getAlertScripts,
-  sendAlert,
-  getAlertHistory,
-  type AlertScript,
-  type AlertHistoryEntry,
+  getAlertScripts, kernelStart, kernelStop, kernelExecute,
+  type AlertScript, type NotebookCell, type DynamicParam,
 } from "@/lib/api";
 
-// ── Context interface ─────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface OutputLine {
+  ts:    string;
+  kind:  "stdout" | "error" | "system";
+  text:  string;
+}
 
 interface AlertsSchedulerCtx {
   // Data
-  scripts:     AlertScript[];
-  setScripts:  React.Dispatch<React.SetStateAction<AlertScript[]>>;
-  history:     AlertHistoryEntry[];
-  setHistory:  React.Dispatch<React.SetStateAction<AlertHistoryEntry[]>>;
-  loadErr:     string;
-  loadScripts: () => void;
+  scripts:    AlertScript[];
+  setScripts: React.Dispatch<React.SetStateAction<AlertScript[]>>;
+  loadErr:    string;
 
-  // Selection + form
-  selectedId:      string | null;
-  setSelectedId:   (id: string | null) => void;
-  values:          Record<string, string>;
-  setValues:       React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  topicOverride:   string;
-  setTopicOverride: (t: string) => void;
+  // Selection + params
+  selectedId:    string | null;
+  setSelectedId: (id: string | null) => void;
+  values:        Record<string, string>;   // param.id → user value
+  setValues:     React.Dispatch<React.SetStateAction<Record<string, string>>>;
 
-  // Send state
-  sending:       boolean;
-  sendResult:    { ok: boolean; error?: string; offset?: number } | null;
-  setSendResult: React.Dispatch<React.SetStateAction<{ ok: boolean; error?: string; offset?: number } | null>>;
+  // Kernel
+  kernelAlive:      boolean;
+  kernelConnecting: boolean;
+  connectKernel:    () => Promise<void>;
+  disconnectKernel: () => Promise<void>;
+
+  // Execution
+  executing:  boolean;
+  output:     OutputLine[];
+  clearOutput: () => void;
 
   // Scheduler
-  schedMode:     "once" | "periodic";
-  setSchedMode:  (m: "once" | "periodic") => void;
-  schedFreq:     number;
-  setSchedFreq:  (n: number) => void;
-  schedFrom:     string;
-  setSchedFrom:  (s: string) => void;
-  schedTo:       string;
-  setSchedTo:    (s: string) => void;
-  schedActive:   boolean;
-  schedCount:    number;
+  schedMode:    "once" | "periodic";
+  setSchedMode: (m: "once" | "periodic") => void;
+  schedFreq:    number;
+  setSchedFreq: (n: number) => void;
+  schedFrom:    string;
+  setSchedFrom: (s: string) => void;
+  schedTo:      string;
+  setSchedTo:   (s: string) => void;
+  schedActive:  boolean;
+  schedCount:   number;
 
-  // Actions
-  doSendCore:    () => Promise<void>;
-  startSchedule: (freqSecs: number) => void;
-  stopSchedule:  () => void;
+  doExecuteCore:  () => Promise<void>;
+  startSchedule:  (freqSecs: number) => void;
+  stopSchedule:   () => void;
 }
 
-const AlertsSchedulerContext = createContext<AlertsSchedulerCtx>({
-  scripts: [], setScripts: () => {},
-  history: [], setHistory: () => {},
-  loadErr: "", loadScripts: () => {},
+const Ctx = createContext<AlertsSchedulerCtx>({
+  scripts: [], setScripts: () => {}, loadErr: "",
   selectedId: null, setSelectedId: () => {},
   values: {}, setValues: () => {},
-  topicOverride: "", setTopicOverride: () => {},
-  sending: false,
-  sendResult: null, setSendResult: () => {},
+  kernelAlive: false, kernelConnecting: false,
+  connectKernel: async () => {}, disconnectKernel: async () => {},
+  executing: false, output: [], clearOutput: () => {},
   schedMode: "once", setSchedMode: () => {},
   schedFreq: 30, setSchedFreq: () => {},
   schedFrom: "", setSchedFrom: () => {},
   schedTo: "", setSchedTo: () => {},
   schedActive: false, schedCount: 0,
-  doSendCore: async () => {},
-  startSchedule: () => {},
-  stopSchedule: () => {},
+  doExecuteCore: async () => {}, startSchedule: () => {}, stopSchedule: () => {},
 });
+
+// ── Helper ────────────────────────────────────────────────────────────────────
+
+function applyParams(source: string, params: DynamicParam[], values: Record<string, string>) {
+  let s = source;
+  for (const p of params) {
+    if (p.placeholder) s = s.replaceAll(p.placeholder, values[p.id] ?? p.placeholder);
+  }
+  return s;
+}
+
+function cellIsInit(c: NotebookCell) { return c.type === "init" || c.type === "code"; }
+function cellIsLoop(c: NotebookCell) { return c.type === "loop"; }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
-  const [scripts,       setScripts]       = useState<AlertScript[]>([]);
-  const [history,       setHistory]       = useState<AlertHistoryEntry[]>([]);
-  const [loadErr,       setLoadErr]       = useState("");
-  const [selectedId,    setSelectedIdState] = useState<string | null>(null);
-  const [values,        setValues]        = useState<Record<string, string>>({});
-  const [topicOverride, setTopicOverrideState] = useState("");
-  const [sending,       setSending]       = useState(false);
-  const [sendResult,    setSendResult]    = useState<{ ok: boolean; error?: string; offset?: number } | null>(null);
-  const [schedMode,     setSchedModeState] = useState<"once" | "periodic">("once");
-  const [schedFreq,     setSchedFreqState] = useState(30);
-  const [schedFrom,     setSchedFromState] = useState("");
-  const [schedTo,       setSchedToState]   = useState("");
-  const [schedActive,   setSchedActive]   = useState(false);
-  const [schedCount,    setSchedCount]    = useState(0);
+  const [scripts,          setScripts]         = useState<AlertScript[]>([]);
+  const [loadErr,          setLoadErr]         = useState("");
+  const [selectedIdState,  setSelectedIdState] = useState<string | null>(null);
+  const [values,           setValues]          = useState<Record<string, string>>({});
+  const [kernelAlive,      setKernelAlive]     = useState(false);
+  const [kernelConnecting, setKernelConnecting]= useState(false);
+  const [executing,        setExecuting]       = useState(false);
+  const [output,           setOutput]          = useState<OutputLine[]>([]);
+  const [schedMode,        setSchedModeState]  = useState<"once" | "periodic">("once");
+  const [schedFreq,        setSchedFreqState]  = useState(30);
+  const [schedFrom,        setSchedFromState]  = useState("");
+  const [schedTo,          setSchedToState]    = useState("");
+  const [schedActive,      setSchedActive]     = useState(false);
+  const [schedCount,       setSchedCount]      = useState(0);
 
-  // Refs to avoid stale closures in timer callback
-  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sendingRef     = useRef(false);
+  // Refs for stale-closure safety
+  const selectedIdRef  = useRef<string | null>(null);
+  const scriptsRef     = useRef<AlertScript[]>([]);
+  const valuesRef      = useRef<Record<string, string>>({});
+  const prevValuesRef  = useRef<Record<string, string>>({});  // last executed values
+  const initDoneRef    = useRef(false);                        // init cells executed at least once
+  const executingRef   = useRef(false);
   const schedActiveRef = useRef(false);
-  const valuesRef      = useRef(values);
-  const topicRef       = useRef(topicOverride);
-  const selectedIdRef  = useRef(selectedId);
-  const scriptsRef     = useRef(scripts);
-  const schedFromRef   = useRef(schedFrom);
-  const schedToRef     = useRef(schedTo);
+  const schedFromRef   = useRef("");
+  const schedToRef     = useRef("");
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => { valuesRef.current     = values; },        [values]);
-  useEffect(() => { topicRef.current      = topicOverride; }, [topicOverride]);
-  useEffect(() => { selectedIdRef.current = selectedId; },    [selectedId]);
   useEffect(() => { scriptsRef.current    = scripts; },       [scripts]);
+  useEffect(() => { valuesRef.current     = values; },        [values]);
   useEffect(() => { schedFromRef.current  = schedFrom; },     [schedFrom]);
   useEffect(() => { schedToRef.current    = schedTo; },       [schedTo]);
 
-  // Setters that keep both state and ref in sync
-  const setSelectedId    = useCallback((id: string | null)           => { setSelectedIdState(id); selectedIdRef.current = id; },         []);
-  const setTopicOverride = useCallback((t: string)                   => { setTopicOverrideState(t); topicRef.current = t; },             []);
-  const setSchedMode     = useCallback((m: "once" | "periodic")      => setSchedModeState(m),    []);
-  const setSchedFreq     = useCallback((n: number)                   => setSchedFreqState(n),    []);
-  const setSchedFrom     = useCallback((s: string)                   => { setSchedFromState(s); schedFromRef.current = s; },             []);
-  const setSchedTo       = useCallback((s: string)                   => { setSchedToState(s);   schedToRef.current = s; },               []);
+  const setSelectedId = useCallback((id: string | null) => {
+    setSelectedIdState(id);
+    selectedIdRef.current = id;
+    // reset init-done when switching alerts
+    initDoneRef.current = false;
+    prevValuesRef.current = {};
+  }, []);
 
-  // Load scripts on mount (once)
-  const loadScripts = useCallback(() => {
+  const setSchedMode = useCallback((m: "once" | "periodic") => setSchedModeState(m), []);
+  const setSchedFreq = useCallback((n: number)               => setSchedFreqState(n), []);
+  const setSchedFrom = useCallback((s: string) => { setSchedFromState(s); schedFromRef.current = s; }, []);
+  const setSchedTo   = useCallback((s: string) => { setSchedToState(s);   schedToRef.current   = s; }, []);
+
+  // Load scripts on mount
+  useEffect(() => {
     getAlertScripts()
       .then(data => {
         setScripts(data);
-        if (data.length > 0 && selectedIdRef.current == null) {
+        if (data.length > 0) {
           const s = data[0];
-          setSelectedId(s.id);
+          selectedIdRef.current = s.id;
+          setSelectedIdState(s.id);
           const v: Record<string, string> = {};
-          for (const p of s.params) {
-            v[p.key] = p.default === "__now__" ? new Date().toISOString() : (p.default ?? "");
-          }
+          for (const p of s.dynamic_params) v[p.id] = p.placeholder;
           setValues(v);
-          setTopicOverride(s.topic);
         }
       })
       .catch(e => setLoadErr(String(e)));
-    getAlertHistory().then(setHistory).catch(() => {});
-  }, [setSelectedId, setTopicOverride]);
-
-  useEffect(() => { loadScripts(); }, [loadScripts]);
-
-  // Core send — reads from refs (safe in timer callback)
-  const doSendCore = useCallback(async () => {
-    const sid = selectedIdRef.current;
-    const sel = scriptsRef.current.find(s => s.id === sid) ?? null;
-    if (!sel || sendingRef.current) return;
-    sendingRef.current = true;
-    setSending(true);
-    setSendResult(null);
-    try {
-      const topic = topicRef.current;
-      const res = await sendAlert({
-        script_id:      sel.id,
-        values:         valuesRef.current,
-        topic_override: topic !== sel.topic ? topic : "",
-      });
-      setSendResult({ ok: res.ok, error: res.error, offset: res.offset });
-      getAlertHistory().then(setHistory).catch(() => {});
-    } catch (e) {
-      setSendResult({ ok: false, error: String(e) });
-    } finally {
-      setSending(false);
-      sendingRef.current = false;
-    }
   }, []);
+
+  // ── Output helpers ──────────────────────────────────────────────────────────
+
+  const pushOutput = useCallback((kind: OutputLine["kind"], text: string) => {
+    const line: OutputLine = { ts: new Date().toLocaleTimeString("ru-RU"), kind, text };
+    setOutput(prev => [...prev.slice(-199), line]);  // keep last 200 lines
+  }, []);
+
+  const clearOutput = useCallback(() => setOutput([]), []);
+
+  // ── Kernel ──────────────────────────────────────────────────────────────────
+
+  const connectKernel = useCallback(async () => {
+    const sid = selectedIdRef.current;
+    if (!sid) return;
+    setKernelConnecting(true);
+    pushOutput("system", "Подключение к ядру Python...");
+    try {
+      const res = await kernelStart(sid);
+      setKernelAlive(true);
+      initDoneRef.current = false;
+      prevValuesRef.current = {};
+      pushOutput("system", res.status === "already_running"
+        ? `Ядро уже запущено (${res.kernel_id})`
+        : `Ядро запущено (${res.kernel_id})`);
+    } catch (e) {
+      pushOutput("error", `Ошибка подключения: ${e}`);
+    } finally {
+      setKernelConnecting(false);
+    }
+  }, [pushOutput]);
+
+  const disconnectKernel = useCallback(async () => {
+    const sid = selectedIdRef.current;
+    if (!sid) return;
+    // stop scheduler if running
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+    schedActiveRef.current = false;
+    setSchedActive(false);
+    try {
+      await kernelStop(sid);
+    } catch (_) {}
+    setKernelAlive(false);
+    initDoneRef.current = false;
+    pushOutput("system", "Ядро остановлено.");
+  }, [pushOutput]);
+
+  // ── Execute ─────────────────────────────────────────────────────────────────
+
+  const doExecuteCore = useCallback(async () => {
+    const sid = selectedIdRef.current;
+    const sel = scriptsRef.current.find(s => s.id === sid);
+    if (!sel || executingRef.current) return;
+
+    executingRef.current = true;
+    setExecuting(true);
+
+    const vals   = valuesRef.current;
+    const params = sel.dynamic_params;
+    const cells  = sel.notebook ?? [];
+
+    // Проверяем изменились ли params с прошлого запуска init
+    const paramsChanged = !initDoneRef.current ||
+      params.some(p => (vals[p.id] ?? p.placeholder) !== (prevValuesRef.current[p.id] ?? p.placeholder));
+
+    // Запускаем init-ячейки если нужно
+    if (paramsChanged) {
+      const initCells = cells.filter(cellIsInit);
+      if (initCells.length > 0) {
+        pushOutput("system", `▶ Init-ячейки (${initCells.length})...`);
+        for (const cell of initCells) {
+          if (!cell.source.trim()) continue;
+          const code = applyParams(cell.source, params, vals);
+          try {
+            const res = await kernelExecute(sid, code, 60);
+            if (res.output) pushOutput("stdout", res.output);
+            if (res.error)  pushOutput("error",  res.error);
+          } catch (e) {
+            pushOutput("error", `Init error: ${e}`);
+          }
+        }
+        // Запомнить выполненные значения
+        const snapshot: Record<string, string> = {};
+        for (const p of params) snapshot[p.id] = vals[p.id] ?? p.placeholder;
+        prevValuesRef.current = snapshot;
+        initDoneRef.current = true;
+      } else {
+        initDoneRef.current = true;
+        prevValuesRef.current = { ...vals };
+      }
+    }
+
+    // Запускаем loop-ячейки
+    const loopCells = cells.filter(cellIsLoop);
+    if (loopCells.length > 0) {
+      for (const cell of loopCells) {
+        if (!cell.source.trim()) continue;
+        const code = applyParams(cell.source, params, vals);
+        try {
+          const res = await kernelExecute(sid, code, 60);
+          if (res.output) pushOutput("stdout", res.output);
+          if (res.error)  pushOutput("error",  res.error);
+        } catch (e) {
+          pushOutput("error", `Loop error: ${e}`);
+        }
+      }
+    } else if (initDoneRef.current) {
+      // No loop cells — just confirm init ran
+    }
+
+    executingRef.current = false;
+    setExecuting(false);
+  }, [pushOutput]);
+
+  // ── Scheduler ───────────────────────────────────────────────────────────────
 
   const stopSchedule = useCallback(() => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
@@ -198,42 +297,39 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
       const to   = schedToRef.current;
       if (from && now < new Date(from)) return;
       if (to   && now > new Date(to))   { stopSchedule(); return; }
-      await doSendCore();
+      await doExecuteCore();
       count++;
       setSchedCount(count);
     };
 
     tick();
     timerRef.current = setInterval(tick, freqSecs * 1000);
-  }, [stopSchedule, doSendCore]);
+  }, [stopSchedule, doExecuteCore]);
 
-  // Clean up timer on full app unmount (not on page navigation, since provider is above pages)
   useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
 
+  const selectedId = selectedIdState;
+
   return (
-    <AlertsSchedulerContext.Provider value={{
-      scripts, setScripts,
-      history, setHistory,
-      loadErr, loadScripts,
+    <Ctx.Provider value={{
+      scripts, setScripts, loadErr,
       selectedId, setSelectedId,
       values, setValues,
-      topicOverride, setTopicOverride,
-      sending,
-      sendResult, setSendResult,
+      kernelAlive, kernelConnecting,
+      connectKernel, disconnectKernel,
+      executing, output, clearOutput,
       schedMode, setSchedMode,
       schedFreq, setSchedFreq,
       schedFrom, setSchedFrom,
       schedTo, setSchedTo,
       schedActive, schedCount,
-      doSendCore, startSchedule, stopSchedule,
+      doExecuteCore, startSchedule, stopSchedule,
     }}>
       {children}
-    </AlertsSchedulerContext.Provider>
+    </Ctx.Provider>
   );
 }
 
-// ── Hook ──────────────────────────────────────────────────────────────────────
-
 export function useAlertsScheduler() {
-  return useContext(AlertsSchedulerContext);
+  return useContext(Ctx);
 }

@@ -28,7 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from backend.api import (
-    auth, generation, etalons, bugs, system, alerts,
+    auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, app_settings,
 )
@@ -121,6 +121,7 @@ app.include_router(generation.router,       dependencies=_auth_dep)
 app.include_router(etalons.router,          dependencies=_auth_dep)
 app.include_router(bugs.router,             dependencies=_auth_dep)
 app.include_router(alerts.router,           dependencies=_auth_dep)
+app.include_router(kernel.router,           dependencies=_auth_dep)
 app.include_router(metrics_systems.router,  dependencies=_auth_dep)
 app.include_router(metrics_settings.router, dependencies=_auth_dep)
 app.include_router(metrics_builder.router,  dependencies=_auth_dep)

@@ -214,8 +214,10 @@ class LayeredGenerator:
             "Верни ТОЛЬКО JSON массив. Никакого текста до или после."
         )
 
+        # Токенов нужно: ~120 токенов на кейс + запас. Для atomary (100 кейсов) = ~14000
+        _max_tokens = min(depth_info["max"] * 140 + 2000, 16000)
         response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.5, max_tokens=4000)
+                                  temperature=0.5, max_tokens=_max_tokens)
 
         text = response.content.strip()
 
@@ -237,7 +239,25 @@ class LayeredGenerator:
             except Exception:
                 pass
 
-        # 3. Fallback — только если LLM совсем не справился
+        # 3. Repair truncated JSON — ответ обрезан по max_tokens
+        #    Берём всё от первой '[' и пытаемся починить незаконченный массив
+        bracket_start = text.find('[')
+        if bracket_start != -1:
+            partial = text[bracket_start:]
+            # Удаляем последний неполный объект (обрезан посередине)
+            last_complete = partial.rfind('},')
+            if last_complete == -1:
+                last_complete = partial.rfind('}')
+            if last_complete != -1:
+                repaired = partial[:last_complete + 1] + "]"
+                try:
+                    cases = json.loads(repaired)
+                    if isinstance(cases, list) and cases:
+                        return cases
+                except Exception:
+                    pass
+
+        # 4. Fallback — только если LLM совсем не справился
         return [
             {"name": "[" + platform + "][" + feature + "] HappyPath. Основной успешный сценарий", "priority": "High", "type": "positive"},
             {"name": "[" + platform + "][" + feature + "] Error. Ошибка при некорректных входных данных", "priority": "Normal", "type": "negative"},

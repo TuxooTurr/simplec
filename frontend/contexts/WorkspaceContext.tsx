@@ -27,6 +27,9 @@ interface WorkspaceCtx {
   /** Открыта ли правая панель (независимо от rightSection) */
   rightOpen: boolean;
   setRightOpen: (v: boolean) => void;
+  /** Счётчик для принудительного обновления списка провайдеров */
+  providersRefreshKey: number;
+  bumpProviders: () => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceCtx>({
@@ -40,6 +43,8 @@ const WorkspaceContext = createContext<WorkspaceCtx>({
   setLeftVisible: () => {},
   rightOpen: false,
   setRightOpen: () => {},
+  providersRefreshKey: 0,
+  bumpProviders: () => {},
 });
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
@@ -48,6 +53,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [dragging, setDragging] = useState<SectionId | null>(null);
   const [leftVisible, setLeftVisible] = useState(true);
   const [rightOpen, setRightOpen] = useState(false);
+  const [providersRefreshKey, setProvidersRefreshKey] = useState(0);
+  const bumpProviders = () => setProvidersRefreshKey((k) => k + 1);
 
   return (
     <WorkspaceContext.Provider
@@ -57,6 +64,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         dragging, setDragging,
         leftVisible, setLeftVisible,
         rightOpen, setRightOpen,
+        providersRefreshKey, bumpProviders,
       }}
     >
       {children}

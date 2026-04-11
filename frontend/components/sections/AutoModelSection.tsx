@@ -53,6 +53,55 @@ function formatHistTime(ts: number): string {
   return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) + " " + hm;
 }
 
+/* ── Test types ───────────────────────────────────────────────────── */
+
+type TestType = "api" | "e2e" | "frontend" | "mobile" | "dt";
+
+interface TestTypeConfig {
+  label: string;
+  framework: string;
+  placeholder: string;
+  codeLabel: string;
+}
+
+const TEST_TYPES: Record<TestType, TestTypeConfig> = {
+  api: {
+    label: "API",
+    framework: "JUnit 5 + RestAssured",
+    placeholder:
+      "Вставьте API тест-кейсы:\n\n1. Тест: Создание пользователя\n   Метод: POST /api/users\n   Тело: { \"name\": \"Ivan\", \"email\": \"ivan@test.com\" }\n   Ожидаемый статус: 201\n   Ожидаемый ответ: { \"id\": <number>, \"name\": \"Ivan\" }\n\n2. Тест: Получение несуществующего пользователя\n   Метод: GET /api/users/99999\n   Ожидаемый статус: 404",
+    codeLabel: "Java-код (RestAssured)",
+  },
+  e2e: {
+    label: "E2E",
+    framework: "JUnit 5 + Selenide",
+    placeholder:
+      "Вставьте E2E тест-кейсы:\n\n1. Тест: Авторизация и оформление заказа\n   Шаг 1: Открыть страницу входа\n   Шаг 2: Ввести логин и пароль\n   Шаг 3: Нажать «Войти»\n   Шаг 4: Перейти в каталог, добавить товар в корзину\n   Шаг 5: Оформить заказ\n   Ожидаемый результат: Заказ создан, отображается номер заказа",
+    codeLabel: "Java-код (Selenide E2E)",
+  },
+  frontend: {
+    label: "Frontend",
+    framework: "JUnit 5 + Selenide",
+    placeholder:
+      "Вставьте Frontend UI тест-кейсы:\n\n1. Тест: Валидация формы регистрации\n   Шаг 1: Открыть страницу /register\n   Шаг 2: Нажать «Зарегистрироваться» без заполнения полей\n   Ожидаемый результат: Поле Email подсвечено красным, текст «Обязательное поле»\n\n2. Тест: Кнопка «Показать пароль»\n   Шаг 1: Ввести пароль в поле\n   Шаг 2: Кликнуть иконку глаза\n   Ожидаемый результат: Тип поля изменился на text",
+    codeLabel: "Java-код (Selenide Frontend)",
+  },
+  mobile: {
+    label: "Mobile",
+    framework: "JUnit 5 + Appium",
+    placeholder:
+      "Вставьте Mobile тест-кейсы:\n\n1. Тест: Авторизация в мобильном приложении\n   Платформа: Android\n   Шаг 1: Запустить приложение\n   Шаг 2: Тапнуть поле «Email», ввести test@mail.ru\n   Шаг 3: Тапнуть поле «Пароль», ввести password123\n   Шаг 4: Тапнуть кнопку «Войти»\n   Ожидаемый результат: Открылся экран главного меню\n\n2. Тест: Свайп карточки товара\n   Шаг 1: Свайпнуть карточку влево\n   Ожидаемый результат: Карточка скрыта, отображается следующая",
+    codeLabel: "Java-код (Appium Mobile)",
+  },
+  dt: {
+    label: "DT",
+    framework: "JUnit 5 + WinAppDriver",
+    placeholder:
+      "Вставьте Desktop тест-кейсы:\n\n1. Тест: Открытие главного окна приложения\n   Приложение: C:\\Program Files\\MyApp\\MyApp.exe\n   Шаг 1: Запустить приложение\n   Шаг 2: Дождаться загрузки главного окна\n   Ожидаемый результат: Заголовок окна «My Application», кнопка «Войти» активна\n\n2. Тест: Сохранение файла через меню\n   Шаг 1: Нажать File → Save As\n   Шаг 2: Ввести имя файла «test_document»\n   Шаг 3: Нажать «Сохранить»\n   Ожидаемый результат: Файл сохранён, в заголовке окна — имя файла",
+    codeLabel: "Java-код (WinAppDriver Desktop)",
+  },
+};
+
 /* ── Constants ────────────────────────────────────────────────────── */
 
 const INPUT_CLS =
@@ -67,6 +116,7 @@ export default function AutoModelSection() {
   const { provider } = useWorkspace();
 
   const [stage, setStage]         = useState<"input" | "history">("input");
+  const [testType, setTestType]   = useState<TestType>("e2e");
   const [feature, setFeature]     = useState("");
   const [inputText, setInputText] = useState("");
   const [fileName, setFileName]   = useState("");
@@ -169,7 +219,7 @@ export default function AutoModelSection() {
     setCode("");
     setGenError(null);
     try {
-      const res = await generateAutotest({ cases: inputText, feature, provider });
+      const res = await generateAutotest({ cases: inputText, feature, provider, test_type: testType });
       setCode(res.code);
       saveHistEntry({
         id: Date.now().toString(),
@@ -318,11 +368,11 @@ export default function AutoModelSection() {
       <div className="w-full">
 
         {/* Header */}
-        <div className="flex items-start justify-between mb-5 gap-4">
+        <div className="flex items-start justify-between mb-4 gap-4">
           <div>
             <h1 className="text-xl font-bold text-text-main mb-1">Автотестирование</h1>
             <p className="text-sm text-text-muted">
-              Вставьте ручные тест-кейсы — AI сгенерирует Java-класс (JUnit 5 + Selenide).
+              Вставьте ручные тест-кейсы — AI сгенерирует код ({TEST_TYPES[testType].framework}).
             </p>
           </div>
           {histEntries.length > 0 && (
@@ -334,6 +384,23 @@ export default function AutoModelSection() {
               История ({histEntries.length})
             </button>
           )}
+        </div>
+
+        {/* Test type selector */}
+        <div className="flex items-center gap-1.5 mb-4 p-1 bg-gray-100 rounded-xl w-fit">
+          {(Object.keys(TEST_TYPES) as TestType[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setTestType(t)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
+                testType === t
+                  ? "bg-white text-primary shadow-sm border border-border-main"
+                  : "text-text-muted hover:text-text-main"
+              }`}
+            >
+              {TEST_TYPES[t].label}
+            </button>
+          ))}
         </div>
 
         {/* Input card */}
@@ -361,7 +428,7 @@ export default function AutoModelSection() {
               value={inputText}
               onChange={e => setInputText(e.target.value)}
               rows={10}
-              placeholder={"Вставьте ручные тест-кейсы в любом формате:\n\n1. Тест: Авторизация\n   Шаг 1: Открыть страницу входа\n   Шаг 2: Ввести логин и пароль\n   Шаг 3: Нажать «Войти»\n   Ожидаемый результат: Пользователь авторизован\n\n2. Тест: Неверный пароль\n   ..."}
+              placeholder={TEST_TYPES[testType].placeholder}
               className={`${INPUT_CLS} resize-none font-mono text-xs`}
             />
             <input
@@ -429,7 +496,7 @@ export default function AutoModelSection() {
         {code && (
           <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-text-main">Java-код</h3>
+              <h3 className="text-sm font-semibold text-text-main">{TEST_TYPES[testType].codeLabel}</h3>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setCode("")}
@@ -503,7 +570,7 @@ export default function AutoModelSection() {
           >
             {loading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Генерирую...</>
-              : <><FlaskConical className="w-4 h-4" /> Сгенерировать Java-код</>}
+              : <><FlaskConical className="w-4 h-4" /> Сгенерировать [{TEST_TYPES[testType].label}]</>}
           </button>
         </div>
 

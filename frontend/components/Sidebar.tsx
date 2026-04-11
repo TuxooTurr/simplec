@@ -48,7 +48,7 @@ export default function Sidebar() {
   const router = useRouter();
   const [username, setUsername] = useState<string | null>(null);
   const [availableIds, setAvailableIds] = useState<Set<string>>(new Set());
-  const { provider, setProvider, setDragging } = useWorkspace();
+  const { provider, setProvider, setDragging, providersRefreshKey } = useWorkspace();
 
   useEffect(() => {
     getMe().then((me) => setUsername(me?.username ?? null));
@@ -64,7 +64,8 @@ export default function Sidebar() {
         }
       })
       .catch(() => setAvailableIds(new Set()));
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providersRefreshKey]);
 
   async function handleLogout() {
     await logout();

@@ -1,27 +1,22 @@
 """
-Эндпоинты управления alert-скриптами и отправки алертов в Kafka.
+Эндпоинты управления алертами (Jupyter-ноутбуки + динамические параметры + Kafka).
 
 REST:
-  GET    /api/alerts/scripts          — список скриптов
-  POST   /api/alerts/scripts          — создать / обновить скрипт
-  DELETE /api/alerts/scripts/{id}     — удалить скрипт (builtin нельзя)
-  POST   /api/alerts/send             — резолвить шаблон + отправить в Kafka
+  GET    /api/alerts/scripts          — список алертов
+  POST   /api/alerts/scripts          — создать / обновить алерт
+  DELETE /api/alerts/scripts/{id}     — удалить алерт
+  POST   /api/alerts/parse-notebook   — распарсить .ipynb файл
+  POST   /api/alerts/send             — подставить параметры + отправить в Kafka
   GET    /api/alerts/history          — последние 20 отправок
-
-script_type:
-  "simple"  — стандартный JSON-шаблон с {{param}} заменой
-  "a2a"     — A2A протокол: JWT заголовки + JSON-RPC 2.0 обёртка
 """
 
 import asyncio
 import json
-import os
-import re
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -33,142 +28,95 @@ router = APIRouter()
 
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
-class AlertParam(BaseModel):
-    key:      str
-    label:    str
-    type:     str = "text"          # text | select | textarea
-    required: bool = False
-    default:  str  = ""
-    hint:     Optional[str] = None
-    options:  Optional[list[str]] = None
+class NotebookCell(BaseModel):
+    id:     str
+    type:   str = "markdown"   # "markdown" | "code"
+    source: str = ""
+
+
+class DynamicParam(BaseModel):
+    id:          str
+    label:       str
+    code_key:    str = ""
+    placeholder: str = ""
 
 
 class AlertScript(BaseModel):
-    id:               Optional[str]   = None
-    name:             str
-    description:      str             = ""
-    topic:            str
-    script_type:      str             = "simple"   # "simple" | "a2a"
-    partition:        Optional[int]   = None
-    payload_template: str
-    params:           list[AlertParam] = []
-    created_at:       Optional[str]   = None
-    builtin:          bool            = False
+    id:             Optional[str]       = None
+    name:           str
+    topic:          str                 = ""
+    notebook:       list[dict]          = []
+    dynamic_params: list[DynamicParam]  = []
+    created_at:     Optional[str]       = None
 
 
 class SendRequest(BaseModel):
     script_id:      str
-    values:         dict[str, str] = {}
+    values:         dict[str, str] = {}   # param.id → user value
     topic_override: str            = ""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _resolve_template(template: str, values: dict[str, str]) -> str:
-    """Заменяет {{key}} на values[key]. __now__ → ISO timestamp."""
-    def replacer(m: re.Match) -> str:
-        k = m.group(1)
-        v = values.get(k, "")
-        return v if v != "__now__" else datetime.now(timezone.utc).isoformat()
-
-    result = re.sub(r"\{\{(\w+)\}\}", replacer, template)
-    result = result.replace("__now__", datetime.now(timezone.utc).isoformat())
+def _apply_params(source: str, dynamic_params: list[dict], values: dict[str, str]) -> str:
+    """Заменяет placeholder каждого параметра на значение из values."""
+    result = source
+    for p in dynamic_params:
+        placeholder = p.get("placeholder", "")
+        if not placeholder:
+            continue
+        value = values.get(p["id"], placeholder)
+        result = result.replace(placeholder, value)
     return result
 
 
-def _send_simple_sync(topic: str, payload: str, partition: Optional[int], kafka_cfg: Optional[dict] = None) -> dict:
+def _build_payload(script: dict, values: dict[str, str]) -> str:
+    """Собирает payload из code-ячеек ноутбука с применёнными параметрами."""
+    cells = script.get("notebook", [])
+    params = script.get("dynamic_params", [])
+    parts = []
+    for cell in cells:
+        if cell.get("type") == "code":
+            parts.append(_apply_params(cell.get("source", ""), params, values))
+    return "\n".join(parts)
+
+
+def _send_kafka_sync(topic: str, payload: str, partition: Optional[int] = None,
+                     kafka_cfg: Optional[dict] = None) -> dict:
     from agents.kafka_client import KafkaClient
     return KafkaClient.send(topic, payload, partition=partition, kafka_cfg=kafka_cfg)
 
 
-def _send_a2a_mpr_sync(
-    topic: str,
-    values: dict[str, str],
-    partition: Optional[int],
-    kafka_cfg: Optional[dict] = None,
-) -> tuple[dict, str]:
-    """
-    Строит A2A-сообщение для МпР (data-части) и отправляет в Kafka.
-    Returns: (record_meta, raw_payload_str)
-    """
-    from agents.kafka_client import KafkaClient
-    from agents.a2a_builder import build_a2a_mpr_message
-
-    system_ci        = values.get("service_ci", values.get("as", ""))
-    sender           = values.get("sender", "sber911.mpr_generator")
-    recipient        = values.get("recipient", "sber.support_platform.channel_agent")
-    sender_id_aef    = values.get("sender_id_aef", "CI00213821")
-    recipient_id_aef = values.get("recipient_id_aef", "CI00293210")
-
-    mpr_data = {
-        "id":           values.get("id", str(uuid.uuid4())),
-        "service_ci":   system_ci,
-        "service_name": values.get("service_name", ""),
-        "deadline":     values.get("deadline", ""),
-        "description":  values.get("description", ""),
-        "action":       values.get("action", "OPEN"),
-        "status":       values.get("status", "ACTIVE"),
-    }
-
-    jwt_secret = os.getenv("A2A_JWT_SECRET", "SBER911_SECRET_KEY")
-
-    payload_str, kafka_headers = build_a2a_mpr_message(
-        system_ci, sender, recipient,
-        sender_id_aef, recipient_id_aef,
-        mpr_data, jwt_secret,
-    )
-
-    key = str(uuid.uuid4())
-    meta = KafkaClient.send(
-        topic, payload_str,
-        key=key,
-        headers=kafka_headers,
-        partition=partition,
-        kafka_cfg=kafka_cfg,
-    )
-    return meta, payload_str
-
-
-def _send_a2a_sync(
-    topic: str,
-    values: dict[str, str],
-    partition: Optional[int],
-    kafka_cfg: Optional[dict] = None,
-) -> tuple[dict, str]:
-    """
-    Строит A2A-сообщение (JWT headers + JSON-RPC wrapper) и отправляет в Kafka.
-    Returns: (record_meta, raw_payload_str)
-    """
-    from agents.kafka_client import KafkaClient
-    from agents.a2a_builder import build_a2a_message
-
-    system_ci        = values.get("as", "")
-    sender           = values.get("sender", "alert_service")
-    recipient        = values.get("recipient", "sber.support_platform.channel_agent")
-    sender_id_aef    = values.get("sender_id_aef", "CI00213821")
-    recipient_id_aef = values.get("recipient_id_aef", "CI00293210")
-    alert_text       = values.get("alert_text", "")
-
-    jwt_secret = os.getenv("A2A_JWT_SECRET", "SBER911_SECRET_KEY")
-
-    payload_str, kafka_headers = build_a2a_message(
-        system_ci, sender, recipient,
-        sender_id_aef, recipient_id_aef,
-        alert_text, jwt_secret,
-    )
-
-    key = str(uuid.uuid4())
-    meta = KafkaClient.send(
-        topic, payload_str,
-        key=key,
-        headers=kafka_headers,
-        partition=partition,
-        kafka_cfg=kafka_cfg,
-    )
-    return meta, payload_str
-
-
 # ── Routes ───────────────────────────────────────────────────────────────────
+
+@router.post("/api/alerts/parse-notebook")
+async def parse_notebook(file: UploadFile = File(...)) -> dict:
+    """Принимает .ipynb, возвращает список ячеек."""
+    raw = await file.read()
+    try:
+        nb = json.loads(raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Файл не является валидным JSON")
+
+    if "cells" not in nb:
+        raise HTTPException(status_code=400, detail="Файл не является Jupyter Notebook (.ipynb)")
+
+    cells = []
+    for i, cell in enumerate(nb.get("cells", [])):
+        cell_type = cell.get("cell_type", "code")
+        if cell_type not in ("markdown", "code"):
+            continue
+        source = cell.get("source", "")
+        if isinstance(source, list):
+            source = "".join(source)
+        cells.append({
+            "id":     f"cell-{i}-{uuid.uuid4().hex[:6]}",
+            "type":   cell_type,
+            "source": source,
+        })
+
+    return {"cells": cells}
+
 
 @router.get("/api/alerts/scripts")
 def list_scripts() -> list[dict]:
@@ -178,7 +126,9 @@ def list_scripts() -> list[dict]:
 @router.post("/api/alerts/scripts")
 def upsert_script(script: AlertScript) -> dict:
     data = script.model_dump(exclude_none=False)
-    data["params"] = [p.model_dump(exclude_none=True) for p in script.params]
+    data["dynamic_params"] = [p.model_dump() for p in script.dynamic_params]
+    if not data.get("created_at"):
+        data["created_at"] = datetime.now(timezone.utc).isoformat()
     return AlertsStore.save_script(data)
 
 
@@ -186,10 +136,7 @@ def upsert_script(script: AlertScript) -> dict:
 def remove_script(script_id: str) -> dict:
     ok = AlertsStore.delete_script(script_id)
     if not ok:
-        raise HTTPException(
-            status_code=400,
-            detail="Встроенный скрипт нельзя удалить. Можно только изменить шаблон."
-        )
+        raise HTTPException(status_code=404, detail="Алерт не найден")
     return {"status": "deleted"}
 
 
@@ -197,116 +144,27 @@ def remove_script(script_id: str) -> dict:
 async def send_alert(req: SendRequest, db: Session = Depends(get_db)) -> dict:
     from backend.api.app_settings import get_alerts_kafka_config
     kafka_cfg_raw = get_alerts_kafka_config(db)
-    # None → KafkaClient falls back to os.getenv
     kafka_cfg: Optional[dict] = kafka_cfg_raw if kafka_cfg_raw else None
 
     script = AlertsStore.get_script(req.script_id)
     if not script:
-        raise HTTPException(status_code=404, detail=f"Скрипт '{req.script_id}' не найден")
+        raise HTTPException(status_code=404, detail=f"Алерт '{req.script_id}' не найден")
 
-    # Подставить defaults
-    values: dict[str, str] = {}
-    for p in script.get("params", []):
-        k = p["key"]
-        v = req.values.get(k, p.get("default", ""))
-        values[k] = v if v != "__now__" else datetime.now(timezone.utc).isoformat()
-
-    topic      = req.topic_override.strip() or script.get("topic", "alerts.default")
-    stype      = script.get("script_type", "simple")
-    partition  = script.get("partition")
-
-    # ── A2A МпР протокол ─────────────────────────────────────────────────
-    if stype == "a2a_mpr":
-        try:
-            meta, raw_payload = await asyncio.to_thread(
-                _send_a2a_mpr_sync, topic, values, partition, kafka_cfg
-            )
-            AlertsStore.add_history({
-                "script_id":   req.script_id,
-                "script_name": script.get("name", req.script_id),
-                "topic":       topic,
-                "payload":     raw_payload,
-                "status":      "ok",
-            })
-            return {
-                "ok":        True,
-                "payload":   raw_payload,
-                "topic":     topic,
-                "offset":    meta.get("offset"),
-                "partition": meta.get("partition"),
-            }
-        except Exception as e:
-            err = str(e)
-            AlertsStore.add_history({
-                "script_id":   req.script_id,
-                "script_name": script.get("name", req.script_id),
-                "topic":       topic,
-                "payload":     "",
-                "status":      "error",
-                "error":       err,
-            })
-            return {"ok": False, "payload": "", "topic": topic, "error": err}
-
-    # ── A2A протокол ─────────────────────────────────────────────────────
-    if stype == "a2a":
-        # Если payload_template — полноценный JSON-шаблон (не "{{alert_text}}"),
-        # резолвим его и используем как alert_text для A2A-сообщения
-        tmpl = script.get("payload_template", "{{alert_text}}")
-        if tmpl and tmpl.strip() != "{{alert_text}}":
-            values["alert_text"] = _resolve_template(tmpl, values)
-        try:
-            meta, raw_payload = await asyncio.to_thread(
-                _send_a2a_sync, topic, values, partition, kafka_cfg
-            )
-            AlertsStore.add_history({
-                "script_id":   req.script_id,
-                "script_name": script.get("name", req.script_id),
-                "topic":       topic,
-                "payload":     raw_payload,
-                "status":      "ok",
-            })
-            return {
-                "ok":        True,
-                "payload":   raw_payload,
-                "topic":     topic,
-                "offset":    meta.get("offset"),
-                "partition": meta.get("partition"),
-            }
-        except Exception as e:
-            err = str(e)
-            AlertsStore.add_history({
-                "script_id":   req.script_id,
-                "script_name": script.get("name", req.script_id),
-                "topic":       topic,
-                "payload":     "",
-                "status":      "error",
-                "error":       err,
-            })
-            return {"ok": False, "payload": "", "topic": topic, "error": err}
-
-    # ── Simple шаблон ─────────────────────────────────────────────────────
-    raw_payload = _resolve_template(script["payload_template"], values)
+    topic   = req.topic_override.strip() or script.get("topic", "alerts.default")
+    payload = _build_payload(script, req.values)
 
     try:
-        json.loads(raw_payload)
-    except json.JSONDecodeError as e:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Шаблон payload не является валидным JSON: {e}"
-        )
-
-    try:
-        meta = await asyncio.to_thread(_send_simple_sync, topic, raw_payload, partition, kafka_cfg)
+        meta = await asyncio.to_thread(_send_kafka_sync, topic, payload, None, kafka_cfg)
         AlertsStore.add_history({
             "script_id":   req.script_id,
             "script_name": script.get("name", req.script_id),
             "topic":       topic,
-            "payload":     raw_payload,
+            "payload":     payload,
             "status":      "ok",
         })
         return {
             "ok":        True,
-            "payload":   raw_payload,
+            "payload":   payload,
             "topic":     topic,
             "offset":    meta.get("offset"),
             "partition": meta.get("partition"),
@@ -317,11 +175,11 @@ async def send_alert(req: SendRequest, db: Session = Depends(get_db)) -> dict:
             "script_id":   req.script_id,
             "script_name": script.get("name", req.script_id),
             "topic":       topic,
-            "payload":     raw_payload,
+            "payload":     payload,
             "status":      "error",
             "error":       err,
         })
-        return {"ok": False, "payload": raw_payload, "topic": topic, "error": err}
+        return {"ok": False, "payload": payload, "topic": topic, "error": err}
 
 
 @router.get("/api/alerts/history")

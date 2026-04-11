@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Eye, EyeOff, Save, Settings } from "lucide-react";
 import { getSettings, saveSettings, type SettingsMap } from "@/lib/settingsApi";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
@@ -250,6 +251,7 @@ function SettingsCard({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function SettingsSection() {
+  const { bumpProviders } = useWorkspace();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
@@ -281,7 +283,7 @@ export default function SettingsSection() {
     setValues((prev) => ({ ...prev, [key]: val }));
   }
 
-  async function handleSave(keys: string[]) {
+  async function handleSave(keys: string[], isLlm = false) {
     const payload: Record<string, string> = {};
     for (const k of keys) {
       payload[k] = values[k] ?? "";
@@ -289,6 +291,8 @@ export default function SettingsSection() {
     await saveSettings(payload);
     // Reload to get fresh masked values from backend
     await loadSettings();
+    // After saving LLM keys — refresh providers in sidebar and status bar
+    if (isLlm) bumpProviders();
   }
 
   if (loading) {
@@ -324,7 +328,7 @@ export default function SettingsSection() {
         values={values}
         descriptions={descriptions}
         onChange={handleChange}
-        onSave={handleSave}
+        onSave={(keys) => handleSave(keys, true)}
       />
 
       {/* Kafka — Алерты */}

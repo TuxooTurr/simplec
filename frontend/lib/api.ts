@@ -298,11 +298,29 @@ export async function generateAutotest(params: {
   feature?: string;
   provider?: string;
   test_type?: string;
+  project_context?: string;
 }): Promise<{ code: string }> {
   const body = new FormData();
   body.append("cases", params.cases);
-  if (params.feature) body.append("feature", params.feature);
-  if (params.provider) body.append("provider", params.provider);
-  if (params.test_type) body.append("test_type", params.test_type);
+  if (params.feature)          body.append("feature",          params.feature);
+  if (params.provider)         body.append("provider",         params.provider);
+  if (params.test_type)        body.append("test_type",        params.test_type);
+  if (params.project_context)  body.append("project_context",  params.project_context);
   return fetchJson("/api/autotests/generate", { method: "POST", body });
+}
+
+export interface ProjectAnalysis {
+  build_tool:     "maven" | "gradle" | "unknown";
+  dependencies:   string[];
+  base_packages:  string[];
+  test_dirs:      string[];
+  sample_imports: string[];
+}
+
+export async function analyzeProject(path: string): Promise<ProjectAnalysis> {
+  return fetchJson("/api/autotests/analyze-project", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ path }),
+  });
 }

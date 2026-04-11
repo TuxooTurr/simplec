@@ -4,9 +4,9 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   FlaskConical, Loader2, Copy, CheckCheck, Paperclip, FileText,
   PlugZap, History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle,
-  Trash2, X,
+  Trash2, X, FolderOpen, ChevronDown, ChevronUp, CheckCircle,
 } from "lucide-react";
-import { generateAutotest, addAutotest, parseFile } from "@/lib/api";
+import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 /* ── History helpers ──────────────────────────────────────────────── */
@@ -129,7 +129,15 @@ export default function AutoModelSection() {
   const [histEntries, setHistEntries] = useState<AutoHistEntry[]>(() => loadHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Project binding
+  const [projectOpen,    setProjectOpen]    = useState(false);
+  const [projectPath,    setProjectPath]    = useState("");
+  const [projectLoading, setProjectLoading] = useState(false);
+  const [projectData,    setProjectData]    = useState<ProjectAnalysis | null>(null);
+  const [projectError,   setProjectError]   = useState("");
+
+  const fileInputRef   = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Prefill from GenerationSection "В автотесты" ─────────────── */
   useEffect(() => {
@@ -211,6 +219,62 @@ export default function AutoModelSection() {
     }
   };
 
+  /* ── Project analysis ──────────────────────────────────────────── */
+
+  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const first = files[0] as File & { path?: string };
+    let resolved = "";
+    if (first.path) {
+      // Electron / local env: file.path is the absolute filesystem path
+      const relDepth = first.webkitRelativePath.split("/").length - 1;
+      const parts = first.path.split(/[/\\]/);
+      resolved = parts.slice(0, parts.length - relDepth).join("/");
+    } else {
+      // Standard browser: only folder name is available from webkitRelativePath
+      resolved = first.webkitRelativePath.split("/")[0];
+    }
+    if (resolved) {
+      setProjectPath(resolved);
+      setProjectData(null);
+      setProjectError("");
+    }
+    // Reset input so the same folder can be re-selected
+    if (folderInputRef.current) folderInputRef.current.value = "";
+  };
+
+  const handleAnalyzeProject = async () => {
+    if (!projectPath.trim()) return;
+    setProjectLoading(true);
+    setProjectError("");
+    setProjectData(null);
+    try {
+      const data = await analyzeProject(projectPath.trim());
+      setProjectData(data);
+    } catch (err) {
+      setProjectError(String(err));
+    } finally {
+      setProjectLoading(false);
+    }
+  };
+
+  const buildProjectContext = (): string => {
+    if (!projectData) return "";
+    const lines: string[] = [];
+    lines.push(`Инструмент сборки: ${projectData.build_tool}`);
+    if (projectData.dependencies.length)
+      lines.push(`Зависимости:\n${projectData.dependencies.map(d => `  - ${d}`).join("\n")}`);
+    if (projectData.base_packages.length)
+      lines.push(`Пакеты проекта: ${projectData.base_packages.join(", ")}`);
+    if (projectData.test_dirs.length)
+      lines.push(`Директории тестов: ${projectData.test_dirs.join(", ")}`);
+    if (projectData.sample_imports.length)
+      lines.push(`Примеры импортов в тестах:\n${projectData.sample_imports.map(i => `  import ${i};`).join("\n")}`);
+    lines.push(`\nГенерируй тесты:\n- Используй пакет из: ${projectData.base_packages[0] ?? "com.example.tests"}\n- Помести файл в: ${projectData.test_dirs[0] ?? "src/test/java"}`);
+    return lines.join("\n\n");
+  };
+
   /* ── Generate ────────────────────────────────────────────────────── */
 
   const handleGenerate = async () => {
@@ -219,7 +283,8 @@ export default function AutoModelSection() {
     setCode("");
     setGenError(null);
     try {
-      const res = await generateAutotest({ cases: inputText, feature, provider, test_type: testType });
+      const project_context = buildProjectContext();
+      const res = await generateAutotest({ cases: inputText, feature, provider, test_type: testType, project_context });
       setCode(res.code);
       saveHistEntry({
         id: Date.now().toString(),
@@ -401,6 +466,135 @@ export default function AutoModelSection() {
               {TEST_TYPES[t].label}
             </button>
           ))}
+        </div>
+
+        {/* Project binding card */}
+        <div className="bg-white border border-border-main rounded-xl mb-4 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setProjectOpen(v => !v)}
+            className="w-full flex items-center justify-between px-5 py-3 text-sm hover:bg-gray-50/60 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-indigo-500" />
+              <span className="font-semibold text-text-main">Проект автотестов</span>
+              {projectData && (
+                <span className="flex items-center gap-1 text-xs text-green-600 font-normal">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  Привязан ({projectData.build_tool})
+                </span>
+              )}
+            </div>
+            {projectOpen ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
+          </button>
+
+          {projectOpen && (
+            <div className="px-5 pb-5 border-t border-border-main pt-4">
+              <p className="text-xs text-text-muted mb-3">
+                Укажи путь к папке с Java/Kotlin проектом — AI проанализирует зависимости и структуру,
+                чтобы сгенерировать код с правильными импортами и пакетом.
+              </p>
+              {/* Hidden folder input */}
+              <input
+                ref={folderInputRef}
+                type="file"
+                // @ts-expect-error — webkitdirectory is non-standard but widely supported
+                webkitdirectory=""
+                multiple
+                className="hidden"
+                onChange={handleFolderSelect}
+              />
+
+              <div className="flex gap-2 mb-3">
+                <div className="flex-1 flex gap-1">
+                  <input
+                    value={projectPath}
+                    onChange={e => { setProjectPath(e.target.value); setProjectData(null); setProjectError(""); }}
+                    placeholder="/Users/me/my-autotest-project"
+                    className="flex-1 border border-border-main rounded-lg px-3 py-2 text-sm font-mono
+                      focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
+                    onKeyDown={e => { if (e.key === "Enter") handleAnalyzeProject(); }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => folderInputRef.current?.click()}
+                    title="Выбрать папку"
+                    className="flex items-center gap-1.5 px-3 py-2 border border-border-main rounded-lg text-sm
+                      text-text-muted hover:text-primary hover:border-primary/50 transition-all"
+                  >
+                    <FolderOpen className="w-4 h-4" />
+                    <span className="hidden sm:inline">Обзор</span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAnalyzeProject}
+                  disabled={projectLoading || !projectPath.trim()}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold
+                    hover:bg-indigo-700 disabled:opacity-40 transition-all active:scale-[0.97]"
+                >
+                  {projectLoading
+                    ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Анализ...</>
+                    : "Анализировать"}
+                </button>
+              </div>
+
+              {projectError && (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">
+                  {projectError}
+                </p>
+              )}
+
+              {projectData && (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
+                      projectData.build_tool === "maven"  ? "bg-orange-50 border-orange-200 text-orange-700" :
+                      projectData.build_tool === "gradle" ? "bg-teal-50 border-teal-200 text-teal-700" :
+                      "bg-gray-100 border-gray-200 text-gray-600"
+                    }`}>
+                      {projectData.build_tool === "maven" ? "Maven" : projectData.build_tool === "gradle" ? "Gradle" : "Неизвестно"}
+                    </span>
+                    {projectData.test_dirs.map(d => (
+                      <span key={d} className="text-xs px-2 py-0.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700 font-mono">
+                        {d}
+                      </span>
+                    ))}
+                    {projectData.base_packages.slice(0, 3).map(p => (
+                      <span key={p} className="text-xs px-2 py-0.5 rounded-full bg-violet-50 border border-violet-200 text-violet-700 font-mono">
+                        {p}
+                      </span>
+                    ))}
+                  </div>
+                  {projectData.dependencies.length > 0 && (
+                    <details className="group">
+                      <summary className="cursor-pointer text-xs text-text-muted hover:text-text-main list-none flex items-center gap-1">
+                        <ChevronDown className="w-3 h-3 group-open:rotate-180 transition-transform" />
+                        {projectData.dependencies.length} зависимостей найдено
+                      </summary>
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {projectData.dependencies.map(d => (
+                          <span key={d} className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-mono">
+                            {d}
+                          </span>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <p className="text-xs text-green-600">
+                    Проект привязан — при генерации будут использованы реальные зависимости и пакеты.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => { setProjectData(null); setProjectPath(""); }}
+                    className="text-xs text-text-muted hover:text-red-500 transition-colors"
+                  >
+                    Отвязать проект
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Input card */}

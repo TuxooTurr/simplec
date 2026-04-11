@@ -24,7 +24,6 @@ const SECRET_KEYS = new Set([
   "deepseek_api_key",
   "openai_api_key",
   "anthropic_api_key",
-  "alerts_kafka_sasl_password",
   "kafka_sasl_password",
 ]);
 
@@ -43,30 +42,31 @@ const LLM_FIELDS: FieldDef[] = [
     key: "gigachat_scope", label: "GigaChat Scope", type: "select",
     options: ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"],
   },
-  { key: "deepseek_api_key",   label: "DeepSeek API Key",  type: "password" },
-  { key: "deepseek_model",     label: "Модель DeepSeek" },
-  { key: "openai_api_key",     label: "OpenAI API Key",    type: "password" },
-  { key: "openai_model",       label: "Модель OpenAI" },
-  { key: "anthropic_api_key",  label: "Anthropic API Key", type: "password" },
-  { key: "anthropic_model",    label: "Модель Claude" },
-  { key: "ollama_model",       label: "Модель Ollama" },
-  { key: "lmstudio_url",       label: "LM Studio URL" },
-  { key: "lmstudio_model",     label: "Модель LM Studio" },
-];
-
-const ALERTS_KAFKA_FIELDS: FieldDef[] = [
-  { key: "alerts_kafka_bootstrap_servers", label: "Bootstrap servers" },
+  { key: "deepseek_api_key", label: "DeepSeek API Key", type: "password" },
   {
-    key: "alerts_kafka_security_protocol", label: "Security protocol", type: "select",
-    options: ["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL", "SSL"],
+    key: "deepseek_model", label: "Модель DeepSeek", type: "select",
+    options: ["deepseek-chat", "deepseek-reasoner"],
   },
+  { key: "openai_api_key", label: "OpenAI API Key", type: "password" },
   {
-    key: "alerts_kafka_sasl_mechanism", label: "SASL механизм", type: "select",
-    options: ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"],
+    key: "openai_model", label: "Модель OpenAI", type: "select",
+    options: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3-mini", "o1"],
   },
-  { key: "alerts_kafka_sasl_username", label: "SASL логин" },
-  { key: "alerts_kafka_sasl_password", label: "SASL пароль",  type: "password" },
-  { key: "alerts_kafka_ssl_cafile",    label: "SSL CA файл" },
+  { key: "anthropic_api_key", label: "Anthropic API Key", type: "password" },
+  {
+    key: "anthropic_model", label: "Модель Claude", type: "select",
+    options: [
+      "claude-opus-4-6",
+      "claude-sonnet-4-6",
+      "claude-haiku-4-5-20251001",
+      "claude-3-5-sonnet-20241022",
+      "claude-3-5-haiku-20241022",
+      "claude-3-haiku-20240307",
+    ],
+  },
+  { key: "ollama_model",   label: "Модель Ollama" },
+  { key: "lmstudio_url",   label: "LM Studio URL" },
+  { key: "lmstudio_model", label: "Модель LM Studio" },
 ];
 
 const METRICS_KAFKA_FIELDS: FieldDef[] = [
@@ -329,16 +329,6 @@ export default function SettingsSection() {
         descriptions={descriptions}
         onChange={handleChange}
         onSave={(keys) => handleSave(keys, true)}
-      />
-
-      {/* Kafka — Алерты */}
-      <SettingsCard
-        title="Kafka — Алерты"
-        fields={ALERTS_KAFKA_FIELDS}
-        values={values}
-        descriptions={descriptions}
-        onChange={handleChange}
-        onSave={handleSave}
       />
 
       {/* Kafka — Метрики */}

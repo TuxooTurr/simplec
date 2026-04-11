@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import {
   FlaskConical, Loader2, Copy, CheckCheck, Paperclip, FileText,
   PlugZap, History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle,
-  Trash2, X, FolderOpen, ChevronDown, ChevronUp, CheckCircle,
+  Trash2, X, FolderOpen, ChevronDown, ChevronUp, CheckCircle, Search,
 } from "lucide-react";
 import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -136,8 +136,7 @@ export default function AutoModelSection() {
   const [projectData,    setProjectData]    = useState<ProjectAnalysis | null>(null);
   const [projectError,   setProjectError]   = useState("");
 
-  const fileInputRef   = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   /* ── Prefill from GenerationSection "В автотесты" ─────────────── */
   useEffect(() => {
@@ -220,29 +219,6 @@ export default function AutoModelSection() {
   };
 
   /* ── Project analysis ──────────────────────────────────────────── */
-
-  const handleFolderSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const first = files[0] as File & { path?: string };
-    let resolved = "";
-    if (first.path) {
-      // Electron / local env: file.path is the absolute filesystem path
-      const relDepth = first.webkitRelativePath.split("/").length - 1;
-      const parts = first.path.split(/[/\\]/);
-      resolved = parts.slice(0, parts.length - relDepth).join("/");
-    } else {
-      // Standard browser: only folder name is available from webkitRelativePath
-      resolved = first.webkitRelativePath.split("/")[0];
-    }
-    if (resolved) {
-      setProjectPath(resolved);
-      setProjectData(null);
-      setProjectError("");
-    }
-    // Reset input so the same folder can be re-selected
-    if (folderInputRef.current) folderInputRef.current.value = "";
-  };
 
   const handleAnalyzeProject = async () => {
     if (!projectPath.trim()) return;
@@ -494,38 +470,15 @@ export default function AutoModelSection() {
                 Укажи путь к папке с Java/Kotlin проектом — AI проанализирует зависимости и структуру,
                 чтобы сгенерировать код с правильными импортами и пакетом.
               </p>
-              {/* Hidden folder input */}
-              <input
-                ref={folderInputRef}
-                type="file"
-                // @ts-expect-error — webkitdirectory is non-standard but widely supported
-                webkitdirectory=""
-                multiple
-                className="hidden"
-                onChange={handleFolderSelect}
-              />
-
               <div className="flex gap-2 mb-3">
-                <div className="flex-1 flex gap-1">
-                  <input
-                    value={projectPath}
-                    onChange={e => { setProjectPath(e.target.value); setProjectData(null); setProjectError(""); }}
-                    placeholder="/Users/me/my-autotest-project"
-                    className="flex-1 border border-border-main rounded-lg px-3 py-2 text-sm font-mono
-                      focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
-                    onKeyDown={e => { if (e.key === "Enter") handleAnalyzeProject(); }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => folderInputRef.current?.click()}
-                    title="Выбрать папку"
-                    className="flex items-center gap-1.5 px-3 py-2 border border-border-main rounded-lg text-sm
-                      text-text-muted hover:text-primary hover:border-primary/50 transition-all"
-                  >
-                    <FolderOpen className="w-4 h-4" />
-                    <span className="hidden sm:inline">Обзор</span>
-                  </button>
-                </div>
+                <input
+                  value={projectPath}
+                  onChange={e => { setProjectPath(e.target.value); setProjectData(null); setProjectError(""); }}
+                  placeholder="/Users/me/projects/my-autotests  или  C:\projects\my-autotests"
+                  className="flex-1 border border-border-main rounded-lg px-3 py-2 text-sm font-mono
+                    focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
+                  onKeyDown={e => { if (e.key === "Enter") handleAnalyzeProject(); }}
+                />
                 <button
                   type="button"
                   onClick={handleAnalyzeProject}
@@ -535,9 +488,13 @@ export default function AutoModelSection() {
                 >
                   {projectLoading
                     ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Анализ...</>
-                    : "Анализировать"}
+                    : <><Search className="w-3.5 h-3.5" /> Анализировать</>}
                 </button>
               </div>
+              <p className="text-xs text-text-muted/70 mb-3 -mt-1">
+                macOS/Linux: скопируй путь в Finder → ПКМ на папке → «Скопировать как имя пути».<br/>
+                Windows: открой папку в Проводнике, нажми на адресную строку и скопируй путь.
+              </p>
 
               {projectError && (
                 <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">

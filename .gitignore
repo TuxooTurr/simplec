@@ -18,4 +18,3 @@ Linly-Dubbing/
 *.css
 simpletest.db
 certs/ca-bundle.pem
-.env

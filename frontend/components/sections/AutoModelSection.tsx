@@ -20,7 +20,17 @@ interface AutoHistEntry {
   loadedAsEtalon?: boolean;
 }
 
-const HIST_KEY = "st_automodel_history";
+const HIST_KEY    = "st_automodel_history";
+const PROJECT_KEY = "st_autotest_project";
+
+function loadSavedProject(): { path: string; data: ProjectAnalysis } | null {
+  try {
+    const raw = localStorage.getItem(PROJECT_KEY);
+    return raw ? (JSON.parse(raw) as { path: string; data: ProjectAnalysis }) : null;
+  } catch {
+    return null;
+  }
+}
 
 function loadHistory(): AutoHistEntry[] {
   try {
@@ -129,11 +139,11 @@ export default function AutoModelSection() {
   const [histEntries, setHistEntries] = useState<AutoHistEntry[]>(() => loadHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
 
-  // Project binding
+  // Project binding — персистируется в localStorage, не сбрасывается при навигации
   const [projectOpen,    setProjectOpen]    = useState(false);
-  const [projectPath,    setProjectPath]    = useState("");
+  const [projectPath,    setProjectPath]    = useState<string>(() => loadSavedProject()?.path ?? "");
   const [projectLoading, setProjectLoading] = useState(false);
-  const [projectData,    setProjectData]    = useState<ProjectAnalysis | null>(null);
+  const [projectData,    setProjectData]    = useState<ProjectAnalysis | null>(() => loadSavedProject()?.data ?? null);
   const [projectError,   setProjectError]   = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -228,11 +238,20 @@ export default function AutoModelSection() {
     try {
       const data = await analyzeProject(projectPath.trim());
       setProjectData(data);
+      // Сохраняем привязку навсегда — восстановится при любой навигации
+      localStorage.setItem(PROJECT_KEY, JSON.stringify({ path: projectPath.trim(), data }));
     } catch (err) {
       setProjectError(String(err));
     } finally {
       setProjectLoading(false);
     }
+  };
+
+  const handleDetachProject = () => {
+    setProjectData(null);
+    setProjectPath("");
+    setProjectError("");
+    localStorage.removeItem(PROJECT_KEY);
   };
 
   const buildProjectContext = (): string => {
@@ -473,7 +492,7 @@ export default function AutoModelSection() {
               <div className="flex gap-2 mb-3">
                 <input
                   value={projectPath}
-                  onChange={e => { setProjectPath(e.target.value); setProjectData(null); setProjectError(""); }}
+                  onChange={e => { setProjectPath(e.target.value); setProjectError(""); }}
                   placeholder="/Users/me/projects/my-autotests  или  C:\projects\my-autotests"
                   className="flex-1 border border-border-main rounded-lg px-3 py-2 text-sm font-mono
                     focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
@@ -543,7 +562,7 @@ export default function AutoModelSection() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => { setProjectData(null); setProjectPath(""); }}
+                    onClick={handleDetachProject}
                     className="text-xs text-text-muted hover:text-red-500 transition-colors"
                   >
                     Отвязать проект

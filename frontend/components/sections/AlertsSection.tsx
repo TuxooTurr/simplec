@@ -512,33 +512,6 @@ export default function AlertsSection() {
                   </div>
                 ))}
 
-                {/* Notebook cells preview */}
-                {(selected.notebook ?? []).length > 0 && (
-                  <div>
-                    <p className={LABEL_CLS}><BookOpen className="w-3.5 h-3.5 inline mr-1" />Ноутбук</p>
-                    <div className="space-y-1.5">
-                      {(selected.notebook ?? []).map((cell, idx) => {
-                        const t = normType(cell.type);
-                        const cfg = CELL_TYPES[t];
-                        const content = (t === "init" || t === "loop")
-                          ? applyParams(cell.source, selected.dynamic_params, values)
-                          : cell.source;
-                        return (
-                          <div key={cell.id} className={`border rounded-lg overflow-hidden ${cfg.border}`}>
-                            <div className={`flex items-center gap-2 px-2 py-0.5 text-[10px] font-semibold uppercase ${cfg.color.split(" ").slice(0,2).join(" ")}`}>
-                              {t === "markdown" ? <AlignLeft className="w-2.5 h-2.5" /> : <Code className="w-2.5 h-2.5" />}
-                              {cfg.label}
-                              <span className="ml-auto text-text-muted/50 normal-case font-normal">#{idx + 1}</span>
-                            </div>
-                            <pre className="text-xs font-mono px-2.5 py-2 whitespace-pre-wrap break-all bg-white text-text-main max-h-28 overflow-auto">
-                              {content || <span className="text-text-muted/50 italic">пусто</span>}
-                            </pre>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
               </div>
 
               {/* Right: output console + scheduler */}

@@ -17,32 +17,38 @@ echo "  ║        SimpleTest — Запуск           ║"
 echo "  ╚══════════════════════════════════════╝"
 echo ""
 
-# ── Проверка Python 3.12 ──────────────────────────────────────
+# ── Проверка Python 3.10+ ─────────────────────────────────────
 PYTHON=""
-for cmd in python3.12 python3 python; do
+for cmd in python3.12 python3.11 python3.10 python3 python; do
     if command -v "$cmd" &>/dev/null; then
         VER=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
         MAJOR=${VER%%.*}; MINOR=${VER##*.}
-        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 12 ]; then
+        if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 10 ]; then
             PYTHON="$cmd"
             break
         fi
     fi
 done
-[ -z "$PYTHON" ] && err "Python 3.12+ не найден. Установите: https://python.org"
+[ -z "$PYTHON" ] && err "Python 3.10+ не найден. Установите: https://python.org или создайте conda env: conda create -n simpletest python=3.11"
 ok "Python $($PYTHON --version)"
 
 # ── Проверка Node.js ──────────────────────────────────────────
 command -v node &>/dev/null || err "Node.js не найден. Установите: https://nodejs.org"
 ok "Node.js $(node --version)"
 
-# ── Виртуальное окружение ─────────────────────────────────────
-if [ ! -f ".venv/bin/activate" ]; then
-    info "Создаю виртуальное окружение..."
-    "$PYTHON" -m venv .venv
-    ok "Виртуальное окружение создано"
+# ── Виртуальное окружение (пропускаем если уже в Conda) ───────
+if [ -n "${CONDA_DEFAULT_ENV:-}" ] || [ -n "${CONDA_PREFIX:-}" ]; then
+    # Уже в активном Conda-окружении — используем его напрямую
+    ok "Conda окружение: ${CONDA_DEFAULT_ENV:-$(basename ${CONDA_PREFIX})}"
+else
+    # Обычный venv
+    if [ ! -f ".venv/bin/activate" ]; then
+        info "Создаю виртуальное окружение..."
+        "$PYTHON" -m venv .venv
+        ok "Виртуальное окружение создано"
+    fi
+    source .venv/bin/activate
 fi
-source .venv/bin/activate
 
 # ── Зависимости Python ────────────────────────────────────────
 if ! python -c "import fastapi" &>/dev/null 2>&1; then

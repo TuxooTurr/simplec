@@ -8,6 +8,7 @@ import {
   Paperclip, Image as ImageIcon, FileText, File as FileIcon,
 } from "lucide-react";
 import { formatBug, addDefect } from "@/lib/api";
+import NotionRenderer from "@/components/NotionRenderer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 /* ── History helpers ──────────────────────────────────────────────── */
@@ -354,7 +355,7 @@ export default function BugsSection() {
         <div className="flex items-start justify-between mb-5 gap-4">
           <div>
             <h1 className="text-xl font-bold text-text-main mb-1">Форматирование дефектов</h1>
-            <p className="text-sm text-text-muted">Опишите баг — AI оформит его по стандарту Jira.</p>
+            <p className="text-sm text-text-muted">Опишите баг — AI оформит его в виде страницы Notion.</p>
           </div>
           {histEntries.length > 0 && (
             <button
@@ -517,9 +518,7 @@ export default function BugsSection() {
                 </button>
               </div>
             </div>
-            <pre className="text-sm text-text-main whitespace-pre-wrap font-sans leading-relaxed">
-              {report}
-            </pre>
+            <NotionRenderer text={report} className="mt-1" />
           </div>
         )}
 
@@ -548,7 +547,7 @@ export default function BugsSection() {
           >
             {loading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Форматирую...</>
-              : <><Bug className="w-4 h-4" /> Оформить по стандарту Jira</>}
+              : <><Bug className="w-4 h-4" /> Оформить для Notion</>}
           </button>
         </div>
 

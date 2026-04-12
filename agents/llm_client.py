@@ -10,9 +10,44 @@ from typing import List
 
 
 def _get_verify():
-    """Возвращает путь к CA bundle (если есть) или True для стандартного certifi."""
+    """Возвращает SSL verify параметр для httpx (False / path / SSLContext).
+
+    Порядок приоритетов:
+    1. SSL_NO_VERIFY=1   → verify=False (быстрый обход для корпоративного прокси)
+    2. certs/ca-bundle.pem / SSL_CERT_FILE → SSLContext с корпоративным CA
+    3. По умолчанию → SSLContext с certifi + флаги совместимости
+
+    Флаги совместимости с Sber BIG IP proxy:
+    - OP_LEGACY_SERVER_CONNECT (Python 3.12+): фикс UNEXPECTED_EOF_WHILE_READING
+    - SSL_MAX_TLS12=1: форсирует TLS 1.2 (для старых BIG IP без TLS 1.3)
+    """
+    # 1. Принудительное отключение проверки (небезопасно, только для отладки)
+    if os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes"):
+        return False
+
+    import ssl
+
     ca = os.environ.get("SSL_CERT_FILE")
-    return ca if ca and os.path.exists(ca) else True
+    cafile = ca if (ca and os.path.exists(ca)) else None
+
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=cafile or certifi.where())
+    except Exception:
+        return cafile or True
+
+    # Фикс для "UNEXPECTED_EOF_WHILE_READING" на корпоративных прокси (Python 3.12+)
+    if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+
+    # Принудительный TLS 1.2 — для старых BIG IP proxy без поддержки TLS 1.3
+    if os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes"):
+        try:
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        except AttributeError:
+            pass
+
+    return ctx
 
 
 @dataclass
@@ -282,8 +317,13 @@ class LLMClient:
             return True, "Ой! Ошибка авторизации LLM-провайдера. Проверьте API-ключ или смените провайдера в настройках."
         if "429" in msg or "rate limit" in msg or "too many requests" in msg or "ratelimit" in msg:
             return True, "Ой! Превышен лимит запросов к LLM-провайдеру. Подождите немного или смените провайдера."
-        if "ssl" in msg or "certificate" in msg or "certificate_verify_failed" in msg:
-            return True, "Ошибка SSL: запустите certs/build_bundle.sh для настройки корпоративных сертификатов."
+        if ("ssl" in msg or "certificate" in msg or "certificate_verify_failed" in msg
+                or "unexpected_eof" in msg or "eof occurred" in msg):
+            return True, (
+                "Ошибка SSL (корпоративный прокси). Быстрый способ: добавьте SSL_NO_VERIFY=1 в файл .env. "
+                "Или запустите certs/build_bundle.sh и перезапустите сервер. "
+                "Если ошибка повторяется — добавьте SSL_MAX_TLS12=1 в .env."
+            )
         if any(x in msg for x in ("connectionerror", "connection refused", "connection error",
                                    "econnrefused", "timeout", "timed out", "read timeout",
                                    "connect timeout", "connection reset",

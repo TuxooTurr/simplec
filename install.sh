@@ -1,30 +1,48 @@
 #!/usr/bin/env bash
 # SimpleTest — быстрая установка на новый компьютер
 # Использование: bash install.sh
+#
+# Поддерживает: venv (macOS/Linux) и Conda (активируй env перед запуском)
 
 set -e
-
-PYTHON=${PYTHON:-python3}
-VENV_DIR=".venv"
 
 echo "=== SimpleTest installer ==="
 echo ""
 
-# 1. Python
+# 1. Python — определяем исполняемый файл
+if [ -n "${CONDA_DEFAULT_ENV:-}" ] || [ -n "${CONDA_PREFIX:-}" ]; then
+    PYTHON="python"
+    echo "Режим: Conda окружение (${CONDA_DEFAULT_ENV:-$(basename ${CONDA_PREFIX})})"
+else
+    PYTHON=${PYTHON:-python3}
+    echo "Режим: venv"
+fi
+
 if ! command -v $PYTHON &>/dev/null; then
-    echo "ERROR: Python 3 не найден. Установите Python 3.10+ и повторите."
+    echo "ERROR: Python не найден. Установите Python 3.10+ или активируйте Conda-окружение."
     exit 1
 fi
-PY_VERSION=$($PYTHON --version 2>&1)
-echo "Python: $PY_VERSION"
 
-# 2. Virtual environment
-if [ ! -d "$VENV_DIR" ]; then
-    echo "Создаю виртуальное окружение..."
-    $PYTHON -m venv $VENV_DIR
+PY_VER=$($PYTHON -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}')")
+PY_MAJOR=${PY_VER%%.*}; PY_MINOR=${PY_VER##*.}
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
+    echo "ERROR: Нужен Python 3.10+, найден $($PYTHON --version). Обновите Python или Conda-окружение."
+    exit 1
 fi
-source $VENV_DIR/bin/activate
-echo "Venv: активирован"
+echo "Python: $($PYTHON --version)"
+
+# 2. Virtual environment (только если не Conda)
+VENV_DIR=".venv"
+if [ -n "${CONDA_DEFAULT_ENV:-}" ] || [ -n "${CONDA_PREFIX:-}" ]; then
+    echo "Venv: пропускаю (используется Conda)"
+else
+    if [ ! -d "$VENV_DIR" ]; then
+        echo "Создаю виртуальное окружение..."
+        $PYTHON -m venv $VENV_DIR
+    fi
+    source $VENV_DIR/bin/activate
+    echo "Venv: активирован"
+fi
 
 # 3. Dependencies
 echo "Устанавливаю зависимости..."
@@ -45,11 +63,10 @@ if [ ! -f ".env" ]; then
     read -s -p "GIGACHAT_AUTH_KEY: " gc_key
     echo ""
     if [ -n "$gc_key" ]; then
-        # Replace empty value in .env
         sed -i.bak "s|^GIGACHAT_AUTH_KEY=.*|GIGACHAT_AUTH_KEY=$gc_key|" .env && rm -f .env.bak
         echo "Ключ сохранён в .env"
     else
-        echo "ВНИМАНИЕ: ключ не введён. Настройте .env вручную или через интерфейс приложения."
+        echo "ВНИМАНИЕ: ключ не введён. Настройте .env вручную."
     fi
 else
     echo ".env: уже существует, пропускаю"
@@ -63,6 +80,12 @@ echo ""
 echo "=== Готово! ==="
 echo ""
 echo "Запуск:"
-echo "  source $VENV_DIR/bin/activate"
-echo "  streamlit run app.py"
+if [ -n "${CONDA_DEFAULT_ENV:-}" ] || [ -n "${CONDA_PREFIX:-}" ]; then
+    echo "  bash start.sh"
+else
+    echo "  bash start.sh"
+    echo "  # или вручную:"
+    echo "  source $VENV_DIR/bin/activate"
+    echo "  python -m uvicorn backend.main:app --port 8000"
+fi
 echo ""

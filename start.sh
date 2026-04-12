@@ -58,19 +58,11 @@ if [ ! -d "frontend/node_modules" ]; then
     ok "Node.js зависимости установлены"
 fi
 
-# ── Настройка .env ────────────────────────────────────────────
-if [ ! -f ".env" ]; then
-    info "Создаю .env из шаблона..."
-    cp .env.example .env
-    echo ""
-    warn "Файл .env создан. Заполните обязательные поля:"
-    echo "   APP_SECRET  — любая случайная строка"
-    echo "   ADMIN_PASS  — пароль администратора (мин. 12 символов)"
-    echo "   DEEPSEEK_API_KEY — ключ DeepSeek (или другой LLM)"
-    echo ""
-    echo "Отредактируйте .env и нажмите Enter для продолжения..."
-    ${EDITOR:-nano} .env
-    read -r
+# ── frontend/.env.local (WebSocket URL) ──────────────────────
+if [ ! -f "frontend/.env.local" ]; then
+    info "Создаю frontend/.env.local..."
+    cp frontend/.env.local.example frontend/.env.local
+    ok "frontend/.env.local создан"
 fi
 
 # ── Запуск бэкенда ────────────────────────────────────────────

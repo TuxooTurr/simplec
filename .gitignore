@@ -3,7 +3,6 @@ __pycache__/
 **/__pycache__/
 *.pyc
 **/*.pyc
-.env
 frontend/.env.local
 db/chroma_data/
 db/chroma_db/
@@ -19,3 +18,4 @@ data/users.json
 Linly-Dubbing/
 *.css
 simpletest.db
+certs/ca-bundle.pem

@@ -35,32 +35,13 @@ def decode_token(token: str) -> Optional[str]:
 def require_auth(
     simpletest_token: Optional[str] = Cookie(default=None),
 ) -> str:
-    """FastAPI Depends-зависимость для HTTP-маршрутов."""
-    if not simpletest_token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Требуется авторизация",
-        )
-    username = decode_token(simpletest_token)
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Токен недействителен или истёк",
-        )
-    return username
+    """Авторизация отключена — всегда возвращаем 'local'."""
+    return "local"
 
 
 async def ws_require_auth(websocket: WebSocket) -> Optional[str]:
-    """Проверяет cookie для WebSocket-соединения. Закрывает с кодом 4001 если нет."""
-    token = websocket.cookies.get(COOKIE_NAME)
-    if not token:
-        await websocket.close(code=4001, reason="Требуется авторизация")
-        return None
-    username = decode_token(token)
-    if not username:
-        await websocket.close(code=4001, reason="Токен недействителен")
-        return None
-    return username
+    """Авторизация отключена — WebSocket всегда разрешён."""
+    return "local"
 
 
 SESSION_HOURS = _SESSION_HOURS

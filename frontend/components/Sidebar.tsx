@@ -1,11 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Zap, BookOpen, Bug, LogOut, User, Bell, BarChart2, Scale, FlaskConical, Settings } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import LLMStatusBar from "./LLMStatusBar";
-import { logout, getMe } from "@/lib/auth";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { getProviders } from "@/lib/api";
 
@@ -45,14 +44,8 @@ function AiBadge() {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
-  const [username, setUsername] = useState<string | null>(null);
   const [availableIds, setAvailableIds] = useState<Set<string>>(new Set());
   const { provider, setProvider, setDragging, providersRefreshKey } = useWorkspace();
-
-  useEffect(() => {
-    getMe().then((me) => setUsername(me?.username ?? null));
-  }, []);
 
   useEffect(() => {
     getProviders()
@@ -66,11 +59,6 @@ export default function Sidebar() {
       .catch(() => setAvailableIds(new Set()));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providersRefreshKey]);
-
-  async function handleLogout() {
-    await logout();
-    router.push("/login");
-  }
 
   return (
     <aside className="w-64 min-h-screen bg-white border-r border-border-main flex flex-col flex-shrink-0">
@@ -152,33 +140,20 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* LLM status + User at bottom */}
+      {/* LLM status + Settings at bottom */}
       <div className="mt-auto border-t border-border-main">
         <div className="px-4 py-3">
           <LLMStatusBar />
         </div>
-        {username && (
-          <div className="px-4 pb-3 flex items-center gap-2">
-            <div className="w-6 h-6 rounded-full bg-indigo-100 flex items-center justify-center flex-shrink-0">
-              <User className="w-3.5 h-3.5 text-primary" />
-            </div>
-            <span className="text-xs text-text-muted flex-1 truncate">{username}</span>
-            <Link
-              href="/settings"
-              title="Настройки"
-              className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-primary transition-colors"
-            >
-              <Settings className="w-3.5 h-3.5" />
-            </Link>
-            <button
-              onClick={handleLogout}
-              title="Выйти"
-              className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-red-500 transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
+        <div className="px-4 pb-3 flex justify-end">
+          <Link
+            href="/settings"
+            title="Настройки"
+            className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-primary transition-colors"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </Link>
+        </div>
       </div>
     </aside>
   );

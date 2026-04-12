@@ -21,7 +21,11 @@ def get_providers():
             result.append({"id": p["id"], "name": p["name"], "status": "red", "message": "Нет ключа"})
         else:
             hc = LLMClient.health_check(p["id"])
-            result.append({"id": p["id"], "name": p["name"], "status": hc["status"], "message": hc["message"]})
+            msg = hc["message"]
+            if any(x in msg.lower() for x in ("ssl", "certificate", "certificate_verify_failed")):
+                msg = "Ошибка SSL: запустите certs/build_bundle.sh для настройки корпоративных сертификатов"
+                hc["status"] = "red"
+            result.append({"id": p["id"], "name": p["name"], "status": hc["status"], "message": msg})
     return result
 
 

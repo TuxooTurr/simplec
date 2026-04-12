@@ -21,6 +21,16 @@ if str(_ROOT) not in sys.path:
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
+# ── Корпоративные SSL-сертификаты (Sber BIG IP proxy) ────────────────────────
+import os as _os
+_CERTS_BUNDLE = _ROOT / "certs" / "ca-bundle.pem"
+if _CERTS_BUNDLE.exists():
+    _CERTS_PATH = str(_CERTS_BUNDLE)
+    _os.environ.setdefault("SSL_CERT_FILE",      _CERTS_PATH)
+    _os.environ.setdefault("REQUESTS_CA_BUNDLE", _CERTS_PATH)
+    _os.environ.setdefault("CURL_CA_BUNDLE",     _CERTS_PATH)
+# ─────────────────────────────────────────────────────────────────────────────
+
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

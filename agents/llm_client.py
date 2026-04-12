@@ -9,6 +9,12 @@ from dataclasses import dataclass
 from typing import List
 
 
+def _get_verify():
+    """Возвращает путь к CA bundle (если есть) или True для стандартного certifi."""
+    ca = os.environ.get("SSL_CERT_FILE")
+    return ca if ca and os.path.exists(ca) else True
+
+
 @dataclass
 class Message:
     role: str
@@ -70,7 +76,7 @@ class LLMClient:
         self.api_key = os.getenv("DEEPSEEK_API_KEY")
         if not self.api_key:
             raise ValueError("DEEPSEEK_API_KEY not found in .env")
-        self.client = httpx.Client(timeout=120.0)
+        self.client = httpx.Client(timeout=120.0, verify=_get_verify())
         self.base_url = "https://api.deepseek.com/v1"
 
     def _init_openai(self):
@@ -78,7 +84,7 @@ class LLMClient:
         self.api_key = os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OPENAI_API_KEY not found in .env")
-        self.client = httpx.Client(timeout=120.0)
+        self.client = httpx.Client(timeout=120.0, verify=_get_verify())
         self.base_url = "https://api.openai.com/v1"
 
     def _init_claude(self):
@@ -86,7 +92,7 @@ class LLMClient:
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY not found in .env")
-        self.client = httpx.Client(timeout=120.0)
+        self.client = httpx.Client(timeout=120.0, verify=_get_verify())
         self.base_url = "https://api.anthropic.com/v1"
 
     def _init_ollama(self):
@@ -95,7 +101,7 @@ class LLMClient:
 
     def _init_lmstudio(self):
         import httpx
-        self.client = httpx.Client(timeout=180.0)
+        self.client = httpx.Client(timeout=180.0, verify=_get_verify())
         self.base_url = os.getenv("LMSTUDIO_URL", "http://localhost:1234/v1")
 
     def chat(self, messages: List[Message],
@@ -276,6 +282,8 @@ class LLMClient:
             return True, "Ой! Ошибка авторизации LLM-провайдера. Проверьте API-ключ или смените провайдера в настройках."
         if "429" in msg or "rate limit" in msg or "too many requests" in msg or "ratelimit" in msg:
             return True, "Ой! Превышен лимит запросов к LLM-провайдеру. Подождите немного или смените провайдера."
+        if "ssl" in msg or "certificate" in msg or "certificate_verify_failed" in msg:
+            return True, "Ошибка SSL: запустите certs/build_bundle.sh для настройки корпоративных сертификатов."
         if any(x in msg for x in ("connectionerror", "connection refused", "connection error",
                                    "econnrefused", "timeout", "timed out", "read timeout",
                                    "connect timeout", "connection reset",
@@ -339,7 +347,8 @@ class LLMClient:
                         "max_tokens": 5
                     },
                     headers={"Authorization": "Bearer " + api_key},
-                    timeout=15.0
+                    timeout=15.0,
+                    verify=_get_verify(),
                 )
                 if r.status_code == 200:
                     return {"status": "green", "message": "OK"}
@@ -362,6 +371,7 @@ class LLMClient:
                           "max_tokens": 5},
                     headers={"Authorization": "Bearer " + api_key},
                     timeout=15.0,
+                    verify=_get_verify(),
                 )
                 if r.status_code == 200:
                     return {"status": "green", "message": "OK"}
@@ -386,6 +396,7 @@ class LLMClient:
                              "anthropic-version": "2023-06-01",
                              "content-type": "application/json"},
                     timeout=15.0,
+                    verify=_get_verify(),
                 )
                 if r.status_code == 200:
                     return {"status": "green", "message": "OK"}

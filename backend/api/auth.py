@@ -1,5 +1,6 @@
 """
 Эндпоинты авторизации: login, logout, me, register.
+Авторизация отключена — /me всегда возвращает "local".
 """
 
 import os as _os
@@ -124,5 +125,6 @@ def logout(response: Response):
 
 
 @router.get("/me")
-def me(username: str = Depends(require_auth)):
-    return {"username": username}
+def me():
+    # Авторизация отключена
+    return {"username": "local"}

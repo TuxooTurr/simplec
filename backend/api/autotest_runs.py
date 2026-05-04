@@ -30,6 +30,17 @@ from db.autotest_runs_store import AutotestRunsStore
 router = APIRouter()
 
 TEST_TYPES = {"api", "e2e", "frontend", "mobile", "dt"}
+SCRIPT_EXTENSIONS = {".sh", ".bash", ".py", ".cmd", ".bat"}
+SCRIPT_NAME_HINTS = (
+    "run", "test", "smoke", "regress", "regression", "api", "e2e",
+    "autotest", "qa", "check", "suite",
+)
+SCRIPT_SKIP_DIRS = {
+    ".git", ".idea", ".vscode", ".venv", "venv", "node_modules",
+    ".next", "dist", "out", "target", "build", ".gradle", "__pycache__",
+}
+SCRIPT_SCAN_MAX_DEPTH = 5
+SCRIPT_SCAN_LIMIT = 250
 
 
 class RunScript(BaseModel):
@@ -97,6 +108,12 @@ class CheckBuildsRequest(BaseModel):
     execute: bool = True
 
 
+class ScriptOption(BaseModel):
+    name: str
+    path: str
+    relative_path: str
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -130,6 +147,128 @@ def _script_command(script_path: Path) -> list[str]:
     return ["bash", str(script_path)]
 
 
+def _candidate_script_paths(script_path_raw: str, config: dict, script: dict) -> list[Path]:
+    raw_path = Path(script_path_raw).expanduser()
+    if raw_path.is_absolute():
+        return [raw_path]
+
+    candidates: list[Path] = []
+    framework_path_raw = str(config.get("framework_path", "")).strip()
+    work_dir_raw = str(script.get("work_dir", "")).strip()
+
+    for base_raw in (work_dir_raw, framework_path_raw):
+        if not base_raw:
+            continue
+        base = Path(base_raw).expanduser()
+        if not base.is_absolute() and framework_path_raw:
+            base = Path(framework_path_raw).expanduser() / base
+        candidates.append(base / raw_path)
+
+    candidates.append(Path.cwd() / raw_path)
+    return candidates
+
+
+def _resolve_script_path(script_path_raw: str, config: dict, script: dict) -> Path:
+    checked: list[str] = []
+    for candidate in _candidate_script_paths(script_path_raw, config, script):
+        resolved = candidate.expanduser().resolve()
+        if str(resolved) in checked:
+            continue
+        checked.append(str(resolved))
+        if not resolved.exists():
+            continue
+        if not resolved.is_file():
+            raise ValueError(f"Путь ведет не к файлу: {resolved}")
+        return resolved
+
+    hint = ""
+    if checked:
+        hint = ". Проверенные варианты: " + "; ".join(checked[:4])
+    raise ValueError(f"Скрипт не найден: {script_path_raw}{hint}")
+
+
+def _resolve_work_dir(work_dir_raw: str, framework_path: str, script_path: Path) -> Path:
+    if not work_dir_raw:
+        if framework_path:
+            work_dir = Path(framework_path).expanduser().resolve()
+            if work_dir.exists() and work_dir.is_dir():
+                return work_dir
+        return script_path.parent
+
+    raw = Path(work_dir_raw).expanduser()
+    candidates = [raw] if raw.is_absolute() else []
+    if framework_path and not raw.is_absolute():
+        candidates.append(Path(framework_path).expanduser() / raw)
+    if not raw.is_absolute():
+        candidates.append(Path.cwd() / raw)
+
+    checked: list[str] = []
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if str(resolved) in checked:
+            continue
+        checked.append(str(resolved))
+        if resolved.exists() and resolved.is_dir():
+            return resolved
+
+    hint = ""
+    if checked:
+        hint = ". Проверенные варианты: " + "; ".join(checked[:4])
+    raise ValueError(f"Рабочая папка не найдена: {work_dir_raw}{hint}")
+
+
+def _looks_like_run_script(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    name = path.name.lower()
+    if path.suffix.lower() in SCRIPT_EXTENSIONS:
+        return True
+    if any(hint in name for hint in SCRIPT_NAME_HINTS) and os.access(path, os.X_OK):
+        return True
+    return False
+
+
+def _scan_script_options(root_raw: str) -> tuple[Path, list[dict]]:
+    if not root_raw.strip():
+        return Path(), []
+
+    root = Path(root_raw).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Папка фреймворка не найдена: {root}")
+
+    options: list[dict] = []
+    for current_root, dirnames, filenames in os.walk(root):
+        current = Path(current_root)
+        try:
+            depth = len(current.relative_to(root).parts)
+        except ValueError:
+            depth = 0
+        if depth >= SCRIPT_SCAN_MAX_DEPTH:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [
+                name for name in dirnames
+                if name not in SCRIPT_SKIP_DIRS and not name.startswith(".cache")
+            ]
+
+        for filename in filenames:
+            candidate = current / filename
+            if not _looks_like_run_script(candidate):
+                continue
+            relative = candidate.relative_to(root)
+            options.append({
+                "name": candidate.name,
+                "path": str(candidate),
+                "relative_path": str(relative),
+            })
+            if len(options) >= SCRIPT_SCAN_LIMIT:
+                options.sort(key=lambda item: (item["relative_path"].count(os.sep), item["relative_path"].lower()))
+                return root, options
+
+    options.sort(key=lambda item: (item["relative_path"].count(os.sep), item["relative_path"].lower()))
+    return root, options
+
+
 def _run_script_sync(
     *,
     config: dict,
@@ -149,17 +288,10 @@ def _run_script_sync(
     if not script_path_raw:
         raise ValueError("Укажите путь до скрипта запуска")
 
-    script_path = Path(script_path_raw).expanduser().resolve()
-    if not script_path.exists():
-        raise ValueError(f"Скрипт не найден: {script_path}")
-    if not script_path.is_file():
-        raise ValueError(f"Путь ведет не к файлу: {script_path}")
-
     framework_path = str(config.get("framework_path", "")).strip()
-    work_dir_raw = str(script.get("work_dir", "")).strip() or framework_path or str(script_path.parent)
-    work_dir = Path(work_dir_raw).expanduser().resolve()
-    if not work_dir.exists() or not work_dir.is_dir():
-        raise ValueError(f"Рабочая папка не найдена: {work_dir}")
+    script_path = _resolve_script_path(script_path_raw, config, script)
+    work_dir_raw = str(script.get("work_dir", "")).strip()
+    work_dir = _resolve_work_dir(work_dir_raw, framework_path, script_path)
 
     selected_tags = _clean_list(tags or script.get("default_tags", []))
     selected_types = [t for t in _clean_list(test_types or script.get("test_types", [])) if t in TEST_TYPES]
@@ -365,6 +497,20 @@ def save_config(req: SaveConfigRequest) -> dict:
 @router.get("/api/autotest-runs/history")
 def get_history(limit: int = 20) -> list[dict]:
     return AutotestRunsStore.get_history(limit=limit)
+
+
+@router.get("/api/autotest-runs/script-options")
+def get_script_options(framework_path: str = "") -> dict:
+    config = AutotestRunsStore.get_config()
+    root_raw = framework_path.strip() or str(config.get("framework_path", "")).strip()
+    try:
+        root, options = _scan_script_options(root_raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "root": str(root) if root_raw else "",
+        "options": options,
+    }
 
 
 @router.post("/api/autotest-runs/run")

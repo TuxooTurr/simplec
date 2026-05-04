@@ -8,6 +8,7 @@ import {
 import { analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import {
   checkAutotestBuilds,
+  getAutotestScriptOptions,
   getAutotestRunConfig,
   getAutotestRunHistory,
   runAutotestScript,
@@ -18,6 +19,7 @@ import {
   type LayoutSize,
   type RunResult,
   type RunScriptConfig,
+  type ScriptOption,
 } from "@/lib/autotestRunsApi";
 
 const TEST_TYPES: Array<{ id: AutotestType; label: string }> = [
@@ -254,11 +256,21 @@ function auditName(item: RunResult): string {
   return item.button_name || item.audit_name || item.script_name;
 }
 
+function selectedScriptOptionValue(value: string, options: ScriptOption[]): string {
+  const clean = value.trim();
+  if (!clean) return "";
+  const option = options.find(item => item.relative_path === clean || item.path === clean);
+  return option?.relative_path ?? "";
+}
+
 export default function AutotestRunPanel() {
   const [config, setConfig] = useState<AutotestRunConfig | null>(null);
   const [history, setHistory] = useState<RunResult[]>([]);
   const [frameworkDraft, setFrameworkDraft] = useState("");
   const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
+  const [discoveredScripts, setDiscoveredScripts] = useState<ScriptOption[]>([]);
+  const [scriptsLoading, setScriptsLoading] = useState(false);
+  const [scriptsError, setScriptsError] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -293,7 +305,38 @@ export default function AutotestRunPanel() {
 
   const sortedScripts = useMemo(() => sortByOrder(config?.scripts ?? []), [config?.scripts]);
   const sortedRules = useMemo(() => sortByOrder(config?.autorun.rules ?? []), [config?.autorun.rules]);
-  const scriptOptions = sortedScripts;
+  const launchScriptOptions = sortedScripts;
+
+  useEffect(() => {
+    const frameworkPath = config?.framework_path?.trim() ?? "";
+    if (!frameworkPath) {
+      setDiscoveredScripts([]);
+      setScriptsError("");
+      setScriptsLoading(false);
+      return;
+    }
+
+    let alive = true;
+    setScriptsLoading(true);
+    setScriptsError("");
+    getAutotestScriptOptions()
+      .then(result => {
+        if (!alive) return;
+        setDiscoveredScripts(result.options ?? []);
+      })
+      .catch(err => {
+        if (!alive) return;
+        setDiscoveredScripts([]);
+        setScriptsError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (alive) setScriptsLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [config?.framework_path]);
 
   const updateConfig = (patch: Partial<AutotestRunConfig>) => {
     setConfig(prev => prev ? { ...prev, ...patch } : prev);
@@ -389,10 +432,13 @@ export default function AutotestRunPanel() {
     setRunningId(script.id);
     setMessage(null);
     try {
+      const saved = await saveAutotestRunConfig(config);
+      setConfig(saved);
+      const scriptToRun = saved.scripts.find(item => item.id === script.id) ?? script;
       const result = await runAutotestScript({
-        script_id: script.id,
-        tags: script.default_tags,
-        test_types: script.test_types,
+        script_id: scriptToRun.id,
+        tags: scriptToRun.default_tags,
+        test_types: scriptToRun.test_types,
       });
       setLastRun(result);
       setHistory(prev => [result, ...prev].slice(0, 12));
@@ -583,10 +629,11 @@ export default function AutotestRunPanel() {
                 <button
                   type="button"
                   onClick={() => runScript(script)}
-                  disabled={runningId === script.id || !script.enabled}
+                  disabled={runningId === script.id || !script.enabled || !script.script_path.trim()}
                   className={`min-h-[42px] min-w-0 flex-1 rounded-lg px-3 py-2 text-left text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md disabled:opacity-40 ${
                     script.enabled ? "bg-indigo-600 hover:bg-indigo-700" : "bg-slate-300"
                   }`}
+                  title={!script.script_path.trim() ? "Выберите скрипт запуска в настройках кнопки" : "Запустить скрипт"}
                 >
                   <span className="flex min-w-0 items-center gap-1.5">
                     {runningId === script.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
@@ -677,13 +724,44 @@ export default function AutotestRunPanel() {
                     </div>
                     <div>
                       <FieldHelp
-                        label="Путь до скрипта"
-                        help="Абсолютный путь до .sh, .py, .bat/.cmd или исполняемого файла, который запускает прогон. SimpleTest не меняет скрипт, а передает ему выбранные теги и типы через env-переменные."
+                        label="Скрипт запуска"
+                        help="Выберите найденный во фреймворке .sh, .py, .bat/.cmd или исполняемый файл. Можно оставить относительный путь: backend запустит его от привязанной папки фреймворка."
                       />
+                      {discoveredScripts.length > 0 && (
+                        <select
+                          value={selectedScriptOptionValue(script.script_path, discoveredScripts)}
+                          onChange={e => {
+                            const option = discoveredScripts.find(item => item.relative_path === e.target.value);
+                            updateScript(script.id, {
+                              script_path: e.target.value,
+                              name: option && script.name === "Новый прогон" ? option.name : script.name,
+                            });
+                          }}
+                          className={`${SMALL_INPUT_CLS} mb-2 font-mono`}
+                        >
+                          <option value="">Выберите скрипт из фреймворка</option>
+                          {discoveredScripts.map(option => (
+                            <option key={option.relative_path} value={option.relative_path}>
+                              {option.relative_path}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      {scriptsLoading && (
+                        <p className="mb-2 text-[11px] text-text-muted">Ищу скрипты в привязанном фреймворке...</p>
+                      )}
+                      {!scriptsLoading && frameworkAttached && discoveredScripts.length === 0 && (
+                        <p className="mb-2 text-[11px] text-amber-700">
+                          Скрипты не найдены автоматически. Укажите путь вручную или положите .sh/.py файл в папку фреймворка.
+                        </p>
+                      )}
+                      {scriptsError && (
+                        <p className="mb-2 text-[11px] text-red-600">{scriptsError}</p>
+                      )}
                       <input
                         value={script.script_path}
                         onChange={e => updateScript(script.id, { script_path: e.target.value })}
-                        placeholder="/Users/team/autotests/run-smoke.sh"
+                        placeholder={frameworkAttached ? "scripts/run-smoke.sh или /abs/path/run-smoke.sh" : "/Users/team/autotests/run-smoke.sh"}
                         className={`${SMALL_INPUT_CLS} font-mono`}
                       />
                     </div>
@@ -931,10 +1009,10 @@ export default function AutotestRunPanel() {
                     <p className="truncate text-sm font-semibold text-text-main">{rule.name}</p>
                   </div>
                   <p className="mt-1 text-xs text-text-muted">
-                    {rule.microservice || "*"} · {ruleTagsLabel(rule)} · {ruleScriptTypesLabel(rule, scriptOptions)}
+                    {rule.microservice || "*"} · {ruleTagsLabel(rule)} · {ruleScriptTypesLabel(rule, launchScriptOptions)}
                   </p>
                   <p className="mt-1 truncate text-[11px] text-text-muted/80">
-                    Кнопки: {rule.script_ids.map(id => scriptOptions.find(script => script.id === id)?.name ?? id).join(", ") || "не выбраны"}
+                    Кнопки: {rule.script_ids.map(id => launchScriptOptions.find(script => script.id === id)?.name ?? id).join(", ") || "не выбраны"}
                   </p>
                 </div>
                 <div className="flex flex-shrink-0 items-center gap-1">
@@ -1040,15 +1118,48 @@ export default function AutotestRunPanel() {
                         help="Выберите одну или несколько пользовательских кнопок запуска, которые будут вызваны при изменении версии этого микросервиса."
                       />
                       <select
-                        multiple
-                        value={rule.script_ids}
-                        onChange={e => updateRule(rule.id, { script_ids: Array.from(e.target.selectedOptions).map(option => option.value) })}
-                        className={`${SMALL_INPUT_CLS} min-h-[66px]`}
+                        value=""
+                        onChange={e => {
+                          const scriptId = e.target.value;
+                          if (!scriptId || rule.script_ids.includes(scriptId)) return;
+                          updateRule(rule.id, { script_ids: [...rule.script_ids, scriptId] });
+                        }}
+                        className={SMALL_INPUT_CLS}
                       >
-                        {scriptOptions.map(script => (
-                          <option key={script.id} value={script.id}>{script.name}</option>
+                        <option value="">Добавить кнопку запуска</option>
+                        {launchScriptOptions
+                          .filter(script => !rule.script_ids.includes(script.id))
+                          .map(script => (
+                          <option key={script.id} value={script.id}>
+                            {script.name} · {testTypeLabels(script.test_types)}
+                          </option>
                         ))}
                       </select>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {rule.script_ids.map(scriptId => {
+                          const selectedScript = launchScriptOptions.find(script => script.id === scriptId);
+                          return (
+                            <span
+                              key={scriptId}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-2 py-1 text-xs font-semibold text-teal-700"
+                            >
+                              <span>{selectedScript?.name ?? scriptId}</span>
+                              <button
+                                type="button"
+                                onClick={() => updateRule(rule.id, { script_ids: rule.script_ids.filter(id => id !== scriptId) })}
+                                className="rounded text-teal-500 hover:text-red-500"
+                                aria-label={`Убрать ${selectedScript?.name ?? scriptId}`}
+                                title="Убрать из правила"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+                        {rule.script_ids.length === 0 && (
+                          <span className="text-xs text-text-muted">Кнопки запуска не выбраны</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <button

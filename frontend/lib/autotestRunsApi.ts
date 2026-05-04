@@ -4,7 +4,14 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init);
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string; error?: string; message?: string };
+      message = parsed.detail ?? parsed.error ?? parsed.message ?? text;
+    } catch {
+      message = text;
+    }
+    throw new Error(`${res.status}: ${message}`);
   }
   return res.json() as Promise<T>;
 }
@@ -97,6 +104,17 @@ export interface CheckBuildsResult {
   checked_at: string;
 }
 
+export interface ScriptOption {
+  name: string;
+  path: string;
+  relative_path: string;
+}
+
+export interface ScriptOptionsResult {
+  root: string;
+  options: ScriptOption[];
+}
+
 export async function getAutotestRunConfig(): Promise<AutotestRunConfig> {
   return fetchJson("/api/autotest-runs/config");
 }
@@ -136,6 +154,11 @@ export async function checkAutotestBuilds(execute = true): Promise<CheckBuildsRe
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ execute }),
   });
+}
+
+export async function getAutotestScriptOptions(frameworkPath = ""): Promise<ScriptOptionsResult> {
+  const qs = frameworkPath ? `?framework_path=${encodeURIComponent(frameworkPath)}` : "";
+  return fetchJson(`/api/autotest-runs/script-options${qs}`);
 }
 
 export async function getAutotestRunHistory(limit = 20): Promise<RunResult[]> {

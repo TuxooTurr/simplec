@@ -5,7 +5,7 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { credentials: "include", ...init });
+  const res = await fetch(`${API_BASE}${path}`, init);
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
@@ -267,14 +267,14 @@ export async function formatBug(params: {
   platform: string;
   feature: string;
   description: string;
-  provider?: string;
+  provider: string;
   files?: File[];
 }): Promise<{ report: string }> {
   const body = new FormData();
   body.append("platform", params.platform);
   body.append("feature", params.feature);
   body.append("description", params.description);
-  body.append("provider", params.provider ?? "gigachat");
+  body.append("provider", params.provider);
   if (params.files) {
     for (const f of params.files) {
       body.append("attachments", f);
@@ -288,14 +288,14 @@ export async function formatBug(params: {
 export async function generateAutotest(params: {
   cases: string;
   feature?: string;
-  provider?: string;
+  provider: string;
   test_type?: string;
   project_context?: string;
 }): Promise<{ code: string }> {
   const body = new FormData();
   body.append("cases", params.cases);
   if (params.feature)          body.append("feature",          params.feature);
-  if (params.provider)         body.append("provider",         params.provider);
+  body.append("provider", params.provider);
   if (params.test_type)        body.append("test_type",        params.test_type);
   if (params.project_context)  body.append("project_context",  params.project_context);
   return fetchJson("/api/autotests/generate", { method: "POST", body });

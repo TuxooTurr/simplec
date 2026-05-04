@@ -80,7 +80,7 @@ async def format_bug(
     platform: str = Form(...),
     feature: str = Form(""),
     description: str = Form(...),
-    provider: str = Form("gigachat"),
+    provider: str = Form(...),
     attachments: List[UploadFile] = File(default=[]),
 ):
     from agents.file_parser import parse_file
@@ -99,6 +99,13 @@ async def format_bug(
     full_description = description
     if attachment_texts:
         full_description += "\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)
+
+    provider = provider.strip()
+    if not provider:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "LLM-провайдер не выбран", "llm_error": False},
+        )
 
     try:
         report = await asyncio.to_thread(

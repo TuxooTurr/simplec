@@ -27,6 +27,57 @@ function renderInline(text: string): React.ReactNode {
   return parts.length === 0 ? text : <>{parts}</>;
 }
 
+// ── Markdown tables ───────────────────────────────────────────────────────────
+function splitTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let current = "";
+  let escaped = false;
+
+  for (const ch of trimmed) {
+    if (escaped) {
+      current += ch;
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function isTableRow(line: string): boolean {
+  return splitTableRow(line).length > 1;
+}
+
+function isTableSeparator(line: string): boolean {
+  const cells = splitTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+}
+
+function normalizeTableRow(cells: string[], columns: number): string[] {
+  if (cells.length > columns) {
+    return [...cells.slice(0, columns - 1), cells.slice(columns - 1).join(" | ")];
+  }
+  return [...cells, ...Array(Math.max(0, columns - cells.length)).fill("")];
+}
+
+function alignClass(separatorCell: string): string {
+  const value = separatorCell.trim();
+  if (value.startsWith(":") && value.endsWith(":")) return "text-center";
+  if (value.endsWith(":")) return "text-right";
+  return "text-left";
+}
+
 // ── NotionRenderer ────────────────────────────────────────────────────────────
 export default function NotionRenderer({ text, className = "" }: { text: string; className?: string }) {
   const lines = text.split("\n");
@@ -60,6 +111,59 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
         </div>
       );
       i++; // пропускаем закрывающий ```
+      continue;
+    }
+
+    // ── Markdown table ────────────────────────────────────────────────
+    if (
+      i + 1 < lines.length &&
+      isTableRow(raw) &&
+      isTableSeparator(lines[i + 1])
+    ) {
+      const headers = splitTableRow(raw);
+      const separators = splitTableRow(lines[i + 1]);
+      const columns = headers.length;
+      const alignments = normalizeTableRow(separators, columns).map(alignClass);
+      const rows: string[][] = [];
+      i += 2;
+
+      while (i < lines.length && lines[i].trim() !== "" && isTableRow(lines[i])) {
+        rows.push(normalizeTableRow(splitTableRow(lines[i]), columns));
+        i++;
+      }
+
+      nodes.push(
+        <div key={k++} className="my-3 overflow-x-auto rounded-xl border border-gray-200">
+          <table className="min-w-full border-separate border-spacing-0 bg-white text-xs">
+            <thead className="bg-gray-50">
+              <tr>
+                {headers.map((cell, idx) => (
+                  <th
+                    key={idx}
+                    className={`border-b border-gray-200 px-3 py-2 font-semibold text-gray-700 ${alignments[idx] ?? "text-left"}`}
+                  >
+                    {renderInline(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIdx) => (
+                <tr key={rowIdx} className={rowIdx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}>
+                  {row.map((cell, cellIdx) => (
+                    <td
+                      key={cellIdx}
+                      className={`border-b border-gray-100 px-3 py-2 align-top text-gray-700 last:border-r-0 ${alignments[cellIdx] ?? "text-left"}`}
+                    >
+                      {renderInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
       continue;
     }
 

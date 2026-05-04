@@ -55,6 +55,18 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "value":       os.getenv("KAFKA_SSL_CAFILE", ""),
         "description": "Путь к CA-сертификату (для SSL/SASL_SSL)",
     },
+    "kafka_ssl_certfile": {
+        "value":       os.getenv("KAFKA_SSL_CERTFILE", ""),
+        "description": "Путь к клиентскому сертификату Kafka (для mTLS)",
+    },
+    "kafka_ssl_keyfile": {
+        "value":       os.getenv("KAFKA_SSL_KEYFILE", ""),
+        "description": "Путь к приватному ключу клиентского сертификата Kafka",
+    },
+    "kafka_ssl_password": {
+        "value":       os.getenv("KAFKA_SSL_PASSWORD", ""),
+        "description": "Пароль приватного ключа Kafka, если ключ зашифрован",
+    },
     "metric_send_timeout_sec": {
         "value":       "10",
         "description": "Таймаут отправки одного сообщения в Kafka (секунды)",

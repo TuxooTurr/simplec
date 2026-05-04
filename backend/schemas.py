@@ -10,7 +10,7 @@ class GenerationStartRequest(BaseModel):
     requirement: str
     feature: str = "Feature"
     depth: str = "smoke"          # smoke|regression|full|atomary
-    provider: str = "gigachat"
+    provider: str
 
 
 class Step(BaseModel):
@@ -37,7 +37,7 @@ class ExportRequest(BaseModel):
     domain: str = ""
     folder: str = "Новая ТМ"
     use_llm: bool = False
-    provider: str = "gigachat"
+    provider: Optional[str] = None
 
 
 class EtalonAddRequest(BaseModel):
@@ -51,7 +51,7 @@ class BugFormatRequest(BaseModel):
     platform: str
     feature: str
     description: str
-    provider: str = "gigachat"
+    provider: str
 
 
 class BugFormatResponse(BaseModel):

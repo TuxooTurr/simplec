@@ -6,7 +6,7 @@ import {
   BarChart2, Plus, Trash2, Play, Square, Settings2,
   Loader2, RefreshCw, ChevronRight, ToggleLeft, ToggleRight,
   AlertTriangle, Database, Save, X, Zap, Eye,
-  CheckCircle, XCircle, Pencil, Bell, MessageSquare,
+  CheckCircle, XCircle, Pencil,
 } from "lucide-react";
 import {
   getSystems, createSystem, updateSystem, deleteSystem, toggleSystem, toggleAll,
@@ -14,11 +14,10 @@ import {
   getMetricsSettings, saveMetricsSettings,
   getMetricBuilder, saveValuesConfig, saveBaselineConfig,
   saveThresholdsConfig, saveHealthConfig, sendNow, previewMessage, getMetricLogs,
-  createAccessRequest, getMyRequests, resolveRequest,
   type System, type Metric, type MetricCreate, type MetricUpdate, type SettingsMap,
   type BuilderConfig, type ValuesConfig, type BaselineConfig,
   type ThresholdsConfig, type ThresholdRow, type HealthConfig,
-  type LogEntry, type SendNowResult, type PreviewResult, type AccessRequest,
+  type LogEntry, type SendNowResult, type PreviewResult,
 } from "@/lib/metricsApi";
 
 // ── Styles ───────────────────────────────────────────────────────────────────
@@ -957,77 +956,6 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
 
 // ── System Card ──────────────────────────────────────────────────────────────
 
-// ── Request Modal ─────────────────────────────────────────────────────────────
-
-function RequestModal({ system, onClose }: { system: System; onClose: () => void }) {
-  const [reqType,  setReqType]  = useState<"stop" | "add">("stop");
-  const [message,  setMessage]  = useState("");
-  const [sending,  setSending]  = useState(false);
-  const [sent,     setSent]     = useState(false);
-  const [err,      setErr]      = useState("");
-
-  const send = async () => {
-    setSending(true); setErr("");
-    try {
-      await createAccessRequest(system.id, reqType, message);
-      setSent(true);
-      setTimeout(onClose, 1500);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Ошибка");
-    } finally { setSending(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 p-6 flex flex-col gap-4" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between">
-          <h3 className="text-base font-semibold text-text-main flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-primary" />
-            Запрос к «{system.startedBy}»
-          </h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-bg-subtle text-text-muted"><X className="w-4 h-4" /></button>
-        </div>
-        <p className="text-xs text-text-muted">Услуга: <span className="font-medium text-text-main">{system.name}</span></p>
-
-        <div className="flex gap-2">
-          {([["stop", "Прошу остановить"], ["add", "Прошу добавить метрику"]] as const).map(([v, l]) => (
-            <button
-              key={v}
-              onClick={() => setReqType(v)}
-              className={`flex-1 py-2 rounded-lg border text-xs font-medium transition-colors ${
-                reqType === v ? "border-primary bg-primary/5 text-primary" : "border-border-main text-text-muted hover:bg-bg-subtle"
-              }`}
-            >{l}</button>
-          ))}
-        </div>
-
-        <div>
-          <label className={LABEL_CLS}>Комментарий (необязательно)</label>
-          <textarea
-            className={INPUT_CLS + " resize-none h-24"}
-            placeholder="Опишите детали..."
-            value={message}
-            onChange={e => setMessage(e.target.value)}
-          />
-        </div>
-
-        {sent && <p className="text-sm text-green-600 flex items-center gap-1"><CheckCircle className="w-4 h-4" /> Запрос отправлен!</p>}
-        {err  && <p className="text-sm text-red-500">{err}</p>}
-
-        <div className="flex gap-2">
-          <button className={BTN_GHOST + " flex-1"} onClick={onClose}>Отмена</button>
-          <button className={BTN_PRIMARY + " flex-1 justify-center"} onClick={send} disabled={sending || sent}>
-            {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MessageSquare className="w-3.5 h-3.5" />}
-            Отправить
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── System Card ──────────────────────────────────────────────────────────────
-
 interface SystemCardProps {
   system:      System;
   selected:    boolean;
@@ -1035,19 +963,13 @@ interface SystemCardProps {
   onToggle:    (id: number) => Promise<void>;
   onDelete:    (id: number) => Promise<void>;
   onEdit:      (s: System) => void;
-  currentUser: string | null;
-  onRequest:   (s: System) => void;
 }
 
-function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit, currentUser, onRequest }: SystemCardProps) {
+function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit }: SystemCardProps) {
   const [busy, setBusy] = useState(false);
-
-  const isOtherOwner = !!(system.isActive && system.startedBy && system.startedBy !== currentUser);
-  const isOwner      = !!(system.isActive && system.startedBy && system.startedBy === currentUser);
 
   const doToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isOtherOwner) return;
     setBusy(true);
     try { await onToggle(system.id); }
     finally { setBusy(false); }
@@ -1077,11 +999,6 @@ function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit, cu
         <p className="text-xs text-text-muted">
           {system.metricsActive}/{system.metricsTotal} метрик активно
         </p>
-        {system.isActive && system.startedBy && (
-          <p className={`text-[10px] font-medium mt-0.5 ${isOtherOwner ? "text-amber-600" : "text-green-600"}`}>
-            {isOwner ? "▶ Запущено вами" : `▶ Запустил: ${system.startedBy}`}
-          </p>
-        )}
       </div>
       <div className="flex items-center gap-1 shrink-0">
         <button
@@ -1092,28 +1009,18 @@ function SystemCard({ system, selected, onSelect, onToggle, onDelete, onEdit, cu
         >
           <Pencil className="w-3.5 h-3.5" />
         </button>
-        {isOtherOwner ? (
-          <button
-            onClick={e => { e.stopPropagation(); onRequest(system); }}
-            className="p-1 rounded hover:bg-amber-50 text-amber-500 transition-colors"
-            title="Отправить запрос владельцу"
-          >
-            <MessageSquare className="w-3.5 h-3.5" />
-          </button>
-        ) : (
-          <button
-            onClick={doToggle}
-            disabled={busy}
-            title={system.isActive ? "Остановить" : "Запустить"}
-            className="p-1 rounded hover:bg-bg-muted transition-colors"
-          >
-            {busy
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin text-text-muted" />
-              : system.isActive
-                ? <Square className="w-3.5 h-3.5 text-orange-500" />
-                : <Play className="w-3.5 h-3.5 text-green-500" />}
-          </button>
-        )}
+        <button
+          onClick={doToggle}
+          disabled={busy}
+          title={system.isActive ? "Остановить" : "Запустить"}
+          className="p-1 rounded hover:bg-bg-muted transition-colors"
+        >
+          {busy
+            ? <Loader2 className="w-3.5 h-3.5 animate-spin text-text-muted" />
+            : system.isActive
+              ? <Square className="w-3.5 h-3.5 text-orange-500" />
+              : <Play className="w-3.5 h-3.5 text-green-500" />}
+        </button>
         <button
           onClick={doDelete}
           disabled={busy}
@@ -1787,21 +1694,6 @@ export default function MetricsSection() {
   const [globalBusy,       setGlobalBusy]       = useState(false);
   const [editingMetric,    setEditingMetric]     = useState<Metric | null>(null);
   const [editingSystem,    setEditingSystem]     = useState<System | null>(null);
-  const [currentUser,      setCurrentUser]       = useState<string | null>(null);
-  const [requests,         setRequests]          = useState<AccessRequest[]>([]);
-  const [requestModal,     setRequestModal]      = useState<System | null>(null);
-  const [showNotif,        setShowNotif]         = useState(false);
-
-  // ── Load current user ─────────────────────────────────────────────────────
-
-  useEffect(() => {
-    fetch("/api/auth/me", { credentials: "include" })
-      .then(r => r.json())
-      .then(d => setCurrentUser((d as { username: string }).username))
-      .catch(() => {});
-    getMyRequests().then(setRequests).catch(() => {});
-  }, []);
-
   // ── Load systems ──────────────────────────────────────────────────────────
 
   const loadSystems = useCallback(async (silent = false) => {
@@ -1852,7 +1744,6 @@ export default function MetricsSection() {
         })
         .catch(() => {});
       loadSystems(true);
-      getMyRequests().then(setRequests).catch(() => {});
     }, 30_000);
     return () => clearInterval(intervalId);
   }, [selectedId, loadSystems]);
@@ -1986,64 +1877,6 @@ export default function MetricsSection() {
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Обновить
         </button>
 
-        {/* Колокол уведомлений */}
-        <div className="relative">
-          <button
-            className={`relative p-1.5 rounded-lg border transition-colors ${
-              showNotif ? "border-primary bg-primary/5 text-primary" : "border-border-main text-text-muted hover:bg-bg-subtle"
-            }`}
-            onClick={() => setShowNotif(v => !v)}
-            title="Входящие запросы"
-          >
-            <Bell className="w-4 h-4" />
-            {requests.length > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
-                {requests.length}
-              </span>
-            )}
-          </button>
-
-          {showNotif && (
-            <div className="absolute right-0 top-full mt-2 w-80 bg-white border border-border-main rounded-xl shadow-xl z-40 overflow-hidden">
-              <div className="px-4 py-3 border-b border-border-main flex items-center justify-between">
-                <p className="text-sm font-semibold text-text-main">Входящие запросы</p>
-                <button onClick={() => setShowNotif(false)}><X className="w-4 h-4 text-text-muted" /></button>
-              </div>
-              {requests.length === 0 ? (
-                <p className="text-xs text-text-muted text-center py-8">Нет новых запросов</p>
-              ) : (
-                <div className="flex flex-col divide-y divide-border-main max-h-80 overflow-y-auto">
-                  {requests.map(req => (
-                    <div key={req.id} className="px-4 py-3 flex flex-col gap-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-text-main">{req.fromUser}</span>
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
-                          req.reqType === "stop"
-                            ? "bg-orange-50 text-orange-700 border-orange-200"
-                            : "bg-blue-50 text-blue-700 border-blue-200"
-                        }`}>
-                          {req.reqType === "stop" ? "Остановить" : "Добавить"}
-                        </span>
-                      </div>
-                      <p className="text-xs text-text-muted">Услуга: <span className="font-medium text-text-main">{req.systemName}</span></p>
-                      {req.message && <p className="text-xs text-text-muted italic">«{req.message}»</p>}
-                      <button
-                        className={BTN_SM + " self-end mt-1"}
-                        onClick={async () => {
-                          await resolveRequest(req.id);
-                          setRequests(prev => prev.filter(r => r.id !== req.id));
-                        }}
-                      >
-                        <CheckCircle className="w-3 h-3 text-green-500" /> Принято
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
       </div>
 
       {/* ── Content ────────────────────────────────────────────────────────── */}
@@ -2068,8 +1901,6 @@ export default function MetricsSection() {
                     onToggle={handleSystemToggle}
                     onDelete={handleSystemDelete}
                     onEdit={setEditingSystem}
-                    currentUser={currentUser}
-                    onRequest={setRequestModal}
                   />
                 ))
               )}
@@ -2176,13 +2007,6 @@ export default function MetricsSection() {
           metric={editingMetric}
           onSave={handleMetricSaved}
           onClose={() => setEditingMetric(null)}
-        />
-      )}
-
-      {requestModal && (
-        <RequestModal
-          system={requestModal}
-          onClose={() => setRequestModal(null)}
         />
       )}
 

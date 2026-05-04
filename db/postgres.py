@@ -18,11 +18,9 @@ DATABASE_URL = os.getenv(
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 
 if _is_sqlite:
-    from sqlalchemy.pool import StaticPool
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
     )
 else:
     engine = create_engine(

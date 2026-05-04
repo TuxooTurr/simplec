@@ -1,0 +1,63 @@
+{
+  "framework_path": "",
+  "selected_types": [
+    "api",
+    "e2e"
+  ],
+  "selected_tags": [
+    "smoke"
+  ],
+  "scripts": [
+    {
+      "id": "smoke-local",
+      "name": "Smoke прогон",
+      "script_path": "",
+      "work_dir": "",
+      "default_tags": [
+        "smoke"
+      ],
+      "test_types": [
+        "api",
+        "e2e"
+      ],
+      "microservices": [
+        "*"
+      ],
+      "enabled": true,
+      "timeout_sec": 1200,
+      "ui_size": "md",
+      "ui_order": 0
+    }
+  ],
+  "autorun": {
+    "enabled": false,
+    "source_type": "url",
+    "source_url": "",
+    "source_file_path": "",
+    "poll_interval_sec": 120,
+    "version_regex": "(?P<microservice>[A-Za-z0-9_.-]+)\\s*[:=]\\s*(?P<version>[A-Za-z0-9_.-]+)",
+    "run_on_first_seen": false,
+    "rules": [
+      {
+        "id": "rule-smoke-all",
+        "name": "Smoke при обновлении любого сервиса",
+        "microservice": "*",
+        "script_ids": [
+          "smoke-local"
+        ],
+        "tags": [],
+        "use_microservice_as_tag": true,
+        "test_types": [
+          "api",
+          "e2e"
+        ],
+        "enabled": true,
+        "ui_size": "md",
+        "ui_order": 0
+      }
+    ],
+    "last_seen": {},
+    "last_check_at": ""
+  },
+  "updated_at": "2026-05-04T06:27:41.244332+00:00"
+}

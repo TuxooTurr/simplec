@@ -3,23 +3,15 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
-import { getProviders } from "@/lib/api";
-
-const PROVIDERS = [
-  { id: "gigachat", label: "GigaChat" },
-  { id: "deepseek", label: "DeepSeek" },
-  { id: "openai",   label: "OpenAI"   },
-  { id: "claude",   label: "Claude"   },
-];
 
 const NAV: {
   id: SectionId;
   href: string;
   label: string;
-  Icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
+  Icon: ComponentType<{ className?: string; strokeWidth?: number }>;
   ai?: boolean;
 }[] = [
   { id: "generation",  href: "/generation",  label: "Ручное тестирование",   Icon: Zap,          ai: true },
@@ -44,21 +36,7 @@ function AiBadge() {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const [availableIds, setAvailableIds] = useState<Set<string>>(new Set());
-  const { provider, setProvider, setDragging, providersRefreshKey } = useWorkspace();
-
-  useEffect(() => {
-    getProviders()
-      .then((statuses) => {
-        const ids = new Set(statuses.filter((s) => s.status === "green").map((s) => s.id));
-        setAvailableIds(ids);
-        if (ids.size > 0 && !ids.has(provider)) {
-          setProvider([...ids][0]);
-        }
-      })
-      .catch(() => setAvailableIds(new Set()));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providersRefreshKey]);
+  const { setDragging } = useWorkspace();
 
   return (
     <aside className="w-64 min-h-screen bg-white border-r border-border-main flex flex-col flex-shrink-0">
@@ -116,29 +94,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-
-      {/* Model selector */}
-      <div className="px-4 py-4 border-b border-border-main">
-        <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
-          Модель
-        </label>
-        <div className="grid grid-cols-2 gap-1.5">
-          {PROVIDERS.filter((p) => availableIds.size === 0 || availableIds.has(p.id)).map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setProvider(p.id)}
-              className={`
-                px-2 py-2 rounded-lg text-xs font-medium border transition-all duration-150
-                ${provider === p.id
-                  ? "border-primary bg-indigo-50 text-primary"
-                  : "border-border-main bg-white text-text-muted hover:border-primary/40 hover:text-text-main"}
-              `}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
       {/* LLM status + Settings at bottom */}
       <div className="mt-auto border-t border-border-main">

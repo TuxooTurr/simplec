@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Activity } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check } from "lucide-react";
 import { getProviders, type ProviderStatus } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -12,26 +12,37 @@ const STATUS_CONFIG: Record<string, { dot: string; ring: string; label: string }
 };
 
 export default function LLMStatusBar() {
-  const { providersRefreshKey } = useWorkspace();
+  const { provider, setProvider, providersRefreshKey } = useWorkspace();
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const providerRef = useRef(provider);
 
   useEffect(() => {
-    setLoading(true);
-    getProviders()
-      .then(setProviders)
-      .catch(() => setProviders([]))
-      .finally(() => setLoading(false));
-  }, [providersRefreshKey]);
+    providerRef.current = provider;
+  }, [provider]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center gap-1.5 text-xs text-text-muted">
-        <Activity className="w-3 h-3 animate-pulse" />
-        <span>Проверка LLM...</span>
-      </div>
-    );
-  }
+  useEffect(() => {
+    let cancelled = false;
+
+    getProviders()
+      .then((statuses) => {
+        if (cancelled) return;
+
+        setProviders(statuses);
+        const providerIds = new Set(statuses.map((s) => s.id));
+        if (statuses.length > 0 && !providerIds.has(providerRef.current)) {
+          setProvider(statuses[0].id);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setHasLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [providersRefreshKey, setProvider]);
 
   return (
     <div>
@@ -40,23 +51,40 @@ export default function LLMStatusBar() {
         {providers.map((p) => {
           const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-gray-300/30", label: "—" };
           const isPulsing = p.status === "green" || p.status === "yellow";
+          const isActive = provider === p.id;
+
           return (
-            <div key={p.id} className="flex items-center gap-2 text-xs">
-              {/* Pulsing dot */}
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => setProvider(p.id)}
+              title={`${p.name}: ${p.message}`}
+              className={`
+                flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs
+                transition-colors text-left
+                ${isActive
+                  ? "border-primary bg-indigo-50 text-primary"
+                  : "border-transparent text-text-main hover:border-border-main hover:bg-gray-50"}
+                cursor-pointer
+              `}
+            >
               <span className="relative flex-shrink-0 w-2.5 h-2.5">
                 {isPulsing && (
                   <span className={`absolute inset-0 rounded-full ${cfg.ring} animate-ping`} />
                 )}
                 <span className={`relative block w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
               </span>
-              <span className="font-medium text-text-main">{p.name}</span>
-              <span className="ml-auto text-[10px] text-text-muted truncate max-w-[80px]" title={p.message}>
+              <span className={`font-medium truncate ${isActive ? "text-primary" : "text-text-main"}`}>
+                {p.name}
+              </span>
+              {isActive && <Check className="w-3 h-3 flex-shrink-0" />}
+              <span className="ml-auto text-[10px] text-text-muted truncate max-w-[72px]">
                 {cfg.label}
               </span>
-            </div>
+            </button>
           );
         })}
-        {providers.length === 0 && (
+        {hasLoaded && providers.length === 0 && (
           <p className="text-xs text-text-muted">Нет провайдеров</p>
         )}
       </div>

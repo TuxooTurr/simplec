@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Scale, Search, Settings, RefreshCw, X, AlertCircle } from "lucide-react";
 import {
   getRevisorData, getStands,
   podStatus, rowMatchStatus,
-  type RevisorData, type StandConfig, type PodInfo, type PodStatus, type ServiceRow,
+  type RevisorData, type StandConfig, type PodInfo, type PodStatus, type ServiceRow, type RevisorMethodResult,
 } from "@/lib/revisorApi";
 
 /* ── Shared style constants (same as Metrics/Alerts/Generation) ── */
@@ -38,11 +39,32 @@ const ROW_BADGE: Record<"green" | "yellow" | "grey", { cls: string; label: strin
 
 /* ── Majority version helper ─────────────────────────────────────── */
 function getMajorityVersion(row: ServiceRow, stands: string[]): string {
-  const versions = stands.map(s => row.stands[s]?.version ?? "").filter(Boolean);
+  const versions = stands.map(s => row.stands[s]?.compare_value || row.stands[s]?.version || "").filter(Boolean);
   if (versions.length === 0) return "";
   const counts: Record<string, number> = {};
   for (const v of versions) counts[v] = (counts[v] ?? 0) + 1;
   return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+}
+
+const METHOD_BADGE: Record<PodStatus, string> = {
+  green:  "bg-green-50 text-green-700 border-green-200",
+  yellow: "bg-amber-50 text-amber-700 border-amber-200",
+  red:    "bg-red-50 text-red-700 border-red-200",
+  grey:   "bg-gray-50 text-gray-500 border-gray-200",
+};
+
+function MethodLine({ method }: { method: RevisorMethodResult }) {
+  const status = method.status ?? "grey";
+  return (
+    <div className="flex items-center gap-2 min-w-0">
+      <span className={`px-1.5 py-0.5 rounded border text-[10px] leading-none flex-shrink-0 ${METHOD_BADGE[status]}`}>
+        {method.label}
+      </span>
+      <span className={`text-[11px] truncate ${method.error ? "text-red-600" : "text-text-main"}`}>
+        {method.value || "—"}
+      </span>
+    </div>
+  );
 }
 
 /* ── Pod cell ─────────────────────────────────────────────────────── */
@@ -51,7 +73,21 @@ function PodCell({ info, highlight = false }: { info: PodInfo | undefined; highl
     return <span className="text-xs text-text-muted/40">—</span>;
   }
   const st = podStatus(info);
-  const noData = info.total === 0 && !info.version;
+  const noData = (info.total ?? 0) === 0 && !info.version && !info.methods?.length;
+  if (info.methods?.length) {
+    return (
+      <div className={`flex flex-col gap-1 min-w-0 ${highlight ? "text-amber-700" : ""}`}>
+        {info.methods.map((m, idx) => (
+          <MethodLine key={`${m.key}-${idx}`} method={m} />
+        ))}
+        {(info.total ?? 0) > 0 && (
+          <span className="text-[10px] text-text-muted tabular-nums leading-tight">
+            {info.running ?? 0}/{info.total ?? 0} pod
+          </span>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="flex items-center gap-2 min-w-0">
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${POD_DOT[st]}`} />
@@ -63,76 +99,11 @@ function PodCell({ info, highlight = false }: { info: PodInfo | undefined; highl
         }`}>
           {info.version || "—"}
         </span>
-        {info.total > 0 && (
+        {(info.total ?? 0) > 0 && (
           <span className="text-[10px] text-text-muted tabular-nums leading-tight">
-            {info.running}/{info.total} pod
+            {info.running ?? 0}/{info.total ?? 0} pod
           </span>
         )}
-      </div>
-    </div>
-  );
-}
-
-/* ── Settings modal ────────────────────────────────────────────────── */
-function SettingsModal({ stands, onClose }: { stands: StandConfig[]; onClose: () => void }) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="absolute inset-0 bg-black/25 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-2xl border border-border-main w-full max-w-md p-6">
-
-        {/* Header */}
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-base font-semibold text-text-main flex items-center gap-2">
-            <Settings className="w-4 h-4 text-primary" />
-            Подключение к стендам
-          </h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-main transition-colors">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Stand cards */}
-        <div className="space-y-2.5">
-          {stands.map(s => (
-            <div key={s.name} className="rounded-xl border border-border-main p-3.5">
-              <div className="flex items-center gap-2 mb-1.5">
-                <span className={`w-2 h-2 rounded-full flex-shrink-0 ${s.connected ? "bg-green-500" : "bg-gray-300"}`} />
-                <span className="text-sm font-semibold text-text-main">{s.name}</span>
-                <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full border ${
-                  s.connected
-                    ? "text-green-700 bg-green-50 border-green-200"
-                    : "text-gray-500 bg-gray-50 border-gray-200"
-                }`}>
-                  {s.connected ? "Подключён" : "Не настроен"}
-                </span>
-              </div>
-              {s.url ? (
-                <p className="text-xs text-text-muted font-mono truncate">{s.url}</p>
-              ) : (
-                <p className="text-xs text-text-muted/60 italic">URL не задан</p>
-              )}
-              {s.namespace && (
-                <p className="text-xs text-text-muted mt-0.5">ns: {s.namespace}</p>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* How-to hint */}
-        <div className="mt-4 rounded-xl bg-indigo-50/70 border border-indigo-100 p-3.5">
-          <p className="text-xs font-semibold text-indigo-700 mb-1.5">Как подключить стенд</p>
-          <p className="text-xs text-indigo-600 mb-1.5 leading-relaxed">
-            Добавьте переменные в <code className="bg-indigo-100/80 px-1 py-0.5 rounded text-[11px]">.env</code> на сервере:
-          </p>
-          <pre className="text-[11px] text-indigo-700 font-mono leading-relaxed whitespace-pre-wrap">{
-`REVISOR_NT_URL=https://k8s.nt.example.com
-REVISOR_NT_TOKEN=<bearer-token>
-REVISOR_NT_NAMESPACE=production`
-          }</pre>
-        </div>
       </div>
     </div>
   );
@@ -150,13 +121,13 @@ const INTERVALS = [
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════ */
 export default function RevisorSection() {
+  const router = useRouter();
   const [data,         setData]         = useState<RevisorData | null>(null);
   const [stands,       setStands]       = useState<StandConfig[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
   const [error,        setError]        = useState("");
   const [search,       setSearch]       = useState("");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [intervalSecs, setIntervalSecs] = useState(0);   // 0 = off
   const [countdown,    setCountdown]    = useState(0);   // seconds until next refresh
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -253,8 +224,6 @@ export default function RevisorSection() {
 
   return (
     <>
-      {settingsOpen && <SettingsModal stands={stands} onClose={() => setSettingsOpen(false)} />}
-
       <div className="p-6 animate-slide-up overflow-x-auto">
 
         {/* ── Page header ──────────────────────────────────────── */}
@@ -281,12 +250,12 @@ export default function RevisorSection() {
               ))}
             </div>
             <button
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => router.push("/settings")}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
                 text-sm text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150"
             >
               <Settings className="w-3.5 h-3.5" />
-              Настройки
+              Общие настройки
             </button>
             <button
               onClick={() => { loadData(true); if (intervalSecs > 0) setCountdown(intervalSecs); }}
@@ -318,7 +287,7 @@ export default function RevisorSection() {
 
         {/* ── Subtitle / stats ─────────────────────────────────── */}
         <p className="text-sm text-text-muted mb-4 flex items-center gap-3 flex-wrap">
-          Сравнение Docker-сборок и статуса подов по стендам.
+          Сравнение сборок, версий, статусов и подов по API-стендам.
           <span className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
             <span className="text-xs">{greenRows} синхронно</span>
@@ -402,7 +371,8 @@ export default function RevisorSection() {
                 {/* Per-stand pod cells — highlight only mismatching cells */}
                 {standNames.map(stand => {
                   const info      = row.stands[stand];
-                  const isMismatch = !!(majority && info?.version && info.version !== majority);
+                  const compare   = info?.compare_value || info?.version || "";
+                  const isMismatch = !!(majority && compare && compare !== majority);
                   return (
                     <div
                       key={stand}
@@ -428,7 +398,7 @@ export default function RevisorSection() {
 
         {/* ── Legend ───────────────────────────────────────────── */}
         <div className="mt-3 flex items-center gap-5 flex-wrap">
-          <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Статус пода:</span>
+          <span className="text-xs font-semibold text-text-muted uppercase tracking-wide">Индикаторы:</span>
           {([
             ["bg-green-500", "Все запущены"],
             ["bg-amber-400", "Часть упала"],

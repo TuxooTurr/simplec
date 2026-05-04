@@ -59,7 +59,7 @@ export interface ExportParams {
   domain?: string;
   folder?: string;
   use_llm?: boolean;
-  provider?: string;
+  provider: string;
 }
 
 // ── Context interface ─────────────────────────────────────────────────────────

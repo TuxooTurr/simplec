@@ -6,6 +6,7 @@ import {
   PlugZap, History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle,
   Trash2, X, FolderOpen, ChevronDown, ChevronUp, CheckCircle, Search,
 } from "lucide-react";
+import AutotestRunPanel from "@/components/AutotestRunPanel";
 import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -18,6 +19,32 @@ interface AutoHistEntry {
   inputText: string;
   code: string;
   loadedAsEtalon?: boolean;
+}
+
+interface ParsedFileAttachment {
+  name: string;
+  text: string;
+}
+
+function buildAutotestSourceText(fieldText: string, files: ParsedFileAttachment[]): string {
+  const cleanFieldText = fieldText.trim();
+  const cleanFiles = files
+    .map((file, index) => {
+      const cleanText = file.text.trim();
+      if (!cleanText) return "";
+      return `### Файл ${index + 1}: ${file.name}\n${cleanText}`;
+    })
+    .filter(Boolean);
+
+  const parts: string[] = [];
+  if (cleanFieldText) {
+    parts.push(`РУЧНЫЕ ТЕСТ-КЕЙСЫ ИЗ ПОЛЯ:\n${cleanFieldText}`);
+  }
+  if (cleanFiles.length > 0) {
+    parts.push(`СОДЕРЖИМОЕ ЗАГРУЖЕННЫХ ФАЙЛОВ, КОТОРОЕ ОБЯЗАТЕЛЬНО НУЖНО ИЗУЧИТЬ ПРИ ГЕНЕРАЦИИ АВТОТЕСТОВ:\n${cleanFiles.join("\n\n")}`);
+  }
+
+  return parts.join("\n\n");
 }
 
 const HIST_KEY    = "st_automodel_history";
@@ -66,6 +93,7 @@ function formatHistTime(ts: number): string {
 /* ── Test types ───────────────────────────────────────────────────── */
 
 type TestType = "api" | "e2e" | "frontend" | "mobile" | "dt";
+type AutoMode = "generate" | "run";
 
 interface TestTypeConfig {
   label: string;
@@ -86,21 +114,21 @@ const TEST_TYPES: Record<TestType, TestTypeConfig> = {
     label: "E2E",
     framework: "JUnit 5 + Selenide",
     placeholder:
-      "Вставьте E2E тест-кейсы:\n\n1. Тест: Авторизация и оформление заказа\n   Шаг 1: Открыть страницу входа\n   Шаг 2: Ввести логин и пароль\n   Шаг 3: Нажать «Войти»\n   Шаг 4: Перейти в каталог, добавить товар в корзину\n   Шаг 5: Оформить заказ\n   Ожидаемый результат: Заказ создан, отображается номер заказа",
+      "Вставьте E2E тест-кейсы:\n\n1. Тест: Оформление заказа\n   Шаг 1: Открыть каталог\n   Шаг 2: Выбрать товар\n   Шаг 3: Добавить товар в корзину\n   Шаг 4: Перейти к оформлению\n   Шаг 5: Подтвердить заказ\n   Ожидаемый результат: Заказ создан, отображается номер заказа",
     codeLabel: "Java-код (Selenide E2E)",
   },
   frontend: {
     label: "Frontend",
     framework: "JUnit 5 + Selenide",
     placeholder:
-      "Вставьте Frontend UI тест-кейсы:\n\n1. Тест: Валидация формы регистрации\n   Шаг 1: Открыть страницу /register\n   Шаг 2: Нажать «Зарегистрироваться» без заполнения полей\n   Ожидаемый результат: Поле Email подсвечено красным, текст «Обязательное поле»\n\n2. Тест: Кнопка «Показать пароль»\n   Шаг 1: Ввести пароль в поле\n   Шаг 2: Кликнуть иконку глаза\n   Ожидаемый результат: Тип поля изменился на text",
+      "Вставьте Frontend UI тест-кейсы:\n\n1. Тест: Валидация формы заявки\n   Шаг 1: Открыть страницу /request\n   Шаг 2: Нажать «Отправить» без заполнения обязательных полей\n   Ожидаемый результат: Обязательные поля подсвечены, отображаются тексты ошибок\n\n2. Тест: Раскрытие дополнительного блока\n   Шаг 1: Нажать переключатель «Дополнительные параметры»\n   Шаг 2: Изменить значение в поле\n   Ожидаемый результат: Блок раскрыт, введённое значение сохраняется в форме",
     codeLabel: "Java-код (Selenide Frontend)",
   },
   mobile: {
     label: "Mobile",
     framework: "JUnit 5 + Appium",
     placeholder:
-      "Вставьте Mobile тест-кейсы:\n\n1. Тест: Авторизация в мобильном приложении\n   Платформа: Android\n   Шаг 1: Запустить приложение\n   Шаг 2: Тапнуть поле «Email», ввести test@mail.ru\n   Шаг 3: Тапнуть поле «Пароль», ввести password123\n   Шаг 4: Тапнуть кнопку «Войти»\n   Ожидаемый результат: Открылся экран главного меню\n\n2. Тест: Свайп карточки товара\n   Шаг 1: Свайпнуть карточку влево\n   Ожидаемый результат: Карточка скрыта, отображается следующая",
+      "Вставьте Mobile тест-кейсы:\n\n1. Тест: Открытие карточки товара\n   Платформа: Android\n   Шаг 1: Запустить приложение\n   Шаг 2: Открыть каталог\n   Шаг 3: Тапнуть карточку товара\n   Ожидаемый результат: Открылась детальная карточка товара\n\n2. Тест: Свайп карточки товара\n   Шаг 1: Свайпнуть карточку влево\n   Ожидаемый результат: Карточка скрыта, отображается следующая",
     codeLabel: "Java-код (Appium Mobile)",
   },
   dt: {
@@ -126,10 +154,11 @@ export default function AutoModelSection() {
   const { provider } = useWorkspace();
 
   const [stage, setStage]         = useState<"input" | "history">("input");
+  const [activeMode, setActiveMode] = useState<AutoMode>("generate");
   const [testType, setTestType]   = useState<TestType>("e2e");
   const [feature, setFeature]     = useState("");
   const [inputText, setInputText] = useState("");
-  const [fileName, setFileName]   = useState("");
+  const [fileAttachments, setFileAttachments] = useState<ParsedFileAttachment[]>([]);
   const [loading, setLoading]     = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
   const [code, setCode]           = useState("");
@@ -212,14 +241,19 @@ export default function AutoModelSection() {
   /* ── File upload ─────────────────────────────────────────────────── */
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
     setFileLoading(true);
-    setFileName(file.name);
     setGenError(null);
     try {
-      const res = await parseFile(file);
-      setInputText(res.text);
+      const parsedFiles = await Promise.all(files.map(async (file) => {
+        const res = await parseFile(file);
+        return {
+          name: res.filename || file.name,
+          text: res.text,
+        };
+      }));
+      setFileAttachments((prev) => [...prev, ...parsedFiles]);
     } catch (err) {
       setGenError({ message: String(err), llm_error: false });
     } finally {
@@ -273,19 +307,20 @@ export default function AutoModelSection() {
   /* ── Generate ────────────────────────────────────────────────────── */
 
   const handleGenerate = async () => {
-    if (!inputText.trim()) return;
+    const sourceText = buildAutotestSourceText(inputText, fileAttachments);
+    if (!sourceText) return;
     setLoading(true);
     setCode("");
     setGenError(null);
     try {
       const project_context = buildProjectContext();
-      const res = await generateAutotest({ cases: inputText, feature, provider, test_type: testType, project_context });
+      const res = await generateAutotest({ cases: sourceText, feature, provider, test_type: testType, project_context });
       setCode(res.code);
       saveHistEntry({
         id: Date.now().toString(),
         timestamp: Date.now(),
         feature,
-        inputText,
+        inputText: sourceText,
         code: res.code,
       });
     } catch (err) {
@@ -310,6 +345,9 @@ export default function AutoModelSection() {
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
+  const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
+  const hasAutotestSource = Boolean(inputText.trim() || fileAttachments.some((file) => file.text.trim()));
 
   /* ── History stage ──────────────────────────────────────────────── */
 
@@ -359,8 +397,10 @@ export default function AutoModelSection() {
                         onClick={() => {
                           setFeature(entry.feature);
                           setInputText(entry.inputText);
+                          setFileAttachments([]);
                           setCode(entry.code);
                           setStage("input");
+                          setActiveMode("generate");
                         }}
                       >
                         <div className="flex-1 min-w-0">
@@ -432,10 +472,12 @@ export default function AutoModelSection() {
           <div>
             <h1 className="text-xl font-bold text-text-main mb-1">Автотестирование</h1>
             <p className="text-sm text-text-muted">
-              Вставьте ручные тест-кейсы — AI сгенерирует код ({TEST_TYPES[testType].framework}).
+              {activeMode === "generate"
+                ? `Вставьте ручные тест-кейсы или загрузите файлы — AI изучит все источники и сгенерирует код (${TEST_TYPES[testType].framework}).`
+                : "Настройте кнопки прогонов, теги и автозапуск по обновлению сборок."}
             </p>
           </div>
-          {histEntries.length > 0 && (
+          {activeMode === "generate" && histEntries.length > 0 && (
             <button
               onClick={() => setStage("history")}
               className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
@@ -446,6 +488,38 @@ export default function AutoModelSection() {
           )}
         </div>
 
+        {/* Work mode tabs */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-4 p-1 bg-gray-100 rounded-xl w-full sm:w-fit">
+          <button
+            type="button"
+            onClick={() => setActiveMode("generate")}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
+              activeMode === "generate"
+                ? "bg-white text-primary shadow-sm border border-border-main"
+                : "text-text-muted hover:text-text-main"
+            }`}
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+            Генерация автотестов
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveMode("run")}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
+              activeMode === "run"
+                ? "bg-white text-primary shadow-sm border border-border-main"
+                : "text-text-muted hover:text-text-main"
+            }`}
+          >
+            <PlugZap className="w-3.5 h-3.5" />
+            Запуск автотестов
+          </button>
+        </div>
+
+        {activeMode === "run" && <AutotestRunPanel />}
+
+        {activeMode === "generate" && (
+          <>
         {/* Test type selector */}
         <div className="flex items-center gap-1.5 mb-4 p-1 bg-gray-100 rounded-xl w-fit">
           {(Object.keys(TEST_TYPES) as TestType[]).map(t => (
@@ -584,7 +658,7 @@ export default function AutoModelSection() {
             <input
               value={feature}
               onChange={e => setFeature(e.target.value)}
-              placeholder="Авторизация, Оплата картой..."
+              placeholder="Каталог, Оплата картой..."
               className={INPUT_CLS}
             />
           </div>
@@ -604,6 +678,7 @@ export default function AutoModelSection() {
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept={ACCEPT}
               className="hidden"
               onChange={handleFileChange}
@@ -620,19 +695,28 @@ export default function AutoModelSection() {
                   ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
                   : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
               </button>
-              {fileName && !fileLoading && (
-                <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+              {fileAttachments.length > 0 && !fileLoading && fileAttachments.map((file, index) => (
+                <span
+                  key={`${file.name}-${index}`}
+                  title={`${file.name}: ${file.text.length.toLocaleString()} симв. попадет в LLM`}
+                  className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1"
+                >
                   <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
-                  {fileName}
+                  <span className="truncate">{file.name}</span>
                   <button
                     type="button"
-                    onClick={() => { setFileName(""); setInputText(""); }}
+                    onClick={() => setFileAttachments((prev) => prev.filter((_, i) => i !== index))}
                     className="ml-0.5 hover:text-red-500 transition-colors"
+                    aria-label={`Убрать файл ${file.name}`}
                   >
                     <X className="w-3 h-3" />
                   </button>
                 </span>
-              )}
+              ))}
+              <span className="ml-auto text-xs text-text-muted tabular-nums">
+                {inputText.length.toLocaleString()} симв. в поле
+                {fileAttachments.length > 0 && ` + ${fileChars.toLocaleString()} симв. из файлов`}
+              </span>
             </div>
           </div>
         </div>
@@ -717,7 +801,7 @@ export default function AutoModelSection() {
         {/* Bottom action row */}
         <div className="flex items-center justify-between">
           <p className="text-xs text-text-muted flex items-center gap-1">
-            {inputText.trim() ? (
+            {hasAutotestSource ? (
               <>
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
                 {feature
@@ -733,16 +817,18 @@ export default function AutoModelSection() {
           </p>
           <button
             onClick={handleGenerate}
-            disabled={loading || !inputText.trim()}
+            disabled={loading || !hasAutotestSource}
             className={`flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold
               hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md
-              ${!inputText.trim() ? "opacity-40" : ""}`}
+              ${!hasAutotestSource ? "opacity-40" : ""}`}
           >
             {loading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Генерирую...</>
               : <><FlaskConical className="w-4 h-4" /> Сгенерировать [{TEST_TYPES[testType].label}]</>}
           </button>
         </div>
+          </>
+        )}
 
       </div>
     </div>

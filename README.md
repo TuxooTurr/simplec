@@ -38,11 +38,11 @@
 - Фоновый планировщик (APScheduler) для периодического сбора метрик
 
 ### Ревизор (`/revisor`)
-- Сравнение микросервисов по стендам: НТ, Major-Check, Major-Go
-- Мониторинг версий и статусов подов через K8s API
+- Сравнение микросервисов по настраиваемым стендам
+- Конструктор API-методов для сборок, версий, статусов, подов и health
 
 ### Настройки (`/settings`)
-- Управление API-ключами LLM-провайдеров
+- Управление подключениями LLM-провайдеров: API key или клиентский сертификат
 - Конфигурация Kafka, параметры моделей
 
 ---
@@ -53,16 +53,14 @@
 SimpleTest/
 ├── backend/                  # FastAPI-приложение
 │   ├── main.py               # Инициализация, роутинг, middleware
-│   ├── auth.py               # JWT-аутентификация
 │   ├── schemas.py            # Pydantic-модели
 │   └── api/
-│       ├── auth.py           # Логин / регистрация
 │       ├── generation.py     # WebSocket-генерация тест-кейсов
 │       ├── etalons.py        # CRUD эталонов
 │       ├── bugs.py           # Форматирование дефектов
 │       ├── alerts.py         # Kafka-алерты
 │       ├── metrics_*.py      # Метрики и системы мониторинга
-│       ├── revisor.py        # K8s стенды
+│       ├── revisor.py        # API-конструктор сравнения стендов
 │       ├── autotests_gen.py  # Selenium/Cypress генерация
 │       ├── app_settings.py   # Настройки приложения
 │       └── system.py         # /healthz, /providers, /stats
@@ -80,7 +78,6 @@ SimpleTest/
 ├── db/                       # Хранилища данных
 │   ├── postgres.py           # SQLAlchemy + PostgreSQL
 │   ├── metrics_models.py     # ORM-схема
-│   ├── user_store.py         # Пользователи
 │   ├── alerts_store.py       # Скрипты алертов
 │   ├── feedback_store.py     # Оценки генераций
 │   ├── vector_store.py       # ChromaDB эмбеддинги
@@ -88,7 +85,6 @@ SimpleTest/
 │
 ├── frontend/                 # Next.js-приложение
 │   ├── app/
-│   │   ├── (auth)/           # login, register
 │   │   └── (app)/            # generation, etalons, bugs,
 │   │                         # alerts, metrics, auto-model,
 │   │                         # revisor, settings
@@ -110,19 +106,18 @@ SimpleTest/
 
 ## LLM-провайдеры
 
-| Провайдер | Тип | Переменная | Статус без ключа |
-|-----------|-----|------------|-----------------|
-| GigaChat | Облачный | `GIGACHAT_AUTH_KEY` | Жёлтый (Ограничен) |
-| DeepSeek | Облачный | `DEEPSEEK_API_KEY` | Красный (Нет ключа) |
-| OpenAI | Облачный | `OPENAI_API_KEY` | Красный (Нет ключа) |
-| Claude | Облачный | `ANTHROPIC_API_KEY` | Красный (Нет ключа) |
-| Ollama | Локальный | — | Скрыт (не запущен) |
-| LM Studio | Локальный | `LMSTUDIO_URL` | Скрыт (не запущен) |
+| Провайдер | Тип | Настройка | Статус без подключения |
+|-----------|-----|-----------|------------------------|
+| GigaChat | Встроенный | `GIGACHAT_AUTH_TYPE`, ключ или сертификат | Красный |
+| DeepSeek | Встроенный | `DEEPSEEK_AUTH_TYPE`, ключ или сертификат | Красный |
+| Пользовательский LLM | Настраиваемый | через UI Settings | зависит от API key/сертификата |
 
 **Особенности:**
 - Кнопки выбора модели отображаются **только для провайдеров со статусом green** (доступны к генерации)
 - Статус-бар внизу сайдбара показывает **всех** провайдеров с индикаторами
-- Провайдеры без ключа сразу получают `red` без HTTP-запроса к API
+- Провайдеры без настроенного ключа/сертификата сразу получают `red` без HTTP-запроса к API
+- GigaChat и DeepSeek редактируются в настройках: Base URL, модель, тип подключения, CA bundle, client cert/key.
+- Дополнительные LLM добавляются в настройках как chat/completions-compatible endpoint через API key или сертификат.
 
 ---
 
@@ -134,7 +129,7 @@ SimpleTest/
 | Backend | FastAPI 0.128, Uvicorn 0.40, Python 3.12 |
 | База данных | PostgreSQL 16, SQLAlchemy 2.0 |
 | Vector DB | ChromaDB 1.4 (RAG для эталонов) |
-| Аутентификация | JWT + bcrypt + HttpOnly cookies |
+| Доступ | Без пользовательской авторизации; доступ ограничивается корпоративной сетью/VM |
 | Real-time | WebSockets (стриминг генерации) |
 | Мониторинг | APScheduler, Kubernetes Python client |
 | Сообщения | kafka-python, A2A/JSON-RPC 2.0 |
@@ -165,11 +160,9 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Отредактировать .env:
-#   APP_SECRET=<случайная строка>
-#   ADMIN_PASS=<пароль>
-#   DEEPSEEK_API_KEY=<ключ>      # или другой провайдер
+#   GIGACHAT_AUTH_KEY=<ключ>     # или настройте сертификат в UI
+#   DEEPSEEK_API_KEY=<ключ>      # или настройте сертификат в UI
 #   DATABASE_URL=sqlite:///./simpletest.db   # уже стоит по умолчанию
-#   COOKIE_SECURE=0              # для локального HTTP
 
 python3.12 -m uvicorn backend.main:app --reload --port 8000
 ```
@@ -209,22 +202,23 @@ npm run dev
 ## Конфигурация (`.env`)
 
 ```dotenv
-# Аутентификация
-APP_SECRET=<случайная_строка_32+_символа>
-ADMIN_USER=admin
-ADMIN_PASS=<минимум_12_символов_буква+цифра>
-SESSION_HOURS=24
-COOKIE_SECURE=0          # 1 на проде (HTTPS)
+# Пользовательской авторизации нет.
+# Все подключившиеся к VM работают с общими данными приложения.
 
 # LLM-провайдеры
 LLM_PROVIDER=gigachat
+GIGACHAT_AUTH_TYPE=api_key
 GIGACHAT_AUTH_KEY=       # Base64(client_id:client_secret)
 GIGACHAT_SCOPE=GIGACHAT_API_PERS
+GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
+GIGACHAT_AUTH_URL=https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+GIGACHAT_MODEL=GigaChat
+DEEPSEEK_AUTH_TYPE=api_key
 DEEPSEEK_API_KEY=
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-OLLAMA_MODEL=llama3
-LMSTUDIO_URL=http://localhost:1234/v1
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=deepseek-chat
+# Для режима certificate укажите *_CA_CERT_PATH, *_CLIENT_CERT_PATH, *_CLIENT_KEY_PATH.
+# Дополнительные LLM настраиваются в UI: Settings → Дополнительные LLM
 
 # База данных
 DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
@@ -233,7 +227,9 @@ DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
 KAFKA_BOOTSTRAP_SERVERS=
 KAFKA_SECURITY_PROTOCOL=PLAINTEXT
 
-# K8s Ревизор (стенды)
+# Ревизор (стенды)
+# Основная настройка: UI Settings → Ревизор — API стенды.
+# Старые env-переменные оставлены как fallback для статуса стендов.
 REVISOR_NT_URL=
 REVISOR_NT_TOKEN=
 REVISOR_MAJORCHECK_URL=
@@ -285,12 +281,12 @@ npm run build --prefix frontend   # пересборка фронтенда
 | `GET/POST/DELETE` | `/api/alerts/scripts` | CRUD скриптов алертов |
 | `POST` | `/api/alerts/send` | Отправка алерта |
 | `GET/POST/PUT/DELETE` | `/api/metrics/*` | CRUD систем и метрик |
-| `GET` | `/api/revisor/data` | Сравнение K8s-стендов |
+| `GET` | `/api/revisor/data` | Сравнение API-стендов Ревизора |
+| `GET` | `/api/revisor/stands` | Статус подключений Ревизора |
+| `GET/POST/DELETE` | `/api/settings/revisor-stands` | Конструктор API-стендов Ревизора |
 | `GET/PUT` | `/api/settings` | Настройки приложения |
-| `GET` | `/api/system/providers` | Статус LLM-провайдеров (публичный) |
-| `GET` | `/healthz` | Health check (публичный) |
-| `POST` | `/api/auth/login` | Вход |
-| `POST` | `/api/auth/register` | Регистрация |
+| `GET` | `/api/system/providers` | Статус LLM-провайдеров |
+| `GET` | `/healthz` | Health check |
 
 ---
 
@@ -301,7 +297,6 @@ npm run build --prefix frontend   # пересборка фронтенда
 - **feat:** Кнопки выбора модели отображаются только для провайдеров с зелёным статусом; автопереключение на первый доступный
 
 ### 2026-03-11
-- **feat:** Добавлены провайдеры OpenAI и Claude в LLM-клиент
 - **fix:** Убрана вкладка Kafka из шапки генератора метрик
 - **fix:** Тоггл «Критичный регресс» — исправлен двойной клик (label→div)
 

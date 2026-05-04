@@ -12,12 +12,14 @@ Kafka-настройки Метрик уже хранятся в metrics_setting
 в os.environ, чтобы LLMClient читал их через os.getenv() без изменений.
 """
 
+import json
 import os
+import re
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.postgres import get_db
@@ -30,18 +32,26 @@ router = APIRouter()
 _SECRET_FIELDS = {
     "gigachat_auth_key",
     "deepseek_api_key",
-    "openai_api_key",
-    "anthropic_api_key",
     "alerts_kafka_sasl_password",
+    "alerts_kafka_ssl_password",
     "kafka_sasl_password",
+    "kafka_ssl_password",
 }
 
 _MASKED_PLACEHOLDER = "●●●●●●●●●●●●"
+_CUSTOM_LLM_KEY = "custom_llm_providers"
+_REVISOR_STANDS_KEY = "revisor_api_stands"
+_AUTH_TYPE_FIELDS = {"gigachat_auth_type", "deepseek_auth_type"}
 
 # ── Дефолтные значения для новых ключей ──────────────────────────────────────
 
 _DEFAULTS: Dict[str, Dict[str, str]] = {
     # LLM
+    "gigachat_auth_type": {
+        "value":       os.getenv("GIGACHAT_AUTH_TYPE", "api_key"),
+        "description": "Тип подключения GigaChat: api_key или certificate",
+        "group":       "llm",
+    },
     "gigachat_auth_key": {
         "value":       os.getenv("GIGACHAT_AUTH_KEY", ""),
         "description": "GigaChat AUTH_KEY (Base64-строка из личного кабинета)",
@@ -52,9 +62,49 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Scope: GIGACHAT_API_PERS (физ.лица) или GIGACHAT_API_CORP (юр.лица)",
         "group":       "llm",
     },
+    "gigachat_base_url": {
+        "value":       os.getenv("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
+        "description": "Base URL GigaChat API",
+        "group":       "llm",
+    },
+    "gigachat_auth_url": {
+        "value":       os.getenv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"),
+        "description": "OAuth URL GigaChat для режима API key",
+        "group":       "llm",
+    },
+    "gigachat_model": {
+        "value":       os.getenv("GIGACHAT_MODEL", "GigaChat"),
+        "description": "Модель GigaChat",
+        "group":       "llm",
+    },
+    "gigachat_ca_cert_path": {
+        "value":       os.getenv("GIGACHAT_CA_CERT_PATH", ""),
+        "description": "Путь к CA bundle для GigaChat",
+        "group":       "llm",
+    },
+    "gigachat_client_cert_path": {
+        "value":       os.getenv("GIGACHAT_CLIENT_CERT_PATH", ""),
+        "description": "Путь к клиентскому сертификату GigaChat",
+        "group":       "llm",
+    },
+    "gigachat_client_key_path": {
+        "value":       os.getenv("GIGACHAT_CLIENT_KEY_PATH", ""),
+        "description": "Путь к приватному ключу клиентского сертификата GigaChat",
+        "group":       "llm",
+    },
+    "deepseek_auth_type": {
+        "value":       os.getenv("DEEPSEEK_AUTH_TYPE", "api_key"),
+        "description": "Тип подключения DeepSeek: api_key или certificate",
+        "group":       "llm",
+    },
     "deepseek_api_key": {
         "value":       os.getenv("DEEPSEEK_API_KEY", ""),
         "description": "DeepSeek API Key (platform.deepseek.com → API keys)",
+        "group":       "llm",
+    },
+    "deepseek_base_url": {
+        "value":       os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        "description": "Base URL DeepSeek/chat-completions endpoint",
         "group":       "llm",
     },
     "deepseek_model": {
@@ -62,40 +112,30 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Модель DeepSeek: deepseek-chat или deepseek-reasoner",
         "group":       "llm",
     },
-    "openai_api_key": {
-        "value":       os.getenv("OPENAI_API_KEY", ""),
-        "description": "OpenAI API Key (platform.openai.com → API keys)",
+    "deepseek_ca_cert_path": {
+        "value":       os.getenv("DEEPSEEK_CA_CERT_PATH", ""),
+        "description": "Путь к CA bundle для DeepSeek",
         "group":       "llm",
     },
-    "openai_model": {
-        "value":       os.getenv("OPENAI_MODEL", "gpt-4o"),
-        "description": "Модель OpenAI: gpt-4o, gpt-4o-mini, o1, o3-mini и др.",
+    "deepseek_client_cert_path": {
+        "value":       os.getenv("DEEPSEEK_CLIENT_CERT_PATH", ""),
+        "description": "Путь к клиентскому сертификату DeepSeek",
         "group":       "llm",
     },
-    "anthropic_api_key": {
-        "value":       os.getenv("ANTHROPIC_API_KEY", ""),
-        "description": "Anthropic API Key (console.anthropic.com → API keys)",
+    "deepseek_client_key_path": {
+        "value":       os.getenv("DEEPSEEK_CLIENT_KEY_PATH", ""),
+        "description": "Путь к приватному ключу клиентского сертификата DeepSeek",
         "group":       "llm",
     },
-    "anthropic_model": {
-        "value":       os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-        "description": "Модель Claude: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5 и др.",
-        "group":       "llm",
+    _CUSTOM_LLM_KEY: {
+        "value":       os.getenv("CUSTOM_LLM_PROVIDERS", "[]"),
+        "description": "Пользовательские chat/completions-compatible LLM подключения",
+        "group":       "llm_custom",
     },
-    "ollama_model": {
-        "value":       os.getenv("OLLAMA_MODEL", "llama3.1"),
-        "description": "Модель Ollama (должна быть загружена: ollama pull <model>)",
-        "group":       "llm",
-    },
-    "lmstudio_url": {
-        "value":       os.getenv("LMSTUDIO_URL", "http://localhost:1234/v1"),
-        "description": "LM Studio API URL (Local Server → копируй URL из интерфейса)",
-        "group":       "llm",
-    },
-    "lmstudio_model": {
-        "value":       os.getenv("LMSTUDIO_MODEL", "local-model"),
-        "description": "Идентификатор модели LM Studio",
-        "group":       "llm",
+    _REVISOR_STANDS_KEY: {
+        "value":       os.getenv("REVISOR_API_STANDS", "[]"),
+        "description": "API-подключения стендов Ревизора и выбранные методы сравнения",
+        "group":       "revisor",
     },
     # Kafka Алерты
     "alerts_kafka_bootstrap_servers": {
@@ -128,27 +168,52 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Путь к CA-сертификату (для SSL/SASL_SSL)",
         "group":       "kafka_alerts",
     },
+    "alerts_kafka_ssl_certfile": {
+        "value":       os.getenv("ALERTS_KAFKA_SSL_CERTFILE", ""),
+        "description": "Путь к клиентскому сертификату Kafka алертов (для mTLS)",
+        "group":       "kafka_alerts",
+    },
+    "alerts_kafka_ssl_keyfile": {
+        "value":       os.getenv("ALERTS_KAFKA_SSL_KEYFILE", ""),
+        "description": "Путь к приватному ключу клиентского сертификата Kafka алертов",
+        "group":       "kafka_alerts",
+    },
+    "alerts_kafka_ssl_password": {
+        "value":       os.getenv("ALERTS_KAFKA_SSL_PASSWORD", ""),
+        "description": "Пароль приватного ключа Kafka алертов, если ключ зашифрован",
+        "group":       "kafka_alerts",
+    },
 }
 
 # Маппинг: ключ настройки → env-переменная (для apply_saved_settings_to_env)
 _ENV_MAP: Dict[str, str] = {
+    "gigachat_auth_type":             "GIGACHAT_AUTH_TYPE",
     "gigachat_auth_key":              "GIGACHAT_AUTH_KEY",
     "gigachat_scope":                 "GIGACHAT_SCOPE",
+    "gigachat_base_url":              "GIGACHAT_BASE_URL",
+    "gigachat_auth_url":              "GIGACHAT_AUTH_URL",
+    "gigachat_model":                 "GIGACHAT_MODEL",
+    "gigachat_ca_cert_path":          "GIGACHAT_CA_CERT_PATH",
+    "gigachat_client_cert_path":      "GIGACHAT_CLIENT_CERT_PATH",
+    "gigachat_client_key_path":       "GIGACHAT_CLIENT_KEY_PATH",
+    "deepseek_auth_type":             "DEEPSEEK_AUTH_TYPE",
     "deepseek_api_key":               "DEEPSEEK_API_KEY",
+    "deepseek_base_url":              "DEEPSEEK_BASE_URL",
     "deepseek_model":                 "DEEPSEEK_MODEL",
-    "openai_api_key":                 "OPENAI_API_KEY",
-    "openai_model":                   "OPENAI_MODEL",
-    "anthropic_api_key":              "ANTHROPIC_API_KEY",
-    "anthropic_model":                "ANTHROPIC_MODEL",
-    "ollama_model":                   "OLLAMA_MODEL",
-    "lmstudio_url":                   "LMSTUDIO_URL",
-    "lmstudio_model":                 "LMSTUDIO_MODEL",
+    "deepseek_ca_cert_path":          "DEEPSEEK_CA_CERT_PATH",
+    "deepseek_client_cert_path":      "DEEPSEEK_CLIENT_CERT_PATH",
+    "deepseek_client_key_path":       "DEEPSEEK_CLIENT_KEY_PATH",
+    _CUSTOM_LLM_KEY:                  "CUSTOM_LLM_PROVIDERS",
+    _REVISOR_STANDS_KEY:              "REVISOR_API_STANDS",
     "alerts_kafka_bootstrap_servers": "ALERTS_KAFKA_BOOTSTRAP_SERVERS",
     "alerts_kafka_security_protocol": "ALERTS_KAFKA_SECURITY_PROTOCOL",
     "alerts_kafka_sasl_mechanism":    "ALERTS_KAFKA_SASL_MECHANISM",
     "alerts_kafka_sasl_username":     "ALERTS_KAFKA_SASL_USERNAME",
     "alerts_kafka_sasl_password":     "ALERTS_KAFKA_SASL_PASSWORD",
     "alerts_kafka_ssl_cafile":        "ALERTS_KAFKA_SSL_CAFILE",
+    "alerts_kafka_ssl_certfile":      "ALERTS_KAFKA_SSL_CERTFILE",
+    "alerts_kafka_ssl_keyfile":       "ALERTS_KAFKA_SSL_KEYFILE",
+    "alerts_kafka_ssl_password":      "ALERTS_KAFKA_SSL_PASSWORD",
 }
 
 
@@ -164,6 +229,88 @@ def _ensure_defaults(db: Session) -> None:
                 description=meta["description"],
             ))
     db.commit()
+
+
+def _load_custom_llm_providers(db: Session) -> list[dict]:
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _CUSTOM_LLM_KEY).first()
+    raw = row.value if row and row.value else "[]"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_custom_llm_providers(db: Session, providers: list[dict]) -> None:
+    raw = json.dumps(providers, ensure_ascii=False)
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _CUSTOM_LLM_KEY).first()
+    if row:
+        row.value = raw
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(MetricsSettings(
+            key=_CUSTOM_LLM_KEY,
+            value=raw,
+            description=_DEFAULTS[_CUSTOM_LLM_KEY]["description"],
+        ))
+    db.commit()
+    os.environ["CUSTOM_LLM_PROVIDERS"] = raw
+
+
+def _load_revisor_stands(db: Session) -> list[dict]:
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _REVISOR_STANDS_KEY).first()
+    raw = row.value if row and row.value else "[]"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_revisor_stands(db: Session, stands: list[dict]) -> None:
+    raw = json.dumps(stands, ensure_ascii=False)
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _REVISOR_STANDS_KEY).first()
+    if row:
+        row.value = raw
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(MetricsSettings(
+            key=_REVISOR_STANDS_KEY,
+            value=raw,
+            description=_DEFAULTS[_REVISOR_STANDS_KEY]["description"],
+        ))
+    db.commit()
+    os.environ["REVISOR_API_STANDS"] = raw
+
+
+def _slugify_provider_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return "custom_" + (slug or "llm")
+
+
+def _slugify_revisor_stand_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return "stand_" + (slug or "api")
+
+
+def _mask_custom_provider(provider: dict) -> dict:
+    item = dict(provider)
+    if item.get("api_key"):
+        item["api_key"] = _MASKED_PLACEHOLDER
+    return item
+
+
+def _mask_revisor_stand(stand: dict) -> dict:
+    item = dict(stand)
+    if item.get("token"):
+        item["token"] = _MASKED_PLACEHOLDER
+    return item
+
+
+def get_revisor_api_stands(db: Session) -> list[dict]:
+    """Public helper for backend/api/revisor.py."""
+    _ensure_defaults(db)
+    return _load_revisor_stands(db)
 
 
 def apply_saved_settings_to_env(db: Session) -> None:
@@ -183,8 +330,9 @@ def get_alerts_kafka_config(db: Session) -> dict:
     """
     Вернуть Kafka-конфиг для алертов из БД.
     Используется в alerts.py для передачи в KafkaClient.send(kafka_cfg=...).
-    Если bootstrap_servers пустой — вернуть None (fallback на os.getenv).
+    Если bootstrap_servers пустой — вернуть пустой dict (fallback на os.getenv).
     """
+    _ensure_defaults(db)
     rows = {r.key: r.value or "" for r in db.query(MetricsSettings).all()}
     bootstrap = rows.get("alerts_kafka_bootstrap_servers", "")
     if not bootstrap:
@@ -196,6 +344,9 @@ def get_alerts_kafka_config(db: Session) -> dict:
         "kafka_sasl_username":      rows.get("alerts_kafka_sasl_username", ""),
         "kafka_sasl_password":      rows.get("alerts_kafka_sasl_password", ""),
         "kafka_ssl_cafile":         rows.get("alerts_kafka_ssl_cafile", ""),
+        "kafka_ssl_certfile":       rows.get("alerts_kafka_ssl_certfile", ""),
+        "kafka_ssl_keyfile":        rows.get("alerts_kafka_ssl_keyfile", ""),
+        "kafka_ssl_password":       rows.get("alerts_kafka_ssl_password", ""),
     }
 
 
@@ -217,6 +368,8 @@ def get_settings(db: Session = Depends(get_db)) -> dict:
 
     # Наши ключи с group-метаданными
     for key, meta in _DEFAULTS.items():
+        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY):
+            continue
         row = rows.get(key)
         raw_value = (row.value or "") if row else meta["value"]
         is_secret = key in _SECRET_FIELDS
@@ -259,12 +412,18 @@ def save_settings(body: SettingsUpdate, db: Session = Depends(get_db)) -> dict:
     _ensure_defaults(db)
 
     for key, value in body.settings.items():
+        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY):
+            continue
         # Игнорировать placeholder маскировки
         if value == _MASKED_PLACEHOLDER:
             continue
         # Игнорировать пустые значения для секретных полей
         if key in _SECRET_FIELDS and not value.strip():
             continue
+        if key in _AUTH_TYPE_FIELDS:
+            value = value.strip().lower() or "api_key"
+            if value not in ("api_key", "certificate"):
+                raise HTTPException(422, f"{key} должен быть api_key или certificate")
 
         row = db.query(MetricsSettings).filter(MetricsSettings.key == key).first()
         if row:
@@ -282,5 +441,182 @@ def save_settings(body: SettingsUpdate, db: Session = Depends(get_db)) -> dict:
         val = rows.get(sk, "")
         if val:
             os.environ[ev] = val
+        elif sk in body.settings:
+            os.environ.pop(ev, None)
 
+    return {"ok": True}
+
+
+class CustomLlmProvider(BaseModel):
+    id: Optional[str] = None
+    name: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    auth_type: str = "api_key"  # api_key | certificate
+    api_key: str = ""
+    ca_cert_path: str = ""
+    client_cert_path: str = ""
+    client_key_path: str = ""
+
+
+@router.get("/api/settings/llm-providers")
+def list_custom_llm_providers(db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    providers = [_mask_custom_provider(p) for p in _load_custom_llm_providers(db)]
+    return {"providers": providers}
+
+
+@router.post("/api/settings/llm-providers")
+def upsert_custom_llm_provider(body: CustomLlmProvider, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    providers = _load_custom_llm_providers(db)
+
+    provider_id = (body.id or "").strip().lower() or _slugify_provider_id(body.name)
+    if provider_id in ("gigachat", "deepseek"):
+        provider_id = "custom_" + provider_id
+    if not provider_id.startswith("custom_"):
+        provider_id = "custom_" + provider_id
+
+    auth_type = body.auth_type.strip() or "api_key"
+    if auth_type not in ("api_key", "certificate"):
+        raise HTTPException(422, "auth_type должен быть api_key или certificate")
+
+    existing = next((p for p in providers if str(p.get("id", "")).lower() == provider_id), None)
+    api_key = body.api_key
+    if auth_type == "certificate":
+        api_key = ""
+    elif api_key == _MASKED_PLACEHOLDER and existing:
+        api_key = str(existing.get("api_key", ""))
+
+    item = {
+        "id": provider_id,
+        "name": body.name.strip(),
+        "base_url": body.base_url.rstrip("/"),
+        "model": body.model.strip(),
+        "auth_type": auth_type,
+        "api_key": api_key.strip(),
+        "ca_cert_path": body.ca_cert_path.strip(),
+        "client_cert_path": body.client_cert_path.strip(),
+        "client_key_path": body.client_key_path.strip(),
+    }
+
+    if existing:
+        providers = [item if str(p.get("id", "")).lower() == provider_id else p for p in providers]
+    else:
+        providers.append(item)
+
+    _save_custom_llm_providers(db, providers)
+    return {"ok": True, "provider": _mask_custom_provider(item)}
+
+
+@router.delete("/api/settings/llm-providers/{provider_id}")
+def delete_custom_llm_provider(provider_id: str, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    provider_id = provider_id.lower()
+    providers = [
+        p for p in _load_custom_llm_providers(db)
+        if str(p.get("id", "")).lower() != provider_id
+    ]
+    _save_custom_llm_providers(db, providers)
+    return {"ok": True}
+
+
+class RevisorMethodConfig(BaseModel):
+    enabled: bool = False
+    path: str = ""
+    label: str = ""
+
+
+class RevisorStandConfig(BaseModel):
+    id: Optional[str] = None
+    name: str = Field(min_length=1)
+    base_url: str = Field(min_length=1)
+    auth_type: str = "none"  # none | bearer | api_key
+    token: str = ""
+    api_key_header: str = "Authorization"
+    namespace: str = ""
+    enabled: bool = True
+    methods: Dict[str, RevisorMethodConfig] = Field(default_factory=dict)
+
+
+_REVISOR_METHOD_LABELS = {
+    "build": "Сборка",
+    "version": "Версия",
+    "status": "Статус",
+    "pods": "Поды",
+    "health": "Health",
+}
+
+
+@router.get("/api/settings/revisor-stands")
+def list_revisor_stands(db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    stands = [_mask_revisor_stand(s) for s in _load_revisor_stands(db)]
+    return {
+        "methods": [{"key": k, "label": v} for k, v in _REVISOR_METHOD_LABELS.items()],
+        "stands": stands,
+    }
+
+
+@router.post("/api/settings/revisor-stands")
+def upsert_revisor_stand(body: RevisorStandConfig, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    stands = _load_revisor_stands(db)
+
+    stand_id = (body.id or "").strip().lower() or _slugify_revisor_stand_id(body.name)
+    if not stand_id.startswith("stand_"):
+        stand_id = "stand_" + stand_id
+
+    auth_type = body.auth_type.strip().lower() or "none"
+    if auth_type not in ("none", "bearer", "api_key"):
+        raise HTTPException(422, "auth_type должен быть none, bearer или api_key")
+
+    existing = next((s for s in stands if str(s.get("id", "")).lower() == stand_id), None)
+    token = body.token
+    if auth_type == "none":
+        token = ""
+    elif token == _MASKED_PLACEHOLDER and existing:
+        token = str(existing.get("token", ""))
+
+    methods: dict[str, dict] = {}
+    for key, cfg in body.methods.items():
+        method_key = key.strip().lower()
+        if not method_key:
+            continue
+        methods[method_key] = {
+            "enabled": bool(cfg.enabled),
+            "path": cfg.path.strip(),
+            "label": cfg.label.strip() or _REVISOR_METHOD_LABELS.get(method_key, method_key),
+        }
+
+    item = {
+        "id": stand_id,
+        "name": body.name.strip(),
+        "base_url": body.base_url.rstrip("/"),
+        "auth_type": auth_type,
+        "token": token.strip(),
+        "api_key_header": body.api_key_header.strip() or "Authorization",
+        "namespace": body.namespace.strip(),
+        "enabled": bool(body.enabled),
+        "methods": methods,
+    }
+
+    if existing:
+        stands = [item if str(s.get("id", "")).lower() == stand_id else s for s in stands]
+    else:
+        stands.append(item)
+
+    _save_revisor_stands(db, stands)
+    return {"ok": True, "stand": _mask_revisor_stand(item)}
+
+
+@router.delete("/api/settings/revisor-stands/{stand_id}")
+def delete_revisor_stand(stand_id: str, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    stand_id = stand_id.lower()
+    stands = [
+        s for s in _load_revisor_stands(db)
+        if str(s.get("id", "")).lower() != stand_id
+    ]
+    _save_revisor_stands(db, stands)
     return {"ok": True}

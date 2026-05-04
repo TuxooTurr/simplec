@@ -151,7 +151,7 @@ def _generate_sync(cases: str, provider: str, test_type: str,
 async def generate_autotest(
     cases:           str = Form(...),
     feature:         str = Form(""),
-    provider:        str = Form("gigachat"),
+    provider:        str = Form(...),
     test_type:       str = Form("e2e"),
     project_context: str = Form(""),
 ):
@@ -159,6 +159,13 @@ async def generate_autotest(
     test_type: api | e2e | frontend | mobile | dt
     project_context: JSON-строка с данными проекта (deps, packages, структура)
     """
+    provider = provider.strip()
+    if not provider:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "LLM-провайдер не выбран", "llm_error": False},
+        )
+
     try:
         code = await asyncio.to_thread(
             _generate_sync, cases, provider, test_type, project_context

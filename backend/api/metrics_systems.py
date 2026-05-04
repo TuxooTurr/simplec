@@ -14,13 +14,12 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.auth import require_auth
 from db.postgres import get_db
 from db.metrics_models import (
     TestSystem, TestMetric,
     TestMetricValuesConfig, TestMetricBaselineConfig,
     TestMetricThresholdsConfig, TestMetricHealthConfig,
-    GenerationLog, MetricAccessRequest,
+    GenerationLog,
 )
 
 router = APIRouter()
@@ -229,19 +228,15 @@ def delete_system(system_id: int, db: Session = Depends(get_db)):
 @router.post("/api/metrics/systems/{system_id}/toggle")
 async def toggle_system(
     system_id: int,
-    username: str = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     from agents.metrics_scheduler import scheduler
     s = db.query(TestSystem).filter(TestSystem.id == system_id).first()
     if not s:
         raise HTTPException(404, "Услуга не найдена")
-    # Только владелец может остановить активную генерацию
-    if s.is_active and s.started_by and s.started_by != username:
-        raise HTTPException(403, f"Генерация запущена пользователем «{s.started_by}»")
     s.is_active = not s.is_active
     if s.is_active:
-        s.started_by = username
+        s.started_by = None
         s.started_at = datetime.now(timezone.utc)
     else:
         s.started_by = None
@@ -264,7 +259,6 @@ async def toggle_system(
 @router.post("/api/metrics/toggle-all")
 async def toggle_all(
     action: str = "start",
-    username: str = Depends(require_auth),
     db: Session = Depends(get_db),
 ):
     """action: 'start' | 'stop'"""
@@ -272,7 +266,7 @@ async def toggle_all(
     new_state = (action == "start")
     if new_state:
         now = datetime.now(timezone.utc)
-        db.query(TestSystem).update({"is_active": True, "started_by": username, "started_at": now})
+        db.query(TestSystem).update({"is_active": True, "started_by": None, "started_at": now})
     else:
         db.query(TestSystem).update({"is_active": False, "started_by": None, "started_at": None})
     db.query(TestMetric).update({"is_active": new_state})
@@ -504,95 +498,3 @@ def get_status(db: Session = Depends(get_db)):
         "totalMetrics":  total_metrics,
         "activeMetrics": active_metrics,
     }
-
-
-# ── Access Requests ───────────────────────────────────────────────────────────
-
-class AccessRequestCreate(BaseModel):
-    req_type: str   # stop | add
-    message:  Optional[str] = None
-
-
-@router.post("/api/metrics/systems/{system_id}/request")
-def create_access_request(
-    system_id: int,
-    body: AccessRequestCreate,
-    username: str = Depends(require_auth),
-    db: Session = Depends(get_db),
-):
-    """Отправить запрос владельцу активной генерации."""
-    s = db.query(TestSystem).filter(TestSystem.id == system_id).first()
-    if not s:
-        raise HTTPException(404, "Услуга не найдена")
-    if not s.is_active or not s.started_by:
-        raise HTTPException(400, "Генерация не запущена")
-    if s.started_by == username:
-        raise HTTPException(400, "Вы сами запустили эту генерацию")
-    if body.req_type not in ("stop", "add"):
-        raise HTTPException(422, "req_type должен быть 'stop' или 'add'")
-    req = MetricAccessRequest(
-        from_user=username,
-        to_user=s.started_by,
-        system_id=system_id,
-        req_type=body.req_type,
-        message=body.message,
-    )
-    db.add(req)
-    db.commit()
-    db.refresh(req)
-    return {
-        "id":         req.id,
-        "fromUser":   req.from_user,
-        "toUser":     req.to_user,
-        "systemId":   req.system_id,
-        "systemName": s.name,
-        "reqType":    req.req_type,
-        "message":    req.message,
-        "status":     req.status,
-        "createdAt":  req.created_at.isoformat(),
-    }
-
-
-@router.get("/api/metrics/requests")
-def get_my_requests(
-    username: str = Depends(require_auth),
-    db: Session = Depends(get_db),
-):
-    """Входящие запросы к текущему пользователю (pending)."""
-    rows = (
-        db.query(MetricAccessRequest)
-        .filter(MetricAccessRequest.to_user == username, MetricAccessRequest.status == "pending")
-        .order_by(MetricAccessRequest.created_at.desc())
-        .all()
-    )
-    result = []
-    for r in rows:
-        result.append({
-            "id":         r.id,
-            "fromUser":   r.from_user,
-            "systemId":   r.system_id,
-            "systemName": r.system.name if r.system else "",
-            "reqType":    r.req_type,
-            "message":    r.message,
-            "status":     r.status,
-            "createdAt":  r.created_at.isoformat(),
-        })
-    return {"requests": result, "total": len(result)}
-
-
-@router.patch("/api/metrics/requests/{req_id}/resolve")
-def resolve_request(
-    req_id: int,
-    username: str = Depends(require_auth),
-    db: Session = Depends(get_db),
-):
-    """Отметить запрос как обработанный."""
-    req = db.query(MetricAccessRequest).filter(MetricAccessRequest.id == req_id).first()
-    if not req:
-        raise HTTPException(404, "Запрос не найден")
-    if req.to_user != username:
-        raise HTTPException(403, "Нет доступа")
-    req.status = "resolved"
-    req.resolved_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"id": req_id, "status": "resolved"}

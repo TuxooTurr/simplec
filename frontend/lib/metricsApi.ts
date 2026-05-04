@@ -21,17 +21,6 @@ export interface System {
   createdAt:     string;
 }
 
-export interface AccessRequest {
-  id:         number;
-  fromUser:   string;
-  systemId:   number;
-  systemName: string;
-  reqType:    "stop" | "add";
-  message:    string | null;
-  status:     "pending" | "resolved";
-  createdAt:  string;
-}
-
 export interface SystemsResponse {
   systems:       System[];
   totalSystems:  number;
@@ -101,7 +90,7 @@ export type SettingsMap = Record<string, KafkaSetting>;
 // ── Systems ───────────────────────────────────────────────────────────────────
 
 export async function getSystems(): Promise<SystemsResponse> {
-  const r = await fetch(`${BASE}/systems`, { credentials: "include" });
+  const r = await fetch(`${BASE}/systems`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -109,7 +98,6 @@ export async function getSystems(): Promise<SystemsResponse> {
 export async function createSystem(body: { itServiceCi: string; name: string; monSystemCi: string }): Promise<System> {
   const r = await fetch(`${BASE}/systems`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -123,7 +111,6 @@ export async function createSystem(body: { itServiceCi: string; name: string; mo
 export async function updateSystem(id: number, body: { name?: string; monSystemCi?: string }): Promise<System> {
   const r = await fetch(`${BASE}/systems/${id}`, {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -135,25 +122,25 @@ export async function updateSystem(id: number, body: { name?: string; monSystemC
 }
 
 export async function deleteSystem(id: number): Promise<void> {
-  const r = await fetch(`${BASE}/systems/${id}`, { method: "DELETE", credentials: "include" });
+  const r = await fetch(`${BASE}/systems/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 export async function toggleSystem(id: number): Promise<{ id: number; isActive: boolean; startedBy: string | null; startedAt: string | null }> {
-  const r = await fetch(`${BASE}/systems/${id}/toggle`, { method: "POST", credentials: "include" });
+  const r = await fetch(`${BASE}/systems/${id}/toggle`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function toggleAll(action: "start" | "stop"): Promise<void> {
-  const r = await fetch(`${BASE}/toggle-all?action=${action}`, { method: "POST", credentials: "include" });
+  const r = await fetch(`${BASE}/toggle-all?action=${action}`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
 export async function getSystemMetrics(systemId: number): Promise<Metric[]> {
-  const r = await fetch(`${BASE}/systems/${systemId}/metrics`, { credentials: "include" });
+  const r = await fetch(`${BASE}/systems/${systemId}/metrics`);
   if (!r.ok) throw new Error(await r.text());
   const d = await r.json();
   return d.metrics;
@@ -162,7 +149,6 @@ export async function getSystemMetrics(systemId: number): Promise<Metric[]> {
 export async function createMetric(systemId: number, body: MetricCreate): Promise<Metric> {
   const r = await fetch(`${BASE}/systems/${systemId}/metrics`, {
     method: "POST",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -176,7 +162,6 @@ export async function createMetric(systemId: number, body: MetricCreate): Promis
 export async function updateMetric(id: number, body: MetricUpdate): Promise<Metric> {
   const r = await fetch(`${BASE}/metrics/${id}`, {
     method: "PATCH",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -188,12 +173,12 @@ export async function updateMetric(id: number, body: MetricUpdate): Promise<Metr
 }
 
 export async function deleteMetric(id: number): Promise<void> {
-  const r = await fetch(`${BASE}/metrics/${id}`, { method: "DELETE", credentials: "include" });
+  const r = await fetch(`${BASE}/metrics/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 export async function toggleMetric(id: number): Promise<{ id: number; isActive: boolean }> {
-  const r = await fetch(`${BASE}/metrics/${id}/toggle`, { method: "POST", credentials: "include" });
+  const r = await fetch(`${BASE}/metrics/${id}/toggle`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -201,7 +186,7 @@ export async function toggleMetric(id: number): Promise<{ id: number; isActive: 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 export async function getMetricsSettings(): Promise<SettingsMap> {
-  const r = await fetch(`${BASE}/settings`, { credentials: "include" });
+  const r = await fetch(`${BASE}/settings`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -209,7 +194,6 @@ export async function getMetricsSettings(): Promise<SettingsMap> {
 export async function saveMetricsSettings(settings: Record<string, string>): Promise<void> {
   const r = await fetch(`${BASE}/settings`, {
     method: "PUT",
-    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ settings }),
   });
@@ -317,14 +301,14 @@ export interface PreviewResult {
 // ── Builder API functions ─────────────────────────────────────────────────────
 
 export async function getMetricBuilder(id: number): Promise<BuilderConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/builder`, { credentials: "include" });
+  const r = await fetch(`${BASE}/metrics/${id}/builder`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function saveValuesConfig(id: number, data: ValuesConfig): Promise<ValuesConfig> {
   const r = await fetch(`${BASE}/metrics/${id}/values-config`, {
-    method: "PUT", credentials: "include",
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
@@ -334,7 +318,7 @@ export async function saveValuesConfig(id: number, data: ValuesConfig): Promise<
 
 export async function saveBaselineConfig(id: number, data: BaselineConfig): Promise<BaselineConfig> {
   const r = await fetch(`${BASE}/metrics/${id}/baseline-config`, {
-    method: "PUT", credentials: "include",
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
@@ -344,7 +328,7 @@ export async function saveBaselineConfig(id: number, data: BaselineConfig): Prom
 
 export async function saveThresholdsConfig(id: number, data: ThresholdsConfig): Promise<ThresholdsConfig> {
   const r = await fetch(`${BASE}/metrics/${id}/thresholds-config`, {
-    method: "PUT", credentials: "include",
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
@@ -354,7 +338,7 @@ export async function saveThresholdsConfig(id: number, data: ThresholdsConfig): 
 
 export async function saveHealthConfig(id: number, data: HealthConfig): Promise<HealthConfig> {
   const r = await fetch(`${BASE}/metrics/${id}/health-config`, {
-    method: "PUT", credentials: "include",
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
@@ -364,56 +348,21 @@ export async function saveHealthConfig(id: number, data: HealthConfig): Promise<
 
 export async function sendNow(id: number): Promise<SendNowResult> {
   const r = await fetch(`${BASE}/metrics/${id}/send-now`, {
-    method: "POST", credentials: "include",
+    method: "POST",
   });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function previewMessage(id: number): Promise<PreviewResult> {
-  const r = await fetch(`${BASE}/metrics/${id}/preview`, { credentials: "include" });
+  const r = await fetch(`${BASE}/metrics/${id}/preview`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function getMetricLogs(id: number, limit = 20): Promise<LogEntry[]> {
-  const r = await fetch(`${BASE}/metrics/${id}/logs?limit=${limit}`, { credentials: "include" });
+  const r = await fetch(`${BASE}/metrics/${id}/logs?limit=${limit}`);
   if (!r.ok) throw new Error(await r.text());
   const d = await r.json();
   return (d as { logs: LogEntry[] }).logs;
-}
-
-// ── Access Requests ───────────────────────────────────────────────────────────
-
-export async function createAccessRequest(
-  systemId: number,
-  reqType: "stop" | "add",
-  message: string,
-): Promise<AccessRequest> {
-  const r = await fetch(`${BASE}/systems/${systemId}/request`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ req_type: reqType, message }),
-  });
-  if (!r.ok) {
-    const d = await r.json().catch(() => ({}));
-    throw new Error((d as { detail?: string }).detail ?? "Ошибка отправки запроса");
-  }
-  return r.json();
-}
-
-export async function getMyRequests(): Promise<AccessRequest[]> {
-  const r = await fetch(`${BASE}/requests`, { credentials: "include" });
-  if (!r.ok) throw new Error(await r.text());
-  const d = await r.json();
-  return (d as { requests: AccessRequest[] }).requests;
-}
-
-export async function resolveRequest(reqId: number): Promise<void> {
-  const r = await fetch(`${BASE}/requests/${reqId}/resolve`, {
-    method: "PATCH",
-    credentials: "include",
-  });
-  if (!r.ok) throw new Error(await r.text());
 }

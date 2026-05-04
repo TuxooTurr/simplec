@@ -212,6 +212,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
 
   const doExecuteCore = useCallback(async () => {
     const sid = selectedIdRef.current;
+    if (!sid) return;
     const sel = scriptsRef.current.find(s => s.id === sid);
     if (!sel || executingRef.current) return;
 

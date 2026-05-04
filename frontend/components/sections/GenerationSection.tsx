@@ -51,6 +51,32 @@ interface HistEntry {
   loadedAsEtalon?: boolean;
 }
 
+interface ParsedFileAttachment {
+  name: string;
+  text: string;
+}
+
+function buildLlmSourceText(fieldText: string, files: ParsedFileAttachment[]): string {
+  const cleanFieldText = fieldText.trim();
+  const cleanFiles = files
+    .map((file, index) => {
+      const cleanText = file.text.trim();
+      if (!cleanText) return "";
+      return `### Файл ${index + 1}: ${file.name}\n${cleanText}`;
+    })
+    .filter(Boolean);
+
+  const parts: string[] = [];
+  if (cleanFieldText) {
+    parts.push(`ТРЕБОВАНИЕ ИЗ ПОЛЯ:\n${cleanFieldText}`);
+  }
+  if (cleanFiles.length > 0) {
+    parts.push(`СОДЕРЖИМОЕ ЗАГРУЖЕННЫХ ФАЙЛОВ, КОТОРОЕ ОБЯЗАТЕЛЬНО НУЖНО ИЗУЧИТЬ:\n${cleanFiles.join("\n\n")}`);
+  }
+
+  return parts.join("\n\n");
+}
+
 function stripMarkdown(text: string): string {
   return text
     .replace(/```[\w]*\n?/g, "").replace(/```/g, "")
@@ -150,7 +176,7 @@ export default function GenerationSection() {
   const [qaExpanded, setQaExpanded]   = useState(false);
   const [qaCopied, setQaCopied]       = useState(false);
   const [fileLoading, setFileLoading] = useState(false);
-  const [fileName, setFileName]       = useState("");
+  const [fileAttachments, setFileAttachments] = useState<ParsedFileAttachment[]>([]);
   const reqFileRef = useRef<HTMLInputElement>(null);
 
 
@@ -276,7 +302,7 @@ export default function GenerationSection() {
   }, [state, events]);
 
   const handleGenerate = () => {
-    const text = requirement.trim();
+    const text = buildLlmSourceText(requirement, fileAttachments);
     if (!text) return;
     genMetaRef.current = { feature: "", project: "", team: "", ke: "", depth, platform: ["Web"], requirement: text };
     historySavedRef.current = false;
@@ -289,10 +315,13 @@ export default function GenerationSection() {
     reset();
     setStage("input");
     setRequirement("");
+    setFileAttachments([]);
     setQaExpanded(false);
   };
 
   const currentDepth = DEPTHS.find((d) => d.id === depth);
+  const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
+  const hasGenerationSource = Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
 
   /* ─────────────── RENDER ─────────────── */
   return (
@@ -315,7 +344,7 @@ export default function GenerationSection() {
             )}
           </div>
           <p className="text-sm text-text-muted mb-4">
-            Вставьте требование или загрузите файл — AI создаст тест-кейсы для Zephyr Scale.
+            Вставьте требование или загрузите файлы — AI изучит все источники и создаст тест-кейсы для Zephyr Scale.
           </p>
 
           {/* Depth */}
@@ -360,19 +389,24 @@ export default function GenerationSection() {
             <input
               ref={reqFileRef}
               type="file"
+              multiple
               accept=".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt"
               className="hidden"
               onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
+                const files = Array.from(e.target.files ?? []);
+                if (files.length === 0) return;
                 setFileLoading(true);
-                setFileName(file.name);
                 try {
-                  const result = await parseFile(file);
-                  setRequirement(result.text);
+                  const parsedFiles = await Promise.all(files.map(async (file) => {
+                    const result = await parseFile(file);
+                    return {
+                      name: result.filename || file.name,
+                      text: result.text,
+                    };
+                  }));
+                  setFileAttachments((prev) => [...prev, ...parsedFiles]);
                 } catch (err) {
                   alert("Ошибка: " + String(err));
-                  setFileName("");
                 } finally {
                   setFileLoading(false);
                   if (e.target) e.target.value = "";
@@ -392,22 +426,28 @@ export default function GenerationSection() {
                     ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
                     : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
                 </button>
-                {fileName && !fileLoading && (
-                  <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+                {fileAttachments.length > 0 && !fileLoading && fileAttachments.map((file, index) => (
+                  <span
+                    key={`${file.name}-${index}`}
+                    title={`${file.name}: ${file.text.length.toLocaleString()} симв. попадет в LLM`}
+                    className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1"
+                  >
                     <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
-                    {fileName}
+                    <span className="truncate">{file.name}</span>
                     <button
                       type="button"
-                      onClick={() => { setFileName(""); setRequirement(""); }}
+                      onClick={() => setFileAttachments((prev) => prev.filter((_, i) => i !== index))}
                       className="ml-0.5 hover:text-red-500 transition-colors"
+                      aria-label={`Убрать файл ${file.name}`}
                     >
                       <X className="w-3 h-3" />
                     </button>
                   </span>
-                )}
+                ))}
               </div>
               <span className="text-xs text-text-muted tabular-nums">
-                {requirement.length.toLocaleString()} симв.
+                {requirement.length.toLocaleString()} симв. в поле
+                {fileAttachments.length > 0 && ` + ${fileChars.toLocaleString()} симв. из файлов`}
               </span>
             </div>
           </div>
@@ -415,10 +455,10 @@ export default function GenerationSection() {
           <div className="flex justify-end">
             <button
               onClick={handleGenerate}
-              disabled={!requirement.trim()}
+              disabled={!hasGenerationSource}
               className={`flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold
                 hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md
-                ${!requirement.trim() ? "opacity-40" : ""}`}
+                ${!hasGenerationSource ? "opacity-40" : ""}`}
             >
               <Sparkles className="w-4 h-4" />
               Генерировать тест-кейсы

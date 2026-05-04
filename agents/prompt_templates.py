@@ -123,9 +123,9 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
 """,
             example_steps="""
 <step index="0">
-  <description><![CDATA[Подготовка: авторизоваться в системе]]></description>
-  <testData><![CDATA[login: test_user, password: Test123!, URL: /login]]></testData>
-  <expectedResult><![CDATA[Пользователь авторизован, главная страница открыта]]></expectedResult>
+  <description><![CDATA[Подготовка: открыть рабочий стенд приложения]]></description>
+  <testData><![CDATA[URL: https://example.ru/app]]></testData>
+  <expectedResult><![CDATA[Рабочая область приложения открыта]]></expectedResult>
 </step>
 <step index="1">
   <description><![CDATA[Открыть форму создания платежа]]></description>

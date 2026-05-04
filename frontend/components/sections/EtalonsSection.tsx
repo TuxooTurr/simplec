@@ -217,7 +217,7 @@ function TestCasesTab() {
           <div className="mb-3">
             <label className={`block ${LABEL_CLS} mb-1.5`}>Название <span className="normal-case font-normal text-text-muted/60">(необязательно)</span></label>
             <input value={addName} onChange={(e) => setAddName(e.target.value)}
-              className={INPUT_CLS} placeholder="Например: Авторизация через СберID..." />
+              className={INPUT_CLS} placeholder="Например: Оплата картой..." />
           </div>
 
           <div className="mb-3">
@@ -520,13 +520,13 @@ function AutotestsTab() {
           <div className="mb-3">
             <label className={`block ${LABEL_CLS} mb-1.5`}>Название <span className="normal-case font-normal text-text-muted/60">(необязательно)</span></label>
             <input value={addName} onChange={(e) => setAddName(e.target.value)}
-              className={INPUT_CLS} placeholder="Например: Авторизация — позитивный сценарий..." />
+              className={INPUT_CLS} placeholder="Например: Оплата картой — позитивный сценарий..." />
           </div>
 
           <div className="mb-4">
             <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
             <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
-              className={INPUT_CLS} placeholder="Авторизация, оплата..." />
+              className={INPUT_CLS} placeholder="Каталог, оплата..." />
           </div>
 
           <div className="grid grid-cols-2 gap-3 mb-4 items-start">
@@ -750,7 +750,7 @@ function DefectsTab() {
           <div className="mb-4">
             <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
             <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
-              className={INPUT_CLS} placeholder="Авторизация, оплата..." />
+              className={INPUT_CLS} placeholder="Каталог, оплата..." />
           </div>
 
           <div className="grid grid-cols-2 gap-3 mb-4">

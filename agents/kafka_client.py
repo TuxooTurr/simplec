@@ -8,6 +8,9 @@
   KAFKA_SASL_USERNAME      — логин
   KAFKA_SASL_PASSWORD      — пароль
   KAFKA_SSL_CAFILE         — путь к CA-файлу
+  KAFKA_SSL_CERTFILE       — путь к клиентскому сертификату
+  KAFKA_SSL_KEYFILE        — путь к приватному ключу клиента
+  KAFKA_SSL_PASSWORD       — пароль приватного ключа, если он зашифрован
 
 Или через явный kafka_cfg: dict (приоритет над env).
 """
@@ -19,15 +22,14 @@ from typing import Optional
 class KafkaClient:
 
     @staticmethod
-    def _build_producer(kafka_cfg: Optional[dict] = None):
-        from kafka import KafkaProducer  # type: ignore
-
+    def _build_producer_kwargs(kafka_cfg: Optional[dict] = None) -> dict:
         cfg = kafka_cfg or {}
         servers  = cfg.get("kafka_bootstrap_servers") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
         protocol = (cfg.get("kafka_security_protocol") or os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")).upper()
+        bootstrap_servers = [s.strip() for s in str(servers).split(",") if s.strip()] or ["localhost:9092"]
 
         kwargs: dict = {
-            "bootstrap_servers": [s.strip() for s in servers.split(",")],
+            "bootstrap_servers": bootstrap_servers,
             "security_protocol": protocol,
             "request_timeout_ms": 10_000,
             "max_block_ms": 10_000,
@@ -45,8 +47,23 @@ class KafkaClient:
             cafile = cfg.get("kafka_ssl_cafile") or os.getenv("KAFKA_SSL_CAFILE", "")
             if cafile:
                 kwargs["ssl_cafile"] = cafile
+            certfile = cfg.get("kafka_ssl_certfile") or os.getenv("KAFKA_SSL_CERTFILE", "")
+            if certfile:
+                kwargs["ssl_certfile"] = certfile
+            keyfile = cfg.get("kafka_ssl_keyfile") or os.getenv("KAFKA_SSL_KEYFILE", "")
+            if keyfile:
+                kwargs["ssl_keyfile"] = keyfile
+            ssl_password = cfg.get("kafka_ssl_password") or os.getenv("KAFKA_SSL_PASSWORD", "")
+            if ssl_password:
+                kwargs["ssl_password"] = ssl_password
 
-        return KafkaProducer(**kwargs)
+        return kwargs
+
+    @staticmethod
+    def _build_producer(kafka_cfg: Optional[dict] = None):
+        from kafka import KafkaProducer  # type: ignore
+
+        return KafkaProducer(**KafkaClient._build_producer_kwargs(kafka_cfg))
 
     @classmethod
     def send(

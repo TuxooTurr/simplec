@@ -3,7 +3,7 @@ WebSocket стриминг генерации + REST парсинг файлов
 
 WebSocket протокол:
   Client → Server:
-    {"action": "start",  "requirement": "...", "feature": "...", "depth": "smoke", "provider": "gigachat"}
+    {"action": "start",  "requirement": "...", "feature": "...", "depth": "smoke", "provider": "<selected-provider>"}
     {"action": "export", "cases": [...], "qa_doc": "...", "project": "...", ...}
 
   Server → Client:
@@ -28,7 +28,6 @@ from typing import List
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
-from backend.auth import ws_require_auth
 
 router = APIRouter()
 
@@ -121,11 +120,14 @@ async def _handle_generation(ws: WebSocket, data: dict):
     raw_requirement = data.get("requirement", "")
     raw_feature = data.get("feature", "Feature")
     depth = data.get("depth", "smoke")
-    provider = data.get("provider", "gigachat")
+    provider = str(data.get("provider") or "").strip()
     platform = data.get("platform", "W")
 
     if not raw_requirement:
         await ws.send_json({"type": "error", "message": "Требование не может быть пустым"})
+        return
+    if not provider:
+        await ws.send_json({"type": "error", "message": "LLM-провайдер не выбран"})
         return
 
     req_result = sanitize_input(raw_requirement)
@@ -198,7 +200,7 @@ async def _handle_export(ws: WebSocket, data: dict):
     domain = data.get("domain", "")
     folder = data.get("folder", "Новая ТМ")
     use_llm = data.get("use_llm", False)
-    provider = data.get("provider", "gigachat")
+    provider = str(data.get("provider") or "").strip()
     crit_regress = data.get("crit_regress", False)
 
     try:
@@ -207,6 +209,9 @@ async def _handle_export(ws: WebSocket, data: dict):
         from agents.layered_generator import LayeredGenerator
 
         if use_llm:
+            if not provider:
+                await ws.send_json({"type": "error", "message": "LLM-провайдер не выбран"})
+                return
             from agents.llm_client import LLMClient
             llm = LLMClient(provider=provider)
             gen = LayeredGenerator(llm)
@@ -234,9 +239,6 @@ async def _handle_export(ws: WebSocket, data: dict):
 
 @router.websocket("/api/ws/generation")
 async def ws_generation(websocket: WebSocket):
-    username = await ws_require_auth(websocket)
-    if not username:
-        return
     await websocket.accept()
     try:
         while True:

@@ -31,23 +31,18 @@ if _CERTS_BUNDLE.exists():
     _os.environ.setdefault("CURL_CA_BUNDLE",     _CERTS_PATH)
 # ─────────────────────────────────────────────────────────────────────────────
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from backend.api import (
-    auth, generation, etalons, bugs, system, alerts, kernel,
+    generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
-    revisor, autotests_gen, app_settings,
+    revisor, autotests_gen, autotest_runs, app_settings,
 )
-from backend.auth import require_auth
-from db.user_store import ensure_default_user
 from db.postgres import init_db
-
-# Создать пользователя по умолчанию если база пуста
-ensure_default_user()
 
 # Инициализировать таблицы PostgreSQL (идемпотентно)
 try:
@@ -72,11 +67,20 @@ async def lifespan(app_: FastAPI):
         await scheduler.start_all()
     except Exception as _e:
         warnings.warn(f"Scheduler failed to start: {_e}")
+    # Startup: запустить монитор автозапуска автотестов
+    try:
+        await autotest_runs.start_autorun_monitor()
+    except Exception as _e:
+        warnings.warn(f"Autotest autorun monitor failed to start: {_e}")
     yield
     # Shutdown: остановить все задачи
     try:
         from agents.metrics_scheduler import scheduler
         await scheduler.stop_all()
+    except Exception:
+        pass
+    try:
+        await autotest_runs.stop_autorun_monitor()
     except Exception:
         pass
 
@@ -113,31 +117,26 @@ app.add_middleware(
         "https://www.simpletest.pro",
         "http://localhost:3000",
     ],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "Cookie", "X-Requested-With"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
-# ─── Открытые роутеры (без авторизации) ─────────────────────────────────────
-app.include_router(auth.router)
-
-# /healthz и /api/system/providers — публичные (для nginx health check и LLM статуса на login)
+# ─── Роутеры приложения ──────────────────────────────────────────────────────
+# Авторизации в приложении нет: проект работает в закрытой корпоративной сети.
 app.include_router(system.router)
-
-# ─── Защищённые роутеры (require_auth) ──────────────────────────────────────
-_auth_dep = [Depends(require_auth)]
-
-app.include_router(generation.router,       dependencies=_auth_dep)
-app.include_router(etalons.router,          dependencies=_auth_dep)
-app.include_router(bugs.router,             dependencies=_auth_dep)
-app.include_router(alerts.router,           dependencies=_auth_dep)
-app.include_router(kernel.router,           dependencies=_auth_dep)
-app.include_router(metrics_systems.router,  dependencies=_auth_dep)
-app.include_router(metrics_settings.router, dependencies=_auth_dep)
-app.include_router(metrics_builder.router,  dependencies=_auth_dep)
-app.include_router(revisor.router,          dependencies=_auth_dep)
-app.include_router(autotests_gen.router,    dependencies=_auth_dep)
-app.include_router(app_settings.router,     dependencies=_auth_dep)
+app.include_router(generation.router)
+app.include_router(etalons.router)
+app.include_router(bugs.router)
+app.include_router(alerts.router)
+app.include_router(kernel.router)
+app.include_router(metrics_systems.router)
+app.include_router(metrics_settings.router)
+app.include_router(metrics_builder.router)
+app.include_router(revisor.router)
+app.include_router(autotests_gen.router)
+app.include_router(autotest_runs.router)
+app.include_router(app_settings.router)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

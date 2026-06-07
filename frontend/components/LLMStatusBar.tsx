@@ -49,7 +49,7 @@ export default function LLMStatusBar() {
       <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Статус LLM</p>
       <div className="flex flex-col gap-1.5">
         {providers.map((p) => {
-          const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-gray-300/30", label: "—" };
+          const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-bg-muted/30", label: "—" };
           const isPulsing = p.status === "green" || p.status === "yellow";
           const isActive = provider === p.id;
 
@@ -63,8 +63,8 @@ export default function LLMStatusBar() {
                 flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs
                 transition-colors text-left
                 ${isActive
-                  ? "border-primary bg-indigo-50 text-primary"
-                  : "border-transparent text-text-main hover:border-border-main hover:bg-gray-50"}
+                  ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                  : "border-transparent text-text-main hover:border-border-main hover:bg-[var(--color-sidebar-hover)]"}
                 cursor-pointer
               `}
             >

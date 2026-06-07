@@ -9,12 +9,15 @@ interface CaseCardProps {
   case_: Case;
   className?: string;
   style?: React.CSSProperties;
+  selectable?: boolean;
+  selected?: boolean;
+  onToggle?: () => void;
 }
 
 const PRIORITY_CONFIG: Record<string, { bg: string; text: string; dot: string }> = {
   High:   { bg: "bg-red-50",   text: "text-red-700",  dot: "bg-red-400" },
   Normal: { bg: "bg-blue-50",  text: "text-blue-700", dot: "bg-blue-400" },
-  Low:    { bg: "bg-gray-50",  text: "text-gray-600", dot: "bg-gray-400" },
+  Low:    { bg: "bg-gray-50",  text: "text-text-muted", dot: "bg-gray-400" },
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -32,7 +35,7 @@ const STEP_FIELDS = [
   { key: "db",        label: "БД",      Icon: Database,     color: "text-green-600" },
 ] as const;
 
-export default function CaseCard({ index, case_, className = "", style }: CaseCardProps) {
+export default function CaseCard({ index, case_, className = "", style, selectable, selected, onToggle }: CaseCardProps) {
   const [expanded, setExpanded] = useState(false);
   const prio = case_.priority ?? "Normal";
   const type = case_.case_type ?? "positive";
@@ -40,15 +43,25 @@ export default function CaseCard({ index, case_, className = "", style }: CaseCa
 
   return (
     <div
-      className={`bg-white border border-border-main rounded-xl mb-2.5 overflow-hidden
+      className={`bg-bg-card border border-border-main rounded-xl mb-2.5 overflow-hidden
         transition-shadow duration-200 hover:shadow-sm animate-slide-up ${className}`}
       style={style}
     >
       {/* Header */}
       <button
         onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50/70 transition-colors"
+        className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-bg-subtle/70 transition-colors
+          ${selectable && !selected ? "opacity-50" : ""}`}
       >
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => { e.stopPropagation(); onToggle?.(); }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-4 h-4 rounded border-border-main text-primary focus:ring-primary/30 flex-shrink-0 cursor-pointer"
+          />
+        )}
         <span className="text-xs text-text-muted font-mono w-5 flex-shrink-0 text-center">{index}</span>
 
         <span className={`flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0 ${prioCfg.bg} ${prioCfg.text}`}>

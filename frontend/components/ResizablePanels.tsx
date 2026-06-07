@@ -44,13 +44,13 @@ function PanelChrome({
       onDrop={onDrop}
     >
       {/* Sticky header */}
-      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-2 border-b border-border-main bg-white/90 backdrop-blur-sm flex-shrink-0">
+      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-2 border-b border-border-main bg-bg-card/90 backdrop-blur-sm flex-shrink-0">
         <span className="text-sm font-semibold text-text-secondary tracking-wide">
           {title}
         </span>
         <button
           onClick={onClose}
-          className="rounded-md p-1 hover:bg-gray-100 text-text-muted hover:text-text-primary transition-colors"
+          className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-primary transition-colors"
           title="Закрыть панель"
         >
           <X className="w-4 h-4" />

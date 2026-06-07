@@ -72,7 +72,8 @@ export interface RevisorData {
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
-  const r = await fetch(path);
+  const { authHeaders } = await import("./authApi");
+  const r = await fetch(path, { headers: authHeaders() });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

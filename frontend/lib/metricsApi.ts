@@ -3,7 +3,16 @@
  * Вынесены отдельно от api.ts чтобы не раздувать общий файл.
  */
 
+import { authHeaders } from "./authApi";
+
 const BASE = "/api/metrics";
+
+function af(url: string, init?: RequestInit): Promise<Response> {
+  const ah = authHeaders();
+  const h = new Headers(init?.headers);
+  for (const [k, v] of Object.entries(ah)) if (!h.has(k)) h.set(k, v);
+  return fetch(url, { ...init, headers: h });
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -90,13 +99,13 @@ export type SettingsMap = Record<string, KafkaSetting>;
 // ── Systems ───────────────────────────────────────────────────────────────────
 
 export async function getSystems(): Promise<SystemsResponse> {
-  const r = await fetch(`${BASE}/systems`);
+  const r = await af(`${BASE}/systems`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function createSystem(body: { itServiceCi: string; name: string; monSystemCi: string }): Promise<System> {
-  const r = await fetch(`${BASE}/systems`, {
+  const r = await af(`${BASE}/systems`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -109,7 +118,7 @@ export async function createSystem(body: { itServiceCi: string; name: string; mo
 }
 
 export async function updateSystem(id: number, body: { name?: string; monSystemCi?: string }): Promise<System> {
-  const r = await fetch(`${BASE}/systems/${id}`, {
+  const r = await af(`${BASE}/systems/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -122,32 +131,32 @@ export async function updateSystem(id: number, body: { name?: string; monSystemC
 }
 
 export async function deleteSystem(id: number): Promise<void> {
-  const r = await fetch(`${BASE}/systems/${id}`, { method: "DELETE" });
+  const r = await af(`${BASE}/systems/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 export async function toggleSystem(id: number): Promise<{ id: number; isActive: boolean; startedBy: string | null; startedAt: string | null }> {
-  const r = await fetch(`${BASE}/systems/${id}/toggle`, { method: "POST" });
+  const r = await af(`${BASE}/systems/${id}/toggle`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function toggleAll(action: "start" | "stop"): Promise<void> {
-  const r = await fetch(`${BASE}/toggle-all?action=${action}`, { method: "POST" });
+  const r = await af(`${BASE}/toggle-all?action=${action}`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 // ── Metrics ───────────────────────────────────────────────────────────────────
 
 export async function getSystemMetrics(systemId: number): Promise<Metric[]> {
-  const r = await fetch(`${BASE}/systems/${systemId}/metrics`);
+  const r = await af(`${BASE}/systems/${systemId}/metrics`);
   if (!r.ok) throw new Error(await r.text());
   const d = await r.json();
   return d.metrics;
 }
 
 export async function createMetric(systemId: number, body: MetricCreate): Promise<Metric> {
-  const r = await fetch(`${BASE}/systems/${systemId}/metrics`, {
+  const r = await af(`${BASE}/systems/${systemId}/metrics`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -160,7 +169,7 @@ export async function createMetric(systemId: number, body: MetricCreate): Promis
 }
 
 export async function updateMetric(id: number, body: MetricUpdate): Promise<Metric> {
-  const r = await fetch(`${BASE}/metrics/${id}`, {
+  const r = await af(`${BASE}/metrics/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -173,12 +182,12 @@ export async function updateMetric(id: number, body: MetricUpdate): Promise<Metr
 }
 
 export async function deleteMetric(id: number): Promise<void> {
-  const r = await fetch(`${BASE}/metrics/${id}`, { method: "DELETE" });
+  const r = await af(`${BASE}/metrics/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error(await r.text());
 }
 
 export async function toggleMetric(id: number): Promise<{ id: number; isActive: boolean }> {
-  const r = await fetch(`${BASE}/metrics/${id}/toggle`, { method: "POST" });
+  const r = await af(`${BASE}/metrics/${id}/toggle`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -186,13 +195,13 @@ export async function toggleMetric(id: number): Promise<{ id: number; isActive: 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
 export async function getMetricsSettings(): Promise<SettingsMap> {
-  const r = await fetch(`${BASE}/settings`);
+  const r = await af(`${BASE}/settings`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function saveMetricsSettings(settings: Record<string, string>): Promise<void> {
-  const r = await fetch(`${BASE}/settings`, {
+  const r = await af(`${BASE}/settings`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ settings }),
@@ -274,6 +283,7 @@ export interface SendNowResult {
   value?:               number;
   baseline?:            number | null;
   health?:              number | null;
+  accumulated_points?:  number;
   // DATA
   data_offset?:         number | null;
   data_partition?:      number | null;
@@ -293,6 +303,7 @@ export interface PreviewResult {
   value:                    number;
   baseline:                 number | null;
   health:                   number | null;
+  accumulated_points:       number;
   data_message_json:        string;
   metadata_message_json:    string;
   thresholds_message_json:  string | null;
@@ -301,13 +312,13 @@ export interface PreviewResult {
 // ── Builder API functions ─────────────────────────────────────────────────────
 
 export async function getMetricBuilder(id: number): Promise<BuilderConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/builder`);
+  const r = await af(`${BASE}/metrics/${id}/builder`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function saveValuesConfig(id: number, data: ValuesConfig): Promise<ValuesConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/values-config`, {
+  const r = await af(`${BASE}/metrics/${id}/values-config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -317,7 +328,7 @@ export async function saveValuesConfig(id: number, data: ValuesConfig): Promise<
 }
 
 export async function saveBaselineConfig(id: number, data: BaselineConfig): Promise<BaselineConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/baseline-config`, {
+  const r = await af(`${BASE}/metrics/${id}/baseline-config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -327,7 +338,7 @@ export async function saveBaselineConfig(id: number, data: BaselineConfig): Prom
 }
 
 export async function saveThresholdsConfig(id: number, data: ThresholdsConfig): Promise<ThresholdsConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/thresholds-config`, {
+  const r = await af(`${BASE}/metrics/${id}/thresholds-config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -337,7 +348,7 @@ export async function saveThresholdsConfig(id: number, data: ThresholdsConfig): 
 }
 
 export async function saveHealthConfig(id: number, data: HealthConfig): Promise<HealthConfig> {
-  const r = await fetch(`${BASE}/metrics/${id}/health-config`, {
+  const r = await af(`${BASE}/metrics/${id}/health-config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -347,7 +358,7 @@ export async function saveHealthConfig(id: number, data: HealthConfig): Promise<
 }
 
 export async function sendNow(id: number): Promise<SendNowResult> {
-  const r = await fetch(`${BASE}/metrics/${id}/send-now`, {
+  const r = await af(`${BASE}/metrics/${id}/send-now`, {
     method: "POST",
   });
   if (!r.ok) throw new Error(await r.text());
@@ -355,13 +366,13 @@ export async function sendNow(id: number): Promise<SendNowResult> {
 }
 
 export async function previewMessage(id: number): Promise<PreviewResult> {
-  const r = await fetch(`${BASE}/metrics/${id}/preview`);
+  const r = await af(`${BASE}/metrics/${id}/preview`);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
 
 export async function getMetricLogs(id: number, limit = 20): Promise<LogEntry[]> {
-  const r = await fetch(`${BASE}/metrics/${id}/logs?limit=${limit}`);
+  const r = await af(`${BASE}/metrics/${id}/logs?limit=${limit}`);
   if (!r.ok) throw new Error(await r.text());
   const d = await r.json();
   return (d as { logs: LogEntry[] }).logs;

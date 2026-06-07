@@ -80,7 +80,7 @@ class LayeredGenerator:
     # ========================================================
     # LAYER 1: QA Documentation
     # ========================================================
-    def generate_qa_doc(self, requirement, feature=""):
+    def generate_qa_doc(self, requirement, feature="", context_docs=""):
         from agents.llm_client import Message
         from agents.prompt_templates import PromptTemplateManager
 
@@ -88,10 +88,20 @@ class LayeredGenerator:
         type_names = PromptTemplateManager.get_template_names()
         types_str = ", ".join([type_names.get(t, t) for t in detected_types])
 
+        context_block = ""
+        if context_docs:
+            context_block = (
+                "КОНТЕКСТНЫЕ ДОКУМЕНТЫ (используй как дополнительный источник информации, "
+                "эти документы содержат требования, спецификации и другую документацию проекта):\n"
+                + context_docs + "\n\n"
+                "---\n\n"
+            )
+
         prompt = (
             "Ты — старший тестировщик и системный аналитик. Твоя задача — получить сырую техническую документацию "
             "(системные требования, спецификации, confluence-страницы, ТЗ) и преобразовать её в структурированный, понятный документ.\n\n"
-            "ФИЧА: " + feature + "\n"
+            + context_block
+            + "ФИЧА: " + feature + "\n"
             "ОПРЕДЕЛЁННЫЙ ТИП: " + types_str + "\n\n"
             "ДОКУМЕНТАЦИЯ:\n" + requirement + "\n\n"
             "---\n\n"

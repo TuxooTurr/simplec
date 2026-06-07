@@ -1,0 +1,16 @@
+{
+  "capabilities": [
+    {
+      "platformName": "iOS",
+      "appium:automationName": "XCUITest",
+      "appium:deviceName": "${DEVICE_NAME}",
+      "appium:platformVersion": "${PLATFORM_VERSION}",
+      "appium:udid": "${UDID}"
+    }
+  ],
+  "configuration": {
+    "url": "http://${AGENT_HOST}:${APPIUM_PORT}/wd/hub",
+    "maxSessions": 1,
+    "timeout": 1800
+  }
+}

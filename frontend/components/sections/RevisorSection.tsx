@@ -12,15 +12,16 @@ import {
 /* ── Shared style constants (same as Metrics/Alerts/Generation) ── */
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm " +
+  "bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 " +
   "focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 " +
-  "transition-shadow duration-150 bg-white";
+  "transition-shadow duration-150";
 
 /* ── Status colour maps ──────────────────────────────────────────── */
 const POD_DOT: Record<PodStatus, string> = {
   green:  "bg-green-500",
   yellow: "bg-amber-400",
   red:    "bg-red-500",
-  grey:   "bg-gray-300",
+  grey:   "bg-bg-muted",
 };
 
 // Left border accent on the service-name cell
@@ -34,7 +35,7 @@ const ROW_ACCENT: Record<"green" | "yellow" | "grey", string> = {
 const ROW_BADGE: Record<"green" | "yellow" | "grey", { cls: string; label: string }> = {
   green:  { cls: "text-green-700  bg-green-50  border border-green-200",  label: "Синхр." },
   yellow: { cls: "text-amber-700  bg-amber-50  border border-amber-200",  label: "Расх."  },
-  grey:   { cls: "text-gray-500   bg-gray-50   border border-gray-200",   label: "—"       },
+  grey:   { cls: "text-text-muted   bg-bg-subtle   border border-border-main",   label: "—"       },
 };
 
 /* ── Majority version helper ─────────────────────────────────────── */
@@ -50,7 +51,7 @@ const METHOD_BADGE: Record<PodStatus, string> = {
   green:  "bg-green-50 text-green-700 border-green-200",
   yellow: "bg-amber-50 text-amber-700 border-amber-200",
   red:    "bg-red-50 text-red-700 border-red-200",
-  grey:   "bg-gray-50 text-gray-500 border-gray-200",
+  grey:   "bg-bg-subtle text-text-muted border-border-main",
 };
 
 function MethodLine({ method }: { method: RevisorMethodResult }) {
@@ -234,14 +235,14 @@ export default function RevisorSection() {
           </h1>
           <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
             {/* Interval pills */}
-            <div className="flex items-center gap-1 bg-gray-100/80 rounded-lg p-1">
+            <div className="flex items-center gap-1 bg-bg-muted/80 rounded-lg p-1">
               {INTERVALS.map(iv => (
                 <button
                   key={iv.secs}
                   onClick={() => setIntervalSecs(iv.secs)}
                   className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all duration-150 ${
                     intervalSecs === iv.secs
-                      ? "bg-white text-text-main shadow-sm"
+                      ? "bg-bg-card text-text-main shadow-sm"
                       : "text-text-muted hover:text-text-main"
                   }`}
                 >
@@ -252,7 +253,7 @@ export default function RevisorSection() {
             <button
               onClick={() => router.push("/settings")}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
-                text-sm text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150"
+                text-sm text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150"
             >
               <Settings className="w-3.5 h-3.5" />
               Общие настройки
@@ -261,7 +262,7 @@ export default function RevisorSection() {
               onClick={() => { loadData(true); if (intervalSecs > 0) setCountdown(intervalSecs); }}
               disabled={refreshing}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
-                text-sm text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150
+                text-sm text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150
                 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
@@ -273,7 +274,7 @@ export default function RevisorSection() {
         {/* ── Auto-refresh progress bar ─────────────────────────── */}
         {intervalSecs > 0 && (
           <div className="mb-2 flex items-center gap-2">
-            <div className="flex-1 h-0.5 bg-gray-100 rounded-full overflow-hidden">
+            <div className="flex-1 h-0.5 bg-bg-muted rounded-full overflow-hidden">
               <div
                 className="h-full bg-primary/40 rounded-full transition-all duration-1000 ease-linear"
                 style={{ width: `${(1 - countdown / intervalSecs) * 100}%` }}
@@ -300,7 +301,7 @@ export default function RevisorSection() {
           <span className="flex items-center gap-1.5 ml-auto">
             {stands.map(s => (
               <span key={s.name} title={`${s.name}: ${s.connected ? "подключён" : "не настроен"}`}
-                className={`w-2 h-2 rounded-full ${s.connected ? "bg-green-500" : "bg-gray-300"}`} />
+                className={`w-2 h-2 rounded-full ${s.connected ? "bg-green-500" : "bg-bg-muted"}`} />
             ))}
           </span>
         </p>
@@ -325,11 +326,11 @@ export default function RevisorSection() {
         </div>
 
         {/* ── Table card ───────────────────────────────────────── */}
-        <div className="bg-white border border-border-main rounded-xl overflow-hidden">
+        <div className="bg-bg-card border border-border-main rounded-xl overflow-hidden">
 
           {/* Table header row */}
           <div
-            className="grid bg-gray-50/80 border-b border-border-main"
+            className="grid bg-bg-subtle/80 border-b border-border-main"
             style={{ gridTemplateColumns: colTemplate }}
           >
             <div className="px-4 py-2.5 text-xs font-semibold text-text-muted uppercase tracking-wide">
@@ -403,7 +404,7 @@ export default function RevisorSection() {
             ["bg-green-500", "Все запущены"],
             ["bg-amber-400", "Часть упала"],
             ["bg-red-500",   "Все упали"],
-            ["bg-gray-300",  "Выключены"],
+            ["bg-bg-muted",  "Выключены"],
           ] as [string, string][]).map(([cls, label]) => (
             <span key={label} className="flex items-center gap-1.5 text-xs text-text-muted">
               <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cls}`} />

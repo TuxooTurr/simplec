@@ -5,11 +5,23 @@ import { createContext, useContext, useState, ReactNode } from "react";
 export type SectionId =
   | "generation"
   | "auto_model"
+  | "test_data"
   | "bugs"
+  | "logs"
+  | "device_farm"
   | "alerts"
+  | "jobs"
   | "metrics"
   | "revisor"
-  | "etalons";
+  | "etalons"
+  | "settings";
+
+export interface BugPrefill {
+  platform: string;
+  feature: string;
+  description: string;
+  source: "log_analyzer" | "manual";
+}
 
 interface WorkspaceCtx {
   /** Глобально выбранная LLM-модель */
@@ -30,6 +42,9 @@ interface WorkspaceCtx {
   /** Счётчик для принудительного обновления списка провайдеров */
   providersRefreshKey: number;
   bumpProviders: () => void;
+  /** Pre-fill данные для BugsSection (от анализатора логов) */
+  bugPrefill: BugPrefill | null;
+  setBugPrefill: (data: BugPrefill | null) => void;
 }
 
 const WorkspaceContext = createContext<WorkspaceCtx>({
@@ -45,6 +60,8 @@ const WorkspaceContext = createContext<WorkspaceCtx>({
   setRightOpen: () => {},
   providersRefreshKey: 0,
   bumpProviders: () => {},
+  bugPrefill: null,
+  setBugPrefill: () => {},
 });
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
@@ -55,6 +72,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [rightOpen, setRightOpen] = useState(false);
   const [providersRefreshKey, setProvidersRefreshKey] = useState(0);
   const bumpProviders = () => setProvidersRefreshKey((k) => k + 1);
+  const [bugPrefill, setBugPrefill] = useState<BugPrefill | null>(null);
 
   return (
     <WorkspaceContext.Provider
@@ -65,6 +83,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         leftVisible, setLeftVisible,
         rightOpen, setRightOpen,
         providersRefreshKey, bumpProviders,
+        bugPrefill, setBugPrefill,
       }}
     >
       {children}

@@ -19,7 +19,7 @@ const LAYER_NAMES: Record<number, string> = {
 
 export default function StatusPanel({ events, progress, done, error, elapsed }: StatusPanelProps) {
   return (
-    <div className="bg-white border border-border-main rounded-xl p-5">
+    <div className="bg-bg-card border border-border-main rounded-xl p-5">
       {/* Header */}
       <div className="flex items-center gap-2 mb-4">
         {done ? (
@@ -52,7 +52,7 @@ export default function StatusPanel({ events, progress, done, error, elapsed }: 
             );
             return (
               <div key={i} className="flex items-center gap-2.5 text-sm animate-fade-in">
-                <div className="w-5 h-5 rounded-full bg-indigo-50 flex items-center justify-center flex-shrink-0">
+                <div className="w-5 h-5 rounded-full bg-[var(--color-active-bg)] flex items-center justify-center flex-shrink-0">
                   <Layers className="w-3 h-3 text-primary" />
                 </div>
                 <span className="text-text-muted">
@@ -128,7 +128,7 @@ export default function StatusPanel({ events, progress, done, error, elapsed }: 
               {Math.round((progress.current / progress.total) * 100)}%
             </span>
           </div>
-          <div className="w-full bg-indigo-100 rounded-full h-2.5 overflow-hidden">
+          <div className="w-full bg-primary/20 rounded-full h-2.5 overflow-hidden">
             <div
               className="h-2.5 rounded-full transition-all duration-500 ease-out animate-progress-glow"
               style={{

@@ -3,22 +3,17 @@
 /**
  * AlertsSchedulerContext
  *
- * Управляет состоянием Jupyter-ядра и планировщика для алертов.
- * Выживает между навигациями (провайдер выше страниц).
- *
- * Логика выполнения:
- *  1. connect()  → POST /api/kernel/start/{id}  — запустить ядро
- *  2. execute()  → выполнить init-ячейки (если не выполнялись или params изменились)
- *                → выполнить loop-ячейки на каждом тике
- *  3. disconnect → DELETE /api/kernel/stop/{id}
+ * Per-script sessions: each alert keeps its own kernel, output,
+ * scheduler, and param values. Switching alerts preserves running
+ * schedulers and kernels in the background.
  */
 
 import {
   createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode,
 } from "react";
 import {
-  getAlertScripts, kernelStart, kernelStop, kernelExecute,
-  type AlertScript, type NotebookCell, type DynamicParam,
+  getAlertScripts, getAlertFolders, kernelStart, kernelStop, kernelExecute, kernelStatus,
+  type AlertScript, type AlertFolder, type NotebookCell, type DynamicParam,
 } from "@/lib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -29,52 +24,75 @@ export interface OutputLine {
   text:  string;
 }
 
+export interface ScriptSession {
+  kernelAlive:      boolean;
+  kernelConnecting: boolean;
+  executing:        boolean;
+  output:           OutputLine[];
+  schedMode:        "once" | "periodic";
+  schedFreq:        number;
+  schedFrom:        string;
+  schedTo:          string;
+  schedActive:      boolean;
+  schedCount:       number;
+  values:           Record<string, string>;
+}
+
 interface AlertsSchedulerCtx {
-  // Data
   scripts:    AlertScript[];
   setScripts: React.Dispatch<React.SetStateAction<AlertScript[]>>;
+  folders:    AlertFolder[];
+  setFolders: React.Dispatch<React.SetStateAction<AlertFolder[]>>;
   loadErr:    string;
 
-  // Selection + params
   selectedId:    string | null;
   setSelectedId: (id: string | null) => void;
-  values:        Record<string, string>;   // param.id → user value
-  setValues:     React.Dispatch<React.SetStateAction<Record<string, string>>>;
 
-  // Kernel
+  sessions: Record<string, ScriptSession>;
+
+  values:           Record<string, string>;
+  setValues:        React.Dispatch<React.SetStateAction<Record<string, string>>>;
   kernelAlive:      boolean;
   kernelConnecting: boolean;
   connectKernel:    () => Promise<void>;
   disconnectKernel: () => Promise<void>;
-
-  // Execution
-  executing:  boolean;
-  output:     OutputLine[];
-  clearOutput: () => void;
-
-  // Scheduler
-  schedMode:    "once" | "periodic";
-  setSchedMode: (m: "once" | "periodic") => void;
-  schedFreq:    number;
-  setSchedFreq: (n: number) => void;
-  schedFrom:    string;
-  setSchedFrom: (s: string) => void;
-  schedTo:      string;
-  setSchedTo:   (s: string) => void;
-  schedActive:  boolean;
-  schedCount:   number;
-
-  doExecuteCore:  () => Promise<void>;
-  startSchedule:  (freqSecs: number) => void;
-  stopSchedule:   () => void;
+  connectKernelFor:    (scriptId: string) => Promise<void>;
+  disconnectKernelFor: (scriptId: string) => Promise<void>;
+  executing:        boolean;
+  output:           OutputLine[];
+  clearOutput:      () => void;
+  schedMode:        "once" | "periodic";
+  setSchedMode:     (m: "once" | "periodic") => void;
+  schedFreq:        number;
+  setSchedFreq:     (n: number) => void;
+  schedFrom:        string;
+  setSchedFrom:     (s: string) => void;
+  schedTo:          string;
+  setSchedTo:       (s: string) => void;
+  schedActive:      boolean;
+  schedCount:       number;
+  doExecuteCore:    () => Promise<void>;
+  startSchedule:    (freqSecs: number) => void;
+  stopSchedule:     () => void;
+  stopScheduleFor:  (scriptId: string) => void;
+  /** Запустить все скрипты в папке: подключить ядра + выполнить параллельно */
+  runFolderScripts: (folderId: string) => Promise<void>;
 }
 
+const EMPTY: ScriptSession = {
+  kernelAlive: false, kernelConnecting: false, executing: false,
+  output: [], schedMode: "once", schedFreq: 30, schedFrom: "", schedTo: "",
+  schedActive: false, schedCount: 0, values: {},
+};
+
 const Ctx = createContext<AlertsSchedulerCtx>({
-  scripts: [], setScripts: () => {}, loadErr: "",
+  scripts: [], setScripts: () => {}, folders: [], setFolders: () => {}, loadErr: "",
   selectedId: null, setSelectedId: () => {},
+  sessions: {},
   values: {}, setValues: () => {},
   kernelAlive: false, kernelConnecting: false,
   connectKernel: async () => {}, disconnectKernel: async () => {},
+  connectKernelFor: async () => {}, disconnectKernelFor: async () => {},
   executing: false, output: [], clearOutput: () => {},
   schedMode: "once", setSchedMode: () => {},
   schedFreq: 30, setSchedFreq: () => {},
@@ -82,9 +100,11 @@ const Ctx = createContext<AlertsSchedulerCtx>({
   schedTo: "", setSchedTo: () => {},
   schedActive: false, schedCount: 0,
   doExecuteCore: async () => {}, startSchedule: () => {}, stopSchedule: () => {},
+  stopScheduleFor: () => {},
+  runFolderScripts: async () => {},
 });
 
-// ── Helper ────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function applyParams(source: string, params: DynamicParam[], values: Record<string, string>) {
   let s = source;
@@ -97,234 +117,403 @@ function applyParams(source: string, params: DynamicParam[], values: Record<stri
 function cellIsInit(c: NotebookCell) { return c.type === "init" || c.type === "code"; }
 function cellIsLoop(c: NotebookCell) { return c.type === "loop"; }
 
+function defaultValues(params: DynamicParam[]): Record<string, string> {
+  const v: Record<string, string> = {};
+  for (const p of params) v[p.id] = p.placeholder;
+  return v;
+}
+
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
-  const [scripts,          setScripts]         = useState<AlertScript[]>([]);
-  const [loadErr,          setLoadErr]         = useState("");
-  const [selectedIdState,  setSelectedIdState] = useState<string | null>(null);
-  const [values,           setValues]          = useState<Record<string, string>>({});
-  const [kernelAlive,      setKernelAlive]     = useState(false);
-  const [kernelConnecting, setKernelConnecting]= useState(false);
-  const [executing,        setExecuting]       = useState(false);
-  const [output,           setOutput]          = useState<OutputLine[]>([]);
-  const [schedMode,        setSchedModeState]  = useState<"once" | "periodic">("once");
-  const [schedFreq,        setSchedFreqState]  = useState(30);
-  const [schedFrom,        setSchedFromState]  = useState("");
-  const [schedTo,          setSchedToState]    = useState("");
-  const [schedActive,      setSchedActive]     = useState(false);
-  const [schedCount,       setSchedCount]      = useState(0);
+  const [scripts,         setScripts]         = useState<AlertScript[]>([]);
+  const [folders,         setFolders]         = useState<AlertFolder[]>([]);
+  const [loadErr,         setLoadErr]         = useState("");
+  const [selectedIdState, setSelectedIdState] = useState<string | null>(null);
+  const [sessions,        _setSessions]       = useState<Record<string, ScriptSession>>({});
 
-  // Refs for stale-closure safety
   const selectedIdRef  = useRef<string | null>(null);
   const scriptsRef     = useRef<AlertScript[]>([]);
-  const valuesRef      = useRef<Record<string, string>>({});
-  const prevValuesRef  = useRef<Record<string, string>>({});  // last executed values
-  const initDoneRef    = useRef(false);                        // init cells executed at least once
-  const executingRef   = useRef(false);
-  const schedActiveRef = useRef(false);
-  const schedFromRef   = useRef("");
-  const schedToRef     = useRef("");
-  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const sessionsRef    = useRef<Record<string, ScriptSession>>({});
+  const executingLocks = useRef<Set<string>>(new Set());
 
-  useEffect(() => { scriptsRef.current    = scripts; },       [scripts]);
-  useEffect(() => { valuesRef.current     = values; },        [values]);
-  useEffect(() => { schedFromRef.current  = schedFrom; },     [schedFrom]);
-  useEffect(() => { schedToRef.current    = schedTo; },       [schedTo]);
+  // Internal per-script state (timers, init tracking — no re-renders)
+  const internals = useRef<Record<string, {
+    initDone:   boolean;
+    prevValues: Record<string, string>;
+    timer:      ReturnType<typeof setInterval> | null;
+  }>>({});
 
-  const setSelectedId = useCallback((id: string | null) => {
-    setSelectedIdState(id);
-    selectedIdRef.current = id;
-    // reset init-done when switching alerts
-    initDoneRef.current = false;
-    prevValuesRef.current = {};
-  }, []);
+  const getInternal = (sid: string) => {
+    if (!internals.current[sid]) {
+      internals.current[sid] = { initDone: false, prevValues: {}, timer: null };
+    }
+    return internals.current[sid];
+  };
 
-  const setSchedMode = useCallback((m: "once" | "periodic") => setSchedModeState(m), []);
-  const setSchedFreq = useCallback((n: number)               => setSchedFreqState(n), []);
-  const setSchedFrom = useCallback((s: string) => { setSchedFromState(s); schedFromRef.current = s; }, []);
-  const setSchedTo   = useCallback((s: string) => { setSchedToState(s);   schedToRef.current   = s; }, []);
+  useEffect(() => { scriptsRef.current = scripts; }, [scripts]);
 
-  // Load scripts on mount
+  const setSessions = useCallback(
+    (updater: Record<string, ScriptSession> | ((prev: Record<string, ScriptSession>) => Record<string, ScriptSession>)) => {
+      _setSessions(prev => {
+        const next = typeof updater === "function" ? updater(prev) : updater;
+        sessionsRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  const patchSession = useCallback(
+    (sid: string, patch: Partial<ScriptSession>) => {
+      setSessions(prev => ({
+        ...prev,
+        [sid]: { ...(prev[sid] || { ...EMPTY }), ...patch },
+      }));
+    },
+    [setSessions],
+  );
+
+  const pushOutput = useCallback(
+    (sid: string, kind: OutputLine["kind"], text: string) => {
+      const line: OutputLine = { ts: new Date().toLocaleTimeString("ru-RU"), kind, text };
+      setSessions(prev => {
+        const s = prev[sid] || { ...EMPTY };
+        return { ...prev, [sid]: { ...s, output: [...s.output.slice(-199), line] } };
+      });
+    },
+    [setSessions],
+  );
+
+  // ── Select ──────────────────────────────────────────────────────────────────
+
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      setSelectedIdState(id);
+      selectedIdRef.current = id;
+      if (id && !sessionsRef.current[id]) {
+        const script = scriptsRef.current.find(s => s.id === id);
+        if (script) patchSession(id, { values: defaultValues(script.dynamic_params) });
+      }
+    },
+    [patchSession],
+  );
+
+  // Verify kernel is still alive when switching scripts
   useEffect(() => {
+    if (!selectedIdState) return;
+    const s = sessionsRef.current[selectedIdState];
+    if (s?.kernelAlive) {
+      kernelStatus(selectedIdState)
+        .then(res => { if (!res.alive) patchSession(selectedIdState, { kernelAlive: false }); })
+        .catch(() => {});
+    }
+  }, [selectedIdState, patchSession]);
+
+  // ── Load scripts ────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    getAlertFolders().then(setFolders).catch(() => {});
     getAlertScripts()
       .then(data => {
         setScripts(data);
-        if (data.length > 0) {
-          const s = data[0];
-          selectedIdRef.current = s.id;
-          setSelectedIdState(s.id);
-          const v: Record<string, string> = {};
-          for (const p of s.dynamic_params) v[p.id] = p.placeholder;
-          setValues(v);
+        const batch: Record<string, ScriptSession> = {};
+        for (const s of data) {
+          if (!sessionsRef.current[s.id]) {
+            batch[s.id] = { ...EMPTY, values: defaultValues(s.dynamic_params) };
+          }
+        }
+        if (Object.keys(batch).length > 0) setSessions(prev => ({ ...prev, ...batch }));
+        if (data.length > 0 && !selectedIdRef.current) {
+          selectedIdRef.current = data[0].id;
+          setSelectedIdState(data[0].id);
         }
       })
       .catch(e => setLoadErr(String(e)));
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Output helpers ──────────────────────────────────────────────────────────
-
-  const pushOutput = useCallback((kind: OutputLine["kind"], text: string) => {
-    const line: OutputLine = { ts: new Date().toLocaleTimeString("ru-RU"), kind, text };
-    setOutput(prev => [...prev.slice(-199), line]);  // keep last 200 lines
-  }, []);
-
-  const clearOutput = useCallback(() => setOutput([]), []);
+  // Cleanup timers for deleted scripts
+  useEffect(() => {
+    const ids = new Set(scripts.map(s => s.id));
+    for (const [sid, int] of Object.entries(internals.current)) {
+      if (!ids.has(sid) && int.timer) { clearInterval(int.timer); int.timer = null; }
+    }
+  }, [scripts]);
 
   // ── Kernel ──────────────────────────────────────────────────────────────────
 
+  const connectKernelFor = useCallback(async (sid: string) => {
+    if (!sid) return;
+    const scriptName = scriptsRef.current.find(s => s.id === sid)?.name ?? "";
+    patchSession(sid, { kernelConnecting: true });
+    pushOutput(sid, "system", "Подключение к ядру Python...");
+    try {
+      const res = await kernelStart(sid, scriptName);
+      const int = getInternal(sid);
+      int.initDone = false;
+      int.prevValues = {};
+      patchSession(sid, { kernelAlive: true, kernelConnecting: false });
+      pushOutput(sid, "system",
+        res.status === "already_running"
+          ? `Ядро уже запущено (${res.kernel_id})`
+          : `Ядро запущено (${res.kernel_id})`);
+    } catch (e) {
+      pushOutput(sid, "error", `Ошибка подключения: ${e}`);
+      patchSession(sid, { kernelConnecting: false });
+    }
+  }, [patchSession, pushOutput]);
+
   const connectKernel = useCallback(async () => {
     const sid = selectedIdRef.current;
+    if (sid) await connectKernelFor(sid);
+  }, [connectKernelFor]);
+
+  const disconnectKernelFor = useCallback(async (sid: string) => {
     if (!sid) return;
-    setKernelConnecting(true);
-    pushOutput("system", "Подключение к ядру Python...");
-    try {
-      const res = await kernelStart(sid);
-      setKernelAlive(true);
-      initDoneRef.current = false;
-      prevValuesRef.current = {};
-      pushOutput("system", res.status === "already_running"
-        ? `Ядро уже запущено (${res.kernel_id})`
-        : `Ядро запущено (${res.kernel_id})`);
-    } catch (e) {
-      pushOutput("error", `Ошибка подключения: ${e}`);
-    } finally {
-      setKernelConnecting(false);
-    }
-  }, [pushOutput]);
+    const int = getInternal(sid);
+    if (int.timer) { clearInterval(int.timer); int.timer = null; }
+    patchSession(sid, { schedActive: false });
+    try { await kernelStop(sid); } catch {}
+    int.initDone = false;
+    patchSession(sid, { kernelAlive: false });
+    pushOutput(sid, "system", "Ядро остановлено.");
+  }, [patchSession, pushOutput]);
 
   const disconnectKernel = useCallback(async () => {
     const sid = selectedIdRef.current;
-    if (!sid) return;
-    // stop scheduler if running
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    schedActiveRef.current = false;
-    setSchedActive(false);
-    try {
-      await kernelStop(sid);
-    } catch (_) {}
-    setKernelAlive(false);
-    initDoneRef.current = false;
-    pushOutput("system", "Ядро остановлено.");
-  }, [pushOutput]);
+    if (sid) await disconnectKernelFor(sid);
+  }, [disconnectKernelFor]);
 
   // ── Execute ─────────────────────────────────────────────────────────────────
 
-  const doExecuteCore = useCallback(async () => {
-    const sid = selectedIdRef.current;
-    if (!sid) return;
+  const _handleKernelDead = useCallback((sid: string) => {
+    const int = getInternal(sid);
+    if (int.timer) { clearInterval(int.timer); int.timer = null; }
+    int.initDone = false;
+    patchSession(sid, { kernelAlive: false, schedActive: false, executing: false });
+    pushOutput(sid, "error", "Ядро недоступно — планировщик остановлен.");
+  }, [patchSession, pushOutput]);
+
+  const _isKernelDeadError = (e: unknown): boolean => {
+    const msg = String(e).toLowerCase();
+    return msg.includes("404") || msg.includes("ядро не запущено") || msg.includes("не найдено");
+  };
+
+  const _doExecute = useCallback(async (sid: string) => {
     const sel = scriptsRef.current.find(s => s.id === sid);
-    if (!sel || executingRef.current) return;
+    if (!sel || executingLocks.current.has(sid)) return;
+    executingLocks.current.add(sid);
+    patchSession(sid, { executing: true });
 
-    executingRef.current = true;
-    setExecuting(true);
-
-    const vals   = valuesRef.current;
+    const s      = sessionsRef.current[sid] || { ...EMPTY };
+    const int    = getInternal(sid);
+    const vals   = s.values;
     const params = sel.dynamic_params;
     const cells  = sel.notebook ?? [];
 
-    // Проверяем изменились ли params с прошлого запуска init
-    const paramsChanged = !initDoneRef.current ||
-      params.some(p => (vals[p.id] ?? p.placeholder) !== (prevValuesRef.current[p.id] ?? p.placeholder));
+    const paramsChanged = !int.initDone ||
+      params.some(p => (vals[p.id] ?? p.placeholder) !== (int.prevValues[p.id] ?? p.placeholder));
 
-    // Запускаем init-ячейки если нужно
     if (paramsChanged) {
       const initCells = cells.filter(cellIsInit);
       if (initCells.length > 0) {
-        pushOutput("system", `▶ Init-ячейки (${initCells.length})...`);
+        pushOutput(sid, "system", `▶ Init-ячейки (${initCells.length})...`);
         for (const cell of initCells) {
           if (!cell.source.trim()) continue;
           const code = applyParams(cell.source, params, vals);
           try {
             const res = await kernelExecute(sid, code, 60);
-            if (res.output) pushOutput("stdout", res.output);
-            if (res.error)  pushOutput("error",  res.error);
+            if (res.output) pushOutput(sid, "stdout", res.output);
+            if (res.error)  pushOutput(sid, "error",  res.error);
           } catch (e) {
-            pushOutput("error", `Init error: ${e}`);
+            if (_isKernelDeadError(e)) {
+              _handleKernelDead(sid);
+              executingLocks.current.delete(sid);
+              return;
+            }
+            pushOutput(sid, "error", `Init error: ${e}`);
           }
         }
-        // Запомнить выполненные значения
-        const snapshot: Record<string, string> = {};
-        for (const p of params) snapshot[p.id] = vals[p.id] ?? p.placeholder;
-        prevValuesRef.current = snapshot;
-        initDoneRef.current = true;
-      } else {
-        initDoneRef.current = true;
-        prevValuesRef.current = { ...vals };
+        const snap: Record<string, string> = {};
+        for (const p of params) snap[p.id] = vals[p.id] ?? p.placeholder;
+        int.prevValues = snap;
       }
+      int.initDone = true;
     }
 
-    // Запускаем loop-ячейки
     const loopCells = cells.filter(cellIsLoop);
-    if (loopCells.length > 0) {
-      for (const cell of loopCells) {
-        if (!cell.source.trim()) continue;
-        const code = applyParams(cell.source, params, vals);
-        try {
-          const res = await kernelExecute(sid, code, 60);
-          if (res.output) pushOutput("stdout", res.output);
-          if (res.error)  pushOutput("error",  res.error);
-        } catch (e) {
-          pushOutput("error", `Loop error: ${e}`);
+    for (const cell of loopCells) {
+      if (!cell.source.trim()) continue;
+      const code = applyParams(cell.source, params, vals);
+      try {
+        const res = await kernelExecute(sid, code, 60);
+        if (res.output) pushOutput(sid, "stdout", res.output);
+        if (res.error)  pushOutput(sid, "error",  res.error);
+      } catch (e) {
+        if (_isKernelDeadError(e)) {
+          _handleKernelDead(sid);
+          executingLocks.current.delete(sid);
+          return;
         }
+        pushOutput(sid, "error", `Loop error: ${e}`);
       }
-    } else if (initDoneRef.current) {
-      // No loop cells — just confirm init ran
     }
 
-    executingRef.current = false;
-    setExecuting(false);
-  }, [pushOutput]);
+    executingLocks.current.delete(sid);
+    patchSession(sid, { executing: false });
+  }, [patchSession, pushOutput, _handleKernelDead]);
+
+  const doExecuteCore = useCallback(async () => {
+    const sid = selectedIdRef.current;
+    if (sid) await _doExecute(sid);
+  }, [_doExecute]);
 
   // ── Scheduler ───────────────────────────────────────────────────────────────
 
+  const stopScheduleFor = useCallback((sid: string) => {
+    if (!sid) return;
+    const int = getInternal(sid);
+    if (int.timer) { clearInterval(int.timer); int.timer = null; }
+    patchSession(sid, { schedActive: false });
+  }, [patchSession]);
+
   const stopSchedule = useCallback(() => {
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
-    schedActiveRef.current = false;
-    setSchedActive(false);
-  }, []);
+    const sid = selectedIdRef.current;
+    if (sid) stopScheduleFor(sid);
+  }, [stopScheduleFor]);
 
   const startSchedule = useCallback((freqSecs: number) => {
-    stopSchedule();
-    let count = 0;
-    setSchedCount(0);
-    schedActiveRef.current = true;
-    setSchedActive(true);
+    const sid = selectedIdRef.current;
+    if (!sid) return;
+    const int = getInternal(sid);
+    if (int.timer) { clearInterval(int.timer); int.timer = null; }
+    patchSession(sid, { schedActive: true, schedCount: 0 });
 
     const tick = async () => {
-      if (!schedActiveRef.current) return;
-      const now  = new Date();
-      const from = schedFromRef.current;
-      const to   = schedToRef.current;
-      if (from && now < new Date(from)) return;
-      if (to   && now > new Date(to))   { stopSchedule(); return; }
-      await doExecuteCore();
-      count++;
-      setSchedCount(count);
+      const cur = sessionsRef.current[sid];
+      if (!cur?.schedActive) return;
+      const now = new Date();
+      if (cur.schedFrom && now < new Date(cur.schedFrom)) return;
+      if (cur.schedTo   && now > new Date(cur.schedTo)) {
+        const i = getInternal(sid);
+        if (i.timer) { clearInterval(i.timer); i.timer = null; }
+        patchSession(sid, { schedActive: false });
+        return;
+      }
+      await _doExecute(sid);
+      const after = sessionsRef.current[sid];
+      if (after) patchSession(sid, { schedCount: (after.schedCount || 0) + 1 });
     };
 
     tick();
-    timerRef.current = setInterval(tick, freqSecs * 1000);
-  }, [stopSchedule, doExecuteCore]);
+    int.timer = setInterval(tick, freqSecs * 1000);
+  }, [patchSession, _doExecute]);
 
-  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+  // Background polling: verify all "alive" kernels every 15s
+  useEffect(() => {
+    const poll = async () => {
+      const snap = sessionsRef.current;
+      const aliveIds = Object.entries(snap)
+        .filter(([, s]) => s.kernelAlive)
+        .map(([id]) => id);
+      for (const sid of aliveIds) {
+        try {
+          const res = await kernelStatus(sid);
+          if (!res.alive) _handleKernelDead(sid);
+        } catch {
+          _handleKernelDead(sid);
+        }
+      }
+    };
+    const timer = setInterval(poll, 15_000);
+    return () => clearInterval(timer);
+  }, [_handleKernelDead]);
 
-  const selectedId = selectedIdState;
+  // Cleanup all timers on unmount
+  useEffect(() => () => {
+    for (const int of Object.values(internals.current)) {
+      if (int.timer) clearInterval(int.timer);
+    }
+  }, []);
+
+  // ── Selected session convenience ────────────────────────────────────────────
+
+  const sel = sessions[selectedIdState ?? ""] || EMPTY;
+
+  const setValues: React.Dispatch<React.SetStateAction<Record<string, string>>> = useCallback(
+    (action) => {
+      const sid = selectedIdRef.current;
+      if (!sid) return;
+      setSessions(prev => {
+        const s = prev[sid] || { ...EMPTY };
+        const next = typeof action === "function" ? action(s.values) : action;
+        return { ...prev, [sid]: { ...s, values: next } };
+      });
+    },
+    [setSessions],
+  );
+
+  const setSchedMode = useCallback((m: "once" | "periodic") => {
+    const sid = selectedIdRef.current;
+    if (sid) patchSession(sid, { schedMode: m });
+  }, [patchSession]);
+
+  const setSchedFreq = useCallback((n: number) => {
+    const sid = selectedIdRef.current;
+    if (sid) patchSession(sid, { schedFreq: n });
+  }, [patchSession]);
+
+  const setSchedFrom = useCallback((s: string) => {
+    const sid = selectedIdRef.current;
+    if (sid) patchSession(sid, { schedFrom: s });
+  }, [patchSession]);
+
+  const setSchedTo = useCallback((s: string) => {
+    const sid = selectedIdRef.current;
+    if (sid) patchSession(sid, { schedTo: s });
+  }, [patchSession]);
+
+  const clearOutput = useCallback(() => {
+    const sid = selectedIdRef.current;
+    if (sid) patchSession(sid, { output: [] });
+  }, [patchSession]);
+
+  // ── Run all scripts in a folder ────────────────────────────────────────────
+
+  const runFolderScripts = useCallback(async (folderId: string) => {
+    const folderScripts = scriptsRef.current.filter(s => s.folder_id === folderId);
+    if (folderScripts.length === 0) return;
+
+    // Connect kernels + execute in parallel
+    await Promise.all(folderScripts.map(async (script) => {
+      const sid = script.id;
+      const sess = sessionsRef.current[sid];
+      // Connect kernel if not alive
+      if (!sess?.kernelAlive) {
+        await connectKernelFor(sid);
+      }
+      // Execute
+      await _doExecute(sid);
+    }));
+  }, [connectKernelFor, _doExecute]);
 
   return (
     <Ctx.Provider value={{
-      scripts, setScripts, loadErr,
-      selectedId, setSelectedId,
-      values, setValues,
-      kernelAlive, kernelConnecting,
+      scripts, setScripts, folders, setFolders, loadErr,
+      selectedId: selectedIdState, setSelectedId,
+      sessions,
+      values: sel.values, setValues,
+      kernelAlive: sel.kernelAlive, kernelConnecting: sel.kernelConnecting,
       connectKernel, disconnectKernel,
-      executing, output, clearOutput,
-      schedMode, setSchedMode,
-      schedFreq, setSchedFreq,
-      schedFrom, setSchedFrom,
-      schedTo, setSchedTo,
-      schedActive, schedCount,
-      doExecuteCore, startSchedule, stopSchedule,
+      connectKernelFor, disconnectKernelFor,
+      executing: sel.executing, output: sel.output, clearOutput,
+      schedMode: sel.schedMode, setSchedMode,
+      schedFreq: sel.schedFreq, setSchedFreq,
+      schedFrom: sel.schedFrom, setSchedFrom,
+      schedTo: sel.schedTo, setSchedTo,
+      schedActive: sel.schedActive, schedCount: sel.schedCount,
+      doExecuteCore, startSchedule, stopSchedule, stopScheduleFor,
+      runFolderScripts,
     }}>
       {children}
     </Ctx.Provider>

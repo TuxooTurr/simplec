@@ -67,6 +67,11 @@ class VectorStore:
             metadata={"description": "Пары описание дефекта → тело дефекта"},
             embedding_function=self.ef
         )
+        self.context_docs = self.client.get_or_create_collection(
+            name="context_docs",
+            metadata={"description": "Контекстные документы и требования для RAG"},
+            embedding_function=self.ef
+        )
 
     # ── Тест-кейсы (существующие) ─────────────────────────────────────────────
 
@@ -173,6 +178,27 @@ class VectorStore:
         )
         return self._format_results(results)
 
+    # ── Контекстные документы ───────────────────────────────────────────────
+
+    def add_context_doc(self, doc_id: str, content: str, name: str = "",
+                        doc_type: str = "document", feature: str = "",
+                        filename: str = ""):
+        metadata = {
+            "name": name,
+            "doc_type": doc_type,
+            "feature": feature,
+            "filename": filename,
+        }
+        self.context_docs.upsert(ids=[doc_id], documents=[content], metadatas=[metadata])
+
+    def find_similar_context_docs(self, query: str, n_results: int = 5,
+                                   feature: str = "") -> List[Dict]:
+        where = {"feature": feature} if feature else None
+        results = self.context_docs.query(
+            query_texts=[query], n_results=n_results, where=where
+        )
+        return self._format_results(results)
+
     # ── Общие ─────────────────────────────────────────────────────────────────
 
     def _format_results(self, results) -> List[Dict]:
@@ -196,6 +222,7 @@ class VectorStore:
             "pairs": self.pairs.count(),
             "autotests": self.autotest_pairs.count(),
             "defects": self.defect_pairs.count(),
+            "context_docs": self.context_docs.count(),
         }
 
     def clear_all(self):
@@ -204,4 +231,5 @@ class VectorStore:
         self.client.delete_collection("requirement_test_pairs")
         self.client.delete_collection("autotest_pairs")
         self.client.delete_collection("defect_pairs")
+        self.client.delete_collection("context_docs")
         self._init_collections()

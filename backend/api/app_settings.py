@@ -41,6 +41,7 @@ _SECRET_FIELDS = {
 _MASKED_PLACEHOLDER = "●●●●●●●●●●●●"
 _CUSTOM_LLM_KEY = "custom_llm_providers"
 _REVISOR_STANDS_KEY = "revisor_api_stands"
+_LOGS_VPS_KEY = "logs_vps_connections"
 _AUTH_TYPE_FIELDS = {"gigachat_auth_type", "deepseek_auth_type"}
 
 # ── Дефолтные значения для новых ключей ──────────────────────────────────────
@@ -137,6 +138,11 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "API-подключения стендов Ревизора и выбранные методы сравнения",
         "group":       "revisor",
     },
+    _LOGS_VPS_KEY: {
+        "value":       os.getenv("LOGS_VPS_CONNECTIONS", "[]"),
+        "description": "Подключения к VPS-платформам агрегации логов (Graylog, Elastic, Loki)",
+        "group":       "logs_vps",
+    },
     # Kafka Алерты
     "alerts_kafka_bootstrap_servers": {
         "value":       os.getenv("ALERTS_KAFKA_BOOTSTRAP_SERVERS", ""),
@@ -183,6 +189,22 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Пароль приватного ключа Kafka алертов, если ключ зашифрован",
         "group":       "kafka_alerts",
     },
+    # Ферма мобильных устройств (встроенная)
+    "farm_enabled": {
+        "value":       os.getenv("FARM_ENABLED", "false"),
+        "description": "Включить ферму устройств",
+        "group":       "farm",
+    },
+    "farm_max_sessions_per_user": {
+        "value":       os.getenv("FARM_MAX_SESSIONS_PER_USER", "3"),
+        "description": "Максимум активных сессий на пользователя",
+        "group":       "farm",
+    },
+    "farm_session_timeout_min": {
+        "value":       os.getenv("FARM_SESSION_TIMEOUT_MIN", "30"),
+        "description": "Таймаут сессии (минуты)",
+        "group":       "farm",
+    },
 }
 
 # Маппинг: ключ настройки → env-переменная (для apply_saved_settings_to_env)
@@ -214,6 +236,9 @@ _ENV_MAP: Dict[str, str] = {
     "alerts_kafka_ssl_certfile":      "ALERTS_KAFKA_SSL_CERTFILE",
     "alerts_kafka_ssl_keyfile":       "ALERTS_KAFKA_SSL_KEYFILE",
     "alerts_kafka_ssl_password":      "ALERTS_KAFKA_SSL_PASSWORD",
+    "farm_enabled":                   "FARM_ENABLED",
+    "farm_max_sessions_per_user":     "FARM_MAX_SESSIONS_PER_USER",
+    "farm_session_timeout_min":       "FARM_SESSION_TIMEOUT_MIN",
 }
 
 
@@ -307,6 +332,48 @@ def _mask_revisor_stand(stand: dict) -> dict:
     return item
 
 
+# ── Logs VPS helpers ─────────────────────────────────────────────────────────
+
+def _load_logs_vps(db: Session) -> list[dict]:
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _LOGS_VPS_KEY).first()
+    raw = row.value if row and row.value else "[]"
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _save_logs_vps(db: Session, connections: list[dict]) -> None:
+    raw = json.dumps(connections, ensure_ascii=False)
+    row = db.query(MetricsSettings).filter(MetricsSettings.key == _LOGS_VPS_KEY).first()
+    if row:
+        row.value = raw
+        row.updated_at = datetime.utcnow()
+    else:
+        db.add(MetricsSettings(
+            key=_LOGS_VPS_KEY,
+            value=raw,
+            description=_DEFAULTS[_LOGS_VPS_KEY]["description"],
+        ))
+    db.commit()
+    os.environ["LOGS_VPS_CONNECTIONS"] = raw
+
+
+def _slugify_logs_vps_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+    return "vps_" + (slug or "logs")
+
+
+def _mask_logs_vps(conn: dict) -> dict:
+    item = dict(conn)
+    if item.get("token"):
+        item["token"] = _MASKED_PLACEHOLDER
+    if item.get("password"):
+        item["password"] = _MASKED_PLACEHOLDER
+    return item
+
+
 def get_revisor_api_stands(db: Session) -> list[dict]:
     """Public helper for backend/api/revisor.py."""
     _ensure_defaults(db)
@@ -350,6 +417,17 @@ def get_alerts_kafka_config(db: Session) -> dict:
     }
 
 
+def get_farm_config(db: Session) -> dict:
+    """Вернуть конфиг встроенной фермы устройств из БД."""
+    _ensure_defaults(db)
+    rows = {r.key: r.value or "" for r in db.query(MetricsSettings).all()}
+    return {
+        "enabled": rows.get("farm_enabled", "false").lower() == "true",
+        "max_sessions_per_user": int(rows.get("farm_max_sessions_per_user", "3")),
+        "session_timeout_min": int(rows.get("farm_session_timeout_min", "30")),
+    }
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @router.get("/api/settings")
@@ -368,7 +446,7 @@ def get_settings(db: Session = Depends(get_db)) -> dict:
 
     # Наши ключи с group-метаданными
     for key, meta in _DEFAULTS.items():
-        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY):
+        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY, _LOGS_VPS_KEY):
             continue
         row = rows.get(key)
         raw_value = (row.value or "") if row else meta["value"]
@@ -412,7 +490,7 @@ def save_settings(body: SettingsUpdate, db: Session = Depends(get_db)) -> dict:
     _ensure_defaults(db)
 
     for key, value in body.settings.items():
-        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY):
+        if key in (_CUSTOM_LLM_KEY, _REVISOR_STANDS_KEY, _LOGS_VPS_KEY):
             continue
         # Игнорировать placeholder маскировки
         if value == _MASKED_PLACEHOLDER:
@@ -620,3 +698,265 @@ def delete_revisor_stand(stand_id: str, db: Session = Depends(get_db)) -> dict:
     ]
     _save_revisor_stands(db, stands)
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Logs VPS CRUD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LogsVpsConfig(BaseModel):
+    id: Optional[str] = None
+    name: str = Field(min_length=1)
+    vps_type: str = "graylog"          # graylog | elastic | loki | generic
+    base_url: str = Field(min_length=1)
+    auth_type: str = "none"            # none | bearer | basic | api_key
+    token: str = ""
+    username: str = ""
+    password: str = ""
+    api_key_header: str = "Authorization"
+    ssl_verify: bool = True
+    ca_cert_path: str = ""
+    default_index: str = ""
+    enabled: bool = True
+
+
+@router.get("/api/settings/logs-vps")
+def list_logs_vps(db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    connections = [_mask_logs_vps(c) for c in _load_logs_vps(db)]
+    return {"connections": connections}
+
+
+@router.post("/api/settings/logs-vps")
+def upsert_logs_vps(body: LogsVpsConfig, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    connections = _load_logs_vps(db)
+
+    conn_id = (body.id or "").strip().lower() or _slugify_logs_vps_id(body.name)
+    if not conn_id.startswith("vps_"):
+        conn_id = "vps_" + conn_id
+
+    vps_type = body.vps_type.strip().lower() or "graylog"
+    if vps_type not in ("graylog", "elastic", "loki", "generic"):
+        raise HTTPException(422, "vps_type должен быть graylog, elastic, loki или generic")
+
+    auth_type = body.auth_type.strip().lower() or "none"
+    if auth_type not in ("none", "bearer", "basic", "api_key"):
+        raise HTTPException(422, "auth_type должен быть none, bearer, basic или api_key")
+
+    existing = next(
+        (c for c in connections if str(c.get("id", "")).lower() == conn_id), None
+    )
+
+    # Не перезатираем секреты маской
+    token = body.token
+    password = body.password
+    if auth_type == "none":
+        token = ""
+        password = ""
+    else:
+        if token == _MASKED_PLACEHOLDER and existing:
+            token = str(existing.get("token", ""))
+        if password == _MASKED_PLACEHOLDER and existing:
+            password = str(existing.get("password", ""))
+
+    item = {
+        "id": conn_id,
+        "name": body.name.strip(),
+        "vps_type": vps_type,
+        "base_url": body.base_url.rstrip("/"),
+        "auth_type": auth_type,
+        "token": token.strip(),
+        "username": body.username.strip(),
+        "password": password.strip(),
+        "api_key_header": body.api_key_header.strip() or "Authorization",
+        "ssl_verify": bool(body.ssl_verify),
+        "ca_cert_path": body.ca_cert_path.strip(),
+        "default_index": body.default_index.strip(),
+        "enabled": bool(body.enabled),
+    }
+
+    if existing:
+        connections = [
+            item if str(c.get("id", "")).lower() == conn_id else c
+            for c in connections
+        ]
+    else:
+        connections.append(item)
+
+    _save_logs_vps(db, connections)
+    return {"ok": True, "connection": _mask_logs_vps(item)}
+
+
+@router.delete("/api/settings/logs-vps/{conn_id}")
+def delete_logs_vps(conn_id: str, db: Session = Depends(get_db)) -> dict:
+    _ensure_defaults(db)
+    conn_id = conn_id.lower()
+    connections = [
+        c for c in _load_logs_vps(db)
+        if str(c.get("id", "")).lower() != conn_id
+    ]
+    _save_logs_vps(db, connections)
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Тест подключений
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/api/settings/test/llm/{provider_id}")
+def test_llm_connection(provider_id: str) -> dict:
+    """Тест подключения к LLM провайдеру (отправляет ping)."""
+    try:
+        from agents.llm_client import LLMClient
+        result = LLMClient.health_check(provider_id)
+        return result
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/kafka-alerts")
+def test_kafka_alerts(db: Session = Depends(get_db)) -> dict:
+    """Тест подключения к Kafka для алертов."""
+    try:
+        cfg = get_alerts_kafka_config(db)
+        bootstrap = cfg.get("kafka_bootstrap_servers", "")
+        if not bootstrap:
+            return {"status": "red", "message": "Bootstrap servers не настроены"}
+        from agents.kafka_client import KafkaClient
+        kwargs = KafkaClient._build_producer_kwargs(cfg)
+        from kafka import KafkaProducer
+        producer = KafkaProducer(**kwargs)
+        producer.close(timeout=5)
+        return {"status": "green", "message": f"Подключено к {bootstrap}"}
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/kafka-metrics")
+def test_kafka_metrics(db: Session = Depends(get_db)) -> dict:
+    """Тест подключения к Kafka для метрик."""
+    try:
+        from backend.api.metrics_settings import get_kafka_config
+        cfg = get_kafka_config(db)
+        bootstrap = cfg.get("kafka_bootstrap_servers", "")
+        if not bootstrap:
+            return {"status": "red", "message": "Bootstrap servers не настроены"}
+        from agents.kafka_client import KafkaClient
+        kafka_cfg = {
+            "kafka_bootstrap_servers":  bootstrap,
+            "kafka_security_protocol":  cfg.get("kafka_security_protocol", "PLAINTEXT"),
+            "kafka_sasl_mechanism":     cfg.get("kafka_sasl_mechanism", ""),
+            "kafka_sasl_username":      cfg.get("kafka_sasl_username", ""),
+            "kafka_sasl_password":      cfg.get("kafka_sasl_password", ""),
+            "kafka_ssl_cafile":         cfg.get("kafka_ssl_cafile", ""),
+            "kafka_ssl_certfile":       cfg.get("kafka_ssl_certfile", ""),
+            "kafka_ssl_keyfile":        cfg.get("kafka_ssl_keyfile", ""),
+            "kafka_ssl_password":       cfg.get("kafka_ssl_password", ""),
+        }
+        kwargs = KafkaClient._build_producer_kwargs(kafka_cfg)
+        from kafka import KafkaProducer
+        producer = KafkaProducer(**kwargs)
+        producer.close(timeout=5)
+        return {"status": "green", "message": f"Подключено к {bootstrap}"}
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/chromadb")
+def test_chromadb() -> dict:
+    """Тест подключения к ChromaDB."""
+    try:
+        from db.vector_store import VectorStore
+        store = VectorStore()
+        stats = store.get_stats()
+        total = sum(stats.values())
+        return {"status": "green", "message": f"OK — {total} записей в {len(stats)} коллекциях"}
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/postgres")
+def test_postgres() -> dict:
+    """Тест подключения к PostgreSQL."""
+    try:
+        from db.postgres import SessionLocal
+        session = SessionLocal()
+        session.execute(__import__("sqlalchemy").text("SELECT 1"))
+        session.close()
+        return {"status": "green", "message": "Подключено"}
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/revisor/{stand_id}")
+def test_revisor_stand(stand_id: str, db: Session = Depends(get_db)) -> dict:
+    """Тест подключения к API стенду Ревизора."""
+    try:
+        _ensure_defaults(db)
+        stands = _load_revisor_stands(db)
+        stand = next((s for s in stands if str(s.get("id", "")).lower() == stand_id.lower()), None)
+        if not stand:
+            return {"status": "red", "message": "Стенд не найден"}
+        import requests as req
+        base_url = stand.get("base_url", "").rstrip("/")
+        headers = {}
+        auth_type = stand.get("auth_type", "none")
+        if auth_type == "bearer" and stand.get("token"):
+            headers["Authorization"] = f"Bearer {stand['token']}"
+        elif auth_type == "api_key" and stand.get("token"):
+            header_name = stand.get("api_key_header", "Authorization")
+            headers[header_name] = stand["token"]
+        resp = req.get(base_url, headers=headers, timeout=10, verify=False)
+        return {"status": "green", "message": f"HTTP {resp.status_code} — доступен"}
+    except req.ConnectionError:
+        return {"status": "red", "message": "Не удалось подключиться"}
+    except req.Timeout:
+        return {"status": "red", "message": "Таймаут подключения (10 сек)"}
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/logs-vps/{conn_id}")
+def test_logs_vps(conn_id: str, db: Session = Depends(get_db)) -> dict:
+    """Тест подключения к VPS-платформе логов."""
+    try:
+        _ensure_defaults(db)
+        connections = _load_logs_vps(db)
+        conn = next(
+            (c for c in connections if str(c.get("id", "")).lower() == conn_id.lower()),
+            None,
+        )
+        if not conn:
+            return {"status": "red", "message": "Подключение не найдено"}
+        from backend.api.log_clients import get_client
+        client = get_client(
+            vps_type=conn.get("vps_type", "generic"),
+            base_url=conn.get("base_url", ""),
+            auth_type=conn.get("auth_type", "none"),
+            token=conn.get("token", ""),
+            username=conn.get("username", ""),
+            password=conn.get("password", ""),
+            api_key_header=conn.get("api_key_header", "Authorization"),
+            ssl_verify=conn.get("ssl_verify", True),
+            ca_cert_path=conn.get("ca_cert_path", ""),
+            default_index=conn.get("default_index", ""),
+        )
+        return client.test_connection()
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}
+
+
+@router.post("/api/settings/test/farm")
+async def test_farm() -> dict:
+    """Тест фермы --- проверить что Farm Manager работает."""
+    try:
+        from backend.farm.manager import farm_manager
+        status = await farm_manager.get_status()
+        total = status.get("devices", {}).get("total", 0)
+        return {
+            "status": "green",
+            "message": f"Ферма активна, устройств: {total}",
+        }
+    except Exception as e:
+        return {"status": "red", "message": str(e)[:200]}

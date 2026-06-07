@@ -5,14 +5,18 @@ import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
   StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
-  Copy, CheckCheck,
+  Copy, CheckCheck, RefreshCw, AlertCircle,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
 import NotionRenderer from "@/components/NotionRenderer";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
-import { parseFile, addEtalon } from "@/lib/api";
+import {
+  parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession,
+  listTestDataConnections, getTestDataSchemasText,
+  type GenSessionSummary, type GenSession, type TestDataConnection,
+} from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
@@ -32,24 +36,6 @@ const PLATFORMS = [
 ];
 
 /* ── History helpers ─────────────────────────────────────────────── */
-
-interface HistEntry {
-  id: string;
-  timestamp: number;
-  depth: string;
-  feature: string;
-  platform: string[];
-  project: string;
-  team: string;
-  ke: string;
-  elapsed: number;
-  caseCount: number;
-  cases: Case[];
-  qaDoc: string;
-  requirement?: string;
-  exportResult?: ExportResult;
-  loadedAsEtalon?: boolean;
-}
 
 interface ParsedFileAttachment {
   name: string;
@@ -114,18 +100,10 @@ function downloadBlob(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url);
 }
 
-function loadHistory(): HistEntry[] {
-  try {
-    const raw = localStorage.getItem("st_gen_history");
-    return raw ? (JSON.parse(raw) as HistEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 const HIST_GROUPS = ["Сегодня", "Вчера", "На этой неделе", "Ранее"] as const;
 
-function getDateGroup(ts: number): string {
+function getDateGroup(isoDate: string): string {
+  const ts = new Date(isoDate).getTime();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const t = todayStart.getTime();
@@ -135,8 +113,9 @@ function getDateGroup(ts: number): string {
   return "Ранее";
 }
 
-function formatHistTime(ts: number): string {
-  const d = new Date(ts);
+function formatHistTime(isoDate: string): string {
+  const d = new Date(isoDate);
+  const ts = d.getTime();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const hm = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -145,11 +124,27 @@ function formatHistTime(ts: number): string {
   return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }) + " " + hm;
 }
 
+/** Получить заголовок сессии: feature или первые 60 символов requirement */
+function sessionTitle(s: GenSessionSummary): string {
+  if (s.feature) return s.feature;
+  const req = (s.requirement ?? "").trim();
+  if (req.length > 60) return req.slice(0, 57) + "...";
+  return req || "Без названия";
+}
+
+const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
+  generating: { label: "Генерация...",  cls: "bg-blue-50 text-blue-600 border-blue-200" },
+  done:       { label: "Готово",        cls: "bg-green-50 text-green-600 border-green-200" },
+  error:      { label: "Ошибка",       cls: "bg-red-50 text-red-600 border-red-200" },
+  cancelled:  { label: "Отменена",     cls: "bg-bg-subtle text-text-muted border-border-main" },
+};
+
 /* ── End history helpers ─────────────────────────────────────────── */
 
 const INPUT_CLS =
-  "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none " +
-  "focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
+  "w-full border border-border-main rounded-lg px-3 py-2 text-sm " +
+  "bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 " +
+  "focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
 const LABEL_CLS = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2";
 
@@ -179,83 +174,140 @@ export default function GenerationSection() {
   const [fileAttachments, setFileAttachments] = useState<ParsedFileAttachment[]>([]);
   const reqFileRef = useRef<HTMLInputElement>(null);
 
+  // ── Test data search ─────────────────────────────────────────
+  const [tdSearchEnabled, setTdSearchEnabled] = useState(false);
+  const [tdConnections, setTdConnections] = useState<TestDataConnection[]>([]);
+  const [selectedTdConns, setSelectedTdConns] = useState<Set<string>>(new Set());
+  const [tdDropdownOpen, setTdDropdownOpen] = useState(false);
+  const tdDropdownRef = useRef<HTMLDivElement>(null);
 
-  // ── Generation history ─────────────────────────────────────────
-  const [histEntries, setHistEntries] = useState<HistEntry[]>(() => loadHistory());
-  const [histView, setHistView] = useState<HistEntry | null>(null);
+  // Load test data connections
+  useEffect(() => {
+    listTestDataConnections()
+      .then(conns => {
+        setTdConnections(conns);
+        // Auto-select connections with schema
+        const withSchema = conns.filter(c => c.cached_schema).map(c => c.id);
+        if (withSchema.length > 0) setSelectedTdConns(new Set(withSchema));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (tdDropdownRef.current && !tdDropdownRef.current.contains(e.target as Node)) {
+        setTdDropdownOpen(false);
+      }
+    }
+    if (tdDropdownOpen) {
+      document.addEventListener("mousedown", handler);
+      return () => document.removeEventListener("mousedown", handler);
+    }
+  }, [tdDropdownOpen]);
+
+  // ── Case selection ────────────────────────────────────────────
+  const [selectedCases, setSelectedCases] = useState<Set<number>>(new Set());
+  const [histSelectedCases, setHistSelectedCases] = useState<Set<number>>(new Set());
+
+  // ── Generation history (from backend) ──────────────────────────
+  const [histSessions, setHistSessions] = useState<GenSessionSummary[]>([]);
+  const [histLoading, setHistLoading] = useState(false);
+  const [histView, setHistView] = useState<GenSession | null>(null);
+  const [histViewLoading, setHistViewLoading] = useState(false);
   const [histFromStage, setHistFromStage] = useState<Stage>("input");
-  const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string } | null>(null);
+  const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string; sessionId?: string } | null>(null);
   const [exportBackStage, setExportBackStage] = useState<Stage>("review");
   const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[], requirement: "" });
   const historySavedRef = useRef(false);
   const currentHistIdRef = useRef<string | null>(null);
   const exportingHistIdRef = useRef<string | null>(null);
 
-  const saveHistEntry = useCallback((entry: HistEntry) => {
-    setHistEntries(prev => {
-      const next = [entry, ...prev].slice(0, 30);
-      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
-      return next;
-    });
+  /** Загрузить список сессий с бэкенда */
+  const refreshHistory = useCallback(async () => {
+    setHistLoading(true);
+    try {
+      const sessions = await listGenSessions({ limit: 50 });
+      setHistSessions(sessions);
+    } catch {
+      // backend не доступен — оставляем пустой список
+    } finally {
+      setHistLoading(false);
+    }
   }, []);
 
-  const deleteHistEntry = useCallback((id: string) => {
-    setHistEntries(prev => {
-      const next = prev.filter(e => e.id !== id);
-      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, []);
-
-  const clearHistory = useCallback(() => {
-    setHistEntries([]);
-    try { localStorage.removeItem("st_gen_history"); } catch {}
+  /** Удалить сессию на бэкенде и убрать из локального списка */
+  const deleteHistSession = useCallback(async (id: string) => {
+    try {
+      await deleteGenSession(id);
+      setHistSessions(prev => prev.filter(s => s.id !== id));
+    } catch {
+      // ignore
+    }
   }, []);
 
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
 
-  const handleLoadAsEtalon = useCallback(async (entry: HistEntry, e: React.MouseEvent) => {
+  /** Загрузить полную сессию и отправить в эталон */
+  const handleLoadAsEtalon = useCallback(async (entry: GenSessionSummary, e: React.MouseEvent) => {
     e.stopPropagation();
     setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
     try {
+      const full = await getGenSession(entry.id);
       await addEtalon({
-        req_text: stripMarkdown(entry.requirement ?? entry.qaDoc ?? ""),
-        tc_text: casesToText(entry.cases),
-        qa_doc: stripMarkdown(entry.qaDoc),
-        platform: entry.platform.join(", "),
-        feature: entry.feature,
+        req_text: stripMarkdown(full.requirement ?? ""),
+        tc_text: casesToText(full.cases as Case[]),
+        qa_doc: stripMarkdown(full.qa_doc ?? ""),
+        platform: full.platform,
+        feature: full.feature,
       });
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-      setHistEntries(prev => {
-        const next = prev.map(e => e.id === entry.id ? { ...e, loadedAsEtalon: true } : e);
-        try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
-        return next;
-      });
     } catch {
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
       setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
     }
   }, []);
+
+  /** Открыть полную сессию из истории */
+  const openHistSession = useCallback(async (entry: GenSessionSummary) => {
+    setHistViewLoading(true);
+    try {
+      const full = await getGenSession(entry.id);
+      setHistView(full);
+      setHistSelectedCases(new Set((full.cases ?? []).map((_: unknown, i: number) => i)));
+      setStage("histitem");
+    } catch {
+      // fallback — не удалось загрузить
+    } finally {
+      setHistViewLoading(false);
+    }
+  }, []);
+
+  // Загрузить историю при первом рендере
+  useEffect(() => { refreshHistory(); }, [refreshHistory]);
   // ── End history ────────────────────────────────────────────────
 
-  const { state, events, progress, cases, qaDoc, start, exportCases, cancel, exportResult, exporting, reset } =
+  const { state, events, progress, cases, qaDoc, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected } =
     useGeneration();
 
-  // Сохраняем exportResult в запись истории, когда экспорт завершён
+  // Когда экспорт завершён — обновляем has_export в локальном списке сессий
   useEffect(() => {
     if (!exportResult || !exportingHistIdRef.current) return;
     const hid = exportingHistIdRef.current;
-    setHistEntries(prev => {
-      const next = prev.map(e => e.id === hid ? { ...e, exportResult } : e);
-      try { localStorage.setItem("st_gen_history", JSON.stringify(next)); } catch {}
-      return next;
-    });
+    setHistSessions(prev => prev.map(s => s.id === hid ? { ...s, has_export: true } : s));
+    // Обновляем histView если он открыт
+    if (histView && histView.id === hid) {
+      setHistView(prev => prev ? { ...prev, export_result: exportResult } : prev);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [exportResult]);
 
   // Restore stage immediately (before paint) when returning to this page
   useLayoutEffect(() => {
-    if (state === "generating") {
+    // If export is in progress or has result — go straight to export
+    if (exporting || (exportResult && (state === "done" || state === "error"))) {
+      setStage("export");
+    } else if (state === "generating") {
       setStage("generating");
     } else if (state === "done" || state === "error") {
       const lastDone = events.find((e) => e.type === "layer_done" && e.layer === 2);
@@ -274,39 +326,43 @@ export default function GenerationSection() {
       const elapsed = lastDone?.elapsed ?? 0;
       setElapsedFinal(elapsed);
       setStage("review");
-      // Save to history (once per generation)
+      // Select all cases by default
+      if (cases.length > 0) setSelectedCases(new Set(cases.map((_, i) => i)));
+      // Обновляем список сессий с бэкенда (сессия уже сохранена на сервере)
       if (!historySavedRef.current && cases.length > 0) {
         historySavedRef.current = true;
-        const meta = genMetaRef.current;
-        const histId = Date.now().toString();
-        currentHistIdRef.current = histId;
-        saveHistEntry({
-          id: histId,
-          timestamp: Date.now(),
-          depth: meta.depth,
-          feature: meta.feature,
-          platform: meta.platform,
-          project: meta.project,
-          team: meta.team,
-          ke: meta.ke,
-          elapsed,
-          caseCount: cases.length,
-          cases,
-          qaDoc,
-          requirement: meta.requirement,
-        });
+        currentHistIdRef.current = sessionId || null;
+        refreshHistory();
       }
     }
     if (state === "error") setStage("review");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, events]);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     const text = buildLlmSourceText(requirement, fileAttachments);
     if (!text) return;
-    genMetaRef.current = { feature: "", project: "", team: "", ke: "", depth, platform: ["Web"], requirement: text };
+
+    let finalText = text;
+
+    // Если включён поиск тестовых данных — подгружаем схему БД и добавляем в промпт
+    if (tdSearchEnabled && selectedTdConns.size > 0) {
+      try {
+        const schemasRes = await getTestDataSchemasText(Array.from(selectedTdConns));
+        if (schemasRes.text) {
+          finalText += "\n\n=== СХЕМЫ РЕАЛЬНЫХ БАЗ ДАННЫХ ДЛЯ ТЕСТОВЫХ ДАННЫХ ===\n"
+            + "Используй реальные таблицы и колонки из схем ниже для формирования тестовых данных в шагах кейсов. "
+            + "В поле test_data каждого шага указывай РЕАЛЬНЫЕ SQL-запросы для получения тестовых данных из этих таблиц.\n\n"
+            + schemasRes.text;
+        }
+      } catch {
+        // Если не удалось получить схему — генерируем без неё
+      }
+    }
+
+    genMetaRef.current = { feature: "", project: "", team: "", ke: "", depth, platform: ["Web"], requirement: finalText };
     historySavedRef.current = false;
-    start({ requirement: text, feature: "", depth, provider, platform: "Web" });
+    start({ requirement: finalText, feature: "", depth, provider, platform: "Web" });
   };
 
 
@@ -333,22 +389,20 @@ export default function GenerationSection() {
         <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
           <div className="flex items-start justify-between mb-1 gap-4">
             <h1 className="text-xl font-bold text-text-main">Генерация тест-кейсов</h1>
-            {histEntries.length > 0 && (
-              <button
-                onClick={() => { setHistFromStage("input"); setStage("history"); }}
-                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
-              >
-                <History className="w-3.5 h-3.5" />
-                История ({histEntries.length})
-              </button>
-            )}
+            <button
+              onClick={() => { refreshHistory(); setHistFromStage("input"); setStage("history"); }}
+              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
+            >
+              <History className="w-3.5 h-3.5" />
+              История{histSessions.length > 0 ? ` (${histSessions.length})` : ""}
+            </button>
           </div>
           <p className="text-sm text-text-muted mb-4">
             Вставьте требование или загрузите файлы — AI изучит все источники и создаст тест-кейсы для Zephyr Scale.
           </p>
 
           {/* Depth */}
-          <div className="bg-white border border-border-main rounded-xl p-4 mb-3">
+          <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
             <div className="mb-2">
               <label className={LABEL_CLS + " mb-0"}>Глубина</label>
             </div>
@@ -360,8 +414,8 @@ export default function GenerationSection() {
                   onClick={() => setDepth(d.id)}
                   className={`px-2 py-2 rounded-lg text-xs font-medium border transition-all duration-150 text-center
                     ${depth === d.id
-                      ? "border-primary bg-indigo-50 text-primary"
-                      : "border-border-main bg-white text-text-muted hover:border-primary/40 hover:text-text-main"}`}
+                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                      : "border-border-main bg-bg-card text-text-muted hover:border-primary/40 hover:text-text-main"}`}
                 >
                   <div className="font-semibold">{d.label}</div>
                   <div className="text-[10px] opacity-70 mt-0.5">{d.sub}</div>
@@ -377,7 +431,7 @@ export default function GenerationSection() {
           </div>
 
           {/* Requirement input */}
-          <div className="bg-white border border-border-main rounded-xl p-5 mb-4">
+          <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
             <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">Требование</label>
             <textarea
               value={requirement}
@@ -430,7 +484,7 @@ export default function GenerationSection() {
                   <span
                     key={`${file.name}-${index}`}
                     title={`${file.name}: ${file.text.length.toLocaleString()} симв. попадет в LLM`}
-                    className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1"
+                    className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-bg-subtle border border-border-main rounded-lg px-2 py-1"
                   >
                     <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
                     <span className="truncate">{file.name}</span>
@@ -451,6 +505,89 @@ export default function GenerationSection() {
               </span>
             </div>
           </div>
+
+          {/* Test data from DB */}
+          {tdConnections.length > 0 && (
+            <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-4">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={tdSearchEnabled}
+                  onChange={e => setTdSearchEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-border-main text-primary focus:ring-primary/30"
+                />
+                <div>
+                  <span className="text-sm font-medium text-text-main">Искать тестовые данные в БД</span>
+                  <p className="text-xs text-text-muted">LLM получит схему реальных БД и подставит запросы для тестовых данных в шаги кейсов</p>
+                </div>
+              </label>
+
+              {tdSearchEnabled && (
+                <div className="mt-3 ml-7 relative" ref={tdDropdownRef}>
+                  <button
+                    onClick={() => setTdDropdownOpen(p => !p)}
+                    className={`${INPUT_CLS} flex items-center justify-between cursor-pointer text-left text-xs`}
+                  >
+                    <span className="truncate">
+                      {selectedTdConns.size === 0
+                        ? "Выберите базы данных..."
+                        : tdConnections
+                            .filter(c => selectedTdConns.has(c.id))
+                            .map(c => c.display_name)
+                            .join(", ")}
+                    </span>
+                    <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform ${tdDropdownOpen ? "rotate-180" : ""}`} />
+                  </button>
+
+                  {tdDropdownOpen && (
+                    <div className="absolute z-20 mt-1 w-full bg-bg-card border border-border-main rounded-lg shadow-lg overflow-hidden">
+                      {tdConnections.map(c => {
+                        const checked = selectedTdConns.has(c.id);
+                        const hasSchema = !!c.cached_schema;
+                        return (
+                          <label
+                            key={c.id}
+                            className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-bg-subtle transition-colors text-xs
+                              ${checked ? "bg-primary/5" : ""}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setSelectedTdConns(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(c.id)) next.delete(c.id); else next.add(c.id);
+                                  return next;
+                                });
+                              }}
+                              className="w-3.5 h-3.5 rounded border-border-main text-primary focus:ring-primary/30"
+                            />
+                            <span className="text-text-main truncate">{c.display_name}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                              c.db_type === "postgresql" ? "bg-blue-100 text-blue-700"
+                              : c.db_type === "mysql" ? "bg-orange-100 text-orange-700"
+                              : "bg-red-100 text-red-700"
+                            }`}>
+                              {c.db_type.toUpperCase()}
+                            </span>
+                            {!hasSchema && (
+                              <span className="text-[10px] text-yellow-600">нет схемы</span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {selectedTdConns.size > 0 && !tdConnections.some(c => selectedTdConns.has(c.id) && c.cached_schema) && (
+                    <p className="text-[11px] text-yellow-600 mt-1.5">
+                      У выбранных БД нет схемы. Выполните introspect в <a href="/settings" className="underline">Настройках</a>.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex justify-end">
             <button
@@ -489,6 +626,12 @@ export default function GenerationSection() {
               Отменить
             </button>
           </div>
+          {!wsConnected && sessionId && (
+            <div className="max-w-2xl mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+              <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+              Соединение потеряно — генерация продолжается на сервере. Переподключение...
+            </div>
+          )}
           <div className="max-w-2xl">
             <StatusPanel events={events} progress={progress} />
           </div>
@@ -514,48 +657,105 @@ export default function GenerationSection() {
                 </p>
               )}
             </div>
-            <div className="flex gap-2">
-              {histEntries.length > 0 && (
+            <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto scrollbar-thin">
+              {state === "error" && sessionId && (
                 <button
-                  onClick={() => { setHistFromStage("review"); setStage("history"); }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
-                    text-text-muted hover:bg-gray-50 hover:text-primary transition-all duration-150"
+                  onClick={() => { resume(sessionId); }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-amber-500 text-white rounded-lg text-xs font-semibold
+                    hover:bg-amber-600 transition-all duration-150 active:scale-[0.98] shadow-sm whitespace-nowrap flex-shrink-0"
                 >
-                  <History className="w-3.5 h-3.5" />
-                  История
+                  <RefreshCw className="w-3 h-3" />
+                  Продолжить
                 </button>
               )}
               <button
-                onClick={handleReset}
-                className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
-                  text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 group"
+                onClick={() => { refreshHistory(); setHistFromStage("review"); setStage("history"); }}
+                className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs
+                  text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150 whitespace-nowrap flex-shrink-0"
               >
-                <Plus className="w-3.5 h-3.5" />
-                Новая генерация
+                <History className="w-3 h-3" />
+                История
               </button>
-              {cases.length > 0 && (
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs
+                  text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 whitespace-nowrap flex-shrink-0"
+              >
+                <Plus className="w-3 h-3" />
+                Новая
+              </button>
+              {cases.length > 0 && selectedCases.size > 0 && (
                 <>
+                  {/* В эталон */}
+                  {(() => {
+                    const eid = sessionId ?? "current";
+                    const st = etalonStatus[eid];
+                    if (st === "done") return (
+                      <span className="flex items-center gap-1 px-2.5 py-1.5 border border-green-200 bg-green-50 rounded-lg text-xs text-green-700 whitespace-nowrap flex-shrink-0">
+                        <CheckCircle2 className="w-3 h-3" /> Эталон
+                      </span>
+                    );
+                    return (
+                      <button
+                        disabled={st === "loading"}
+                        onClick={async () => {
+                          setEtalonStatus(prev => ({ ...prev, [eid]: "loading" }));
+                          try {
+                            const sel = cases.filter((_, i) => selectedCases.has(i));
+                            await addEtalon({
+                              req_text: stripMarkdown(genMetaRef.current.requirement ?? ""),
+                              tc_text: casesToText(sel),
+                              qa_doc: stripMarkdown(qaDoc),
+                              platform: genMetaRef.current.platform.join(", "),
+                              feature: genMetaRef.current.feature,
+                              name: genMetaRef.current.feature || "Генерация",
+                            });
+                            setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
+                          } catch {
+                            setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
+                            setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; }), 2500);
+                          }
+                        }}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-xs transition-all duration-150 whitespace-nowrap flex-shrink-0
+                          ${st === "error"
+                            ? "border-red-200 text-red-500"
+                            : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
+                      >
+                        {st === "loading"
+                          ? <><Loader2 className="w-3 h-3 animate-spin" /> ...</>
+                          : st === "error"
+                            ? <><XCircle className="w-3 h-3" /> Ошибка</>
+                            : <><BookmarkPlus className="w-3 h-3" /> Эталон</>}
+                      </button>
+                    );
+                  })()}
                   <button
                     onClick={() => {
-                      const entry = histEntries[0];
-                      const text = entry?.exportResult?.xml ?? casesToText(cases);
+                      const sel = cases.filter((_, i) => selectedCases.has(i));
+                      const text = exportResult?.xml ?? casesToText(sel);
                       sessionStorage.setItem("st_automodel_prefill",
-                        JSON.stringify({ text, feature: entry?.feature ?? "" }));
+                        JSON.stringify({ text, feature: genMetaRef.current.feature ?? "" }));
                       window.location.href = "/auto-model";
                     }}
-                    className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
-                      text-text-muted hover:bg-gray-50 hover:text-violet-600 transition-all duration-150"
+                    className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs
+                      text-text-muted hover:bg-bg-subtle hover:text-violet-600 transition-all duration-150 whitespace-nowrap flex-shrink-0"
                   >
-                    <FlaskConical className="w-3.5 h-3.5" />
-                    В автотесты
+                    <FlaskConical className="w-3 h-3" />
+                    Автотест
                   </button>
                   <button
-                    onClick={() => { exportingHistIdRef.current = currentHistIdRef.current; setExportSource(null); setExportBackStage("review"); setStage("export"); }}
-                    className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
-                      hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
+                    onClick={() => {
+                      const sel = cases.filter((_, i) => selectedCases.has(i));
+                      exportingHistIdRef.current = currentHistIdRef.current ?? sessionId;
+                      setExportSource({ cases: sel, qaDoc });
+                      setExportBackStage("review");
+                      setStage("export");
+                    }}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold
+                      hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm whitespace-nowrap flex-shrink-0"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    Экспорт
+                    <Download className="w-3 h-3" />
+                    Экспорт ({selectedCases.size})
                   </button>
                 </>
               )}
@@ -569,11 +769,11 @@ export default function GenerationSection() {
               </div>
             )}
             {qaDoc && (
-              <div className="mb-4 bg-white border border-border-main rounded-xl overflow-hidden">
+              <div className="mb-4 bg-bg-card border border-border-main rounded-xl overflow-hidden">
                 <button
                   onClick={() => setQaExpanded((v) => !v)}
                   className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
-                    text-text-main hover:bg-gray-50/70 transition-colors group"
+                    text-text-main hover:bg-bg-subtle/70 transition-colors group"
                 >
                   <span className="flex items-center gap-2">
                     <FileText className="w-4 h-4 text-text-muted" />
@@ -595,7 +795,7 @@ export default function GenerationSection() {
                         className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
                           ${qaCopied
                             ? "bg-green-50 border-green-200 text-green-700"
-                            : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                            : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
                       >
                         {qaCopied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
                       </button>
@@ -609,12 +809,38 @@ export default function GenerationSection() {
             )}
             {cases.length > 0 && (
               <div>
-                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">Тест-кейсы</p>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                    Тест-кейсы ({selectedCases.size}/{cases.length})
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setSelectedCases(new Set(cases.map((_, i) => i)))}
+                      className="text-xs text-primary hover:text-primary-dark transition-colors"
+                    >
+                      Выбрать все
+                    </button>
+                    <span className="text-text-muted/30">|</span>
+                    <button
+                      onClick={() => setSelectedCases(new Set())}
+                      className="text-xs text-text-muted hover:text-red-500 transition-colors"
+                    >
+                      Снять все
+                    </button>
+                  </div>
+                </div>
                 {cases.map((c, i) => (
                   <CaseCard
                     key={i}
                     index={i + 1}
                     case_={c}
+                    selectable
+                    selected={selectedCases.has(i)}
+                    onToggle={() => setSelectedCases(prev => {
+                      const next = new Set(prev);
+                      next.has(i) ? next.delete(i) : next.add(i);
+                      return next;
+                    })}
                     className="animate-slide-up"
                     style={{ animationDelay: `${Math.min(i * 30, 300)}ms` } as React.CSSProperties}
                   />
@@ -640,102 +866,134 @@ export default function GenerationSection() {
               <span className="text-text-muted/40">·</span>
               <h1 className="text-xl font-bold text-text-main">История генераций</h1>
             </div>
-            {histEntries.length > 0 && (
-              <button
-                onClick={() => { if (window.confirm("Удалить всю историю генераций?")) clearHistory(); }}
-                className="text-xs text-text-muted hover:text-red-500 transition-colors"
-              >
-                Очистить всё
-              </button>
-            )}
+            <button
+              onClick={refreshHistory}
+              disabled={histLoading}
+              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors disabled:opacity-40"
+            >
+              <RefreshCw className={`w-3 h-3 ${histLoading ? "animate-spin" : ""}`} />
+              Обновить
+            </button>
           </div>
 
-          {histEntries.length === 0 ? (
+          {histLoading && histSessions.length === 0 ? (
+            <div className="max-w-2xl flex flex-col items-center justify-center py-16 text-text-muted">
+              <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-30" />
+              <p className="text-sm">Загрузка истории...</p>
+            </div>
+          ) : histSessions.length === 0 ? (
             <div className="max-w-2xl flex flex-col items-center justify-center py-16 text-text-muted">
               <History className="w-10 h-10 mb-3 opacity-20" />
               <p className="text-sm">История пуста — завершите генерацию, чтобы она появилась здесь</p>
             </div>
           ) : (
             <div className="max-w-2xl space-y-5">
+              {histViewLoading && (
+                <div className="fixed inset-0 z-50 bg-black/10 flex items-center justify-center">
+                  <div className="bg-bg-card rounded-xl px-6 py-4 shadow-lg flex items-center gap-3">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                    <span className="text-sm text-text-main">Загрузка сессии...</span>
+                  </div>
+                </div>
+              )}
               {HIST_GROUPS
-                .map(g => [g, histEntries.filter(e => getDateGroup(e.timestamp) === g)] as [string, HistEntry[]])
+                .map(g => [g, histSessions.filter(s => getDateGroup(s.created_at) === g)] as [string, GenSessionSummary[]])
                 .filter(([, entries]) => entries.length > 0)
                 .map(([group, entries]) => (
                   <div key={group}>
                     <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">{group}</p>
-                    <div className="bg-white border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
-                      {entries.map(entry => (
-                        <div
-                          key={entry.id}
-                          className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 cursor-pointer group transition-colors"
-                          onClick={() => { setHistView(entry); setStage("histitem"); }}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium text-text-main truncate">{entry.feature || "Без названия"}</p>
-                            <p className="text-xs text-text-muted mt-0.5">
-                              {entry.caseCount} кейсов
-                              {" · "}
-                              {DEPTHS.find(d => d.id === entry.depth)?.label ?? entry.depth}
-                              {" · "}
-                              {entry.platform.join(", ")}
-                              {entry.project ? ` · ${entry.project}` : ""}
-                            </p>
-                            {entry.exportResult && (
-                              <div className="flex items-center gap-2 mt-1" onClick={e => e.stopPropagation()}>
-                                <button onClick={() => downloadBlob(entry.exportResult!.xml, `cases_${entry.id}.xml`, "application/xml")}
-                                  className="text-[11px] font-medium text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 transition-colors">
-                                  <Download className="w-2.5 h-2.5" /> XML
-                                </button>
-                                <span className="text-text-muted/40">·</span>
-                                <button onClick={() => downloadBlob(entry.exportResult!.csv, `cases_${entry.id}.csv`, "text/csv")}
-                                  className="text-[11px] font-medium text-emerald-500 hover:text-emerald-700 flex items-center gap-0.5 transition-colors">
-                                  <Download className="w-2.5 h-2.5" /> CSV
-                                </button>
-                                <span className="text-text-muted/40">·</span>
-                                <button onClick={() => downloadBlob(entry.exportResult!.md, `cases_${entry.id}.md`, "text/markdown")}
-                                  className="text-[11px] font-medium text-violet-500 hover:text-violet-700 flex items-center gap-0.5 transition-colors">
-                                  <Download className="w-2.5 h-2.5" /> MD
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                          <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.timestamp)}</span>
-                          {/* Загрузить в эталон */}
-                          {(() => {
-                            if (entry.loadedAsEtalon) return (
-                              <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
-                                <CheckCircle2 className="w-3.5 h-3.5" />
-                              </span>
-                            );
-                            const st = etalonStatus[entry.id];
-                            if (st === "loading") return (
-                              <span className="flex-shrink-0 p-0.5 text-text-muted">
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              </span>
-                            );
-                            if (st === "error") return (
-                              <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
-                                <XCircle className="w-3.5 h-3.5" />
-                              </span>
-                            );
-                            return (
-                              <button
-                                onClick={e => handleLoadAsEtalon(entry, e)}
-                                title="Загрузить в эталон"
-                                className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
-                              >
-                                <BookmarkPlus className="w-3.5 h-3.5" />
-                              </button>
-                            );
-                          })()}
-                          <button
-                            onClick={e => { e.stopPropagation(); if (window.confirm("Удалить эту запись из истории?")) deleteHistEntry(entry.id); }}
-                            className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"
+                    <div className="bg-bg-card border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
+                      {entries.map(entry => {
+                        const badge = STATUS_BADGE[entry.status] ?? STATUS_BADGE.done;
+                        const isRunning = entry.status === "generating";
+                        const hasError = entry.status === "error" || entry.status === "cancelled";
+                        return (
+                          <div
+                            key={entry.id}
+                            className="flex items-center gap-3 px-4 py-3 hover:bg-bg-subtle/60 cursor-pointer group transition-colors"
+                            onClick={() => openHistSession(entry)}
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-text-main truncate">{sessionTitle(entry)}</p>
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border flex-shrink-0 ${badge.cls}`}>
+                                  {badge.label}
+                                </span>
+                              </div>
+                              <p className="text-xs text-text-muted mt-0.5">
+                                {entry.case_count > 0 ? `${entry.case_count} кейсов` : "кейсы не готовы"}
+                                {" · "}
+                                {DEPTHS.find(d => d.id === entry.depth)?.label ?? entry.depth}
+                                {" · "}
+                                {entry.platform}
+                                {entry.elapsed > 0 ? ` · ${entry.elapsed}с` : ""}
+                              </p>
+                              {/* Кнопки действий: экспорт / продолжить */}
+                              <div className="flex items-center gap-2 mt-1" onClick={e => e.stopPropagation()}>
+                                {entry.status === "done" && !entry.has_export && entry.case_count > 0 && (
+                                  <button
+                                    onClick={() => openHistSession(entry)}
+                                    className="text-[11px] font-medium text-primary hover:text-primary-dark flex items-center gap-0.5 transition-colors"
+                                  >
+                                    <Download className="w-2.5 h-2.5" /> Сгенерировать файл
+                                  </button>
+                                )}
+                                {hasError && (
+                                  <button
+                                    onClick={() => {
+                                      resume(entry.id);
+                                      setStage("generating");
+                                    }}
+                                    className="text-[11px] font-medium text-amber-600 hover:text-amber-700 flex items-center gap-0.5 transition-colors"
+                                  >
+                                    <RefreshCw className="w-2.5 h-2.5" /> Продолжить
+                                  </button>
+                                )}
+                                {isRunning && (
+                                  <span className="text-[11px] text-blue-500 flex items-center gap-1">
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin" /> Идёт генерация
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.created_at)}</span>
+                            {/* Загрузить в эталон */}
+                            {entry.status === "done" && entry.case_count > 0 && (() => {
+                              const st = etalonStatus[entry.id];
+                              if (st === "done") return (
+                                <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                </span>
+                              );
+                              if (st === "loading") return (
+                                <span className="flex-shrink-0 p-0.5 text-text-muted">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                </span>
+                              );
+                              if (st === "error") return (
+                                <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
+                                  <XCircle className="w-3.5 h-3.5" />
+                                </span>
+                              );
+                              return (
+                                <button
+                                  onClick={e => handleLoadAsEtalon(entry, e)}
+                                  title="Загрузить в эталон"
+                                  className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
+                                >
+                                  <BookmarkPlus className="w-3.5 h-3.5" />
+                                </button>
+                              );
+                            })()}
+                            <button
+                              onClick={e => { e.stopPropagation(); if (window.confirm("Удалить эту запись?")) deleteHistSession(entry.id); }}
+                              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -747,128 +1005,250 @@ export default function GenerationSection() {
       {/* ── HISTORY ITEM ── */}
       {stage === "histitem" && histView && (
         <div className="p-6 animate-slide-up">
-          <div className="flex items-start justify-between mb-4 max-w-3xl gap-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <button
-                onClick={() => setStage("history")}
-                className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group flex-shrink-0"
-              >
-                <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
-                История
-              </button>
-              <span className="text-text-muted/40 flex-shrink-0">·</span>
-              <h1 className="text-lg font-bold text-text-main truncate">{histView.feature || "Без названия"}</h1>
-            </div>
-            {histView.cases.length > 0 && (
+          {(() => {
+            const hvCases = (histView.cases ?? []) as Case[];
+            const hvQaDoc = histView.qa_doc ?? "";
+            const hvBadge = STATUS_BADGE[histView.status] ?? STATUS_BADGE.done;
+            const hvTitle = sessionTitle(histView);
+            return (
               <>
-                <button
-                  onClick={() => {
-                    const text = histView.exportResult?.xml ?? casesToText(histView.cases);
-                    sessionStorage.setItem("st_automodel_prefill",
-                      JSON.stringify({ text, feature: histView.feature }));
-                    window.location.href = "/auto-model";
-                  }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
-                    text-text-muted hover:bg-gray-50 hover:text-violet-600 transition-all duration-150 flex-shrink-0"
-                >
-                  <FlaskConical className="w-3.5 h-3.5" />
-                  В автотесты
-                </button>
-                <button
-                  onClick={() => {
-                    exportingHistIdRef.current = histView.id;
-                    setExportSource({ cases: histView.cases, qaDoc: histView.qaDoc });
-                    setExportBackStage("histitem");
-                    setStage("export");
-                  }}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
-                    hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm flex-shrink-0"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Экспорт
-                </button>
-              </>
-            )}
-          </div>
-
-          <div className="max-w-3xl">
-            {/* Meta badges */}
-            <div className="flex items-center gap-2 flex-wrap mb-4">
-              <span className="text-xs bg-indigo-50 text-primary border border-indigo-100 px-2 py-1 rounded-md font-medium">
-                {DEPTHS.find(d => d.id === histView.depth)?.label ?? histView.depth}
-              </span>
-              {histView.platform.map(p => (
-                <span key={p} className="text-xs bg-gray-50 text-text-muted border border-border-main px-2 py-1 rounded-md">
-                  {p}
-                </span>
-              ))}
-              <span className="text-xs text-text-muted">
-                {histView.caseCount} кейсов{histView.elapsed > 0 ? ` · за ${histView.elapsed}с` : ""}
-              </span>
-              {histView.project && <span className="text-xs text-text-muted">{histView.project}</span>}
-              {histView.team && <span className="text-xs text-text-muted">{histView.team}</span>}
-              <span className="text-xs text-text-muted ml-auto">{formatHistTime(histView.timestamp)}</span>
-            </div>
-
-            {/* QA Doc */}
-            {histView.qaDoc && (
-              <div className="mb-4 bg-white border border-border-main rounded-xl overflow-hidden">
-                <button
-                  onClick={() => setQaExpanded(v => !v)}
-                  className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
-                    text-text-main hover:bg-gray-50/70 transition-colors group"
-                >
-                  <span className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-text-muted" />
-                    QA Документация
-                  </span>
-                  <ChevronDown
-                    className={`w-4 h-4 text-text-muted transition-transform duration-200 ${qaExpanded ? "rotate-180" : ""}`}
-                  />
-                </button>
-                {qaExpanded && (
-                  <div className="border-t border-border-main animate-fade-in">
-                    <div className="flex justify-end px-4 pt-3">
-                      <button
-                        onClick={async () => {
-                          await navigator.clipboard.writeText(histView.qaDoc);
-                          setQaCopied(true);
-                          setTimeout(() => setQaCopied(false), 2000);
-                        }}
-                        className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
-                          ${qaCopied
-                            ? "bg-green-50 border-green-200 text-green-700"
-                            : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
-                      >
-                        {qaCopied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
-                      </button>
-                    </div>
-                    <div className="px-5 py-4">
-                      <NotionRenderer text={histView.qaDoc} />
-                    </div>
+                <div className="flex items-start justify-between mb-4 max-w-3xl gap-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button
+                      onClick={() => { setStage("history"); setHistView(null); }}
+                      className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group flex-shrink-0"
+                    >
+                      <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+                      История
+                    </button>
+                    <span className="text-text-muted/40 flex-shrink-0">·</span>
+                    <h1 className="text-lg font-bold text-text-main truncate">{hvTitle}</h1>
+                    <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full border flex-shrink-0 ${hvBadge.cls}`}>
+                      {hvBadge.label}
+                    </span>
                   </div>
-                )}
-              </div>
-            )}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {(histView.status === "error" || histView.status === "cancelled") && (
+                      <button
+                        onClick={() => { resume(histView.id); setStage("generating"); }}
+                        className="flex items-center gap-1.5 px-3.5 py-2 bg-amber-500 text-white rounded-lg text-sm font-semibold
+                          hover:bg-amber-600 transition-all duration-150 active:scale-[0.98] shadow-sm"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Продолжить
+                      </button>
+                    )}
+                    {hvCases.length > 0 && histSelectedCases.size > 0 && (
+                      <>
+                        {/* В эталон */}
+                        {(() => {
+                          const eid = histView.id;
+                          const st = etalonStatus[eid];
+                          if (st === "done") return (
+                            <span className="flex items-center gap-1.5 px-3.5 py-2 border border-green-200 bg-green-50 rounded-lg text-sm text-green-700">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> В эталонах
+                            </span>
+                          );
+                          return (
+                            <button
+                              disabled={st === "loading"}
+                              onClick={async () => {
+                                setEtalonStatus(prev => ({ ...prev, [eid]: "loading" }));
+                                try {
+                                  const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));
+                                  await addEtalon({
+                                    req_text: stripMarkdown(histView.requirement ?? ""),
+                                    tc_text: casesToText(sel),
+                                    qa_doc: stripMarkdown(hvQaDoc),
+                                    platform: histView.platform,
+                                    feature: histView.feature,
+                                    name: histView.feature || "Генерация",
+                                  });
+                                  setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
+                                } catch {
+                                  setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
+                                  setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; }), 2500);
+                                }
+                              }}
+                              className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-lg text-sm transition-all duration-150
+                                ${st === "error"
+                                  ? "border-red-200 text-red-500"
+                                  : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
+                            >
+                              {st === "loading"
+                                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
+                                : st === "error"
+                                  ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
+                                  : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                            </button>
+                          );
+                        })()}
+                        <button
+                          onClick={() => {
+                            const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));
+                            const text = histView.export_result?.xml ?? casesToText(sel);
+                            sessionStorage.setItem("st_automodel_prefill",
+                              JSON.stringify({ text, feature: histView.feature }));
+                            window.location.href = "/auto-model";
+                          }}
+                          className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
+                            text-text-muted hover:bg-bg-subtle hover:text-violet-600 transition-all duration-150"
+                        >
+                          <FlaskConical className="w-3.5 h-3.5" />
+                          В автотесты
+                        </button>
+                        <button
+                          onClick={() => {
+                            const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));
+                            exportingHistIdRef.current = histView.id;
+                            setExportSource({ cases: sel, qaDoc: hvQaDoc, sessionId: histView.id });
+                            setExportBackStage("histitem");
+                            setStage("export");
+                          }}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                            hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Экспорт ({histSelectedCases.size})
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
 
-            {/* Cases */}
-            {histView.cases.length > 0 && (
-              <div>
-                <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">
-                  {histView.caseCount} тест-кейсов
-                </p>
-                {histView.cases.map((c, i) => (
-                  <CaseCard
-                    key={i}
-                    index={i + 1}
-                    case_={c}
-                    className="animate-slide-up"
-                    style={{ animationDelay: `${Math.min(i * 30, 300)}ms` } as React.CSSProperties}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+                <div className="max-w-3xl">
+                  {/* Meta badges */}
+                  <div className="flex items-center gap-2 flex-wrap mb-4">
+                    <span className="text-xs bg-[var(--color-active-bg)] text-primary border border-indigo-100 px-2 py-1 rounded-md font-medium">
+                      {DEPTHS.find(d => d.id === histView.depth)?.label ?? histView.depth}
+                    </span>
+                    <span className="text-xs bg-bg-subtle text-text-muted border border-border-main px-2 py-1 rounded-md">
+                      {histView.platform}
+                    </span>
+                    <span className="text-xs text-text-muted">
+                      {hvCases.length} кейсов{histView.elapsed > 0 ? ` · за ${histView.elapsed}с` : ""}
+                    </span>
+                    <span className="text-xs text-text-muted ml-auto">{formatHistTime(histView.created_at)}</span>
+                  </div>
+
+                  {/* Error message */}
+                  {histView.error && (
+                    <div className="mb-4 flex items-start gap-2 px-4 py-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+                      <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                      <span>{histView.error}</span>
+                    </div>
+                  )}
+
+                  {/* Export result downloads */}
+                  {histView.export_result && (
+                    <div className="mb-4 flex items-center gap-3 px-4 py-3 bg-green-50/50 border border-green-200 rounded-xl">
+                      <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                      <span className="text-sm text-green-700 font-medium">Файл экспортирован</span>
+                      <div className="flex items-center gap-2 ml-auto">
+                        <button onClick={() => downloadBlob(histView.export_result!.xml, `cases_${histView.id}.xml`, "application/xml")}
+                          className="text-[11px] font-medium text-indigo-500 hover:text-indigo-700 flex items-center gap-0.5 transition-colors">
+                          <Download className="w-2.5 h-2.5" /> XML
+                        </button>
+                        <span className="text-text-muted/40">·</span>
+                        <button onClick={() => downloadBlob(histView.export_result!.csv, `cases_${histView.id}.csv`, "text/csv")}
+                          className="text-[11px] font-medium text-emerald-500 hover:text-emerald-700 flex items-center gap-0.5 transition-colors">
+                          <Download className="w-2.5 h-2.5" /> CSV
+                        </button>
+                        <span className="text-text-muted/40">·</span>
+                        <button onClick={() => downloadBlob(histView.export_result!.md, `cases_${histView.id}.md`, "text/markdown")}
+                          className="text-[11px] font-medium text-violet-500 hover:text-violet-700 flex items-center gap-0.5 transition-colors">
+                          <Download className="w-2.5 h-2.5" /> MD
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* QA Doc */}
+                  {hvQaDoc && (
+                    <div className="mb-4 bg-bg-card border border-border-main rounded-xl overflow-hidden">
+                      <button
+                        onClick={() => setQaExpanded(v => !v)}
+                        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
+                          text-text-main hover:bg-bg-subtle/70 transition-colors group"
+                      >
+                        <span className="flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-text-muted" />
+                          QA Документация
+                        </span>
+                        <ChevronDown
+                          className={`w-4 h-4 text-text-muted transition-transform duration-200 ${qaExpanded ? "rotate-180" : ""}`}
+                        />
+                      </button>
+                      {qaExpanded && (
+                        <div className="border-t border-border-main animate-fade-in">
+                          <div className="flex justify-end px-4 pt-3">
+                            <button
+                              onClick={async () => {
+                                await navigator.clipboard.writeText(hvQaDoc);
+                                setQaCopied(true);
+                                setTimeout(() => setQaCopied(false), 2000);
+                              }}
+                              className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
+                                ${qaCopied
+                                  ? "bg-green-50 border-green-200 text-green-700"
+                                  : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
+                            >
+                              {qaCopied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
+                            </button>
+                          </div>
+                          <div className="px-5 py-4">
+                            <NotionRenderer text={hvQaDoc} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Cases */}
+                  {hvCases.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">
+                          {histSelectedCases.size}/{hvCases.length} тест-кейсов
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setHistSelectedCases(new Set(hvCases.map((_: Case, i: number) => i)))}
+                            className="text-xs text-primary hover:text-primary-dark transition-colors"
+                          >
+                            Выбрать все
+                          </button>
+                          <span className="text-text-muted/30">|</span>
+                          <button
+                            onClick={() => setHistSelectedCases(new Set())}
+                            className="text-xs text-text-muted hover:text-red-500 transition-colors"
+                          >
+                            Снять все
+                          </button>
+                        </div>
+                      </div>
+                      {hvCases.map((c: Case, i: number) => (
+                        <CaseCard
+                          key={i}
+                          index={i + 1}
+                          case_={c}
+                          selectable
+                          selected={histSelectedCases.has(i)}
+                          onToggle={() => setHistSelectedCases(prev => {
+                            const next = new Set(prev);
+                            next.has(i) ? next.delete(i) : next.add(i);
+                            return next;
+                          })}
+                          className="animate-slide-up"
+                          style={{ animationDelay: `${Math.min(i * 30, 300)}ms` } as React.CSSProperties}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 

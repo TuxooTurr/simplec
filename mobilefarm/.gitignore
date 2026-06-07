@@ -1,0 +1,28 @@
+# Java / Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+*.jar
+*.war
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Environment
+.env
+*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (dashboard)
+node_modules/
+dist/
+
+# Docker
+*.log

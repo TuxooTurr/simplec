@@ -38,7 +38,7 @@ function downloadBlob(content: string, filename: string, mime: string) {
 }
 
 const DOWNLOAD_BUTTONS = [
-  { key: "xml", label: "Zephyr XML",  mime: "application/xml", ext: "xml", Icon: FileCode2, color: "text-indigo-600 border-indigo-200 hover:bg-indigo-50" },
+  { key: "xml", label: "Zephyr XML",  mime: "application/xml", ext: "xml", Icon: FileCode2, color: "text-indigo-600 border-indigo-200 hover:bg-[var(--color-active-bg)]" },
   { key: "csv", label: "CSV таблица", mime: "text/csv",         ext: "csv", Icon: Table2,    color: "text-emerald-600 border-emerald-200 hover:bg-emerald-50" },
   { key: "md",  label: "Markdown",    mime: "text/markdown",    ext: "md",  Icon: FileText,  color: "text-violet-600 border-violet-200 hover:bg-violet-50" },
 ] as const;
@@ -118,7 +118,7 @@ function EditableDropdown({ value, onChange, list, onListChange, placeholder, in
       </div>
 
       {open && (
-        <div className="absolute z-50 w-full mt-1 bg-white border border-border-main rounded-lg shadow-lg overflow-hidden">
+        <div className="absolute z-50 w-full mt-1 bg-bg-card border border-border-main rounded-lg shadow-lg overflow-hidden">
           {filtered.length > 0 && (
             <ul className="max-h-48 overflow-y-auto divide-y divide-border-main">
               {filtered.map(item => (
@@ -137,7 +137,7 @@ function EditableDropdown({ value, onChange, list, onListChange, placeholder, in
           )}
           {canAdd && (
             <button type="button" onClick={addToList}
-              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary hover:bg-indigo-50 border-t border-border-main">
+              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-primary hover:bg-[var(--color-active-bg)] border-t border-border-main">
               <Plus className="w-3.5 h-3.5 shrink-0" />
               <span className="truncate">Добавить «{input.trim()}»</span>
             </button>
@@ -212,7 +212,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
       </div>
 
       {/* Settings */}
-      <div className="bg-white border border-border-main rounded-xl p-5">
+      <div className="bg-bg-card border border-border-main rounded-xl p-5">
         <h3 className="text-sm font-semibold text-text-main mb-4 flex items-center gap-2">
           <FileCode2 className="w-4 h-4 text-text-muted" />
           Настройки Zephyr XML
@@ -250,8 +250,8 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
                   )}
                   className={`px-2 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150 text-center
                     ${platform.includes(p.id)
-                      ? "border-primary bg-indigo-50 text-primary"
-                      : "border-border-main bg-white text-text-muted hover:border-primary/40 hover:text-text-main"}`}
+                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                      : "border-border-main bg-bg-card text-text-muted hover:border-primary/40 hover:text-text-main"}`}
                 >
                   {p.label}
                 </button>
@@ -367,7 +367,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
 
       {/* Download buttons */}
       {result && (
-        <div className="bg-white border border-border-main rounded-xl p-5 animate-slide-up">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 animate-slide-up">
           <div className="flex items-center gap-2 mb-4">
             <CheckCircle2 className="w-4 h-4 text-green-500 animate-success flex-shrink-0" />
             <p className="text-sm font-semibold text-text-main">Файлы готовы к скачиванию</p>
@@ -377,7 +377,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
               <button
                 key={key}
                 onClick={() => downloadBlob(result[key as keyof ExportResult], `test_cases_${ts}.${ext}`, mime)}
-                className={`flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-medium
+                className={`flex items-center gap-2 px-4 py-2 bg-bg-card border rounded-lg text-sm font-medium
                   transition-all duration-150 active:scale-[0.97] hover:shadow-sm ${color}`}
               >
                 <Icon className="w-4 h-4" />
@@ -390,7 +390,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
 
       {/* XML preview */}
       {result?.xml && (
-        <div className="bg-white border border-border-main rounded-xl p-5 animate-slide-up">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 animate-slide-up">
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">XML для Zephyr</p>
             <button
@@ -402,14 +402,14 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150 active:scale-[0.97]
                 ${xmlCopied
                   ? "bg-green-50 border-green-200 text-green-700"
-                  : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                  : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
             >
               {xmlCopied
                 ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
                 : <><Copy className="w-3.5 h-3.5" /> Копировать XML</>}
             </button>
           </div>
-          <pre className="text-xs font-mono text-text-main bg-gray-50 rounded-lg p-3 overflow-x-auto max-h-72 overflow-y-auto leading-relaxed whitespace-pre-wrap">
+          <pre className="text-xs font-mono text-text-main bg-bg-subtle rounded-lg p-3 overflow-x-auto max-h-72 overflow-y-auto leading-relaxed whitespace-pre-wrap">
             {result.xml}
           </pre>
         </div>

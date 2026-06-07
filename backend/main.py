@@ -38,9 +38,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from backend.api import (
-    generation, etalons, bugs, system, alerts, kernel,
+    auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
+    testdata, jobs, logs,
+    device_farm, device_farm_ws,
 )
 from db.postgres import init_db
 
@@ -72,6 +74,12 @@ async def lifespan(app_: FastAPI):
         await autotest_runs.start_autorun_monitor()
     except Exception as _e:
         warnings.warn(f"Autotest autorun monitor failed to start: {_e}")
+    # Startup: запустить менеджер фермы устройств
+    try:
+        from backend.farm.manager import farm_manager
+        await farm_manager.start()
+    except Exception as _e:
+        warnings.warn(f"Farm manager failed to start: {_e}")
     yield
     # Shutdown: остановить все задачи
     try:
@@ -81,6 +89,11 @@ async def lifespan(app_: FastAPI):
         pass
     try:
         await autotest_runs.stop_autorun_monitor()
+    except Exception:
+        pass
+    try:
+        from backend.farm.manager import farm_manager
+        await farm_manager.stop()
     except Exception:
         pass
 
@@ -107,6 +120,27 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Проверяет Bearer-токен на всех /api/ путях, кроме публичных."""
+
+    _PUBLIC = frozenset({"/api/auth/login", "/api/auth/me", "/healthz"})
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        path = request.url.path
+        if path in self._PUBLIC or not path.startswith("/api/") or path.startswith("/api/farm/agents/"):
+            return await call_next(request)
+        if request.headers.get("upgrade", "").lower() == "websocket":
+            return await call_next(request)
+        from backend.api.auth import get_current_user
+        user = get_current_user(request)
+        if not user:
+            from starlette.responses import JSONResponse
+            return JSONResponse(status_code=401, content={"detail": "Не авторизован"})
+        request.state.user = user
+        return await call_next(request)
+
+
+app.add_middleware(AuthMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS — разрешаем только свой домен + localhost для разработки
@@ -123,7 +157,7 @@ app.add_middleware(
 )
 
 # ─── Роутеры приложения ──────────────────────────────────────────────────────
-# Авторизации в приложении нет: проект работает в закрытой корпоративной сети.
+app.include_router(auth.router)
 app.include_router(system.router)
 app.include_router(generation.router)
 app.include_router(etalons.router)
@@ -137,6 +171,11 @@ app.include_router(revisor.router)
 app.include_router(autotests_gen.router)
 app.include_router(autotest_runs.router)
 app.include_router(app_settings.router)
+app.include_router(testdata.router)
+app.include_router(jobs.router)
+app.include_router(logs.router)
+app.include_router(device_farm.router)
+app.include_router(device_farm_ws.router)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

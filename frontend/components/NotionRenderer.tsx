@@ -12,12 +12,12 @@ function renderInline(text: string): React.ReactNode {
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(<React.Fragment key={k++}>{text.slice(last, m.index)}</React.Fragment>);
     if (m[2] !== undefined)
-      parts.push(<strong key={k++} className="font-semibold text-gray-900">{m[2]}</strong>);
+      parts.push(<strong key={k++} className="font-semibold text-text-main">{m[2]}</strong>);
     else if (m[3] !== undefined)
-      parts.push(<em key={k++} className="italic text-gray-700">{m[3]}</em>);
+      parts.push(<em key={k++} className="italic text-text-main">{m[3]}</em>);
     else if (m[4] !== undefined)
       parts.push(
-        <code key={k++} className="px-1.5 py-0.5 rounded text-[11px] bg-gray-100 font-mono text-gray-700 border border-gray-200">
+        <code key={k++} className="px-1.5 py-0.5 rounded text-[11px] bg-bg-muted font-mono text-text-main border border-border-main">
           {m[4]}
         </code>
       );
@@ -99,9 +99,9 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
         i++;
       }
       nodes.push(
-        <div key={k++} className="my-3 rounded-xl overflow-hidden border border-gray-200">
+        <div key={k++} className="my-3 rounded-xl overflow-hidden border border-border-main">
           {lang && (
-            <div className="px-4 py-1.5 bg-gray-900 text-gray-400 text-[10px] font-mono uppercase tracking-widest">
+            <div className="px-4 py-1.5 bg-gray-900 text-text-muted text-[10px] font-mono uppercase tracking-widest">
               {lang}
             </div>
           )}
@@ -133,14 +133,14 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
       }
 
       nodes.push(
-        <div key={k++} className="my-3 overflow-x-auto rounded-xl border border-gray-200">
-          <table className="min-w-full border-separate border-spacing-0 bg-white text-xs">
-            <thead className="bg-gray-50">
+        <div key={k++} className="my-3 overflow-x-auto rounded-xl border border-border-main">
+          <table className="min-w-full border-separate border-spacing-0 bg-bg-card text-xs">
+            <thead className="bg-bg-subtle">
               <tr>
                 {headers.map((cell, idx) => (
                   <th
                     key={idx}
-                    className={`border-b border-gray-200 px-3 py-2 font-semibold text-gray-700 ${alignments[idx] ?? "text-left"}`}
+                    className={`border-b border-border-main px-3 py-2 font-semibold text-text-main ${alignments[idx] ?? "text-left"}`}
                   >
                     {renderInline(cell)}
                   </th>
@@ -149,11 +149,11 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
             </thead>
             <tbody>
               {rows.map((row, rowIdx) => (
-                <tr key={rowIdx} className={rowIdx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}>
+                <tr key={rowIdx} className={rowIdx % 2 === 1 ? "bg-bg-subtle/40" : "bg-bg-card"}>
                   {row.map((cell, cellIdx) => (
                     <td
                       key={cellIdx}
-                      className={`border-b border-gray-100 px-3 py-2 align-top text-gray-700 last:border-r-0 ${alignments[cellIdx] ?? "text-left"}`}
+                      className={`border-b border-border-main px-3 py-2 align-top text-text-main last:border-r-0 ${alignments[cellIdx] ?? "text-left"}`}
                     >
                       {renderInline(cell)}
                     </td>
@@ -169,14 +169,14 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
 
     // ── Divider ─────────────────────────────────────────────────────
     if (/^-{3,}$/.test(trimmed) || /^={3,}$/.test(trimmed)) {
-      nodes.push(<hr key={k++} className="my-4 border-gray-100" />);
+      nodes.push(<hr key={k++} className="my-4 border-border-main" />);
       i++; continue;
     }
 
     // ── H1 ──────────────────────────────────────────────────────────
     if (/^# /.test(raw)) {
       nodes.push(
-        <h1 key={k++} className="text-base font-bold text-gray-900 mt-6 mb-2 first:mt-0 pb-2 border-b border-gray-100">
+        <h1 key={k++} className="text-base font-bold text-text-main mt-6 mb-2 first:mt-0 pb-2 border-b border-border-main">
           {renderInline(raw.slice(2))}
         </h1>
       );
@@ -186,7 +186,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     // ── H2 ──────────────────────────────────────────────────────────
     if (/^## /.test(raw)) {
       nodes.push(
-        <h2 key={k++} className="text-sm font-semibold text-gray-800 mt-5 mb-1.5 first:mt-0 uppercase tracking-wide text-[11px]">
+        <h2 key={k++} className="text-sm font-semibold text-text-main mt-5 mb-1.5 first:mt-0 uppercase tracking-wide text-[11px]">
           {renderInline(raw.slice(3))}
         </h2>
       );
@@ -196,7 +196,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     // ── H3 ──────────────────────────────────────────────────────────
     if (/^### /.test(raw)) {
       nodes.push(
-        <h3 key={k++} className="text-sm font-semibold text-gray-700 mt-4 mb-1 first:mt-0">
+        <h3 key={k++} className="text-sm font-semibold text-text-main mt-4 mb-1 first:mt-0">
           {renderInline(raw.slice(4))}
         </h3>
       );
@@ -213,7 +213,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
       nodes.push(
         <ul key={k++} className="my-2 space-y-1.5">
           {items.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2.5 text-sm text-gray-700 leading-relaxed">
+            <li key={idx} className="flex items-start gap-2.5 text-sm text-text-main leading-relaxed">
               <span className="mt-[7px] w-1.5 h-1.5 rounded-sm bg-gray-400 flex-shrink-0" />
               <span>{renderInline(item)}</span>
             </li>
@@ -233,8 +233,8 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
       nodes.push(
         <ol key={k++} className="my-2 space-y-1.5 list-none">
           {items.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2.5 text-sm text-gray-700 leading-relaxed">
-              <span className="flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-bold text-gray-500 bg-gray-100 mt-0.5">
+            <li key={idx} className="flex items-start gap-2.5 text-sm text-text-main leading-relaxed">
+              <span className="flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-bold text-text-muted bg-bg-muted mt-0.5">
                 {idx + 1}
               </span>
               <span>{renderInline(item)}</span>
@@ -253,7 +253,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
 
     // ── Paragraph ────────────────────────────────────────────────────
     nodes.push(
-      <p key={k++} className="text-sm text-gray-700 leading-relaxed">
+      <p key={k++} className="text-sm text-text-main leading-relaxed">
         {renderInline(raw)}
       </p>
     );

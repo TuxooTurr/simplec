@@ -4,21 +4,22 @@ import { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Plus, RefreshCw, Trash2, ChevronDown,
   Loader2, Smartphone, Tag, X, Save, Paperclip, FileText,
-  Code2, Bug,
+  Code2, Bug, FolderOpen, Upload,
 } from "lucide-react";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
   listAutotests, addAutotest, deleteAutotest,
   listDefects, addDefect, deleteDefect,
-  type Etalon, type Autotest, type Defect,
+  listContextDocs, addContextDoc, deleteContextDoc,
+  type Etalon, type Autotest, type Defect, type ContextDoc,
 } from "@/lib/api";
 
 const INPUT_CLS =
-  "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
+  "w-full border border-border-main rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
 const LABEL_CLS = "text-xs font-semibold text-text-muted uppercase tracking-wide";
 
-type Tab = "testcases" | "autotests" | "defects";
+type Tab = "testcases" | "autotests" | "defects" | "docs";
 
 const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
 
@@ -44,7 +45,7 @@ function FileAttachRow({
           : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
       </button>
       {fileName && !loading && (
-        <span className="flex items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1">
+        <span className="flex items-center gap-1 text-xs text-text-muted bg-bg-subtle border border-border-main rounded-lg px-2 py-1">
           <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
           {fileName}
           <button type="button" onClick={onClear} className="ml-0.5 hover:text-red-500 transition-colors">
@@ -154,7 +155,7 @@ function TestCasesTab() {
   return (
     <div>
       {/* Описание */}
-      <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 mb-4 text-xs text-indigo-700">
+      <div className="bg-[var(--color-active-bg)] border border-indigo-200 rounded-xl px-4 py-3 mb-4 text-xs text-indigo-700">
         Пары <span className="font-semibold">требование → тест-кейсы</span> используются как контекст
         для LLM при генерации ручных тест-кейсов (RAG).
       </div>
@@ -183,7 +184,7 @@ function TestCasesTab() {
             )}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
               ${filterPlatforms.includes(p)
-                ? "border-primary bg-indigo-50 text-primary"
+                ? "border-primary bg-[var(--color-active-bg)] text-primary"
                 : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
           >
             {p}
@@ -196,7 +197,7 @@ function TestCasesTab() {
         </div>
         <button onClick={() => load(true)} disabled={refreshing}
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
-            text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 disabled:opacity-50"
+            text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
           Обновить
@@ -205,11 +206,11 @@ function TestCasesTab() {
 
       {/* Add form */}
       {showAdd && (
-        <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-text-main">Новый эталон</h3>
             <button onClick={() => setShowAdd(false)}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -230,7 +231,7 @@ function TestCasesTab() {
                   )}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all duration-150
                     ${addPlatforms.includes(p)
-                      ? "border-primary bg-indigo-50 text-primary"
+                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
                       : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
                 >
                   {p}
@@ -292,7 +293,7 @@ function TestCasesTab() {
 
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowAdd(false)}
-              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-gray-50 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-3.5 h-3.5" /> Отмена
             </button>
             <button onClick={handleAdd} disabled={addLoading || !reqText.trim() || !tcText.trim()}
@@ -312,8 +313,8 @@ function TestCasesTab() {
           <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
         </div>
       ) : items.length === 0 ? (
-        <div className="bg-white border border-border-main rounded-xl p-10 text-center animate-fade-in">
-          <div className="w-12 h-12 rounded-xl bg-indigo-50 flex items-center justify-center mx-auto mb-3">
+        <div className="bg-bg-card border border-border-main rounded-xl p-10 text-center animate-fade-in">
+          <div className="w-12 h-12 rounded-xl bg-[var(--color-active-bg)] flex items-center justify-center mx-auto mb-3">
             <BookOpen className="w-6 h-6 text-primary" />
           </div>
           <p className="text-sm font-medium text-text-main mb-1">Эталонов нет</p>
@@ -323,7 +324,7 @@ function TestCasesTab() {
         <div className="space-y-2">
           {items.map((item, idx) => (
             <div key={item.id}
-              className="bg-white border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
               <div className="flex items-center gap-3 px-4 py-3">
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
@@ -500,7 +501,7 @@ function AutotestsTab() {
         </div>
         <button onClick={() => load(true)} disabled={refreshing}
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
-            text-text-muted hover:bg-gray-50 transition-all duration-150 disabled:opacity-50"
+            text-text-muted hover:bg-bg-subtle transition-all duration-150 disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Обновить
         </button>
@@ -508,11 +509,11 @@ function AutotestsTab() {
 
       {/* Add form */}
       {showAdd && (
-        <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-text-main">Новая пара автотеста</h3>
             <button onClick={() => setShowAdd(false)}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -563,7 +564,7 @@ function AutotestsTab() {
 
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowAdd(false)}
-              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-gray-50 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-3.5 h-3.5" /> Отмена
             </button>
             <button onClick={handleAdd} disabled={addLoading || !xmlText.trim() || !javaText.trim()}
@@ -583,7 +584,7 @@ function AutotestsTab() {
           <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
         </div>
       ) : items.length === 0 ? (
-        <div className="bg-white border border-border-main rounded-xl p-10 text-center animate-fade-in">
+        <div className="bg-bg-card border border-border-main rounded-xl p-10 text-center animate-fade-in">
           <div className="w-12 h-12 rounded-xl bg-violet-50 flex items-center justify-center mx-auto mb-3">
             <Code2 className="w-6 h-6 text-violet-500" />
           </div>
@@ -594,7 +595,7 @@ function AutotestsTab() {
         <div className="space-y-2">
           {items.map((item, idx) => (
             <div key={item.id}
-              className="bg-white border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
               <div className="flex items-center gap-3 px-4 py-3">
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
@@ -724,7 +725,7 @@ function DefectsTab() {
         </div>
         <button onClick={() => load(true)} disabled={refreshing}
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
-            text-text-muted hover:bg-gray-50 transition-all duration-150 disabled:opacity-50"
+            text-text-muted hover:bg-bg-subtle transition-all duration-150 disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Обновить
         </button>
@@ -732,11 +733,11 @@ function DefectsTab() {
 
       {/* Add form */}
       {showAdd && (
-        <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-text-main">Новый дефект</h3>
             <button onClick={() => setShowAdd(false)}
-              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-gray-100 transition-colors">
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -774,7 +775,7 @@ function DefectsTab() {
 
           <div className="flex gap-2 justify-end">
             <button onClick={() => setShowAdd(false)}
-              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-gray-50 transition-colors">
+              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-bg-subtle transition-colors">
               <X className="w-3.5 h-3.5" /> Отмена
             </button>
             <button onClick={handleAdd} disabled={addLoading || !description.trim() || !defectBody.trim()}
@@ -794,7 +795,7 @@ function DefectsTab() {
           <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
         </div>
       ) : items.length === 0 ? (
-        <div className="bg-white border border-border-main rounded-xl p-10 text-center animate-fade-in">
+        <div className="bg-bg-card border border-border-main rounded-xl p-10 text-center animate-fade-in">
           <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center mx-auto mb-3">
             <Bug className="w-6 h-6 text-rose-500" />
           </div>
@@ -805,7 +806,7 @@ function DefectsTab() {
         <div className="space-y-2">
           {items.map((item, idx) => (
             <div key={item.id}
-              className="bg-white border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
               <div className="flex items-center gap-3 px-4 py-3">
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
@@ -862,6 +863,281 @@ function DefectsTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Контекстные документы
+// ══════════════════════════════════════════════════════════════════════════════
+
+const DOC_TYPES: { value: string; label: string }[] = [
+  { value: "requirement", label: "Требование" },
+  { value: "specification", label: "Спецификация" },
+  { value: "document", label: "Документ" },
+  { value: "confluence", label: "Confluence" },
+  { value: "other", label: "Другое" },
+];
+
+function ContextDocsTab() {
+  const [items, setItems]               = useState<ContextDoc[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [filterDocType, setFilterDocType] = useState("");
+  const [filterFeature, setFilterFeature] = useState("");
+  const [expanded, setExpanded]         = useState<string | null>(null);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [showAdd, setShowAdd]           = useState(false);
+
+  const [content, setContent]           = useState("");
+  const [fileLoading, setFileLoading]   = useState(false);
+  const [fileName, setFileName]         = useState("");
+  const [fileObj, setFileObj]           = useState<File | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const [addName, setAddName]           = useState("");
+  const [addDocType, setAddDocType]     = useState("document");
+  const [addFeature, setAddFeature]     = useState("");
+  const [addLoading, setAddLoading]     = useState(false);
+
+  const load = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    try {
+      const res = await listContextDocs({ doc_type: filterDocType, feature: filterFeature });
+      setItems(res.items);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [filterDocType, filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileLoading(true);
+    setFileName(file.name);
+    setFileObj(file);
+    try {
+      const r = await parseFile(file);
+      setContent(r.text);
+    } catch (err) {
+      alert("Ошибка: " + String(err));
+      setFileName("");
+      setFileObj(null);
+    } finally {
+      setFileLoading(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!content.trim() && !fileObj) return;
+    setAddLoading(true);
+    try {
+      await addContextDoc({
+        content: content || undefined,
+        name: addName,
+        doc_type: addDocType,
+        feature: addFeature,
+        file: fileObj || undefined,
+      });
+      setContent(""); setFileName(""); setFileObj(null);
+      setAddName(""); setAddDocType("document"); setAddFeature("");
+      setShowAdd(false);
+      await load();
+    } catch (err) { alert("Ошибка: " + String(err)); }
+    finally { setAddLoading(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Удалить документ?")) return;
+    try {
+      await deleteContextDoc(id);
+      setItems((prev) => prev.filter((i) => i.id !== id));
+    } catch (err) { alert("Ошибка: " + String(err)); }
+  };
+
+  const docTypeLabel = (v: string) => DOC_TYPES.find(d => d.value === v)?.label ?? v;
+
+  return (
+    <div>
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-4 text-xs text-emerald-700">
+        <span className="font-semibold">Документы и требования</span> загружаются без связей и используются как
+        постоянный контекст для ИИ при генерации тест-кейсов (RAG). Загрузите спецификации, ТЗ, confluence-страницы.
+      </div>
+
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-text-muted">{items.length} документов</p>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+            hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md"
+        >
+          <Plus className="w-4 h-4" /> Добавить документ
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <select
+          value={filterDocType}
+          onChange={(e) => setFilterDocType(e.target.value)}
+          className={`${INPUT_CLS} w-auto min-w-[140px]`}
+        >
+          <option value="">Все типы</option>
+          {DOC_TYPES.map((d) => (
+            <option key={d.value} value={d.value}>{d.label}</option>
+          ))}
+        </select>
+        <div className="relative flex-1 min-w-[140px]">
+          <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
+          <input value={filterFeature} onChange={(e) => setFilterFeature(e.target.value)}
+            placeholder="Фича..." className={`${INPUT_CLS} pl-8`} />
+        </div>
+        <button onClick={() => load(true)} disabled={refreshing}
+          className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
+            text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          Обновить
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showAdd && (
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-text-main">Новый документ</h3>
+            <button onClick={() => setShowAdd(false)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-subtle transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Название</label>
+              <input value={addName} onChange={(e) => setAddName(e.target.value)}
+                className={INPUT_CLS} placeholder="Например: ТЗ на оплату..." />
+            </div>
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Тип документа</label>
+              <select value={addDocType} onChange={(e) => setAddDocType(e.target.value)}
+                className={INPUT_CLS}>
+                {DOC_TYPES.map((d) => (
+                  <option key={d.value} value={d.value}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
+              <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
+                className={INPUT_CLS} placeholder="Оплата, каталог..." />
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>
+              Содержимое <span className="text-red-400 normal-case font-normal">*</span>
+            </label>
+            <input ref={fileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+              onChange={handleFileChange} />
+            <textarea value={content} onChange={(e) => setContent(e.target.value)}
+              className={`${INPUT_CLS} resize-none min-h-[200px]`}
+              placeholder="Вставьте текст документа, требования, спецификации..." />
+            <FileAttachRow loading={fileLoading} fileName={fileName}
+              onPick={() => fileRef.current?.click()}
+              onClear={() => { setContent(""); setFileName(""); setFileObj(null); }} />
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowAdd(false)}
+              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-bg-subtle transition-colors">
+              <X className="w-3.5 h-3.5" /> Отмена
+            </button>
+            <button onClick={handleAdd} disabled={addLoading || (!content.trim() && !fileObj)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                hover:bg-primary-dark transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98]">
+              {addLoading
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
+                : <><Save className="w-3.5 h-3.5" /> Сохранить</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-2 py-8 text-text-muted text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
+        </div>
+      ) : items.length === 0 ? (
+        <div className="bg-bg-card border border-border-main rounded-xl p-10 text-center animate-fade-in">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center mx-auto mb-3">
+            <FolderOpen className="w-6 h-6 text-emerald-500" />
+          </div>
+          <p className="text-sm font-medium text-text-main mb-1">Документов нет</p>
+          <p className="text-xs text-text-muted">Загрузите документы и требования для контекста генерации</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item, idx) => (
+            <div key={item.id}
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+              style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
+              <div className="flex items-center gap-3 px-4 py-3">
+                <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                  className="flex-1 text-left min-w-0">
+                  <p className="text-sm font-medium text-text-main truncate">
+                    {item.name || item.content.slice(0, 80) + (item.content.length > 80 ? "..." : "")}
+                  </p>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    <span className="flex items-center gap-1 text-xs text-emerald-500 flex-shrink-0">
+                      <FileText className="w-3 h-3" /> {docTypeLabel(item.doc_type)}
+                    </span>
+                    {item.feature && (
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
+                        <Tag className="w-3 h-3" />{item.feature}
+                      </span>
+                    )}
+                    {item.filename && (
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
+                        <Paperclip className="w-3 h-3" />{item.filename}
+                      </span>
+                    )}
+                    <span className="text-xs text-text-muted/60">
+                      {item.content.length > 1000
+                        ? `${Math.round(item.content.length / 1000)}K символов`
+                        : `${item.content.length} символов`}
+                    </span>
+                  </div>
+                </button>
+                <button onClick={() => handleDelete(item.id)}
+                  className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 hover:bg-red-50
+                    rounded-lg px-2.5 py-1.5 transition-all duration-150 flex-shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                <ChevronDown
+                  className={`w-4 h-4 text-text-muted flex-shrink-0 transition-transform duration-200 cursor-pointer
+                    ${expanded === item.id ? "rotate-180" : ""}`}
+                  onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                />
+              </div>
+
+              {expanded === item.id && (
+                <div className="border-t border-border-main px-4 py-3 animate-fade-in">
+                  <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide mb-2">Содержимое</p>
+                  <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed max-h-[400px] overflow-y-auto">
+                    {item.content}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Корневой компонент с вкладками
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -869,9 +1145,10 @@ export default function EtalonsSection() {
   const [tab, setTab] = useState<Tab>("testcases");
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "testcases", label: "Тест-кейсы",  icon: <BookOpen className="w-4 h-4" /> },
-    { id: "autotests", label: "Автотесты",   icon: <Code2    className="w-4 h-4" /> },
-    { id: "defects",   label: "Дефекты",     icon: <Bug      className="w-4 h-4" /> },
+    { id: "testcases", label: "Тест-кейсы",  icon: <BookOpen   className="w-4 h-4" /> },
+    { id: "autotests", label: "Автотесты",   icon: <Code2      className="w-4 h-4" /> },
+    { id: "defects",   label: "Дефекты",     icon: <Bug        className="w-4 h-4" /> },
+    { id: "docs",      label: "Документы",   icon: <FolderOpen className="w-4 h-4" /> },
   ];
 
   return (
@@ -884,14 +1161,14 @@ export default function EtalonsSection() {
         </div>
 
         {/* Вкладки */}
-        <div className="flex gap-1 bg-gray-100 rounded-xl p-1 mb-6 w-fit">
+        <div className="flex gap-1 bg-bg-muted rounded-xl p-1 mb-6 w-fit">
           {TABS.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-150
                 ${tab === t.id
-                  ? "bg-white text-text-main shadow-sm"
+                  ? "bg-bg-card text-text-main shadow-sm"
                   : "text-text-muted hover:text-text-main"}`}
             >
               {t.icon}
@@ -904,6 +1181,7 @@ export default function EtalonsSection() {
         {tab === "testcases" && <TestCasesTab />}
         {tab === "autotests" && <AutotestsTab />}
         {tab === "defects"   && <DefectsTab />}
+        {tab === "docs"      && <ContextDocsTab />}
       </div>
     </div>
   );

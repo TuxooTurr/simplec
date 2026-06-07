@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+    open-in-view: false
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+
+farm:
+  session:
+    default-timeout-min: 30
+    max-sessions-per-user: 3
+  agent:
+    health-check-interval-sec: 999999
+  grid:
+    port: 4444
+    session-timeout-sec: 1800
+
+jwt:
+  secret: test-secret-key-for-unit-tests-minimum-32-bytes-long
+  expiration-ms: 3600000

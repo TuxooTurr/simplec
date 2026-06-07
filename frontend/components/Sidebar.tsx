@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Settings } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
+import { Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Database, Settings, LogOut, User, Play, ScrollText, Smartphone } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
+import { ThemeToggle } from "./ui";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 const NAV: {
   id: SectionId;
@@ -13,20 +15,25 @@ const NAV: {
   label: string;
   Icon: ComponentType<{ className?: string; strokeWidth?: number }>;
   ai?: boolean;
+  superuserOnly?: boolean;
 }[] = [
   { id: "generation",  href: "/generation",  label: "Ручное тестирование",   Icon: Zap,          ai: true },
   { id: "auto_model",  href: "/auto-model",  label: "Автотестирование",       Icon: FlaskConical, ai: true },
+  { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
+  { id: "jobs",        href: "/jobs",        label: "Jobs",                     Icon: Play },
   { id: "bugs",        href: "/bugs",        label: "Дефекты",                 Icon: Bug,         ai: true },
+  { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText,  ai: true },
+  { id: "device_farm", href: "/device-farm", label: "Ферма устройств",         Icon: Smartphone },
   { id: "alerts",      href: "/alerts",      label: "Генератор алертов",       Icon: Bell },
-  { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2 },
+  { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2,   superuserOnly: true },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
-  { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen },
+  { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen,    superuserOnly: true },
 ];
 
 function AiBadge() {
   return (
     <sup
-      className="inline-block text-[8px] font-bold leading-none px-[3px] py-[1px] rounded bg-indigo-100 text-indigo-500"
+      className="inline-block text-[8px] font-bold leading-none px-[3px] py-[1px] rounded bg-[var(--color-badge-ai-bg)] text-[var(--color-badge-ai-text)]"
       style={{ verticalAlign: "super" }}
     >
       AI
@@ -36,10 +43,22 @@ function AiBadge() {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { setDragging } = useWorkspace();
+  const { user, logout, isSuperuser } = useAuth();
+
+  const filteredNav = NAV.filter(item => {
+    if (item.superuserOnly && !isSuperuser) return false;
+    return true;
+  });
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace("/login");
+  };
 
   return (
-    <aside className="w-64 min-h-screen bg-white border-r border-border-main flex flex-col flex-shrink-0">
+    <aside className="w-64 min-h-screen bg-[var(--color-sidebar-bg)] border-r border-border-main flex flex-col flex-shrink-0">
       {/* Logo */}
       <div className="px-5 py-4 border-b border-border-main">
         <div className="flex items-center gap-2.5">
@@ -55,7 +74,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="px-3 py-3 border-b border-border-main">
-        {NAV.map(({ id, href, label, Icon, ai }) => {
+        {filteredNav.map(({ id, href, label, Icon, ai }) => {
           const active = pathname.startsWith(href);
           return (
             <Link
@@ -72,8 +91,8 @@ export default function Sidebar() {
                 relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-0.5 text-sm font-medium
                 transition-all duration-200 group cursor-grab active:cursor-grabbing
                 ${active
-                  ? "bg-indigo-50 text-primary"
-                  : "text-text-muted hover:bg-gray-50 hover:text-text-main"}
+                  ? "bg-[var(--color-active-bg)] text-primary"
+                  : "text-text-muted hover:bg-[var(--color-sidebar-hover)] hover:text-text-main"}
               `}
             >
               {active && (
@@ -95,19 +114,42 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* LLM status + Settings at bottom */}
+      {/* LLM status + User + Settings at bottom */}
       <div className="mt-auto border-t border-border-main">
         <div className="px-4 py-3">
           <LLMStatusBar />
         </div>
-        <div className="px-4 pb-3 flex justify-end">
-          <Link
-            href="/settings"
-            title="Настройки"
-            className="p-1 rounded hover:bg-gray-100 text-text-muted hover:text-primary transition-colors"
-          >
-            <Settings className="w-3.5 h-3.5" />
-          </Link>
+        {user && (
+          <div className="px-4 pb-2 flex items-center gap-2">
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              <User className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+              <span className="text-xs text-text-main font-medium truncate">{user.display_name}</span>
+              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                isSuperuser ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-blue-50 text-blue-700 border border-blue-200"
+              }`}>
+                {isSuperuser ? "SU" : "MON"}
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              title="Выйти"
+              className="p-1 rounded hover:bg-red-50 text-text-muted hover:text-red-500 transition-colors flex-shrink-0"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+        <div className="px-4 pb-3 flex items-center justify-end gap-1">
+          <ThemeToggle />
+          {isSuperuser && (
+            <Link
+              href="/settings"
+              title="Настройки"
+              className="p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+            </Link>
+          )}
         </div>
       </div>
     </aside>

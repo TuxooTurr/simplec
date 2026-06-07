@@ -118,6 +118,20 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _tail_text(value: object, limit: int = 12000) -> str:
+    if value is None:
+        return ""
+    return str(value)[-limit:]
+
+
+def _add_history_safe(entry: dict) -> Optional[str]:
+    try:
+        AutotestRunsStore.add_history(entry)
+    except Exception as exc:
+        return f"Запуск выполнен, но аудит не сохранился: {exc}"
+    return None
+
+
 def _clean_list(values: list[str]) -> list[str]:
     result: list[str] = []
     for value in values:
@@ -310,15 +324,19 @@ def _run_script_sync(
 
     started = _now_iso()
     t0 = time.perf_counter()
-    proc = subprocess.run(
-        _script_command(script_path),
-        cwd=str(work_dir),
-        env=env,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        check=False,
-    )
+    command = _script_command(script_path)
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=str(work_dir),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except OSError as exc:
+        raise ValueError(f"Не удалось запустить скрипт: {exc}") from exc
     duration_ms = round((time.perf_counter() - t0) * 1000)
     script_name = script.get("name", script_path.name)
     audit_type = "button" if trigger == "manual" else "autorun"
@@ -341,12 +359,14 @@ def _run_script_sync(
         "build_version": build_version,
         "started_at": started,
         "duration_ms": duration_ms,
-        "stdout": proc.stdout[-12000:],
-        "stderr": proc.stderr[-12000:],
-        "command": " ".join(_script_command(script_path)),
+        "stdout": _tail_text(getattr(proc, "stdout", "")),
+        "stderr": _tail_text(getattr(proc, "stderr", "")),
+        "command": " ".join(command),
         "work_dir": str(work_dir),
     }
-    AutotestRunsStore.add_history(result)
+    history_warning = _add_history_safe(result)
+    if history_warning:
+        result["history_warning"] = history_warning
     return result
 
 
@@ -472,7 +492,9 @@ def _check_builds_sync(*, execute: bool) -> dict:
                         "stdout": "",
                         "stderr": str(exc),
                     }
-                    AutotestRunsStore.add_history(error_run)
+                    history_warning = _add_history_safe(error_run)
+                    if history_warning:
+                        error_run["history_warning"] = history_warning
                     runs.append(error_run)
 
     AutotestRunsStore.update_autorun_state(last_seen=previous, last_check_at=_now_iso())
@@ -532,6 +554,8 @@ async def run_script(req: RunScriptRequest) -> dict:
         raise HTTPException(status_code=408, detail="Скрипт превысил таймаут запуска")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Ошибка запуска скрипта: {exc}")
 
@@ -560,7 +584,7 @@ async def _autorun_loop() -> None:
             try:
                 await asyncio.to_thread(_check_builds_sync, execute=True)
             except Exception as exc:
-                AutotestRunsStore.add_history({
+                _add_history_safe({
                     "id": f"autorun-error-{int(time.time() * 1000)}",
                     "script_id": "",
                     "script_name": "Автозапуск",

@@ -19,19 +19,9 @@ import {
   type ThresholdsConfig, type ThresholdRow, type HealthConfig,
   type LogEntry, type SendNowResult, type PreviewResult,
 } from "@/lib/metricsApi";
+import { INPUT_CLS, INPUT_SM, LABEL_CLS } from "@/components/ui";
 
-// ── Styles ───────────────────────────────────────────────────────────────────
-
-const INPUT_CLS =
-  "w-full border border-border-main rounded-lg px-3 py-2 text-sm " +
-  "focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 " +
-  "transition-shadow duration-150 bg-white";
-
-const INPUT_SM =
-  "border border-border-main rounded-md px-2 py-1 text-xs " +
-  "focus:outline-none focus:ring-1 focus:ring-primary/30 bg-white w-full";
-
-const LABEL_CLS = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5";
+// ── Styles (backward-compat aliases, use <Button> where possible) ────────────
 
 const BTN_PRIMARY =
   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm " +
@@ -78,17 +68,20 @@ function fmtAgo(iso: string | null): string {
 
 // ── Pattern Sparkline ─────────────────────────────────────────────────────────
 
-// Y-координаты в диапазоне 0–20 (реальные пиксели, viewBox совпадает с size)
-const _SINE_PTS: [number, number][] = Array.from({ length: 9 }, (_, i) => [
-  i * 8,
-  Math.round(10 + 9 * Math.sin((i / 8) * 2 * Math.PI)),
+// Sparkline viewBox = 0 0 140 36 (enlarged for bigger rows)
+const SVG_W = 140;
+const SVG_H = 36;
+
+const _SINE_PTS: [number, number][] = Array.from({ length: 13 }, (_, i) => [
+  Math.round(i * SVG_W / 12),
+  Math.round(SVG_H / 2 + (SVG_H / 2 - 2) * Math.sin((i / 12) * 2 * Math.PI)),
 ] as [number, number]);
 
 const SPARKLINE_PTS: Record<string, [number, number][]> = {
-  constant: [[0, 10], [64, 10]],
+  constant: [[0, SVG_H / 2], [SVG_W, SVG_H / 2]],
   sine:     _SINE_PTS,
-  spike:    [[0, 16], [26, 16], [34, 1], [42, 16], [64, 16]],
-  random:   [[0, 12], [8,  6], [16, 15], [24,  9], [32,  4], [40, 13], [48,  8], [56, 16], [64,  7]],
+  spike:    [[0, 28], [50, 28], [70, 4], [90, 28], [SVG_W, 28]],
+  random:   [[0, 20], [16, 10], [32, 28], [48, 14], [64, 6], [80, 24], [96, 12], [112, 30], [128, 16], [SVG_W, 8]],
 };
 
 const THRESHOLD_STROKE: Record<number, string> = {
@@ -100,40 +93,73 @@ const THRESHOLD_STROKE: Record<number, string> = {
   5: "#ef4444", // red-500
 };
 
+const HEALTH_SHORT: Record<number, string> = {
+  0: "BL", 1: "OK", 2: "Inf", 3: "Wrn", 4: "Min", 5: "Crt",
+};
+
 function PatternSparkline({
   pattern,
   thresholds,
+  health,
 }: {
   pattern: string;
   thresholds?: number[];  // отсортированные health-типы
+  health?: number | null;
 }) {
   const pts = SPARKLINE_PTS[pattern] ?? SPARKLINE_PTS.random;
   const points = pts.map(([x, y]) => `${x},${y}`).join(" ");
   const n = thresholds?.length ?? 0;
+  const lastPt = pts[pts.length - 1];
   return (
-    <svg width={64} height={20} viewBox="0 0 64 20" className="overflow-visible">
-      {/* Линии порогов — равномерно, health 1 → верх, 5 → низ */}
+    <svg width={SVG_W} height={SVG_H} viewBox={`0 0 ${SVG_W} ${SVG_H}`} className="overflow-visible">
+      {/* Линии порогов с лейблами — равномерно */}
       {thresholds?.map((ht, i) => {
-        const y = +((i + 1) * 20 / (n + 1)).toFixed(1);
+        const y = +((i + 1) * SVG_H / (n + 1)).toFixed(1);
+        const color = THRESHOLD_STROKE[ht] ?? "#aaa";
+        const label = HEALTH_SHORT[ht] ?? String(ht);
         return (
-          <line
-            key={i}
-            x1="0" y1={y} x2="64" y2={y}
-            stroke={THRESHOLD_STROKE[ht] ?? "#aaa"}
-            strokeWidth="1"
-            strokeDasharray="3 2"
-            opacity="0.85"
-          />
+          <g key={i}>
+            <line
+              x1="0" y1={y} x2={SVG_W} y2={y}
+              stroke={color}
+              strokeWidth="1"
+              strokeDasharray="4 3"
+              opacity="0.8"
+            />
+            <text
+              x={SVG_W + 4}
+              y={y + 3}
+              fontSize="9"
+              fontWeight="600"
+              fill={color}
+              opacity="0.9"
+              style={{ fontFamily: "system-ui, sans-serif" }}
+            >
+              {label}
+            </text>
+          </g>
         );
       })}
+      {/* Основная линия графика */}
       <polyline
         points={points}
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.5"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+      {/* Индикатор здоровья — цветная точка в конце линии */}
+      {health != null && lastPt && (
+        <circle
+          cx={lastPt[0]}
+          cy={lastPt[1]}
+          r="3.5"
+          fill={THRESHOLD_STROKE[health] ?? "#4ade80"}
+          stroke="white"
+          strokeWidth="1"
+        />
+      )}
     </svg>
   );
 }
@@ -201,7 +227,7 @@ function AddSystemModal({ onSave, onClose }: AddSystemModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
+      <div className="bg-bg-card rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-text-main">Добавить услугу</h3>
           <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
@@ -270,7 +296,7 @@ function EditSystemModal({ system, onSave, onClose }: EditSystemModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
+      <div className="bg-bg-card rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-text-main">Редактировать услугу</h3>
           <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
@@ -355,7 +381,7 @@ function EditMetricModal({ metric, onSave, onClose }: EditMetricModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
+      <div className="bg-bg-card rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="font-semibold text-text-main">Редактировать метрику</h3>
           <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
@@ -528,10 +554,10 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+      <div className="bg-bg-card rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0 bg-white">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0 bg-bg-card">
           <div>
             <h3 className="font-semibold text-text-main">Добавить метрики</h3>
             <p className="text-xs text-text-muted mt-0.5">Услуга: <span className="font-medium text-text-main">{systemName}</span></p>
@@ -869,63 +895,76 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
   return (
     <div
       onClick={onSelect}
-      className={`flex items-start gap-3 py-2.5 px-3 rounded-lg cursor-pointer transition-colors group border-l-2 ${
+      className={`flex items-stretch gap-3 py-3 px-4 rounded-xl cursor-pointer transition-colors group border-l-[3px] ${
         selected
           ? "bg-primary/5 border-l-primary"
           : "border-l-transparent hover:bg-bg-subtle"
       }`}
     >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium text-text-main truncate">{metric.metricName}</span>
-          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100">
+      {/* Left: metric info — two-line name + meta badges */}
+      <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
+        {/* Name: allow 2 lines */}
+        <div className="flex items-start gap-2">
+          <span className={`text-[10px] mt-0.5 font-bold shrink-0 ${metric.isActive ? "text-green-500" : "text-text-muted"}`}>
+            {metric.isActive ? "●" : "○"}
+          </span>
+          <span className="text-sm font-semibold text-text-main leading-snug line-clamp-2">
+            {metric.metricName}
+          </span>
+        </div>
+        {/* Meta row */}
+        <div className="flex items-center gap-2 flex-wrap ml-4">
+          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-100 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800">
             {metric.metricType}
           </span>
           {metric.metricUnit && (
-            <span className="text-[10px] text-text-muted">{metric.metricUnit}</span>
+            <span className="text-[10px] text-text-muted font-medium">{metric.metricUnit}</span>
           )}
-        </div>
-        <div className="flex items-center gap-3 mt-0.5">
-          <span className="text-xs text-text-muted truncate">{metric.objectName}</span>
-          <span className="text-xs text-text-muted">{metric.metricPeriodSec}с</span>
-          <span className={`text-[10px] px-1 rounded font-semibold ${metric.isActive ? "text-green-600" : "text-text-muted"}`}>
-            {metric.isActive ? "●" : "○"}
-          </span>
+          <span className="text-[10px] text-text-muted">{metric.metricPeriodSec}с</span>
+          <span className="text-xs text-text-muted truncate max-w-[160px]">{metric.objectName}</span>
           {ago && (
             <span className="text-[10px] text-text-muted tabular-nums">{ago}</span>
           )}
         </div>
-      </div>
-      {metric.isActive && (
-        <div className="shrink-0 flex items-center gap-1.5 self-center">
-          {metric.thresholdLines.includes(0) && (
-            <span className="whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded border bg-blue-50 text-blue-500 border-blue-200">
-              baseline
-            </span>
-          )}
-          {metric.lastSentHealth != null && (
-            <HealthBadge health={metric.lastSentHealth} />
-          )}
-          <div className="flex flex-col items-end gap-0.5 mr-0.5">
-            <div className="text-green-400 opacity-70">
-              <PatternSparkline
-                pattern={metric.valuePattern ?? "random"}
-                thresholds={metric.thresholdLines}
-              />
-            </div>
+        {/* Active badges row */}
+        {metric.isActive && (
+          <div className="flex items-center gap-1.5 ml-4">
+            {metric.thresholdLines.includes(0) && (
+              <span className="whitespace-nowrap text-[10px] font-semibold px-2 py-0.5 rounded border bg-blue-50 text-blue-500 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800">
+                baseline
+              </span>
+            )}
+            {metric.lastSentHealth != null && (
+              <HealthBadge health={metric.lastSentHealth} />
+            )}
             {lastVal != null && (
-              <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none">
+              <span className="text-[10px] tabular-nums font-mono text-text-muted leading-none px-1.5 py-0.5 rounded bg-bg-subtle">
                 {lastVal}{metric.metricUnit ? ` ${metric.metricUnit}` : ""}
               </span>
             )}
           </div>
+        )}
+      </div>
+
+      {/* Right: enlarged sparkline */}
+      {metric.isActive && (
+        <div className="shrink-0 flex items-center self-center">
+          <div className="text-green-400 dark:text-green-500 opacity-80">
+            <PatternSparkline
+              pattern={metric.valuePattern ?? "random"}
+              thresholds={metric.thresholdLines}
+              health={metric.lastSentHealth}
+            />
+          </div>
         </div>
       )}
-      <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+
+      {/* Actions */}
+      <div className="flex flex-col items-center justify-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
           onClick={e => { e.stopPropagation(); onEdit(metric); }}
           disabled={busy}
-          className="p-1 rounded hover:bg-bg-muted text-text-muted hover:text-primary transition-colors"
+          className="p-1.5 rounded-lg hover:bg-bg-muted text-text-muted hover:text-primary transition-colors"
           title="Редактировать"
         >
           <Pencil className="w-3.5 h-3.5" />
@@ -933,7 +972,7 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
         <button
           onClick={doToggle}
           disabled={busy}
-          className="p-1 rounded hover:bg-bg-muted transition-colors"
+          className="p-1.5 rounded-lg hover:bg-bg-muted transition-colors"
           title={metric.isActive ? "Остановить" : "Запустить"}
         >
           {busy
@@ -945,9 +984,9 @@ function MetricRow({ metric, selected, onSelect, onToggle, onDelete, onEdit }: M
         <button
           onClick={doDelete}
           disabled={busy}
-          className="p-1 rounded hover:bg-red-50 text-text-muted hover:text-red-500 transition-colors"
+          className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-text-muted hover:text-red-500 transition-colors"
         >
-          <Trash2 className="w-4 h-4" />
+          <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
     </div>
@@ -1540,6 +1579,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
                 <span className="font-semibold">DATA</span>
                 {` · value=${sendResult.value?.toFixed(4)}`}
                 {sendResult.health != null && ` · health=${sendResult.health}`}
+                {sendResult.accumulated_points != null && sendResult.accumulated_points > 1 && ` · ${sendResult.accumulated_points} точек`}
                 {sendResult.data_offset != null && ` · offset=${sendResult.data_offset}`}
                 {sendResult.data_topic && <span className="opacity-60"> → {sendResult.data_topic}</span>}
               </div>
@@ -1575,6 +1615,11 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
             <div className="flex items-center gap-3 text-xs">
               <span className="text-text-main">value=<strong>{preview.value.toFixed(4)}</strong></span>
               {preview.baseline != null && <span className="text-text-muted">baseline={preview.baseline.toFixed(4)}</span>}
+              {preview.accumulated_points > 1 && (
+                <span className="text-text-muted" title="Накопленных точек за 24ч">
+                  <Database className="w-3 h-3 inline mr-0.5" />{preview.accumulated_points} точек
+                </span>
+              )}
               {preview.health   != null && (
                 <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${(HEALTH_LABELS[preview.health] ?? HEALTH_LABELS[1]).cls}`}>
                   {(HEALTH_LABELS[preview.health] ?? HEALTH_LABELS[1]).label}
@@ -1584,7 +1629,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
             </div>
           </div>
           {/* Табы: DATA / METADATA / THRESHOLDS */}
-          <div className="flex items-center gap-1 px-3 pt-2 bg-white border-b border-border-main">
+          <div className="flex items-center gap-1 px-3 pt-2 bg-bg-card border-b border-border-main">
             {(["data", "metadata", "thresholds"] as const).map(t => {
               const disabled = t === "thresholds" && !preview.thresholds_message_json;
               return (
@@ -1606,7 +1651,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
             })}
           </div>
           {/* JSON */}
-          <pre className="text-xs font-mono p-3 max-h-52 overflow-y-auto bg-white text-text-main leading-relaxed">
+          <pre className="text-xs font-mono p-3 max-h-52 overflow-y-auto bg-bg-card text-text-main leading-relaxed">
             {previewTab === "data"
               ? preview.data_message_json
               : previewTab === "metadata"
@@ -1637,7 +1682,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
                 onClick={() => setTab(t.key)}
                 className={`px-3 py-1.5 text-xs font-medium rounded-t-lg border-x border-t transition-colors ${
                   tab === t.key
-                    ? "bg-white border-border-main text-text-main"
+                    ? "bg-bg-card border-border-main text-text-main"
                     : "border-transparent text-text-muted hover:text-text-main hover:bg-bg-subtle"
                 }`}
               >
@@ -1647,7 +1692,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
           </div>
 
           {/* Tab content */}
-          <div className="border border-border-main rounded-b-xl rounded-tr-xl mx-4 p-4 bg-white">
+          <div className="border border-border-main rounded-b-xl rounded-tr-xl mx-4 p-4 bg-bg-card">
             {tab === "values"     && <ValuesTab     metricId={metricId} initial={config.valuesConfig}     onSaved={onSaved} />}
             {tab === "baseline"   && <BaselineTab   metricId={metricId} initial={config.baselineConfig}   onSaved={onSaved} />}
             {tab === "thresholds" && <ThresholdsTab metricId={metricId} initial={config.thresholdsConfig} onSaved={onSaved} />}

@@ -1,0 +1,61 @@
+[
+  {
+    "action": "stop",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "stopped_other": false,
+    "ts": "2026-06-05T07:49:51.570285+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-05T07:49:40.522298+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-05T07:19:48.993391+00:00"
+  },
+  {
+    "action": "stop",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "stopped_other": false,
+    "ts": "2026-06-05T07:02:49.393444+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-05T07:02:31.471430+00:00"
+  },
+  {
+    "action": "stop",
+    "script_id": "3389d6b0",
+    "script_name": "dhfhhf",
+    "user": "Sber911",
+    "stopped_other": false,
+    "ts": "2026-06-04T08:18:18.694038+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "3389d6b0",
+    "script_name": "dhfhhf",
+    "user": "Sber911",
+    "ts": "2026-06-04T08:18:16.524347+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-04T08:17:48.993871+00:00"
+  }
+]

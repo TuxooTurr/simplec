@@ -8,6 +8,10 @@ import BugsSection from "./sections/BugsSection";
 import AlertsSection from "./sections/AlertsSection";
 import MetricsSection from "./sections/MetricsSection";
 import RevisorSection from "./sections/RevisorSection";
+import AutoModelSection from "./sections/AutoModelSection";
+import TestDataSection from "./sections/TestDataSection";
+import SettingsSection from "./sections/SettingsSection";
+import JobsSection from "./sections/JobsSection";
 
 export default function SectionRenderer() {
   const { rightSection, dragging } = useWorkspace();
@@ -21,7 +25,7 @@ export default function SectionRenderer() {
             transition-all duration-200
             ${dragging
               ? "border-primary/60 bg-indigo-50/60 scale-110"
-              : "border-border-main bg-white/60"}
+              : "border-border-main bg-bg-card/60"}
           `}
         >
           <PanelRight
@@ -42,11 +46,15 @@ export default function SectionRenderer() {
 
   const sections: Record<string, React.ReactNode> = {
     generation: <GenerationSection />,
+    auto_model: <AutoModelSection />,
+    test_data:  <TestDataSection />,
     etalons:    <EtalonsSection />,
     bugs:       <BugsSection />,
     alerts:     <AlertsSection />,
+    jobs:       <JobsSection />,
     metrics:    <MetricsSection />,
     revisor:    <RevisorSection />,
+    settings:   <SettingsSection />,
   };
 
   return <>{sections[rightSection] ?? null}</>;

@@ -14,10 +14,10 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from db.alerts_store import AlertsStore
@@ -30,7 +30,7 @@ router = APIRouter()
 
 class NotebookCell(BaseModel):
     id:     str
-    type:   str = "markdown"   # "markdown" | "code"
+    type:   str = "markdown"
     source: str = ""
 
 
@@ -39,27 +39,35 @@ class DynamicParam(BaseModel):
     label:       str
     code_key:    str = ""
     placeholder: str = ""
+    field_type:  Literal["text", "select", "multiselect", "dropdown", "dropdown_multi", "datetime"] = "text"
+    options:     list[str] = Field(default_factory=list)
 
 
 class AlertScript(BaseModel):
-    id:             Optional[str]       = None
-    name:           str
-    topic:          str                 = ""
-    notebook:       list[dict]          = []
-    dynamic_params: list[DynamicParam]  = []
-    created_at:     Optional[str]       = None
+    id:                    Optional[str]       = None
+    name:                  str
+    topic:                 str                 = ""
+    notebook:              list[dict]          = []
+    dynamic_params:        list[DynamicParam]  = []
+    visible_to_monitoring: bool                = False
+    folder_id:             Optional[str]       = None
+    created_at:            Optional[str]       = None
+
+
+class AlertFolder(BaseModel):
+    id:   Optional[str] = None
+    name: str
 
 
 class SendRequest(BaseModel):
     script_id:      str
-    values:         dict[str, str] = {}   # param.id → user value
+    values:         dict[str, str] = {}
     topic_override: str            = ""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _apply_params(source: str, dynamic_params: list[dict], values: dict[str, str]) -> str:
-    """Заменяет placeholder каждого параметра на значение из values."""
     result = source
     for p in dynamic_params:
         placeholder = p.get("placeholder", "")
@@ -71,7 +79,6 @@ def _apply_params(source: str, dynamic_params: list[dict], values: dict[str, str
 
 
 def _build_payload(script: dict, values: dict[str, str]) -> str:
-    """Собирает payload из code-ячеек ноутбука с применёнными параметрами."""
     cells = script.get("notebook", [])
     params = script.get("dynamic_params", [])
     parts = []
@@ -89,9 +96,26 @@ def _send_kafka_sync(topic: str, payload: str, partition: Optional[int] = None,
 
 # ── Routes ───────────────────────────────────────────────────────────────────
 
+@router.get("/api/alerts/folders")
+def list_folders() -> list[dict]:
+    return AlertsStore.get_folders()
+
+
+@router.post("/api/alerts/folders")
+def upsert_folder(folder: AlertFolder) -> dict:
+    return AlertsStore.save_folder(folder.model_dump(exclude_none=False))
+
+
+@router.delete("/api/alerts/folders/{folder_id}")
+def remove_folder(folder_id: str) -> dict:
+    ok = AlertsStore.delete_folder(folder_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Папка не найдена")
+    return {"status": "deleted"}
+
+
 @router.post("/api/alerts/parse-notebook")
 async def parse_notebook(file: UploadFile = File(...)) -> dict:
-    """Принимает .ipynb, возвращает список ячеек."""
     raw = await file.read()
     try:
         nb = json.loads(raw)
@@ -119,8 +143,12 @@ async def parse_notebook(file: UploadFile = File(...)) -> dict:
 
 
 @router.get("/api/alerts/scripts")
-def list_scripts() -> list[dict]:
-    return AlertsStore.get_scripts()
+def list_scripts(request: Request) -> list[dict]:
+    scripts = AlertsStore.get_scripts()
+    user = getattr(request.state, "user", None)
+    if user and user.get("role") == "monitoring":
+        scripts = [s for s in scripts if s.get("visible_to_monitoring", False)]
+    return scripts
 
 
 @router.post("/api/alerts/scripts")

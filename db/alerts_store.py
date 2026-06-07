@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 _ROOT = Path(__file__).resolve().parent.parent
-_SCRIPTS_FILE = _ROOT / "data" / "alert_scripts.json"
-_HISTORY_FILE = _ROOT / "data" / "alert_history.json"
-_HISTORY_MAX  = 50
+_SCRIPTS_FILE  = _ROOT / "data" / "alert_scripts.json"
+_HISTORY_FILE  = _ROOT / "data" / "alert_history.json"
+_FOLDERS_FILE  = _ROOT / "data" / "alert_folders.json"
+_HISTORY_MAX   = 50
 
 
 class AlertsStore:
@@ -77,6 +78,57 @@ class AlertsStore:
                 cls._save_scripts(scripts)
                 return True
         return False
+
+    # ── Folders ─────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_folders() -> list[dict]:
+        if not _FOLDERS_FILE.exists():
+            return []
+        with open(_FOLDERS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _save_folders(folders: list[dict]) -> None:
+        _FOLDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_FOLDERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(folders, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def get_folders(cls) -> list[dict]:
+        return cls._load_folders()
+
+    @classmethod
+    def save_folder(cls, folder: dict) -> dict:
+        folders = cls._load_folders()
+        if not folder.get("id"):
+            folder["id"] = "fld-" + str(uuid.uuid4())[:8]
+        for i, f in enumerate(folders):
+            if f.get("id") == folder["id"]:
+                folders[i] = folder
+                cls._save_folders(folders)
+                return folder
+        folders.append(folder)
+        cls._save_folders(folders)
+        return folder
+
+    @classmethod
+    def delete_folder(cls, folder_id: str) -> bool:
+        folders = cls._load_folders()
+        before = len(folders)
+        folders = [f for f in folders if f.get("id") != folder_id]
+        if len(folders) == before:
+            return False
+        cls._save_folders(folders)
+        scripts = cls._load_scripts()
+        changed = False
+        for s in scripts:
+            if s.get("folder_id") == folder_id:
+                s["folder_id"] = None
+                changed = True
+        if changed:
+            cls._save_scripts(scripts)
+        return True
 
     # ── History ──────────────────────────────────────────────────────────────
 

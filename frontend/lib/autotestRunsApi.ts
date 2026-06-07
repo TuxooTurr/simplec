@@ -1,7 +1,14 @@
+import { authHeaders } from "./authApi";
+
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const ah = authHeaders();
+  const headers = new Headers(init?.headers);
+  for (const [k, v] of Object.entries(ah)) {
+    if (!headers.has(k)) headers.set(k, v);
+  }
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text();
     let message = text;
@@ -90,6 +97,7 @@ export interface RunResult {
   stderr: string;
   command?: string;
   work_dir?: string;
+  history_warning?: string;
 }
 
 export interface CheckBuildsResult {

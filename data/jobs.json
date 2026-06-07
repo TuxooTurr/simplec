@@ -1,0 +1,22 @@
+[
+  {
+    "id": "job-6185bf33",
+    "name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "update_sql": "UPDATE qrtz_triggers SET next_fire_time = {nextfiretime} WHERE trigger_name = ''",
+    "folder_id": null,
+    "visible_to_monitoring": true,
+    "created_at": "2026-06-05T07:01:54.298513+00:00",
+    "updated_at": "2026-06-05T07:01:54.298529+00:00"
+  },
+  {
+    "id": "job-8efbfbef",
+    "name": "чамвмым",
+    "connection_id": "a3b7c8d9e0f1",
+    "update_sql": "UPDATE qrtz_triggers SET next_fire_time = {nextfiretime} WHERE trigger_name = ''",
+    "folder_id": "jfld-9b5ea3e2",
+    "visible_to_monitoring": false,
+    "created_at": "2026-06-05T07:49:04.498014+00:00",
+    "updated_at": "2026-06-05T07:49:04.498026+00:00"
+  }
+]

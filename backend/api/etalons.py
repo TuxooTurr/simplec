@@ -279,3 +279,94 @@ def delete_defect(pair_id: str):
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
         raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Контекстные документы
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/api/context-docs")
+def list_context_docs(doc_type: str = "", feature: str = "", limit: int = 50, offset: int = 0):
+    store = _get_store()
+    try:
+        kwargs: dict = {"limit": limit, "offset": offset}
+        where_conditions = []
+        if doc_type:
+            where_conditions.append({"doc_type": doc_type})
+        if feature:
+            where_conditions.append({"feature": feature})
+        if len(where_conditions) == 1:
+            kwargs["where"] = where_conditions[0]
+        elif len(where_conditions) > 1:
+            kwargs["where"] = {"$and": where_conditions}
+
+        result = store.context_docs.get(**kwargs)
+
+        ids = result.get("ids", [])
+        docs = result.get("documents", [])
+        metas = result.get("metadatas", []) or [{}] * len(ids)
+
+        items = []
+        for i, doc_id in enumerate(ids):
+            meta = metas[i] if i < len(metas) else {}
+            items.append({
+                "id": doc_id,
+                "content": docs[i] if i < len(docs) else "",
+                "name": meta.get("name", ""),
+                "doc_type": meta.get("doc_type", "document"),
+                "feature": meta.get("feature", ""),
+                "filename": meta.get("filename", ""),
+            })
+        return {"items": items, "total": len(items)}
+    except Exception as e:
+        logger.exception("Ошибка в эндпоинте контекстных документов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.post("/api/context-docs")
+async def add_context_doc(
+    content: str = Form(""),
+    name: str = Form(""),
+    doc_type: str = Form("document"),
+    feature: str = Form(""),
+    file: Optional[UploadFile] = File(None),
+):
+    from agents.file_parser import parse_file
+
+    filename = ""
+    if file:
+        data = await file.read()
+        content = parse_file(data, file.filename)
+        filename = file.filename or ""
+        if not name:
+            name = filename
+
+    if not content:
+        raise HTTPException(status_code=400, detail="content обязателен (текст или файл)")
+
+    doc_id = str(uuid.uuid4())
+    store = _get_store()
+    try:
+        store.add_context_doc(
+            doc_id=doc_id,
+            content=content,
+            name=name,
+            doc_type=doc_type,
+            feature=feature,
+            filename=filename,
+        )
+        return {"id": doc_id, "status": "added"}
+    except Exception as e:
+        logger.exception("Ошибка в эндпоинте контекстных документов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+
+
+@router.delete("/api/context-docs/{doc_id}")
+def delete_context_doc(doc_id: str):
+    store = _get_store()
+    try:
+        store.context_docs.delete(ids=[doc_id])
+        return {"status": "deleted", "id": doc_id}
+    except Exception as e:
+        logger.exception("Ошибка в эндпоинте контекстных документов")
+        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")

@@ -4,9 +4,67 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Theme tokens (light) ─────────────────────────────────────── */
+
+:root {
+  --color-primary:       #6366F1;
+  --color-primary-dark:  #4F46E5;
+  --color-bg-main:       #eef2ff;
+  --color-bg-card:       #ffffff;
+  --color-bg-subtle:     #f5f7ff;
+  --color-bg-muted:      #f1f5f9;
+  --color-text-main:     #1e293b;
+  --color-text-muted:    #64748b;
+  --color-border-main:   #e2e8f0;
+
+  /* semantic extras */
+  --color-sidebar-bg:    #ffffff;
+  --color-sidebar-hover: #f8fafc;
+  --color-active-bg:     #eef2ff;
+  --color-active-border: #6366F1;
+  --color-input-bg:      #ffffff;
+  --color-modal-bg:      #ffffff;
+  --color-modal-overlay: rgba(15, 23, 42, 0.45);
+  --color-code-bg:       #f8fafc;
+  --color-badge-ai-bg:   #e0e7ff;
+  --color-badge-ai-text: #6366f1;
+  --color-scrollbar:     #c7d2fe;
+  --color-shimmer-from:  #f0f4ff;
+  --color-shimmer-via:   #e0e7ff;
+}
+
+/* ── Dark theme ─────────────────────────────────────────────── */
+
+.dark {
+  --color-primary:       #818cf8;
+  --color-primary-dark:  #6366f1;
+  --color-bg-main:       #0f172a;
+  --color-bg-card:       #1e293b;
+  --color-bg-subtle:     #1e293b;
+  --color-bg-muted:      #334155;
+  --color-text-main:     #f1f5f9;
+  --color-text-muted:    #94a3b8;
+  --color-border-main:   #334155;
+
+  --color-sidebar-bg:    #1e293b;
+  --color-sidebar-hover: #334155;
+  --color-active-bg:     rgba(99, 102, 241, 0.15);
+  --color-active-border: #818cf8;
+  --color-input-bg:      #1e293b;
+  --color-modal-bg:      #1e293b;
+  --color-modal-overlay: rgba(0, 0, 0, 0.6);
+  --color-code-bg:       #0f172a;
+  --color-badge-ai-bg:   rgba(99, 102, 241, 0.2);
+  --color-badge-ai-text: #a5b4fc;
+  --color-scrollbar:     #475569;
+  --color-shimmer-from:  #1e293b;
+  --color-shimmer-via:   #334155;
+}
+
 @layer base {
   body {
     @apply bg-bg-main text-text-main font-sans;
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
   * {
     box-sizing: border-box;
@@ -17,12 +75,12 @@
   /* ── Scrollbar ── */
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: #c7d2fe transparent;
+    scrollbar-color: var(--color-scrollbar) transparent;
   }
   .scrollbar-thin::-webkit-scrollbar { width: 6px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #c7d2fe;
+    background-color: var(--color-scrollbar);
     border-radius: 3px;
   }
 
@@ -49,7 +107,7 @@
 
   /* ── Shimmer (skeleton) ── */
   .animate-shimmer {
-    background: linear-gradient(90deg, #f0f4ff 25%, #e0e7ff 50%, #f0f4ff 75%);
+    background: linear-gradient(90deg, var(--color-shimmer-from) 25%, var(--color-shimmer-via) 50%, var(--color-shimmer-from) 75%);
     background-size: 200% 100%;
     animation: shimmer 1.5s infinite;
   }
@@ -62,7 +120,7 @@
   /* ── Spin (for loaders) ── */
   .spin-slow { animation: spin 1.2s linear infinite; }
 
-  /* ── Shake (виброс кнопки) ── */
+  /* ── Shake (вибрация кнопки) ── */
   .animate-shake {
     animation: shake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
   }

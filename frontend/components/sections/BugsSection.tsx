@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone,
   BarChart2, Palette, GitBranch, PlugZap,
@@ -66,7 +66,7 @@ const PLATFORMS = [
 ];
 
 const INPUT_CLS =
-  "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
+  "w-full border border-border-main rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
 const ATTACH_ACCEPT = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg"]);
@@ -94,7 +94,7 @@ function FileChip({ file, onRemove }: { file: File; onRemove: () => void }) {
   }
 
   return (
-    <div className="flex items-center gap-1.5 pl-1.5 pr-1 py-1 bg-gray-50 border border-border-main rounded-lg text-xs text-text-muted max-w-[200px] group">
+    <div className="flex items-center gap-1.5 pl-1.5 pr-1 py-1 bg-bg-subtle border border-border-main rounded-lg text-xs text-text-muted max-w-[200px] group">
       {isImage && src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" className="w-5 h-5 rounded object-cover flex-shrink-0" />
@@ -121,7 +121,7 @@ function FileChip({ file, onRemove }: { file: File; onRemove: () => void }) {
 /* ── Component ────────────────────────────────────────────────────── */
 
 export default function BugsSection() {
-  const { provider } = useWorkspace();
+  const { provider, bugPrefill, setBugPrefill } = useWorkspace();
 
   const [stage, setStage]             = useState<"input" | "history">("input");
   const [platform, setPlatform]       = useState("Back");
@@ -136,6 +136,18 @@ export default function BugsSection() {
 
   const [histEntries, setHistEntries] = useState<BugHistEntry[]>(() => loadBugHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+
+  /* ── Pre-fill от анализатора логов ─────────────────────────────────── */
+  useEffect(() => {
+    if (bugPrefill) {
+      setPlatform(bugPrefill.platform || "Back");
+      setFeature(bugPrefill.feature || "");
+      setDescription(bugPrefill.description || "");
+      setStage("input");
+      setReport("");
+      setBugPrefill(null); // очищаем после применения
+    }
+  }, [bugPrefill, setBugPrefill]);
 
   /* ── History management ─────────────────────────────────────────── */
 
@@ -270,11 +282,11 @@ export default function BugsSection() {
               .map(([group, entries]) => (
                 <div key={group}>
                   <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">{group}</p>
-                  <div className="bg-white border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
+                  <div className="bg-bg-card border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
                     {entries.map(entry => (
                       <div
                         key={entry.id}
-                        className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 cursor-pointer group transition-colors"
+                        className="flex items-center gap-3 px-4 py-3 hover:bg-bg-subtle/60 cursor-pointer group transition-colors"
                         onClick={() => {
                           setPlatform(entry.platform);
                           setFeature(entry.feature);
@@ -369,7 +381,7 @@ export default function BugsSection() {
         </div>
 
         {/* Input card */}
-        <div className="bg-white border border-border-main rounded-xl p-5 mb-4">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
           <div className="mb-4">
             <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">
               Направление
@@ -382,7 +394,7 @@ export default function BugsSection() {
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border
                     transition-all duration-150
                     ${platform === id
-                      ? "border-primary bg-indigo-50 text-primary"
+                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
                       : "border-border-main text-text-muted hover:border-primary/40 hover:text-text-main"}`}
                 >
                   <Icon className="w-3.5 h-3.5" />{label}
@@ -486,7 +498,7 @@ export default function BugsSection() {
 
         {/* Report */}
         {report && (
-          <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+          <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-text-main">Баг-репорт</h3>
               <div className="flex items-center gap-2">
@@ -500,7 +512,7 @@ export default function BugsSection() {
                     setAttachedFiles([]);
                   }}
                   className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
-                    text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 active:scale-[0.97]"
+                    text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 active:scale-[0.97]"
                 >
                   <Bug className="w-3.5 h-3.5" /> Новый дефект
                 </button>
@@ -510,7 +522,7 @@ export default function BugsSection() {
                     transition-all duration-150 active:scale-[0.97]
                     ${copied
                       ? "bg-green-50 border-green-200 text-green-700"
-                      : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                      : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
                 >
                   {copied
                     ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>

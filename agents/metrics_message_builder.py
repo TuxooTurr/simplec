@@ -182,19 +182,32 @@ def build_data_message(
     value: float,
     baseline: Optional[float],
     health: Optional[int],
+    historical_points: Optional[list[dict]] = None,
     version: str = "1.0",
 ) -> dict:
-    """DATA-сообщение: значение метрики. Отправляется каждый period_sec."""
+    """DATA-сообщение: значение метрики + накопленные точки за 24ч.
+
+    historical_points — ранее отправленные точки (из GenerationLog за последние 24 часа).
+    Каждая точка: {"metric_hash", "metric_value", "baseline_value", "metric_ts", "metric_status"}.
+    Текущая точка добавляется в конец массива.
+    """
+    current_point = {
+        "metric_hash":    metric_hash,
+        "metric_value":   value,
+        "baseline_value": baseline,
+        "metric_ts":      int(time.time()),
+        "metric_status":  HEALTH_TO_STATUS.get(health) if health is not None else None,
+    }
+
+    data_points: list[dict] = []
+    if historical_points:
+        data_points.extend(historical_points)
+    data_points.append(current_point)
+
     return {
         "version": version,
         "metrics": {
-            "data": [{
-                "metric_hash":    metric_hash,
-                "metric_value":   value,
-                "baseline_value": baseline,
-                "metric_ts":      int(time.time()),
-                "metric_status":  HEALTH_TO_STATUS.get(health) if health is not None else None,
-            }]
+            "data": data_points
         },
     }
 
@@ -290,6 +303,7 @@ def build_preview(
     health_cfg: dict,
     thresholds_cfg: dict,
     threshold_rows: list[dict],
+    historical_points: Optional[list[dict]] = None,
 ) -> dict:
     """Строит превью всех 3 сообщений для UI (без отправки в Kafka)."""
     value = generate_value(
@@ -323,7 +337,10 @@ def build_preview(
         threshold_rows=threshold_rows,
     )
 
-    data_msg = build_data_message(metric_hash, value, baseline, health)
+    data_msg = build_data_message(
+        metric_hash, value, baseline, health,
+        historical_points=historical_points,
+    )
 
     meta_msg = build_metadata_message(
         metric_hash=metric_hash,
@@ -361,10 +378,12 @@ def build_preview(
         )
         thr_msg_json = json.dumps(thr_msg, ensure_ascii=False, indent=2)
 
+    accumulated_count = len(data_msg.get("metrics", {}).get("data", []))
     return {
         "value":                   value,
         "baseline":                baseline,
         "health":                  health,
+        "accumulated_points":      accumulated_count,
         "data_message_json":       json.dumps(data_msg, ensure_ascii=False, indent=2),
         "metadata_message_json":   json.dumps(meta_msg, ensure_ascii=False, indent=2),
         "thresholds_message_json": thr_msg_json,

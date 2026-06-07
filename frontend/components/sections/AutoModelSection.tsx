@@ -9,6 +9,7 @@ import {
 import AutotestRunPanel from "@/components/AutotestRunPanel";
 import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 /* ── History helpers ──────────────────────────────────────────────── */
 
@@ -143,8 +144,9 @@ const TEST_TYPES: Record<TestType, TestTypeConfig> = {
 /* ── Constants ────────────────────────────────────────────────────── */
 
 const INPUT_CLS =
-  "w-full border border-border-main rounded-lg px-3 py-2 text-sm focus:outline-none " +
-  "focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
+  "w-full border border-border-main rounded-lg px-3 py-2 text-sm " +
+  "bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 " +
+  "focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
 const ACCEPT = ".txt,.md,.pdf,.docx,.doc,.xlsx,.xls,.xml";
 
@@ -152,6 +154,7 @@ const ACCEPT = ".txt,.md,.pdf,.docx,.doc,.xlsx,.xls,.xml";
 
 export default function AutoModelSection() {
   const { provider } = useWorkspace();
+  const { isSuperuser } = useAuth();
 
   const [stage, setStage]         = useState<"input" | "history">("input");
   const [activeMode, setActiveMode] = useState<AutoMode>("generate");
@@ -389,11 +392,11 @@ export default function AutoModelSection() {
               .map(([group, entries]) => (
                 <div key={group}>
                   <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-2">{group}</p>
-                  <div className="bg-white border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
+                  <div className="bg-bg-card border border-border-main rounded-xl overflow-hidden divide-y divide-border-main">
                     {entries.map(entry => (
                       <div
                         key={entry.id}
-                        className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 cursor-pointer group transition-colors"
+                        className="flex items-center gap-3 px-4 py-3 hover:bg-bg-subtle/60 cursor-pointer group transition-colors"
                         onClick={() => {
                           setFeature(entry.feature);
                           setInputText(entry.inputText);
@@ -489,31 +492,33 @@ export default function AutoModelSection() {
         </div>
 
         {/* Work mode tabs */}
-        <div className="flex flex-wrap items-center gap-1.5 mb-4 p-1 bg-gray-100 rounded-xl w-full sm:w-fit">
+        <div className="flex flex-wrap items-center gap-1.5 mb-4 p-1 bg-bg-muted rounded-xl w-full sm:w-fit">
           <button
             type="button"
             onClick={() => setActiveMode("generate")}
             className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
               activeMode === "generate"
-                ? "bg-white text-primary shadow-sm border border-border-main"
+                ? "bg-bg-card text-primary shadow-sm border border-border-main"
                 : "text-text-muted hover:text-text-main"
             }`}
           >
             <FlaskConical className="w-3.5 h-3.5" />
             Генерация автотестов
           </button>
-          <button
-            type="button"
-            onClick={() => setActiveMode("run")}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
-              activeMode === "run"
-                ? "bg-white text-primary shadow-sm border border-border-main"
-                : "text-text-muted hover:text-text-main"
-            }`}
-          >
-            <PlugZap className="w-3.5 h-3.5" />
-            Запуск автотестов
-          </button>
+          {isSuperuser && (
+            <button
+              type="button"
+              onClick={() => setActiveMode("run")}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
+                activeMode === "run"
+                  ? "bg-bg-card text-primary shadow-sm border border-border-main"
+                  : "text-text-muted hover:text-text-main"
+              }`}
+            >
+              <PlugZap className="w-3.5 h-3.5" />
+              Запуск автотестов
+            </button>
+          )}
         </div>
 
         {activeMode === "run" && <AutotestRunPanel />}
@@ -521,14 +526,14 @@ export default function AutoModelSection() {
         {activeMode === "generate" && (
           <>
         {/* Test type selector */}
-        <div className="flex items-center gap-1.5 mb-4 p-1 bg-gray-100 rounded-xl w-fit">
+        <div className="flex items-center gap-1.5 mb-4 p-1 bg-bg-muted rounded-xl w-fit">
           {(Object.keys(TEST_TYPES) as TestType[]).map(t => (
             <button
               key={t}
               onClick={() => setTestType(t)}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 ${
                 testType === t
-                  ? "bg-white text-primary shadow-sm border border-border-main"
+                  ? "bg-bg-card text-primary shadow-sm border border-border-main"
                   : "text-text-muted hover:text-text-main"
               }`}
             >
@@ -538,11 +543,11 @@ export default function AutoModelSection() {
         </div>
 
         {/* Project binding card */}
-        <div className="bg-white border border-border-main rounded-xl mb-4 overflow-hidden">
+        <div className="bg-bg-card border border-border-main rounded-xl mb-4 overflow-hidden">
           <button
             type="button"
             onClick={() => setProjectOpen(v => !v)}
-            className="w-full flex items-center justify-between px-5 py-3 text-sm hover:bg-gray-50/60 transition-colors"
+            className="w-full flex items-center justify-between px-5 py-3 text-sm hover:bg-bg-subtle/60 transition-colors"
           >
             <div className="flex items-center gap-2">
               <FolderOpen className="w-4 h-4 text-indigo-500" />
@@ -601,7 +606,7 @@ export default function AutoModelSection() {
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
                       projectData.build_tool === "maven"  ? "bg-orange-50 border-orange-200 text-orange-700" :
                       projectData.build_tool === "gradle" ? "bg-teal-50 border-teal-200 text-teal-700" :
-                      "bg-gray-100 border-gray-200 text-gray-600"
+                      "bg-bg-muted border-border-main text-text-muted"
                     }`}>
                       {projectData.build_tool === "maven" ? "Maven" : projectData.build_tool === "gradle" ? "Gradle" : "Неизвестно"}
                     </span>
@@ -624,7 +629,7 @@ export default function AutoModelSection() {
                       </summary>
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {projectData.dependencies.map(d => (
-                          <span key={d} className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 font-mono">
+                          <span key={d} className="text-xs px-1.5 py-0.5 rounded bg-bg-muted text-text-main font-mono">
                             {d}
                           </span>
                         ))}
@@ -648,7 +653,7 @@ export default function AutoModelSection() {
         </div>
 
         {/* Input card */}
-        <div className="bg-white border border-border-main rounded-xl p-5 mb-4">
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
 
           {/* Feature */}
           <div className="mb-4">
@@ -699,7 +704,7 @@ export default function AutoModelSection() {
                 <span
                   key={`${file.name}-${index}`}
                   title={`${file.name}: ${file.text.length.toLocaleString()} симв. попадет в LLM`}
-                  className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-gray-50 border border-border-main rounded-lg px-2 py-1"
+                  className="flex max-w-[260px] items-center gap-1 text-xs text-text-muted bg-bg-subtle border border-border-main rounded-lg px-2 py-1"
                 >
                   <FileText className="w-3 h-3 flex-shrink-0 text-indigo-400" />
                   <span className="truncate">{file.name}</span>
@@ -748,14 +753,14 @@ export default function AutoModelSection() {
 
         {/* Code result */}
         {code && (
-          <div className="bg-white border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+          <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-text-main">{TEST_TYPES[testType].codeLabel}</h3>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setCode("")}
                   className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
-                    text-text-muted hover:bg-gray-50 hover:text-text-main transition-all duration-150 active:scale-[0.97]"
+                    text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 active:scale-[0.97]"
                 >
                   <FlaskConical className="w-3.5 h-3.5" /> Новая генерация
                 </button>
@@ -768,7 +773,7 @@ export default function AutoModelSection() {
                     transition-all duration-150 active:scale-[0.97]
                     ${histEntries[0]?.loadedAsEtalon
                       ? "bg-green-50 border-green-200 text-green-700"
-                      : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                      : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
                   title="Загрузить в эталон автотестов"
                 >
                   {histEntries[0]?.loadedAsEtalon
@@ -783,7 +788,7 @@ export default function AutoModelSection() {
                     transition-all duration-150 active:scale-[0.97]
                     ${copied
                       ? "bg-green-50 border-green-200 text-green-700"
-                      : "border-border-main text-text-muted hover:bg-gray-50 hover:text-text-main"}`}
+                      : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
                 >
                   {copied
                     ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
@@ -792,7 +797,7 @@ export default function AutoModelSection() {
               </div>
             </div>
             <pre className="text-xs text-text-main font-mono whitespace-pre-wrap leading-relaxed
-              bg-gray-50 rounded-lg p-4 overflow-x-auto">
+              bg-bg-subtle rounded-lg p-4 overflow-x-auto">
               {code}
             </pre>
           </div>

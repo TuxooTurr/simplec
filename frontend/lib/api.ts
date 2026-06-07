@@ -2,10 +2,17 @@
  * HTTP API клиент для REST эндпоинтов.
  */
 
+import { authHeaders } from "./authApi";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, init);
+  const ah = authHeaders();
+  const headers = new Headers(init?.headers);
+  for (const [k, v] of Object.entries(ah)) {
+    if (!headers.has(k)) headers.set(k, v);
+  }
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
@@ -166,6 +173,49 @@ export async function deleteDefect(id: string): Promise<{ status: string }> {
   return fetchJson(`/api/defects/${id}`, { method: "DELETE" });
 }
 
+// ─── Context Docs ─────────────────────────────────────────────────────────
+
+export interface ContextDoc {
+  id: string;
+  content: string;
+  name: string;
+  doc_type: string;
+  feature: string;
+  filename: string;
+}
+
+export async function listContextDocs(params?: {
+  doc_type?: string;
+  feature?: string;
+  limit?: number;
+}): Promise<{ items: ContextDoc[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params?.doc_type) qs.set("doc_type", params.doc_type);
+  if (params?.feature) qs.set("feature", params.feature);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  return fetchJson(`/api/context-docs?${qs.toString()}`);
+}
+
+export async function addContextDoc(data: {
+  content?: string;
+  name?: string;
+  doc_type?: string;
+  feature?: string;
+  file?: File;
+}): Promise<{ id: string; status: string }> {
+  const body = new FormData();
+  if (data.content) body.append("content", data.content);
+  if (data.name) body.append("name", data.name);
+  if (data.doc_type) body.append("doc_type", data.doc_type);
+  if (data.feature) body.append("feature", data.feature);
+  if (data.file) body.append("file", data.file);
+  return fetchJson("/api/context-docs", { method: "POST", body });
+}
+
+export async function deleteContextDoc(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/context-docs/${id}`, { method: "DELETE" });
+}
+
 // ─── Alerts ────────────────────────────────────────────────────────────────
 
 export interface NotebookCell {
@@ -175,20 +225,31 @@ export interface NotebookCell {
   source: string;
 }
 
+export type ParamFieldType = "text" | "select" | "multiselect" | "dropdown" | "dropdown_multi" | "datetime";
+
 export interface DynamicParam {
   id:          string;
-  label:       string;       // Отображаемое имя
-  code_key:    string;       // Информационно: ключ в коде (напр. "systems")
-  placeholder: string;       // Значение для замены в коде (напр. "CI0000000")
+  label:       string;
+  code_key:    string;
+  placeholder: string;
+  field_type:  ParamFieldType;
+  options:     string[];
+}
+
+export interface AlertFolder {
+  id:   string;
+  name: string;
 }
 
 export interface AlertScript {
-  id:             string;
-  name:           string;
-  topic:          string;
-  notebook:       NotebookCell[];
-  dynamic_params: DynamicParam[];
-  created_at?:    string;
+  id:                    string;
+  name:                  string;
+  topic:                 string;
+  notebook:              NotebookCell[];
+  dynamic_params:        DynamicParam[];
+  visible_to_monitoring: boolean;
+  folder_id?:            string | null;
+  created_at?:           string;
 }
 
 export interface AlertHistoryEntry {
@@ -199,6 +260,22 @@ export interface AlertHistoryEntry {
   status:      "ok" | "error";
   error?:      string;
   ts:          string;
+}
+
+export async function getAlertFolders(): Promise<AlertFolder[]> {
+  return fetchJson("/api/alerts/folders");
+}
+
+export async function saveAlertFolder(folder: Partial<AlertFolder>): Promise<AlertFolder> {
+  return fetchJson("/api/alerts/folders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(folder),
+  });
+}
+
+export async function deleteAlertFolder(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/alerts/folders/${id}`, { method: "DELETE" });
 }
 
 export async function getAlertScripts(): Promise<AlertScript[]> {
@@ -241,8 +318,9 @@ export async function parseNotebook(file: File): Promise<{ cells: NotebookCell[]
 
 // ─── Kernel ────────────────────────────────────────────────────────────────
 
-export async function kernelStart(scriptId: string): Promise<{ status: string; kernel_id: string }> {
-  return fetchJson(`/api/kernel/start/${scriptId}`, { method: "POST" });
+export async function kernelStart(scriptId: string, scriptName?: string): Promise<{ status: string; kernel_id: string }> {
+  const qs = scriptName ? `?script_name=${encodeURIComponent(scriptName)}` : "";
+  return fetchJson(`/api/kernel/start/${scriptId}${qs}`, { method: "POST" });
 }
 
 export async function kernelStop(scriptId: string): Promise<{ status: string }> {
@@ -259,6 +337,31 @@ export async function kernelExecute(scriptId: string, code: string, timeout = 60
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ code, timeout }),
   });
+}
+
+export interface KernelInfo {
+  script_id:   string;
+  script_name: string;
+  alive:       boolean;
+  kernel_id:   string;
+  started_by:  string;
+  started_at:  string;
+}
+
+export async function kernelAllStatus(): Promise<KernelInfo[]> {
+  return fetchJson("/api/kernel/all-status");
+}
+
+export interface KernelAuditEntry {
+  action:      string;
+  script_id:   string;
+  script_name: string;
+  user:        string;
+  ts:          string;
+}
+
+export async function kernelAudit(limit = 30): Promise<KernelAuditEntry[]> {
+  return fetchJson(`/api/kernel/audit?limit=${limit}`);
 }
 
 // ─── Bugs ──────────────────────────────────────────────────────────────────
@@ -315,4 +418,378 @@ export async function analyzeProject(path: string): Promise<ProjectAnalysis> {
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify({ path }),
   });
+}
+
+// ─── Generation Sessions ──────────────────────────────────────────────────
+
+export interface GenSessionSummary {
+  id:             string;
+  status:         "generating" | "done" | "error" | "cancelled";
+  created_at:     string;
+  updated_at:     string;
+  requirement:    string;
+  feature:        string;
+  depth:          string;
+  provider:       string;
+  platform:       string;
+  elapsed:        number;
+  current_layer:  number;
+  layer3_progress: { current: number; total: number; name: string } | null;
+  error:          string | null;
+  error_is_llm:   boolean;
+  case_count:     number;
+  has_qa_doc:     boolean;
+  has_export:     boolean;
+}
+
+export interface GenSession extends GenSessionSummary {
+  qa_doc:         string;
+  case_list:      Array<{ name: string; priority: string; type: string }>;
+  cases:          Array<{ name: string; priority: string; case_type: string; steps: unknown[] }>;
+  export_result:  { xml: string; csv: string; md: string } | null;
+  is_running:     boolean;
+}
+
+export async function listGenSessions(params?: {
+  limit?: number;
+  status?: string;
+}): Promise<GenSessionSummary[]> {
+  const qs = new URLSearchParams();
+  if (params?.limit)  qs.set("limit",  String(params.limit));
+  if (params?.status) qs.set("status", params.status);
+  return fetchJson(`/api/generation/sessions?${qs.toString()}`);
+}
+
+export async function getGenSession(id: string): Promise<GenSession> {
+  return fetchJson(`/api/generation/sessions/${id}`);
+}
+
+export async function deleteGenSession(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/generation/sessions/${id}`, { method: "DELETE" });
+}
+
+export async function resumeGenSession(id: string): Promise<{ status: string; session_id: string }> {
+  return fetchJson(`/api/generation/sessions/${id}/resume`, { method: "POST" });
+}
+
+export async function exportGenSession(id: string, params: {
+  project?: string;
+  system?: string;
+  team?: string;
+  domain?: string;
+  folder?: string;
+  use_llm?: boolean;
+  provider?: string;
+  crit_regress?: boolean;
+}): Promise<{ xml: string; csv: string; md: string }> {
+  return fetchJson(`/api/generation/sessions/${id}/export`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+// ─── Test Data ───────────────────────────────────────────────────────────────
+
+export interface TestDataConnection {
+  id:                string;
+  display_name:      string;
+  db_type:           "postgresql" | "mysql" | "oracle";
+  host:              string;
+  port:              number;
+  db_name:           string;
+  login:             string;
+  password:          string;
+  schema_name:       string;
+  created_at:        string;
+  updated_at:        string;
+  cached_schema:     Record<string, { name: string; type: string; nullable: boolean; default: string | null }[]> | null;
+  schema_updated_at: string | null;
+}
+
+export interface TestDataConnectionCreate {
+  display_name: string;
+  db_type:      "postgresql" | "mysql" | "oracle";
+  host:         string;
+  port:         number;
+  db_name:      string;
+  login:        string;
+  password:     string;
+  schema_name?: string;
+}
+
+export interface TestDataQueryResult {
+  columns:   string[];
+  rows:      (string | number | boolean | null)[][];
+  row_count: number;
+  db_name?:  string;
+  error?:    string;
+}
+
+export async function listTestDataConnections(): Promise<TestDataConnection[]> {
+  return fetchJson("/api/testdata/connections");
+}
+
+export async function createTestDataConnection(
+  data: TestDataConnectionCreate,
+): Promise<{ connection: TestDataConnection }> {
+  return fetchJson("/api/testdata/connections", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(data),
+  });
+}
+
+export async function updateTestDataConnection(
+  id: string,
+  data: TestDataConnectionCreate,
+): Promise<{ connection: TestDataConnection }> {
+  return fetchJson(`/api/testdata/connections/${id}`, {
+    method:  "PUT",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(data),
+  });
+}
+
+export async function deleteTestDataConnection(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/testdata/connections/${id}`, { method: "DELETE" });
+}
+
+export async function testTestDataConnection(id: string): Promise<{ status: string; message: string }> {
+  return fetchJson(`/api/testdata/connections/${id}/test`, { method: "POST" });
+}
+
+export async function introspectTestDataConnection(
+  id: string,
+): Promise<{ schema: Record<string, unknown[]>; table_count: number; column_count: number }> {
+  return fetchJson(`/api/testdata/connections/${id}/introspect`, { method: "POST" });
+}
+
+export async function executeTestDataQuery(params: {
+  connection_ids: string[];
+  sql:            string;
+}): Promise<{ results: Record<string, TestDataQueryResult> }> {
+  return fetchJson("/api/testdata/query", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+export async function generateTestDataQuery(params: {
+  connection_ids: string[];
+  requirement:    string;
+  provider:       string;
+}): Promise<{ sql: string; db_type: string }> {
+  return fetchJson("/api/testdata/generate-query", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+export async function suggestTestDataScript(params: {
+  connection_ids: string[];
+  requirement:    string;
+  provider:       string;
+}): Promise<{ script: string; db_type: string; warning: string }> {
+  return fetchJson("/api/testdata/suggest-script", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+export async function getTestDataSchemasText(
+  connection_ids: string[],
+): Promise<{ text: string; connection_count: number }> {
+  return fetchJson("/api/testdata/schemas-text", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(connection_ids),
+  });
+}
+
+// ── Jobs ──────────────────────────────────────────────────────────────────────
+
+export interface JobDef {
+  id:                    string;
+  name:                  string;
+  connection_id:         string;
+  update_sql:            string;
+  folder_id:             string | null;
+  visible_to_monitoring: boolean;
+  created_at:            string;
+  updated_at?:           string;
+}
+
+export interface JobFolder {
+  id:   string;
+  name: string;
+}
+
+export interface JobExecuteResult {
+  ok:            boolean;
+  job_id:        string;
+  nextfiretime?: number;
+  rows_affected?: number;
+  sql?:          string;
+  error?:        string;
+}
+
+export interface JobBatchResult {
+  total:   number;
+  ok:      number;
+  failed:  number;
+  results: JobExecuteResult[];
+}
+
+export interface JobHistoryEntry {
+  job_id:        string;
+  job_name:      string;
+  connection_id: string;
+  sql:           string;
+  nextfiretime:  number;
+  rows_affected?: number;
+  status:        "ok" | "error";
+  error?:        string;
+  ts:            string;
+}
+
+export async function getJobs(): Promise<JobDef[]> {
+  return fetchJson("/api/jobs");
+}
+
+export async function saveJob(
+  job: Partial<JobDef> & { name: string; connection_id: string; update_sql: string },
+): Promise<JobDef> {
+  return fetchJson("/api/jobs", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(job),
+  });
+}
+
+export async function deleteJob(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/jobs/${id}`, { method: "DELETE" });
+}
+
+export async function executeJob(
+  id: string,
+  offsetMs: number = 30000,
+): Promise<JobExecuteResult> {
+  return fetchJson(`/api/jobs/${id}/execute`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ offset_ms: offsetMs }),
+  });
+}
+
+export async function executeJobBatch(
+  jobIds: string[],
+  offsetMs: number = 30000,
+): Promise<JobBatchResult> {
+  return fetchJson("/api/jobs/execute-batch", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ job_ids: jobIds, offset_ms: offsetMs }),
+  });
+}
+
+export async function getJobHistory(limit: number = 30): Promise<JobHistoryEntry[]> {
+  return fetchJson(`/api/jobs/history?limit=${limit}`);
+}
+
+export async function getJobFolders(): Promise<JobFolder[]> {
+  return fetchJson("/api/jobs/folders");
+}
+
+export async function saveJobFolder(
+  folder: Partial<JobFolder> & { name: string },
+): Promise<JobFolder> {
+  return fetchJson("/api/jobs/folders", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(folder),
+  });
+}
+
+export async function deleteJobFolder(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/jobs/folders/${id}`, { method: "DELETE" });
+}
+
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+
+export interface LogEntry {
+  id:          string;
+  timestamp:   string;
+  service:     string;
+  level:       string;
+  message:     string;
+  stacktrace:  string;
+  metadata:    Record<string, string | number>;
+  fingerprint: string;
+}
+
+export interface LogGroup extends LogEntry {
+  count:         number;
+  group_entries: LogEntry[];
+}
+
+export interface LogAnalysis {
+  error_index:  number;
+  log_id:       string;
+  service:      string;
+  summary:      string;
+  root_cause:   string;
+  impact:       string;
+  category:     string;
+  severity:     string;
+  suggestion:   string;
+  defect_draft: string;
+}
+
+export interface LogSearchResult {
+  entries:        LogEntry[];
+  grouped:        LogGroup[];
+  total:          number;
+  unique_count:   number;
+  services_found: string[];
+}
+
+export interface LogAnalyzeResult {
+  analyses: LogAnalysis[];
+}
+
+export async function searchLogs(params: {
+  vps_id:    string;
+  services:  string[];
+  level:     string;
+  time_from: string;
+  time_to:   string;
+  query?:    string;
+  limit?:    number;
+}): Promise<LogSearchResult> {
+  return fetchJson("/api/logs/search", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+export async function analyzeLogs(params: {
+  vps_id:   string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  entries:  any[];
+  provider: string;
+}): Promise<LogAnalyzeResult> {
+  return fetchJson("/api/logs/analyze", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}
+
+export async function getLogServices(vpsId: string): Promise<{ services: string[] }> {
+  return fetchJson(`/api/logs/services?vps_id=${encodeURIComponent(vpsId)}`);
 }

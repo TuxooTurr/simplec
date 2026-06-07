@@ -1,1 +1,21 @@
-[]
+[
+  {
+    "id": "27ca74ba",
+    "name": "Время",
+    "topic": "",
+    "notebook": [],
+    "dynamic_params": [
+      {
+        "id": "param-1780478082845-vme",
+        "label": "Время",
+        "code_key": "",
+        "placeholder": "",
+        "field_type": "datetime",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-1dff74db",
+    "created_at": "2026-06-04T08:42:18.595926+00:00"
+  }
+]

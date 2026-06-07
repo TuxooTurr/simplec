@@ -1,0 +1,92 @@
+[
+  {
+    "job_id": "job-8efbfbef",
+    "job_name": "чамвмым",
+    "connection_id": "a3b7c8d9e0f1",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780645779964 WHERE trigger_name = ''",
+    "nextfiretime": 1780645779964,
+    "status": "error",
+    "error": "mysql-connector-python не установлен",
+    "ts": "2026-06-05T07:49:09.966940+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780643505413 WHERE trigger_name = ''",
+    "nextfiretime": 1780643505413,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:11:15.427463+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780643034950 WHERE trigger_name = ''",
+    "nextfiretime": 1780643034950,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:03:24.962403+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780643009963 WHERE trigger_name = ''",
+    "nextfiretime": 1780643009963,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:59.976276+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780643005476 WHERE trigger_name = ''",
+    "nextfiretime": 1780643005476,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:55.500309+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780642963634 WHERE trigger_name = ''",
+    "nextfiretime": 1780642963634,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:13.644797+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780642958176 WHERE trigger_name = ''",
+    "nextfiretime": 1780642958176,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:08.194009+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780642954795 WHERE trigger_name = ''",
+    "nextfiretime": 1780642954795,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:04.805115+00:00"
+  },
+  {
+    "job_id": "job-6185bf33",
+    "job_name": "Тестовый джоб отчётов",
+    "connection_id": "51e5192c254e",
+    "sql": "UPDATE qrtz_triggers SET next_fire_time = 1780642951345 WHERE trigger_name = ''",
+    "nextfiretime": 1780642951345,
+    "status": "error",
+    "error": "connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"demo_user\" does not exist\n",
+    "ts": "2026-06-05T07:02:01.554943+00:00"
+  }
+]

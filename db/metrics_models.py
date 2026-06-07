@@ -169,3 +169,32 @@ class MetricsSettings(Base):
     value       = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
     updated_at  = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class FarmDevice(Base):
+    """Устройство в ферме мобильных устройств."""
+    __tablename__ = "farm_devices"
+
+    udid        = Column(String(100), primary_key=True)
+    platform    = Column(String(10), nullable=False)        # ANDROID | IOS
+    model       = Column(String(255), nullable=True)
+    os_version  = Column(String(50), nullable=True)
+    agent_host  = Column(String(255), nullable=True)
+    appium_port = Column(Integer, nullable=True)
+    status      = Column(String(20), default="OFFLINE")     # AVAILABLE | BUSY | OFFLINE | MAINTENANCE
+    battery     = Column(Integer, nullable=True)
+    last_seen   = Column(DateTime, nullable=True)
+
+
+class FarmSession(Base):
+    """Сессия работы с устройством."""
+    __tablename__ = "farm_sessions"
+
+    id           = Column(String(36), primary_key=True)     # UUID string
+    device_udid  = Column(String(100), ForeignKey("farm_devices.udid"), nullable=False)
+    username     = Column(String(255), nullable=False)      # SimpleTest user
+    session_type = Column(String(20), default="MANUAL")     # MANUAL | AUTOMATION
+    started_at   = Column(DateTime, server_default=func.now())
+    ended_at     = Column(DateTime, nullable=True)
+    timeout_min  = Column(Integer, default=30)
+    status       = Column(String(20), default="ACTIVE")     # ACTIVE | COMPLETED | TIMED_OUT | FORCE_RELEASED

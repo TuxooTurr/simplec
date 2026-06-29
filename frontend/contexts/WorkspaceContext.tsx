@@ -8,7 +8,6 @@ export type SectionId =
   | "test_data"
   | "bugs"
   | "logs"
-  | "device_farm"
   | "alerts"
   | "jobs"
   | "metrics"

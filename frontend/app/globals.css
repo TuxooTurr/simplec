@@ -7,6 +7,15 @@
 /* ── Theme tokens (light) ─────────────────────────────────────── */
 
 :root {
+  color-scheme: light;
+
+  /* motion tokens (transitions.dev vocabulary) */
+  --ease-smooth: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-quick:   150ms;
+  --dur-fast:    250ms;
+  --dur-medium:  350ms;
+
   --color-primary:       #6366F1;
   --color-primary-dark:  #4F46E5;
   --color-bg-main:       #eef2ff;
@@ -36,6 +45,8 @@
 /* ── Dark theme ─────────────────────────────────────────────── */
 
 .dark {
+  color-scheme: dark;
+
   --color-primary:       #818cf8;
   --color-primary-dark:  #6366f1;
   --color-bg-main:       #0f172a;
@@ -95,6 +106,12 @@
   .animate-slide-up-delay-2 { animation: slideUp 0.35s ease-out 0.10s both; }
   .animate-slide-up-delay-3 { animation: slideUp 0.35s ease-out 0.15s both; }
 
+  /* Panel reveal — slide a panel in from the right edge as it opens.
+     `backwards` (not `both`): the transform is dropped once the animation
+     ends, so it never creates a containing block that would break
+     position:fixed modals rendered inside the panel. */
+  .animate-panel-in-right { animation: panelInRight var(--dur-medium) var(--ease-smooth) backwards; }
+
   /* ── Progress glow ── */
   .animate-progress-glow {
     animation: progressGlow 1.5s ease-in-out infinite;
@@ -136,6 +153,11 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes panelInRight {
+  from { opacity: 0; transform: translateX(18px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
 @keyframes progressGlow {
   0%, 100% { box-shadow: 0 0 6px 0 rgba(99,102,241,0.4); }
   50%       { box-shadow: 0 0 14px 3px rgba(99,102,241,0.7); }
@@ -169,4 +191,362 @@
   60%       { transform: translateX(4px)  rotate(0.5deg); }
   75%       { transform: translateX(-2px); }
   90%       { transform: translateX(2px); }
+}
+
+/* ── Smooth theme switch ─────────────────────────────────────────
+   Applied to <html> only for the duration of a toggle, so colours
+   cross-fade together instead of snapping — without slowing every
+   hover/interaction for the rest of the session. */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition: background-color var(--dur-fast) ease,
+              border-color     var(--dur-fast) ease,
+              color            var(--dur-fast) ease,
+              fill             var(--dur-fast) ease !important;
+  transition-delay: 0s !important;
+}
+
+/* ── Modal open / close (transitions.dev: 06-modal) ── */
+.t-modal-overlay        { animation: modalOverlayIn  var(--dur-fast) ease both; }
+.t-modal-overlay.is-closing { animation: modalOverlayOut var(--dur-quick) ease both; }
+.t-modal-panel          { animation: modalPanelIn  var(--dur-fast) var(--ease-smooth) both; }
+.t-modal-panel.is-closing { animation: modalPanelOut var(--dur-quick) var(--ease-smooth) both; }
+
+@keyframes modalOverlayIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes modalOverlayOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes modalPanelIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);  }
+}
+@keyframes modalPanelOut {
+  from { opacity: 1; transform: scale(1)    translateY(0);  }
+  to   { opacity: 0; transform: scale(0.96) translateY(4px); }
+}
+
+/* ── Semantic status tones ───────────────────────────────────────
+   One class sets background + text + border-colour for a status pill
+   or callout, and adapts to the theme. Replaces ad-hoc light-only
+   triads like `bg-amber-50 text-amber-700 border-amber-200` that broke
+   in dark mode. Pair with layout utilities (padding, rounded, border).
+   A `.tone-*-text` variant colours just text/icons. */
+@layer components {
+  .tone-success { background-color: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+  .tone-warning { background-color: #fffbeb; color: #b45309; border-color: #fde68a; }
+  .tone-danger  { background-color: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+  .tone-info    { background-color: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+  .tone-accent  { background-color: var(--color-badge-ai-bg); color: var(--color-badge-ai-text); border-color: color-mix(in srgb, var(--color-primary) 30%, transparent); }
+  .tone-neutral { background-color: var(--color-bg-muted); color: var(--color-text-muted); border-color: var(--color-border-main); }
+
+  .tone-success-text { color: #059669; }
+  .tone-warning-text { color: #d97706; }
+  .tone-danger-text  { color: #dc2626; }
+  .tone-info-text    { color: #2563eb; }
+
+  .dark .tone-success { background-color: rgba(16,185,129,0.15); color: #6ee7b7; border-color: rgba(16,185,129,0.30); }
+  .dark .tone-warning { background-color: rgba(245,158,11,0.15); color: #fcd34d; border-color: rgba(245,158,11,0.30); }
+  .dark .tone-danger  { background-color: rgba(239,68,68,0.15);  color: #fca5a5; border-color: rgba(239,68,68,0.30); }
+  .dark .tone-info    { background-color: rgba(59,130,246,0.15); color: #93c5fd; border-color: rgba(59,130,246,0.30); }
+
+  .dark .tone-success-text { color: #34d399; }
+  .dark .tone-warning-text { color: #fbbf24; }
+  .dark .tone-danger-text  { color: #f87171; }
+  .dark .tone-info-text    { color: #60a5fa; }
+}
+
+/* ── Reduced motion — disable non-essential animation ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ── Dark-theme surface compatibility layer ──────────────────────
+   Retrofits dark-mode values onto light-only semantic colour
+   utilities (bg-*-50/100, border-*-100/200/300, hover:bg-*, dark
+   text shades). Lives in @layer components, so it overrides the
+   plain light utility (higher specificity) yet always yields to an
+   explicit `dark:` variant (equal specificity, later in source).
+   Neutral slate/gray excluded on purpose — those use theme tokens. */
+@layer components {
+  .dark .bg-red-50  { background-color: rgb(239 68 68 / 0.13); }
+  .dark .bg-red-100 { background-color: rgb(239 68 68 / 0.18); }
+  .dark .bg-red-50\/50 { background-color: rgb(239 68 68 / 0.10); }
+  .dark .hover\:bg-red-50:hover  { background-color: rgb(239 68 68 / 0.15); }
+  .dark .hover\:bg-red-100:hover { background-color: rgb(239 68 68 / 0.22); }
+  .dark .border-red-100 { border-color: rgb(239 68 68 / 0.22); }
+  .dark .border-red-200 { border-color: rgb(239 68 68 / 0.30); }
+  .dark .border-red-200\/50 { border-color: rgb(239 68 68 / 0.22); }
+  .dark .border-red-300 { border-color: rgb(239 68 68 / 0.40); }
+  .dark .text-red-600, .dark .text-red-700, .dark .text-red-800, .dark .text-red-900 { color: #fca5a5; }
+  .dark .bg-orange-50  { background-color: rgb(249 115 22 / 0.13); }
+  .dark .bg-orange-100 { background-color: rgb(249 115 22 / 0.18); }
+  .dark .bg-orange-50\/50 { background-color: rgb(249 115 22 / 0.10); }
+  .dark .hover\:bg-orange-50:hover  { background-color: rgb(249 115 22 / 0.15); }
+  .dark .hover\:bg-orange-100:hover { background-color: rgb(249 115 22 / 0.22); }
+  .dark .border-orange-100 { border-color: rgb(249 115 22 / 0.22); }
+  .dark .border-orange-200 { border-color: rgb(249 115 22 / 0.30); }
+  .dark .border-orange-200\/50 { border-color: rgb(249 115 22 / 0.22); }
+  .dark .border-orange-300 { border-color: rgb(249 115 22 / 0.40); }
+  .dark .text-orange-600, .dark .text-orange-700, .dark .text-orange-800, .dark .text-orange-900 { color: #fdba74; }
+  .dark .bg-amber-50  { background-color: rgb(245 158 11 / 0.13); }
+  .dark .bg-amber-100 { background-color: rgb(245 158 11 / 0.18); }
+  .dark .bg-amber-50\/50 { background-color: rgb(245 158 11 / 0.10); }
+  .dark .hover\:bg-amber-50:hover  { background-color: rgb(245 158 11 / 0.15); }
+  .dark .hover\:bg-amber-100:hover { background-color: rgb(245 158 11 / 0.22); }
+  .dark .border-amber-100 { border-color: rgb(245 158 11 / 0.22); }
+  .dark .border-amber-200 { border-color: rgb(245 158 11 / 0.30); }
+  .dark .border-amber-200\/50 { border-color: rgb(245 158 11 / 0.22); }
+  .dark .border-amber-300 { border-color: rgb(245 158 11 / 0.40); }
+  .dark .text-amber-600, .dark .text-amber-700, .dark .text-amber-800, .dark .text-amber-900 { color: #fcd34d; }
+  .dark .bg-yellow-50  { background-color: rgb(234 179 8 / 0.13); }
+  .dark .bg-yellow-100 { background-color: rgb(234 179 8 / 0.18); }
+  .dark .bg-yellow-50\/50 { background-color: rgb(234 179 8 / 0.10); }
+  .dark .hover\:bg-yellow-50:hover  { background-color: rgb(234 179 8 / 0.15); }
+  .dark .hover\:bg-yellow-100:hover { background-color: rgb(234 179 8 / 0.22); }
+  .dark .border-yellow-100 { border-color: rgb(234 179 8 / 0.22); }
+  .dark .border-yellow-200 { border-color: rgb(234 179 8 / 0.30); }
+  .dark .border-yellow-200\/50 { border-color: rgb(234 179 8 / 0.22); }
+  .dark .border-yellow-300 { border-color: rgb(234 179 8 / 0.40); }
+  .dark .text-yellow-600, .dark .text-yellow-700, .dark .text-yellow-800, .dark .text-yellow-900 { color: #fde047; }
+  .dark .bg-lime-50  { background-color: rgb(132 204 22 / 0.13); }
+  .dark .bg-lime-100 { background-color: rgb(132 204 22 / 0.18); }
+  .dark .bg-lime-50\/50 { background-color: rgb(132 204 22 / 0.10); }
+  .dark .hover\:bg-lime-50:hover  { background-color: rgb(132 204 22 / 0.15); }
+  .dark .hover\:bg-lime-100:hover { background-color: rgb(132 204 22 / 0.22); }
+  .dark .border-lime-100 { border-color: rgb(132 204 22 / 0.22); }
+  .dark .border-lime-200 { border-color: rgb(132 204 22 / 0.30); }
+  .dark .border-lime-200\/50 { border-color: rgb(132 204 22 / 0.22); }
+  .dark .border-lime-300 { border-color: rgb(132 204 22 / 0.40); }
+  .dark .text-lime-600, .dark .text-lime-700, .dark .text-lime-800, .dark .text-lime-900 { color: #bef264; }
+  .dark .bg-green-50  { background-color: rgb(34 197 94 / 0.13); }
+  .dark .bg-green-100 { background-color: rgb(34 197 94 / 0.18); }
+  .dark .bg-green-50\/50 { background-color: rgb(34 197 94 / 0.10); }
+  .dark .hover\:bg-green-50:hover  { background-color: rgb(34 197 94 / 0.15); }
+  .dark .hover\:bg-green-100:hover { background-color: rgb(34 197 94 / 0.22); }
+  .dark .border-green-100 { border-color: rgb(34 197 94 / 0.22); }
+  .dark .border-green-200 { border-color: rgb(34 197 94 / 0.30); }
+  .dark .border-green-200\/50 { border-color: rgb(34 197 94 / 0.22); }
+  .dark .border-green-300 { border-color: rgb(34 197 94 / 0.40); }
+  .dark .text-green-600, .dark .text-green-700, .dark .text-green-800, .dark .text-green-900 { color: #86efac; }
+  .dark .bg-emerald-50  { background-color: rgb(16 185 129 / 0.13); }
+  .dark .bg-emerald-100 { background-color: rgb(16 185 129 / 0.18); }
+  .dark .bg-emerald-50\/50 { background-color: rgb(16 185 129 / 0.10); }
+  .dark .hover\:bg-emerald-50:hover  { background-color: rgb(16 185 129 / 0.15); }
+  .dark .hover\:bg-emerald-100:hover { background-color: rgb(16 185 129 / 0.22); }
+  .dark .border-emerald-100 { border-color: rgb(16 185 129 / 0.22); }
+  .dark .border-emerald-200 { border-color: rgb(16 185 129 / 0.30); }
+  .dark .border-emerald-200\/50 { border-color: rgb(16 185 129 / 0.22); }
+  .dark .border-emerald-300 { border-color: rgb(16 185 129 / 0.40); }
+  .dark .text-emerald-600, .dark .text-emerald-700, .dark .text-emerald-800, .dark .text-emerald-900 { color: #6ee7b7; }
+  .dark .bg-teal-50  { background-color: rgb(20 184 166 / 0.13); }
+  .dark .bg-teal-100 { background-color: rgb(20 184 166 / 0.18); }
+  .dark .bg-teal-50\/50 { background-color: rgb(20 184 166 / 0.10); }
+  .dark .hover\:bg-teal-50:hover  { background-color: rgb(20 184 166 / 0.15); }
+  .dark .hover\:bg-teal-100:hover { background-color: rgb(20 184 166 / 0.22); }
+  .dark .border-teal-100 { border-color: rgb(20 184 166 / 0.22); }
+  .dark .border-teal-200 { border-color: rgb(20 184 166 / 0.30); }
+  .dark .border-teal-200\/50 { border-color: rgb(20 184 166 / 0.22); }
+  .dark .border-teal-300 { border-color: rgb(20 184 166 / 0.40); }
+  .dark .text-teal-600, .dark .text-teal-700, .dark .text-teal-800, .dark .text-teal-900 { color: #5eead4; }
+  .dark .bg-cyan-50  { background-color: rgb(6 182 212 / 0.13); }
+  .dark .bg-cyan-100 { background-color: rgb(6 182 212 / 0.18); }
+  .dark .bg-cyan-50\/50 { background-color: rgb(6 182 212 / 0.10); }
+  .dark .hover\:bg-cyan-50:hover  { background-color: rgb(6 182 212 / 0.15); }
+  .dark .hover\:bg-cyan-100:hover { background-color: rgb(6 182 212 / 0.22); }
+  .dark .border-cyan-100 { border-color: rgb(6 182 212 / 0.22); }
+  .dark .border-cyan-200 { border-color: rgb(6 182 212 / 0.30); }
+  .dark .border-cyan-200\/50 { border-color: rgb(6 182 212 / 0.22); }
+  .dark .border-cyan-300 { border-color: rgb(6 182 212 / 0.40); }
+  .dark .text-cyan-600, .dark .text-cyan-700, .dark .text-cyan-800, .dark .text-cyan-900 { color: #67e8f9; }
+  .dark .bg-sky-50  { background-color: rgb(14 165 233 / 0.13); }
+  .dark .bg-sky-100 { background-color: rgb(14 165 233 / 0.18); }
+  .dark .bg-sky-50\/50 { background-color: rgb(14 165 233 / 0.10); }
+  .dark .hover\:bg-sky-50:hover  { background-color: rgb(14 165 233 / 0.15); }
+  .dark .hover\:bg-sky-100:hover { background-color: rgb(14 165 233 / 0.22); }
+  .dark .border-sky-100 { border-color: rgb(14 165 233 / 0.22); }
+  .dark .border-sky-200 { border-color: rgb(14 165 233 / 0.30); }
+  .dark .border-sky-200\/50 { border-color: rgb(14 165 233 / 0.22); }
+  .dark .border-sky-300 { border-color: rgb(14 165 233 / 0.40); }
+  .dark .text-sky-600, .dark .text-sky-700, .dark .text-sky-800, .dark .text-sky-900 { color: #7dd3fc; }
+  .dark .bg-blue-50  { background-color: rgb(59 130 246 / 0.13); }
+  .dark .bg-blue-100 { background-color: rgb(59 130 246 / 0.18); }
+  .dark .bg-blue-50\/50 { background-color: rgb(59 130 246 / 0.10); }
+  .dark .hover\:bg-blue-50:hover  { background-color: rgb(59 130 246 / 0.15); }
+  .dark .hover\:bg-blue-100:hover { background-color: rgb(59 130 246 / 0.22); }
+  .dark .border-blue-100 { border-color: rgb(59 130 246 / 0.22); }
+  .dark .border-blue-200 { border-color: rgb(59 130 246 / 0.30); }
+  .dark .border-blue-200\/50 { border-color: rgb(59 130 246 / 0.22); }
+  .dark .border-blue-300 { border-color: rgb(59 130 246 / 0.40); }
+  .dark .text-blue-600, .dark .text-blue-700, .dark .text-blue-800, .dark .text-blue-900 { color: #93c5fd; }
+  .dark .bg-indigo-50  { background-color: rgb(99 102 241 / 0.13); }
+  .dark .bg-indigo-100 { background-color: rgb(99 102 241 / 0.18); }
+  .dark .bg-indigo-50\/50 { background-color: rgb(99 102 241 / 0.10); }
+  .dark .hover\:bg-indigo-50:hover  { background-color: rgb(99 102 241 / 0.15); }
+  .dark .hover\:bg-indigo-100:hover { background-color: rgb(99 102 241 / 0.22); }
+  .dark .border-indigo-100 { border-color: rgb(99 102 241 / 0.22); }
+  .dark .border-indigo-200 { border-color: rgb(99 102 241 / 0.30); }
+  .dark .border-indigo-200\/50 { border-color: rgb(99 102 241 / 0.22); }
+  .dark .border-indigo-300 { border-color: rgb(99 102 241 / 0.40); }
+  .dark .text-indigo-600, .dark .text-indigo-700, .dark .text-indigo-800, .dark .text-indigo-900 { color: #a5b4fc; }
+  .dark .bg-violet-50  { background-color: rgb(139 92 246 / 0.13); }
+  .dark .bg-violet-100 { background-color: rgb(139 92 246 / 0.18); }
+  .dark .bg-violet-50\/50 { background-color: rgb(139 92 246 / 0.10); }
+  .dark .hover\:bg-violet-50:hover  { background-color: rgb(139 92 246 / 0.15); }
+  .dark .hover\:bg-violet-100:hover { background-color: rgb(139 92 246 / 0.22); }
+  .dark .border-violet-100 { border-color: rgb(139 92 246 / 0.22); }
+  .dark .border-violet-200 { border-color: rgb(139 92 246 / 0.30); }
+  .dark .border-violet-200\/50 { border-color: rgb(139 92 246 / 0.22); }
+  .dark .border-violet-300 { border-color: rgb(139 92 246 / 0.40); }
+  .dark .text-violet-600, .dark .text-violet-700, .dark .text-violet-800, .dark .text-violet-900 { color: #c4b5fd; }
+  .dark .bg-purple-50  { background-color: rgb(168 85 247 / 0.13); }
+  .dark .bg-purple-100 { background-color: rgb(168 85 247 / 0.18); }
+  .dark .bg-purple-50\/50 { background-color: rgb(168 85 247 / 0.10); }
+  .dark .hover\:bg-purple-50:hover  { background-color: rgb(168 85 247 / 0.15); }
+  .dark .hover\:bg-purple-100:hover { background-color: rgb(168 85 247 / 0.22); }
+  .dark .border-purple-100 { border-color: rgb(168 85 247 / 0.22); }
+  .dark .border-purple-200 { border-color: rgb(168 85 247 / 0.30); }
+  .dark .border-purple-200\/50 { border-color: rgb(168 85 247 / 0.22); }
+  .dark .border-purple-300 { border-color: rgb(168 85 247 / 0.40); }
+  .dark .text-purple-600, .dark .text-purple-700, .dark .text-purple-800, .dark .text-purple-900 { color: #d8b4fe; }
+  .dark .bg-fuchsia-50  { background-color: rgb(217 70 239 / 0.13); }
+  .dark .bg-fuchsia-100 { background-color: rgb(217 70 239 / 0.18); }
+  .dark .bg-fuchsia-50\/50 { background-color: rgb(217 70 239 / 0.10); }
+  .dark .hover\:bg-fuchsia-50:hover  { background-color: rgb(217 70 239 / 0.15); }
+  .dark .hover\:bg-fuchsia-100:hover { background-color: rgb(217 70 239 / 0.22); }
+  .dark .border-fuchsia-100 { border-color: rgb(217 70 239 / 0.22); }
+  .dark .border-fuchsia-200 { border-color: rgb(217 70 239 / 0.30); }
+  .dark .border-fuchsia-200\/50 { border-color: rgb(217 70 239 / 0.22); }
+  .dark .border-fuchsia-300 { border-color: rgb(217 70 239 / 0.40); }
+  .dark .text-fuchsia-600, .dark .text-fuchsia-700, .dark .text-fuchsia-800, .dark .text-fuchsia-900 { color: #f0abfc; }
+  .dark .bg-pink-50  { background-color: rgb(236 72 153 / 0.13); }
+  .dark .bg-pink-100 { background-color: rgb(236 72 153 / 0.18); }
+  .dark .bg-pink-50\/50 { background-color: rgb(236 72 153 / 0.10); }
+  .dark .hover\:bg-pink-50:hover  { background-color: rgb(236 72 153 / 0.15); }
+  .dark .hover\:bg-pink-100:hover { background-color: rgb(236 72 153 / 0.22); }
+  .dark .border-pink-100 { border-color: rgb(236 72 153 / 0.22); }
+  .dark .border-pink-200 { border-color: rgb(236 72 153 / 0.30); }
+  .dark .border-pink-200\/50 { border-color: rgb(236 72 153 / 0.22); }
+  .dark .border-pink-300 { border-color: rgb(236 72 153 / 0.40); }
+  .dark .text-pink-600, .dark .text-pink-700, .dark .text-pink-800, .dark .text-pink-900 { color: #f9a8d4; }
+  .dark .bg-rose-50  { background-color: rgb(244 63 94 / 0.13); }
+  .dark .bg-rose-100 { background-color: rgb(244 63 94 / 0.18); }
+  .dark .bg-rose-50\/50 { background-color: rgb(244 63 94 / 0.10); }
+  .dark .hover\:bg-rose-50:hover  { background-color: rgb(244 63 94 / 0.15); }
+  .dark .hover\:bg-rose-100:hover { background-color: rgb(244 63 94 / 0.22); }
+  .dark .border-rose-100 { border-color: rgb(244 63 94 / 0.22); }
+  .dark .border-rose-200 { border-color: rgb(244 63 94 / 0.30); }
+  .dark .border-rose-200\/50 { border-color: rgb(244 63 94 / 0.22); }
+  .dark .border-rose-300 { border-color: rgb(244 63 94 / 0.40); }
+  .dark .text-rose-600, .dark .text-rose-700, .dark .text-rose-800, .dark .text-rose-900 { color: #fda4af; }
+}
+
+/* Dark-surface compat — supplement: extra opacity steps + 200/300 surfaces + faint borders */
+@layer components {
+  .dark .bg-red-50\/40 { background-color: rgb(239 68 68 / 0.10); }
+  .dark .bg-red-50\/60 { background-color: rgb(239 68 68 / 0.12); }
+  .dark .bg-red-50\/70 { background-color: rgb(239 68 68 / 0.13); }
+  .dark .bg-red-200 { background-color: rgb(239 68 68 / 0.22); }
+  .dark .bg-red-300, .dark .bg-red-300\/40 { background-color: rgb(239 68 68 / 0.28); }
+  .dark .border-red-50 { border-color: rgb(239 68 68 / 0.18); }
+  .dark .bg-orange-50\/40 { background-color: rgb(249 115 22 / 0.10); }
+  .dark .bg-orange-50\/60 { background-color: rgb(249 115 22 / 0.12); }
+  .dark .bg-orange-50\/70 { background-color: rgb(249 115 22 / 0.13); }
+  .dark .bg-orange-200 { background-color: rgb(249 115 22 / 0.22); }
+  .dark .bg-orange-300, .dark .bg-orange-300\/40 { background-color: rgb(249 115 22 / 0.28); }
+  .dark .border-orange-50 { border-color: rgb(249 115 22 / 0.18); }
+  .dark .bg-amber-50\/40 { background-color: rgb(245 158 11 / 0.10); }
+  .dark .bg-amber-50\/60 { background-color: rgb(245 158 11 / 0.12); }
+  .dark .bg-amber-50\/70 { background-color: rgb(245 158 11 / 0.13); }
+  .dark .bg-amber-200 { background-color: rgb(245 158 11 / 0.22); }
+  .dark .bg-amber-300, .dark .bg-amber-300\/40 { background-color: rgb(245 158 11 / 0.28); }
+  .dark .border-amber-50 { border-color: rgb(245 158 11 / 0.18); }
+  .dark .bg-yellow-50\/40 { background-color: rgb(234 179 8 / 0.10); }
+  .dark .bg-yellow-50\/60 { background-color: rgb(234 179 8 / 0.12); }
+  .dark .bg-yellow-50\/70 { background-color: rgb(234 179 8 / 0.13); }
+  .dark .bg-yellow-200 { background-color: rgb(234 179 8 / 0.22); }
+  .dark .bg-yellow-300, .dark .bg-yellow-300\/40 { background-color: rgb(234 179 8 / 0.28); }
+  .dark .border-yellow-50 { border-color: rgb(234 179 8 / 0.18); }
+  .dark .bg-lime-50\/40 { background-color: rgb(132 204 22 / 0.10); }
+  .dark .bg-lime-50\/60 { background-color: rgb(132 204 22 / 0.12); }
+  .dark .bg-lime-50\/70 { background-color: rgb(132 204 22 / 0.13); }
+  .dark .bg-lime-200 { background-color: rgb(132 204 22 / 0.22); }
+  .dark .bg-lime-300, .dark .bg-lime-300\/40 { background-color: rgb(132 204 22 / 0.28); }
+  .dark .border-lime-50 { border-color: rgb(132 204 22 / 0.18); }
+  .dark .bg-green-50\/40 { background-color: rgb(34 197 94 / 0.10); }
+  .dark .bg-green-50\/60 { background-color: rgb(34 197 94 / 0.12); }
+  .dark .bg-green-50\/70 { background-color: rgb(34 197 94 / 0.13); }
+  .dark .bg-green-200 { background-color: rgb(34 197 94 / 0.22); }
+  .dark .bg-green-300, .dark .bg-green-300\/40 { background-color: rgb(34 197 94 / 0.28); }
+  .dark .border-green-50 { border-color: rgb(34 197 94 / 0.18); }
+  .dark .bg-emerald-50\/40 { background-color: rgb(16 185 129 / 0.10); }
+  .dark .bg-emerald-50\/60 { background-color: rgb(16 185 129 / 0.12); }
+  .dark .bg-emerald-50\/70 { background-color: rgb(16 185 129 / 0.13); }
+  .dark .bg-emerald-200 { background-color: rgb(16 185 129 / 0.22); }
+  .dark .bg-emerald-300, .dark .bg-emerald-300\/40 { background-color: rgb(16 185 129 / 0.28); }
+  .dark .border-emerald-50 { border-color: rgb(16 185 129 / 0.18); }
+  .dark .bg-teal-50\/40 { background-color: rgb(20 184 166 / 0.10); }
+  .dark .bg-teal-50\/60 { background-color: rgb(20 184 166 / 0.12); }
+  .dark .bg-teal-50\/70 { background-color: rgb(20 184 166 / 0.13); }
+  .dark .bg-teal-200 { background-color: rgb(20 184 166 / 0.22); }
+  .dark .bg-teal-300, .dark .bg-teal-300\/40 { background-color: rgb(20 184 166 / 0.28); }
+  .dark .border-teal-50 { border-color: rgb(20 184 166 / 0.18); }
+  .dark .bg-cyan-50\/40 { background-color: rgb(6 182 212 / 0.10); }
+  .dark .bg-cyan-50\/60 { background-color: rgb(6 182 212 / 0.12); }
+  .dark .bg-cyan-50\/70 { background-color: rgb(6 182 212 / 0.13); }
+  .dark .bg-cyan-200 { background-color: rgb(6 182 212 / 0.22); }
+  .dark .bg-cyan-300, .dark .bg-cyan-300\/40 { background-color: rgb(6 182 212 / 0.28); }
+  .dark .border-cyan-50 { border-color: rgb(6 182 212 / 0.18); }
+  .dark .bg-sky-50\/40 { background-color: rgb(14 165 233 / 0.10); }
+  .dark .bg-sky-50\/60 { background-color: rgb(14 165 233 / 0.12); }
+  .dark .bg-sky-50\/70 { background-color: rgb(14 165 233 / 0.13); }
+  .dark .bg-sky-200 { background-color: rgb(14 165 233 / 0.22); }
+  .dark .bg-sky-300, .dark .bg-sky-300\/40 { background-color: rgb(14 165 233 / 0.28); }
+  .dark .border-sky-50 { border-color: rgb(14 165 233 / 0.18); }
+  .dark .bg-blue-50\/40 { background-color: rgb(59 130 246 / 0.10); }
+  .dark .bg-blue-50\/60 { background-color: rgb(59 130 246 / 0.12); }
+  .dark .bg-blue-50\/70 { background-color: rgb(59 130 246 / 0.13); }
+  .dark .bg-blue-200 { background-color: rgb(59 130 246 / 0.22); }
+  .dark .bg-blue-300, .dark .bg-blue-300\/40 { background-color: rgb(59 130 246 / 0.28); }
+  .dark .border-blue-50 { border-color: rgb(59 130 246 / 0.18); }
+  .dark .bg-indigo-50\/40 { background-color: rgb(99 102 241 / 0.10); }
+  .dark .bg-indigo-50\/60 { background-color: rgb(99 102 241 / 0.12); }
+  .dark .bg-indigo-50\/70 { background-color: rgb(99 102 241 / 0.13); }
+  .dark .bg-indigo-200 { background-color: rgb(99 102 241 / 0.22); }
+  .dark .bg-indigo-300, .dark .bg-indigo-300\/40 { background-color: rgb(99 102 241 / 0.28); }
+  .dark .border-indigo-50 { border-color: rgb(99 102 241 / 0.18); }
+  .dark .bg-violet-50\/40 { background-color: rgb(139 92 246 / 0.10); }
+  .dark .bg-violet-50\/60 { background-color: rgb(139 92 246 / 0.12); }
+  .dark .bg-violet-50\/70 { background-color: rgb(139 92 246 / 0.13); }
+  .dark .bg-violet-200 { background-color: rgb(139 92 246 / 0.22); }
+  .dark .bg-violet-300, .dark .bg-violet-300\/40 { background-color: rgb(139 92 246 / 0.28); }
+  .dark .border-violet-50 { border-color: rgb(139 92 246 / 0.18); }
+  .dark .bg-purple-50\/40 { background-color: rgb(168 85 247 / 0.10); }
+  .dark .bg-purple-50\/60 { background-color: rgb(168 85 247 / 0.12); }
+  .dark .bg-purple-50\/70 { background-color: rgb(168 85 247 / 0.13); }
+  .dark .bg-purple-200 { background-color: rgb(168 85 247 / 0.22); }
+  .dark .bg-purple-300, .dark .bg-purple-300\/40 { background-color: rgb(168 85 247 / 0.28); }
+  .dark .border-purple-50 { border-color: rgb(168 85 247 / 0.18); }
+  .dark .bg-fuchsia-50\/40 { background-color: rgb(217 70 239 / 0.10); }
+  .dark .bg-fuchsia-50\/60 { background-color: rgb(217 70 239 / 0.12); }
+  .dark .bg-fuchsia-50\/70 { background-color: rgb(217 70 239 / 0.13); }
+  .dark .bg-fuchsia-200 { background-color: rgb(217 70 239 / 0.22); }
+  .dark .bg-fuchsia-300, .dark .bg-fuchsia-300\/40 { background-color: rgb(217 70 239 / 0.28); }
+  .dark .border-fuchsia-50 { border-color: rgb(217 70 239 / 0.18); }
+  .dark .bg-pink-50\/40 { background-color: rgb(236 72 153 / 0.10); }
+  .dark .bg-pink-50\/60 { background-color: rgb(236 72 153 / 0.12); }
+  .dark .bg-pink-50\/70 { background-color: rgb(236 72 153 / 0.13); }
+  .dark .bg-pink-200 { background-color: rgb(236 72 153 / 0.22); }
+  .dark .bg-pink-300, .dark .bg-pink-300\/40 { background-color: rgb(236 72 153 / 0.28); }
+  .dark .border-pink-50 { border-color: rgb(236 72 153 / 0.18); }
+  .dark .bg-rose-50\/40 { background-color: rgb(244 63 94 / 0.10); }
+  .dark .bg-rose-50\/60 { background-color: rgb(244 63 94 / 0.12); }
+  .dark .bg-rose-50\/70 { background-color: rgb(244 63 94 / 0.13); }
+  .dark .bg-rose-200 { background-color: rgb(244 63 94 / 0.22); }
+  .dark .bg-rose-300, .dark .bg-rose-300\/40 { background-color: rgb(244 63 94 / 0.28); }
+  .dark .border-rose-50 { border-color: rgb(244 63 94 / 0.18); }
 }

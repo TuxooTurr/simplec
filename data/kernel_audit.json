@@ -5,6 +5,36 @@
     "script_name": "Время",
     "user": "Sber911",
     "stopped_other": false,
+    "ts": "2026-06-19T16:33:30.322814+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-19T16:33:29.020059+00:00"
+  },
+  {
+    "action": "stop",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "stopped_other": false,
+    "ts": "2026-06-11T12:25:56.583264+00:00"
+  },
+  {
+    "action": "start",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "ts": "2026-06-11T12:25:40.499624+00:00"
+  },
+  {
+    "action": "stop",
+    "script_id": "27ca74ba",
+    "script_name": "Время",
+    "user": "Sber911",
+    "stopped_other": false,
     "ts": "2026-06-05T07:49:51.570285+00:00"
   },
   {

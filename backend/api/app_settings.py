@@ -189,22 +189,6 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Пароль приватного ключа Kafka алертов, если ключ зашифрован",
         "group":       "kafka_alerts",
     },
-    # Ферма мобильных устройств (встроенная)
-    "farm_enabled": {
-        "value":       os.getenv("FARM_ENABLED", "false"),
-        "description": "Включить ферму устройств",
-        "group":       "farm",
-    },
-    "farm_max_sessions_per_user": {
-        "value":       os.getenv("FARM_MAX_SESSIONS_PER_USER", "3"),
-        "description": "Максимум активных сессий на пользователя",
-        "group":       "farm",
-    },
-    "farm_session_timeout_min": {
-        "value":       os.getenv("FARM_SESSION_TIMEOUT_MIN", "30"),
-        "description": "Таймаут сессии (минуты)",
-        "group":       "farm",
-    },
 }
 
 # Маппинг: ключ настройки → env-переменная (для apply_saved_settings_to_env)
@@ -236,9 +220,6 @@ _ENV_MAP: Dict[str, str] = {
     "alerts_kafka_ssl_certfile":      "ALERTS_KAFKA_SSL_CERTFILE",
     "alerts_kafka_ssl_keyfile":       "ALERTS_KAFKA_SSL_KEYFILE",
     "alerts_kafka_ssl_password":      "ALERTS_KAFKA_SSL_PASSWORD",
-    "farm_enabled":                   "FARM_ENABLED",
-    "farm_max_sessions_per_user":     "FARM_MAX_SESSIONS_PER_USER",
-    "farm_session_timeout_min":       "FARM_SESSION_TIMEOUT_MIN",
 }
 
 
@@ -417,15 +398,6 @@ def get_alerts_kafka_config(db: Session) -> dict:
     }
 
 
-def get_farm_config(db: Session) -> dict:
-    """Вернуть конфиг встроенной фермы устройств из БД."""
-    _ensure_defaults(db)
-    rows = {r.key: r.value or "" for r in db.query(MetricsSettings).all()}
-    return {
-        "enabled": rows.get("farm_enabled", "false").lower() == "true",
-        "max_sessions_per_user": int(rows.get("farm_max_sessions_per_user", "3")),
-        "session_timeout_min": int(rows.get("farm_session_timeout_min", "30")),
-    }
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -943,20 +915,5 @@ def test_logs_vps(conn_id: str, db: Session = Depends(get_db)) -> dict:
             default_index=conn.get("default_index", ""),
         )
         return client.test_connection()
-    except Exception as e:
-        return {"status": "red", "message": str(e)[:200]}
-
-
-@router.post("/api/settings/test/farm")
-async def test_farm() -> dict:
-    """Тест фермы --- проверить что Farm Manager работает."""
-    try:
-        from backend.farm.manager import farm_manager
-        status = await farm_manager.get_status()
-        total = status.get("devices", {}).get("total", 0)
-        return {
-            "status": "green",
-            "message": f"Ферма активна, устройств: {total}",
-        }
     except Exception as e:
         return {"status": "red", "message": str(e)[:200]}

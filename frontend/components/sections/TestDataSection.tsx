@@ -34,9 +34,9 @@ const BTN_SECONDARY =
   "text-text-main hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 transition-all";
 
 const DB_TYPE_COLORS: Record<string, string> = {
-  postgresql: "bg-blue-100 text-blue-700",
-  mysql:      "bg-orange-100 text-orange-700",
-  oracle:     "bg-red-100 text-red-700",
+  postgresql: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
+  mysql:      "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300",
+  oracle:     "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */

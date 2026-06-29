@@ -229,7 +229,7 @@ function StatusBadge({ result, loading }: { result: TestResult | null; loading: 
     : result.status === "yellow"
     ? <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
     : <XCircle className="w-3.5 h-3.5 text-red-500" />;
-  const color = result.status === "green" ? "text-green-600" : result.status === "yellow" ? "text-yellow-600" : "text-red-500";
+  const color = result.status === "green" ? "tone-success-text" : result.status === "yellow" ? "tone-warning-text" : "tone-danger-text";
   return (
     <span className={`flex items-center gap-1.5 text-xs ${color}`}>
       {icon} {result.message}

@@ -7,28 +7,7 @@
   "selected_tags": [
     "smoke"
   ],
-  "scripts": [
-    {
-      "id": "smoke-local",
-      "name": "Smoke прогон",
-      "script_path": "",
-      "work_dir": "",
-      "default_tags": [
-        "smoke"
-      ],
-      "test_types": [
-        "api",
-        "e2e"
-      ],
-      "microservices": [
-        "*"
-      ],
-      "enabled": true,
-      "timeout_sec": 1200,
-      "ui_size": "md",
-      "ui_order": 0
-    }
-  ],
+  "scripts": [],
   "autorun": {
     "enabled": false,
     "source_type": "url",
@@ -59,5 +38,7 @@
     "last_seen": {},
     "last_check_at": ""
   },
-  "updated_at": "2026-05-04T06:27:41.244332+00:00"
+  "test_labels": {},
+  "analyzed_at": "",
+  "updated_at": "2026-06-27T14:23:41.520293+00:00"
 }

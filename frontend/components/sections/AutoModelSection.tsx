@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import AutotestRunPanel from "@/components/AutotestRunPanel";
 import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
+import { getAutotestRunConfig, saveAutotestRunConfig } from "@/lib/autotestRunsApi";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -193,6 +194,30 @@ export default function AutoModelSection() {
     } catch { /* ignore */ }
   }, []);
 
+  /* ── Общий путь фреймворка: подтягиваем из серверного конфига (вкладка «Запуск») ─ */
+  useEffect(() => {
+    let alive = true;
+    getAutotestRunConfig().then(cfg => {
+      const fp = (cfg.framework_path ?? "").trim();
+      if (!alive || !fp) return;
+      setProjectPath(fp);
+      const saved = loadSavedProject();
+      if (saved && saved.path === fp && saved.data) {
+        setProjectData(saved.data);
+      } else {
+        // путь задан на вкладке «Запуск» — подтянем контекст проекта для генерации
+        analyzeProject(fp)
+          .then(data => {
+            if (!alive) return;
+            setProjectData(data);
+            localStorage.setItem(PROJECT_KEY, JSON.stringify({ path: fp, data }));
+          })
+          .catch(() => { /* контекст необязателен */ });
+      }
+    }).catch(() => { /* не критично */ });
+    return () => { alive = false; };
+  }, []);
+
   /* ── History management ─────────────────────────────────────────── */
 
   const saveHistEntry = useCallback((entry: AutoHistEntry) => {
@@ -273,10 +298,18 @@ export default function AutoModelSection() {
     setProjectError("");
     setProjectData(null);
     try {
-      const data = await analyzeProject(projectPath.trim());
+      const path = projectPath.trim();
+      const data = await analyzeProject(path);
       setProjectData(data);
       // Сохраняем привязку навсегда — восстановится при любой навигации
-      localStorage.setItem(PROJECT_KEY, JSON.stringify({ path: projectPath.trim(), data }));
+      localStorage.setItem(PROJECT_KEY, JSON.stringify({ path, data }));
+      // Общий путь фреймворка — синхронизируем со вкладкой «Запуск» (серверный конфиг)
+      try {
+        const cfg = await getAutotestRunConfig();
+        if ((cfg.framework_path ?? "").trim() !== path) {
+          await saveAutotestRunConfig({ ...cfg, framework_path: path });
+        }
+      } catch { /* не критично для генерации */ }
     } catch (err) {
       setProjectError(String(err));
     } finally {
@@ -289,6 +322,10 @@ export default function AutoModelSection() {
     setProjectPath("");
     setProjectError("");
     localStorage.removeItem(PROJECT_KEY);
+    // Отвязываем общий путь и на вкладке «Запуск»
+    getAutotestRunConfig()
+      .then(cfg => saveAutotestRunConfig({ ...cfg, framework_path: "" }))
+      .catch(() => { /* не критично */ });
   };
 
   const buildProjectContext = (): string => {
@@ -477,7 +514,7 @@ export default function AutoModelSection() {
             <p className="text-sm text-text-muted">
               {activeMode === "generate"
                 ? `Вставьте ручные тест-кейсы или загрузите файлы — AI изучит все источники и сгенерирует код (${TEST_TYPES[testType].framework}).`
-                : "Настройте кнопки прогонов, теги и автозапуск по обновлению сборок."}
+                : "Выберите тесты в дереве и запустите — или настройте автозапуск по новым сборкам."}
             </p>
           </div>
           {activeMode === "generate" && histEntries.length > 0 && (

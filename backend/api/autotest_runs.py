@@ -12,6 +12,7 @@ REST:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import re
 import subprocess
@@ -89,6 +90,9 @@ class AutotestRunConfig(BaseModel):
     selected_tags: list[str] = Field(default_factory=list)
     scripts: list[RunScript] = Field(default_factory=list)
     autorun: AutorunConfig = Field(default_factory=AutorunConfig)
+    # LLM-сгенерированные понятные названия кейсов/папок: {id -> название}
+    test_labels: dict[str, str] = Field(default_factory=dict)
+    analyzed_at: str = ""
 
 
 class SaveConfigRequest(BaseModel):
@@ -99,6 +103,7 @@ class RunScriptRequest(BaseModel):
     script_id: str
     tags: list[str] = Field(default_factory=list)
     test_types: list[str] = Field(default_factory=list)
+    tests: list[str] = Field(default_factory=list)
     microservice: str = ""
     build_version: str = ""
     trigger: Literal["manual", "autorun"] = "manual"
@@ -106,6 +111,17 @@ class RunScriptRequest(BaseModel):
 
 class CheckBuildsRequest(BaseModel):
     execute: bool = True
+
+
+class CreateScenarioRequest(BaseModel):
+    name: str = ""
+    tests: list[str] = Field(default_factory=list)
+    test_types: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class AnalyzeTreeRequest(BaseModel):
+    provider: str = ""
 
 
 class ScriptOption(BaseModel):
@@ -283,12 +299,293 @@ def _scan_script_options(root_raw: str) -> tuple[Path, list[dict]]:
     return root, options
 
 
+# ── Test-tree discovery ───────────────────────────────────────────────────────
+# Lightweight regex parsing of JUnit5 Java/Kotlin tests, mirroring the project
+# analyzer in autotests_gen.py. We surface classes + @Test methods + @Tag so the
+# UI can show a checkable tree of real cases instead of opaque scripts.
+
+TEST_DIR_CANDIDATES = (
+    ("src", "test", "java"),
+    ("src", "test", "kotlin"),
+    ("src", "androidTest", "java"),
+    ("src", "androidTest", "kotlin"),
+    ("tests",),
+    ("test",),
+)
+TEST_SCAN_FILE_LIMIT = 400
+
+_RE_PACKAGE = re.compile(r"^\s*package\s+([\w.]+)", re.MULTILINE)
+_RE_DISPLAY = re.compile(r'@DisplayName\s*\(\s*"((?:[^"\\]|\\.)*)"')
+_RE_TAG = re.compile(r'@Tag\s*\(\s*"([^"]*)"')
+_RE_TEST_ANNO = re.compile(r"@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b")
+_RE_ANNO_STRIP = re.compile(r"@\w+\s*(?:\([^)]*\))?")
+_RE_CLASS = re.compile(r"\bclass\s+(\w+)")
+_RE_KT_BACKTICK = re.compile(r"\bfun\s+`([^`]+)`\s*\(")
+_RE_METHOD_NAME = re.compile(r"(\w+)\s*\(")
+_METHOD_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "new", "synchronized", "fun"}
+
+
+def _test_dirs(root: Path) -> list[Path]:
+    dirs = [root.joinpath(*parts) for parts in TEST_DIR_CANDIDATES]
+    found = [d for d in dirs if d.exists() and d.is_dir()]
+    return found or [root]
+
+
+def _parse_test_file(text: str, rel_path: str) -> Optional[dict]:
+    """Extract one test class (name, display, tags, @Test methods) from a source file."""
+    pkg_match = _RE_PACKAGE.search(text)
+    package = pkg_match.group(1) if pkg_match else ""
+
+    class_name = ""
+    class_display = ""
+    class_tags: list[str] = []
+    methods: list[dict] = []
+    found_class = False
+
+    pending_display = ""
+    pending_tags: list[str] = []
+    seen_test = False
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//") or line.startswith("*") or line.startswith("/*"):
+            continue
+
+        dn = _RE_DISPLAY.search(line)
+        if dn:
+            pending_display = dn.group(1)
+        tags = _RE_TAG.findall(line)
+        if tags:
+            pending_tags.extend(tags)
+        if _RE_TEST_ANNO.search(line):
+            seen_test = True
+
+        # strip annotations so an inline `@Test void foo()` still exposes the signature
+        code = _RE_ANNO_STRIP.sub("", line).strip()
+        if not code:
+            continue
+
+        if not found_class:
+            cls = _RE_CLASS.search(code)
+            if cls:
+                class_name = cls.group(1)
+                class_display = pending_display
+                class_tags = list(dict.fromkeys(pending_tags))
+                found_class = True
+                pending_display, pending_tags, seen_test = "", [], False
+            continue
+
+        if seen_test:
+            bt = _RE_KT_BACKTICK.search(code)
+            name = bt.group(1) if bt else ""
+            if not name:
+                mm = _RE_METHOD_NAME.search(code)
+                candidate = mm.group(1) if mm else ""
+                if candidate and candidate not in _METHOD_KEYWORDS:
+                    name = candidate
+            if name:
+                methods.append({
+                    "id": f"{package + '.' if package else ''}{class_name}#{name}",
+                    "name": name,
+                    "display": pending_display or name,
+                    "tags": list(dict.fromkeys(pending_tags)),
+                })
+                pending_display, pending_tags, seen_test = "", [], False
+            continue
+
+        # plain code line outside a pending test — drop stale method annotations
+        pending_display, pending_tags = "", []
+
+    if not found_class or not methods:
+        return None
+
+    return {
+        "id": f"{package + '.' if package else ''}{class_name}",
+        "type": "class",
+        "name": class_name,
+        "display": class_display or class_name,
+        "package": package,
+        "file": rel_path,
+        "tags": class_tags,
+        "methods": methods,
+    }
+
+
+def _discover_tests_sync(framework_path_raw: str) -> dict:
+    root_raw = (framework_path_raw or "").strip()
+    empty = {"root": "", "total": 0, "tags": [], "classes": [], "parseable": False}
+    if not root_raw:
+        return empty
+
+    root = Path(root_raw).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Папка фреймворка не найдена: {root}")
+
+    classes: list[dict] = []
+    all_tags: list[str] = []
+    scanned = 0
+    for base in _test_dirs(root):
+        for pattern in ("*.java", "*.kt"):
+            for fpath in base.rglob(pattern):
+                if scanned >= TEST_SCAN_FILE_LIMIT:
+                    break
+                if any(part in SCRIPT_SKIP_DIRS for part in fpath.parts):
+                    continue
+                scanned += 1
+                try:
+                    text = fpath.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if not _RE_TEST_ANNO.search(text):
+                    continue
+                try:
+                    rel = str(fpath.relative_to(root))
+                except ValueError:
+                    rel = fpath.name
+                parsed = _parse_test_file(text, rel)
+                if not parsed:
+                    continue
+                classes.append(parsed)
+                for tag in parsed["tags"]:
+                    all_tags.append(tag)
+                for method in parsed["methods"]:
+                    all_tags.extend(method["tags"])
+
+    classes.sort(key=lambda c: (c["package"], c["name"]))
+    total = sum(len(c["methods"]) for c in classes)
+    tags = sorted(dict.fromkeys(all_tags))
+    return {
+        "root": str(root),
+        "total": total,
+        "tags": tags,
+        "classes": classes,
+        "parseable": bool(classes),
+    }
+
+
+# ── Scenario script generation ────────────────────────────────────────────────
+# "Создать сценарий" turns a tree selection into a real runnable script written
+# into the framework, registered as a run scenario.
+
+def _detect_build_tool(root: Path) -> str:
+    if (root / "pom.xml").exists():
+        return "maven"
+    if (root / "build.gradle").exists() or (root / "build.gradle.kts").exists():
+        return "gradle"
+    return "unknown"
+
+
+def _slugify(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (name or "").strip()).strip("-").lower()
+    return slug or f"scenario-{int(time.time())}"
+
+
+def _maven_selector(sel: str) -> str:
+    cls, _, method = sel.partition("#")
+    simple = cls.rsplit(".", 1)[-1]
+    return f"{simple}#{method}" if method else simple
+
+
+def _gradle_selector(sel: str) -> str:
+    cls, _, method = sel.partition("#")
+    return f"{cls}.{method}" if method else cls
+
+
+def _build_scenario_script(name: str, build_tool: str, tests: list[str]) -> str:
+    head = (
+        "#!/usr/bin/env bash\n"
+        f"# Сгенерировано SimpleTest — сценарий: {name}\n"
+        "# Запускает фиксированный набор тест-кейсов. Список можно отредактировать вручную.\n"
+        "set -euo pipefail\n"
+        'cd "$(dirname "$0")/.."\n\n'
+    )
+    if build_tool == "maven":
+        joined = ",".join(_maven_selector(t) for t in tests)
+        body = f"mvn -q -Dtest='{joined}' test\n" if joined else "mvn -q test\n"
+    elif build_tool == "gradle":
+        flags = " ".join(f"--tests '{_gradle_selector(t)}'" for t in tests)
+        body = (
+            "if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi\n"
+            f'"$GRADLE" test {flags}'.rstrip() + "\n"
+        )
+    else:
+        listing = "\n".join(tests) or "(весь набор)"
+        body = (
+            'echo "Build-инструмент не распознан — отредактируйте скрипт под ваш фреймворк."\n'
+            "cat <<'TESTS'\n" + listing + "\nTESTS\n"
+            "exit 1\n"
+        )
+    return head + body
+
+
+def _merge_labels(result: dict, config: dict) -> dict:
+    labels = config.get("test_labels") or {}
+    for c in result.get("classes", []):
+        c["label"] = labels.get(c["id"], "")
+        for m in c.get("methods", []):
+            m["label"] = labels.get(m["id"], "")
+    result["analyzed"] = bool(labels)
+    result["analyzed_at"] = config.get("analyzed_at", "")
+    return result
+
+
+def _test_tree_sync(root_raw: str, config: dict) -> dict:
+    return _merge_labels(_discover_tests_sync(root_raw), config)
+
+
+def _analyze_tree_sync(provider: str) -> dict:
+    from agents.llm_client import LLMClient, Message
+
+    config = AutotestRunsStore.get_config()
+    root = str(config.get("framework_path", "")).strip()
+    if not root:
+        raise ValueError("Сначала подключите папку с автотестами")
+    tree = _discover_tests_sync(root)
+    if not tree.get("parseable"):
+        return {"labels": {}, "analyzed": False, "total": 0}
+
+    items: list[dict] = []
+    for c in tree["classes"]:
+        items.append({"id": c["id"], "kind": "папка/группа", "name": c["name"], "hint": c["display"]})
+        for m in c["methods"]:
+            items.append({"id": m["id"], "kind": "тест-кейс", "name": m["name"], "hint": m["display"], "group": c["name"]})
+    items = items[:300]
+
+    prompt = (
+        "Ты помогаешь QA-инженеру разобраться в автотестах.\n"
+        "Ниже — список папок/групп и тест-кейсов с техническими именами (поле name) "
+        "и подсказкой (hint).\n"
+        "Для каждого элемента придумай КОРОТКОЕ понятное название на русском (3–7 слов): "
+        "для группы — что это за набор, для тест-кейса — что он проверяет.\n"
+        "Верни СТРОГО JSON-объект вида {\"<id>\": \"<понятное название>\"} без markdown и пояснений.\n\n"
+        + json.dumps(items, ensure_ascii=False)
+    )
+    llm = LLMClient(provider=provider)
+    resp = llm.chat([Message(role="user", content=prompt)], temperature=0.2, max_tokens=2000)
+    raw = (resp.content or "").strip()
+
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    try:
+        parsed = json.loads(match.group(0) if match else raw)
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(f"Не удалось разобрать ответ LLM: {exc}") from exc
+
+    valid = {it["id"] for it in items}
+    labels = {str(k): str(v).strip() for k, v in parsed.items() if str(k) in valid and str(v).strip()}
+
+    config["test_labels"] = labels
+    config["analyzed_at"] = _now_iso()
+    AutotestRunsStore.save_config(config)
+    return {"labels": labels, "total": len(labels), "analyzed": True, "analyzed_at": config["analyzed_at"]}
+
+
 def _run_script_sync(
     *,
     config: dict,
     script: dict,
     tags: list[str],
     test_types: list[str],
+    tests: list[str] | None = None,
     microservice: str = "",
     build_version: str = "",
     trigger: str = "manual",
@@ -309,6 +606,7 @@ def _run_script_sync(
 
     selected_tags = _clean_list(tags or script.get("default_tags", []))
     selected_types = [t for t in _clean_list(test_types or script.get("test_types", [])) if t in TEST_TYPES]
+    selected_tests = _clean_list(tests or [])
     timeout = max(10, min(int(script.get("timeout_sec") or 1200), 24 * 60 * 60))
 
     env = os.environ.copy()
@@ -317,6 +615,9 @@ def _run_script_sync(
         "AUTOTEST_TAGS": ",".join(selected_tags),
         "AUTOTEST_SERVICE_TAG": microservice,
         "AUTOTEST_TYPES": ",".join(selected_types),
+        # Конкретные выбранные в дереве кейсы (pkg.Class или pkg.Class#method).
+        # Скрипт фреймворка прокидывает их в JUnit (-Dtest=… / --select-method).
+        "AUTOTEST_TESTS": ",".join(selected_tests),
         "AUTOTEST_MICROSERVICE": microservice,
         "AUTOTEST_BUILD_VERSION": build_version,
         "AUTOTEST_TRIGGER": trigger,
@@ -355,6 +656,7 @@ def _run_script_sync(
         "exit_code": proc.returncode,
         "tags": selected_tags,
         "test_types": selected_types,
+        "tests": selected_tests,
         "microservice": microservice,
         "build_version": build_version,
         "started_at": started,
@@ -535,6 +837,85 @@ def get_script_options(framework_path: str = "") -> dict:
     }
 
 
+@router.get("/api/autotest-runs/test-tree")
+async def get_test_tree(framework_path: str = "") -> dict:
+    config = AutotestRunsStore.get_config()
+    root_raw = framework_path.strip() or str(config.get("framework_path", "")).strip()
+    try:
+        return await asyncio.to_thread(_test_tree_sync, root_raw, config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка чтения тест-кейсов: {exc}")
+
+
+@router.post("/api/autotest-runs/analyze-tree")
+async def analyze_tree(req: AnalyzeTreeRequest) -> dict:
+    provider = (req.provider or "").strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail="LLM-провайдер не выбран")
+    try:
+        return await asyncio.to_thread(_analyze_tree_sync, provider)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        from agents.llm_client import LLMClient
+        is_llm, msg = LLMClient.classify_error(exc)
+        raise HTTPException(status_code=503 if is_llm else 500, detail=msg)
+
+
+def _create_scenario_sync(req: CreateScenarioRequest) -> dict:
+    config = AutotestRunsStore.get_config()
+    framework_path = str(config.get("framework_path", "")).strip()
+    if not framework_path:
+        raise ValueError("Сначала подключите папку с автотестами")
+    root = Path(framework_path).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        raise ValueError(f"Папка фреймворка не найдена: {root}")
+
+    name = (req.name or "").strip() or "Сценарий"
+    tests = _clean_list(req.tests)
+    build_tool = _detect_build_tool(root)
+
+    runners_dir = root / "simpletest-runners"
+    runners_dir.mkdir(exist_ok=True)
+    slug = _slugify(name)
+    target = runners_dir / f"{slug}.sh"
+    if target.exists():
+        target = runners_dir / f"{slug}-{int(time.time())}.sh"
+    target.write_text(_build_scenario_script(name, build_tool, tests), encoding="utf-8")
+    os.chmod(target, 0o755)
+
+    script = {
+        "id": f"script-{int(time.time() * 1000)}",
+        "name": name,
+        "script_path": str(target.relative_to(root)),
+        "work_dir": "",
+        "default_tags": _clean_list(req.tags),
+        "test_types": [t for t in _clean_list(req.test_types) if t in TEST_TYPES] or ["e2e"],
+        "microservices": ["*"],
+        "enabled": True,
+        "timeout_sec": 1800,
+        "ui_size": "md",
+        "ui_order": len(config.get("scripts", [])),
+    }
+    config.setdefault("scripts", []).append(script)
+    saved = AutotestRunsStore.save_config(config)
+    return {"script": script, "path": str(target), "build_tool": build_tool, "config": saved}
+
+
+@router.post("/api/autotest-runs/create-scenario")
+async def create_scenario(req: CreateScenarioRequest) -> dict:
+    try:
+        return await asyncio.to_thread(_create_scenario_sync, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось создать скрипт сценария: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Ошибка создания сценария: {exc}")
+
+
 @router.post("/api/autotest-runs/run")
 async def run_script(req: RunScriptRequest) -> dict:
     config = AutotestRunsStore.get_config()
@@ -546,6 +927,7 @@ async def run_script(req: RunScriptRequest) -> dict:
             script=script,
             tags=req.tags,
             test_types=req.test_types,
+            tests=req.tests,
             microservice=req.microservice,
             build_version=req.build_version,
             trigger=req.trigger,

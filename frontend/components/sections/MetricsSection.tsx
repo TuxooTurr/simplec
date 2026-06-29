@@ -839,11 +839,11 @@ function KafkaSettingsTab() {
 // ── Health Badge ──────────────────────────────────────────────────────────────
 
 const HEALTH_META: Record<number, { label: string; cls: string }> = {
-  1: { label: "OK",        cls: "bg-green-50  text-green-700  border-green-200"  },
-  2: { label: "OK пониж.", cls: "bg-lime-50   text-lime-700   border-lime-200"   },
-  3: { label: "Warning",   cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
-  4: { label: "Degraded",  cls: "bg-orange-50 text-orange-700 border-orange-200" },
-  5: { label: "Critical",  cls: "bg-red-50    text-red-700    border-red-200"    },
+  1: { label: "OK",        cls: "bg-green-50  text-green-700  border-green-200  dark:bg-green-500/15  dark:text-green-300  dark:border-green-500/30"  },
+  2: { label: "OK пониж.", cls: "bg-lime-50   text-lime-700   border-lime-200   dark:bg-lime-500/15   dark:text-lime-300   dark:border-lime-500/30"   },
+  3: { label: "Warning",   cls: "bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-500/15 dark:text-yellow-300 dark:border-yellow-500/30" },
+  4: { label: "Degraded",  cls: "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-500/15 dark:text-orange-300 dark:border-orange-500/30" },
+  5: { label: "Critical",  cls: "bg-red-50    text-red-700    border-red-200    dark:bg-red-500/15    dark:text-red-300    dark:border-red-500/30"    },
 };
 
 function HealthBadge({ health }: { health: number }) {

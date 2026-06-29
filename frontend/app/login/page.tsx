@@ -71,7 +71,11 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <p
+              role="alert"
+              className="animate-shake text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2
+                dark:text-red-300 dark:bg-red-900/20 dark:border-red-800/50"
+            >
               {error}
             </p>
           )}
@@ -80,7 +84,8 @@ export default function LoginPage() {
             type="submit"
             disabled={loading || !loginStr.trim() || !password.trim()}
             className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg
-              text-sm font-semibold hover:bg-primary-dark transition-all disabled:opacity-40 shadow-sm"
+              text-sm font-semibold hover:bg-primary-dark transition-all disabled:opacity-40 shadow-sm
+              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-main"
           >
             {loading
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Вхожу...</>

@@ -17,6 +17,5 @@ data/users.json
 data/gen_sessions.json
 data/testdata_connections.json
 Linly-Dubbing/
-*.css
 simpletest.db
 certs/ca-bundle.pem

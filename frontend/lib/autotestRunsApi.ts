@@ -72,6 +72,8 @@ export interface AutotestRunConfig {
   selected_tags: string[];
   scripts: RunScriptConfig[];
   autorun: AutorunConfig;
+  test_labels?: Record<string, string>;
+  analyzed_at?: string;
 }
 
 export interface RunResult {
@@ -88,6 +90,7 @@ export interface RunResult {
   exit_code: number | null;
   tags: string[];
   test_types: AutotestType[];
+  tests?: string[];
   microservice: string;
   build_version: string;
   started_at: string;
@@ -123,6 +126,51 @@ export interface ScriptOptionsResult {
   options: ScriptOption[];
 }
 
+export interface TestTreeMethod {
+  id: string;       // pkg.Class#method
+  name: string;
+  display: string;  // @DisplayName or method name
+  label?: string;   // LLM-сгенерированное понятное название
+  tags: string[];
+}
+
+export interface TestTreeClass {
+  id: string;       // pkg.Class
+  type: "class";
+  name: string;
+  display: string;
+  label?: string;   // LLM-сгенерированное понятное название
+  package: string;
+  file: string;
+  tags: string[];
+  methods: TestTreeMethod[];
+}
+
+export interface TestTreeResult {
+  root: string;
+  total: number;        // total test methods
+  tags: string[];       // all @Tag values across the framework
+  classes: TestTreeClass[];
+  parseable: boolean;   // false when no JUnit tests were found
+  analyzed?: boolean;   // true when LLM friendly names are available
+  analyzed_at?: string;
+}
+
+export interface AnalyzeTreeResult {
+  labels: Record<string, string>;
+  total: number;
+  analyzed: boolean;
+  analyzed_at?: string;
+}
+
+export async function analyzeAutotestTree(provider: string): Promise<AnalyzeTreeResult> {
+  return fetchJson("/api/autotest-runs/analyze-tree", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
+}
+
 export async function getAutotestRunConfig(): Promise<AutotestRunConfig> {
   return fetchJson("/api/autotest-runs/config");
 }
@@ -139,6 +187,7 @@ export async function runAutotestScript(params: {
   script_id: string;
   tags: string[];
   test_types: AutotestType[];
+  tests?: string[];
   microservice?: string;
   build_version?: string;
 }): Promise<RunResult> {
@@ -149,6 +198,7 @@ export async function runAutotestScript(params: {
       script_id: params.script_id,
       tags: params.tags,
       test_types: params.test_types,
+      tests: params.tests ?? [],
       microservice: params.microservice ?? "",
       build_version: params.build_version ?? "",
       trigger: "manual",
@@ -171,4 +221,34 @@ export async function getAutotestScriptOptions(frameworkPath = ""): Promise<Scri
 
 export async function getAutotestRunHistory(limit = 20): Promise<RunResult[]> {
   return fetchJson(`/api/autotest-runs/history?limit=${limit}`);
+}
+
+export async function getAutotestTestTree(frameworkPath = ""): Promise<TestTreeResult> {
+  const qs = frameworkPath ? `?framework_path=${encodeURIComponent(frameworkPath)}` : "";
+  return fetchJson(`/api/autotest-runs/test-tree${qs}`);
+}
+
+export interface CreateScenarioResult {
+  script: RunScriptConfig;
+  path: string;
+  build_tool: string;
+  config: AutotestRunConfig;
+}
+
+export async function createAutotestScenario(params: {
+  name: string;
+  tests: string[];
+  test_types?: AutotestType[];
+  tags?: string[];
+}): Promise<CreateScenarioResult> {
+  return fetchJson("/api/autotest-runs/create-scenario", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: params.name,
+      tests: params.tests,
+      test_types: params.test_types ?? [],
+      tags: params.tags ?? [],
+    }),
+  });
 }

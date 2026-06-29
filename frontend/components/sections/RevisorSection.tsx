@@ -33,9 +33,9 @@ const ROW_ACCENT: Record<"green" | "yellow" | "grey", string> = {
 
 // Badge for the match-status column
 const ROW_BADGE: Record<"green" | "yellow" | "grey", { cls: string; label: string }> = {
-  green:  { cls: "text-green-700  bg-green-50  border border-green-200",  label: "Синхр." },
-  yellow: { cls: "text-amber-700  bg-amber-50  border border-amber-200",  label: "Расх."  },
-  grey:   { cls: "text-text-muted   bg-bg-subtle   border border-border-main",   label: "—"       },
+  green:  { cls: "tone-success border",  label: "Синхр." },
+  yellow: { cls: "tone-warning border",  label: "Расх."  },
+  grey:   { cls: "tone-neutral border",  label: "—"       },
 };
 
 /* ── Majority version helper ─────────────────────────────────────── */
@@ -48,10 +48,10 @@ function getMajorityVersion(row: ServiceRow, stands: string[]): string {
 }
 
 const METHOD_BADGE: Record<PodStatus, string> = {
-  green:  "bg-green-50 text-green-700 border-green-200",
-  yellow: "bg-amber-50 text-amber-700 border-amber-200",
-  red:    "bg-red-50 text-red-700 border-red-200",
-  grey:   "bg-bg-subtle text-text-muted border-border-main",
+  green:  "tone-success",
+  yellow: "tone-warning",
+  red:    "tone-danger",
+  grey:   "tone-neutral",
 };
 
 function MethodLine({ method }: { method: RevisorMethodResult }) {
@@ -61,7 +61,7 @@ function MethodLine({ method }: { method: RevisorMethodResult }) {
       <span className={`px-1.5 py-0.5 rounded border text-[10px] leading-none flex-shrink-0 ${METHOD_BADGE[status]}`}>
         {method.label}
       </span>
-      <span className={`text-[11px] truncate ${method.error ? "text-red-600" : "text-text-main"}`}>
+      <span className={`text-[11px] truncate ${method.error ? "tone-danger-text" : "text-text-main"}`}>
         {method.value || "—"}
       </span>
     </div>

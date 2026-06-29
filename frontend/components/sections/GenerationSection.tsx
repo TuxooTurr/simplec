@@ -133,10 +133,10 @@ function sessionTitle(s: GenSessionSummary): string {
 }
 
 const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
-  generating: { label: "Генерация...",  cls: "bg-blue-50 text-blue-600 border-blue-200" },
-  done:       { label: "Готово",        cls: "bg-green-50 text-green-600 border-green-200" },
-  error:      { label: "Ошибка",       cls: "bg-red-50 text-red-600 border-red-200" },
-  cancelled:  { label: "Отменена",     cls: "bg-bg-subtle text-text-muted border-border-main" },
+  generating: { label: "Генерация...",  cls: "tone-info" },
+  done:       { label: "Готово",        cls: "tone-success" },
+  error:      { label: "Ошибка",       cls: "tone-danger" },
+  cancelled:  { label: "Отменена",     cls: "tone-neutral" },
 };
 
 /* ── End history helpers ─────────────────────────────────────────── */
@@ -507,7 +507,15 @@ export default function GenerationSection() {
           </div>
 
           {/* Test data from DB */}
-          {tdConnections.length > 0 && (
+          {tdConnections.length === 0 ? (
+            <div className="bg-bg-card border border-dashed border-border-main rounded-xl p-4 mb-4">
+              <span className="text-sm font-medium text-text-main">Искать тестовые данные в БД</span>
+              <p className="text-xs text-text-muted mt-0.5">
+                Подключите базу данных в <a href="/settings" className="text-primary underline">Настройках → Тестовые данные</a> —
+                и здесь появится выбор БД: LLM получит реальную схему и подставит SQL-запросы в шаги кейсов.
+              </p>
+            </div>
+          ) : (
             <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-4">
               <label className="flex items-center gap-3 cursor-pointer">
                 <input

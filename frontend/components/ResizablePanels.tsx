@@ -37,7 +37,7 @@ function PanelChrome({
     <div
       className={`flex flex-col h-full transition-all duration-150 ${
         dropTarget && isDraggingSection
-          ? "ring-2 ring-inset ring-primary/40 bg-indigo-50/30"
+          ? "ring-2 ring-inset ring-primary/40 bg-primary/5"
           : ""
       }`}
       onDragOver={onDragOver}
@@ -45,12 +45,12 @@ function PanelChrome({
     >
       {/* Sticky header */}
       <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-2 border-b border-border-main bg-bg-card/90 backdrop-blur-sm flex-shrink-0">
-        <span className="text-sm font-semibold text-text-secondary tracking-wide">
+        <span className="text-sm font-semibold text-text-main tracking-wide">
           {title}
         </span>
         <button
           onClick={onClose}
-          className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-primary transition-colors"
+          className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
           title="Закрыть панель"
         >
           <X className="w-4 h-4" />
@@ -75,7 +75,7 @@ function RestoreStrip({
   return (
     <button
       onClick={onClick}
-      className="flex flex-col items-center justify-center w-10 h-full bg-bg-secondary border-r border-border-main hover:bg-indigo-50 transition-colors text-text-muted hover:text-primary flex-shrink-0"
+      className="flex flex-col items-center justify-center w-10 h-full bg-bg-card border-r border-border-main hover:bg-primary/10 transition-colors text-text-muted hover:text-primary flex-shrink-0"
       title={title}
     >
       <Icon className="w-5 h-5" />
@@ -179,7 +179,7 @@ export default function ResizablePanels({
         <RestoreStrip side="left" onClick={() => setLeftVisible(true)} />
         <div
           className={`flex-1 flex items-center justify-center text-text-muted text-sm transition-all ${
-            sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-indigo-50/30" : ""
+            sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-primary/5" : ""
           }`}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
@@ -200,7 +200,7 @@ export default function ResizablePanels({
         className="flex flex-1 min-h-0 h-full overflow-hidden"
       >
         <RestoreStrip side="left" onClick={() => setLeftVisible(true)} />
-        <div className="flex-1 h-full flex flex-col">
+        <div className="flex-1 h-full flex flex-col animate-panel-in-right">
           <PanelChrome
             title={rightTitle}
             onClose={closeRight}
@@ -225,7 +225,7 @@ export default function ResizablePanels({
       >
         <div
           className={`flex-1 h-full flex flex-col transition-all ${
-            sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-indigo-50/30" : ""
+            sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-primary/5" : ""
           }`}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
@@ -275,7 +275,7 @@ export default function ResizablePanels({
       {/* Right panel */}
       <div
         style={{ width: `calc(${100 - split}% - 4px)` }}
-        className="h-full flex flex-col flex-1"
+        className="h-full flex flex-col flex-1 animate-panel-in-right"
       >
         <PanelChrome
           title={rightTitle}

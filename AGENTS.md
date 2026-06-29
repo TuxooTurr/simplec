@@ -8,7 +8,7 @@
 - **Фронтенд:** Next.js App Router, TypeScript, Tailwind CSS, порт **3000**
 - **БД:** SQLite (`simpletest.db`) + ChromaDB
 - **LLM:** GigaChat, DeepSeek и пользовательские chat/completions-compatible подключения из UI
-- **Авторизация:** пользовательской авторизации нет; доступ ограничивается корпоративной сетью/VM
+- **Авторизация:** Bearer-токен; 2 пользователя захардкожены в `backend/api/auth.py` (`Sber911`, `SberMonitoring`, пароль `1234567`), сессии in-memory
 
 ## Как запустить локально
 

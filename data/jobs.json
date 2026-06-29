@@ -16,7 +16,7 @@
     "update_sql": "UPDATE qrtz_triggers SET next_fire_time = {nextfiretime} WHERE trigger_name = ''",
     "folder_id": "jfld-9b5ea3e2",
     "visible_to_monitoring": false,
-    "created_at": "2026-06-05T07:49:04.498014+00:00",
-    "updated_at": "2026-06-05T07:49:04.498026+00:00"
+    "created_at": "2026-06-09T12:56:21.373098+00:00",
+    "updated_at": "2026-06-09T12:56:21.373124+00:00"
   }
 ]

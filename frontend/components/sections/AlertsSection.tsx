@@ -605,6 +605,29 @@ export default function AlertsSection() {
 
   const selected = scripts.find(s => s.id === selectedId) ?? null;
 
+  // ── Ручной порядок скриптов в колонке (drag-and-drop, хранится локально) ──
+  const [scriptOrder, setScriptOrder] = useState<string[]>([]);
+  const [scriptDragId, setScriptDragId] = useState<string | null>(null);
+  useEffect(() => {
+    try { setScriptOrder(JSON.parse(localStorage.getItem("st_alert_script_order") ?? "[]")); } catch { /* ignore */ }
+  }, []);
+  const sortByPref = (list: typeof scripts) => {
+    const pos = (id: string) => { const i = scriptOrder.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i; };
+    return [...list].sort((a, b) => pos(a.id) - pos(b.id));
+  };
+  const reorderScript = (drag: string, target: string) => {
+    if (drag === target) return;
+    const ids = sortByPref(scripts).map(s => s.id);
+    const from = ids.indexOf(drag);
+    if (from < 0) return;
+    ids.splice(from, 1);
+    const to = ids.indexOf(target);
+    if (to < 0) return;
+    ids.splice(to, 0, drag);
+    setScriptOrder(ids);
+    localStorage.setItem("st_alert_script_order", JSON.stringify(ids));
+  };
+
   useEffect(() => {
     if (!isSuperuser) return;
     const load = () => {
@@ -769,7 +792,7 @@ export default function AlertsSection() {
             )}
 
             {/* Root-level alerts (no folder) */}
-            {scripts.filter(s => !s.folder_id).map(s => {
+            {sortByPref(scripts.filter(s => !s.folder_id)).map(s => {
               const sess = sessions[s.id];
               const alive     = !!sess?.kernelAlive;
               const connecting = !!sess?.kernelConnecting;
@@ -791,7 +814,13 @@ export default function AlertsSection() {
 
               return (
                 <div key={s.id} onClick={() => handleSelectScript(s)}
-                  className={`group flex items-start gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all ${
+                  draggable
+                  onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
+                  onDragEnd={() => setScriptDragId(null)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
+                  className={`group flex items-start gap-2.5 px-3 py-2 rounded-lg cursor-grab active:cursor-grabbing transition-all ${
+                    scriptDragId === s.id ? "opacity-50" : ""} ${
                     selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
                     : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
                     : "hover:bg-bg-subtle border border-transparent"}`}>
@@ -816,7 +845,7 @@ export default function AlertsSection() {
             {/* Folders */}
             {folders.map(folder => {
               const isOpen = openFolders.has(folder.id);
-              const folderScripts = scripts.filter(s => s.folder_id === folder.id);
+              const folderScripts = sortByPref(scripts.filter(s => s.folder_id === folder.id));
               const hasActive = folderScripts.some(s => {
                 const sess = sessions[s.id];
                 return sess?.kernelAlive || sess?.schedActive;
@@ -902,7 +931,13 @@ export default function AlertsSection() {
 
                         return (
                           <div key={s.id} onClick={() => handleSelectScript(s)}
-                            className={`group flex items-start gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer transition-all ${
+                            draggable
+                            onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
+                            onDragEnd={() => setScriptDragId(null)}
+                            onDragOver={e => e.preventDefault()}
+                            onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
+                            className={`group flex items-start gap-2 px-2.5 py-1.5 rounded-lg cursor-grab active:cursor-grabbing transition-all ${
+                              scriptDragId === s.id ? "opacity-50" : ""} ${
                               selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
                               : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
                               : "hover:bg-bg-subtle border border-transparent"}`}>

@@ -120,12 +120,13 @@ SimpleTest/
 │       └── useGeneration.ts # Реэкспорт из GenerationContext
 ├── agents/
 │   ├── llm_client.py        # Универсальный LLM клиент (все провайдеры)
-│   ├── generator.py         # Основной генератор тест-кейсов
+│   ├── layered_generator.py # 4-слойный генератор тест-кейсов
 │   └── file_parser.py       # Парсинг файлов (PDF, DOCX, Excel)
 ├── db/
-│   ├── user_store.py        # SQLite пользователи + сессии
-│   ├── vector_store.py      # ChromaDB эталоны
-│   └── postgres.py          # PostgreSQL (метрики, опционально)
+│   ├── vector_store.py      # ChromaDB эталоны (RAG)
+│   ├── postgres.py          # PostgreSQL/SQLite ORM (метрики, настройки)
+│   ├── *_store.py           # Файловые JSON-сторы (jobs, alerts, teams, autotest_runs…)
+│   └── secure_config.py     # Шифрование секретов настроек
 ├── certs/
 │   └── build_bundle.sh      # Сборка CA bundle для корп. прокси
 ├── start.sh                 # Запуск (venv + Conda)
@@ -153,11 +154,14 @@ SimpleTest/
 - `st_gen_history` — история генераций
 
 ### Авторизация
-Cookie-based (httpOnly). Дефолтный пользователь из `.env`:
+Bearer-токен (токен в localStorage на фронте, проверяется `AuthMiddleware` в `backend/main.py`).
+Пользователи **захардкожены в `backend/api/auth.py`** (`USERS`), сессии — in-memory (`_sessions`):
 ```
-ADMIN_USER=admin
-ADMIN_PASS=Admin12345
+Sber911       / 1234567   (роль superuser)
+SberMonitoring / 1234567  (роль monitoring)
 ```
+> Аккаунты живут в коде `auth.py`, поэтому валидны на любой машине сразу после клона.
+> Смена пароля/добавление пользователя — правка словаря `USERS` в `backend/api/auth.py`.
 
 ---
 
@@ -171,3 +175,22 @@ ADMIN_PASS=Admin12345
 | `UNEXPECTED_EOF_WHILE_READING` (SSL) | Добавь `SSL_NO_VERIFY=1` в `.env` |
 | Бэкенд стартует, фронтенд не видит API | Проверь `frontend/.env.local` — там должен быть `NEXT_PUBLIC_API_URL=http://localhost:8000` |
 | uvicorn берёт неправильный Python | Всегда `python -m uvicorn`, не `uvicorn` напрямую |
+
+---
+
+## Скилы (Claude Code Skills) — использовать по умолчанию
+
+Установлены глобально в `~/.claude/skills/` и применяются автоматически по описанию.
+В этом проекте использовать проактивно:
+
+- **agent-skills** (addyosmani, 24 скила) — инженерный воркфлоу: спека, планирование,
+  пошаговая реализация, отладка по первопричине, код-ревью, упрощение, безопасность,
+  git-флоу, CI/CD, TDD. Применять при любой нетривиальной задаче; перед мерджем —
+  `code-review-and-quality`, `security-and-hardening`, `debugging-and-error-recovery`.
+- **ui-skills** (ibelick, 5) — полировка веб-UI: `baseline-ui`, `fixing-accessibility`,
+  `fixing-metadata`, `fixing-motion-performance`. Применять при работе над `frontend/`.
+- **transitions-dev** — готовые CSS-переходы/анимации (модалки, дропдауны, тосты, табы,
+  staggered reveal). Применять при анимациях во `frontend/`.
+
+> Скилы исполняются с полными правами агента — это доверенные паки, поставленные
+> по запросу пользователя.

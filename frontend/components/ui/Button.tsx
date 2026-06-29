@@ -6,8 +6,11 @@ import { Loader2 } from "lucide-react";
 /* ── Variant styles ───────────────────────────────────────────── */
 
 const base =
-  "inline-flex items-center justify-center gap-1.5 font-medium transition-colors " +
-  "disabled:opacity-50 disabled:cursor-not-allowed select-none";
+  "inline-flex items-center justify-center gap-1.5 font-medium " +
+  "transition-[color,background-color,border-color,transform] duration-150 " +
+  "disabled:opacity-50 disabled:cursor-not-allowed select-none " +
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-bg-card " +
+  "active:scale-[0.98]";
 
 const variants = {
   primary:

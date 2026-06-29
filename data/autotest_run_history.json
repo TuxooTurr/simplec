@@ -1,0 +1,68 @@
+[
+  {
+    "id": "run-1782123167705",
+    "script_id": "script-demo",
+    "script_name": "Smoke прогон",
+    "button_name": "Smoke прогон",
+    "rule_id": "",
+    "rule_name": "",
+    "audit_type": "button",
+    "audit_name": "Smoke прогон",
+    "trigger": "manual",
+    "status": "ok",
+    "exit_code": 0,
+    "tags": [
+      "smoke"
+    ],
+    "test_types": [
+      "api",
+      "e2e"
+    ],
+    "tests": [
+      "com.shop.catalog.CatalogE2ETest#opensProductCard",
+      "com.shop.catalog.CatalogE2ETest#filtersByPrice",
+      "com.shop.payments.PaymentApiTest#successfulPayment",
+      "com.shop.payments.PaymentApiTest#declinedCard"
+    ],
+    "microservice": "",
+    "build_version": "",
+    "started_at": "2026-06-22T10:12:47.666926+00:00",
+    "duration_ms": 38,
+    "stdout": "RUN tags=smoke types=api,e2e\nTESTS=com.shop.catalog.CatalogE2ETest#opensProductCard,com.shop.catalog.CatalogE2ETest#filtersByPrice,com.shop.payments.PaymentApiTest#successfulPayment,com.shop.payments.PaymentApiTest#declinedCard\n",
+    "stderr": "",
+    "command": "bash /private/tmp/st_fixture_fw/run.sh",
+    "work_dir": "/private/tmp/st_fixture_fw",
+    "ts": "2026-06-22T10:12:47.705211+00:00"
+  },
+  {
+    "id": "run-1782123020779",
+    "script_id": "script-demo",
+    "script_name": "Smoke прогон",
+    "button_name": "Smoke прогон",
+    "rule_id": "",
+    "rule_name": "",
+    "audit_type": "button",
+    "audit_name": "Smoke прогон",
+    "trigger": "manual",
+    "status": "ok",
+    "exit_code": 0,
+    "tags": [
+      "smoke"
+    ],
+    "test_types": [
+      "e2e"
+    ],
+    "tests": [
+      "com.shop.payments.PaymentApiTest#successfulPayment"
+    ],
+    "microservice": "",
+    "build_version": "",
+    "started_at": "2026-06-22T10:10:20.773785+00:00",
+    "duration_ms": 5,
+    "stdout": "RUN tags=smoke types=e2e\nTESTS=com.shop.payments.PaymentApiTest#successfulPayment\n",
+    "stderr": "",
+    "command": "bash /private/tmp/st_fixture_fw/run.sh",
+    "work_dir": "/private/tmp/st_fixture_fw",
+    "ts": "2026-06-22T10:10:20.779240+00:00"
+  }
+]

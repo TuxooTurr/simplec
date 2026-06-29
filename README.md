@@ -129,7 +129,7 @@ SimpleTest/
 | Backend | FastAPI 0.128, Uvicorn 0.40, Python 3.12 |
 | База данных | PostgreSQL 16, SQLAlchemy 2.0 |
 | Vector DB | ChromaDB 1.4 (RAG для эталонов) |
-| Доступ | Без пользовательской авторизации; доступ ограничивается корпоративной сетью/VM |
+| Доступ | Bearer-токен; 2 пользователя захардкожены в `backend/api/auth.py` (`Sber911`, `SberMonitoring`) |
 | Real-time | WebSockets (стриминг генерации) |
 | Мониторинг | APScheduler, Kubernetes Python client |
 | Сообщения | kafka-python, A2A/JSON-RPC 2.0 |
@@ -202,8 +202,8 @@ npm run dev
 ## Конфигурация (`.env`)
 
 ```dotenv
-# Пользовательской авторизации нет.
-# Все подключившиеся к VM работают с общими данными приложения.
+# Авторизация: Bearer-токен, пользователи захардкожены в backend/api/auth.py
+# (Sber911 / SberMonitoring, пароль 1234567). Аккаунты в коде → валидны на любой машине.
 
 # LLM-провайдеры
 LLM_PROVIDER=gigachat

@@ -1,22 +1,20 @@
 """
-Хранилище alert-скриптов и истории отправок.
+Хранилище alert-скриптов.
 
 Файлы:
   data/alert_scripts.json   — скрипты (встроенные + пользовательские)
-  data/alert_history.json   — последние 50 отправок
+  data/alert_folders.json   — папки скриптов
 """
 
 import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS_FILE  = _ROOT / "data" / "alert_scripts.json"
-_HISTORY_FILE  = _ROOT / "data" / "alert_history.json"
 _FOLDERS_FILE  = _ROOT / "data" / "alert_folders.json"
-_HISTORY_MAX   = 50
 
 
 class AlertsStore:
@@ -129,35 +127,3 @@ class AlertsStore:
         if changed:
             cls._save_scripts(scripts)
         return True
-
-    # ── History ──────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _load_history() -> list[dict]:
-        if not _HISTORY_FILE.exists():
-            return []
-        with open(_HISTORY_FILE, encoding="utf-8") as f:
-            return json.load(f)
-
-    @staticmethod
-    def _save_history(history: list[dict]) -> None:
-        _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-
-    @classmethod
-    def add_history(cls, entry: dict) -> None:
-        """
-        entry должен содержать:
-          script_id, script_name, topic, payload, status ("ok"|"error"), error?, ts?
-        """
-        if not entry.get("ts"):
-            entry["ts"] = datetime.now(timezone.utc).isoformat()
-        history = cls._load_history()
-        history.insert(0, entry)
-        history = history[:_HISTORY_MAX]
-        cls._save_history(history)
-
-    @classmethod
-    def get_history(cls, limit: int = 20) -> list[dict]:
-        return cls._load_history()[:limit]

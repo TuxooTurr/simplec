@@ -840,7 +840,7 @@ function JobModal({ initial, folders, connections, onSave, onClose }: {
               <option value="">— Выберите подключение —</option>
               {connections.map(c => (
                 <option key={c.id} value={c.id}>
-                  {c.display_name} ({c.db_type} · {c.host}:{c.port}/{c.db_name})
+                  {c.display_name} ({c.driver_name} · {c.host}:{c.port}/{c.db_name})
                 </option>
               ))}
             </select>

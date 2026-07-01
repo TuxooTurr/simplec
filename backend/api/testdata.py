@@ -26,71 +26,15 @@ import logging
 import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from backend.api.db_connector import ensure_jvm, get_db_connection, introspect_schema
+from db.jdbc_drivers_store import JdbcDriversStore
 from db.testdata_connections import TestDataConnectionsStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ── DB Connector ──────────────────────────────────────────────────────────────
-
-_DEFAULT_PORTS = {
-    "postgresql": 5432,
-    "mysql": 3306,
-    "oracle": 1521,
-}
-
-
-def _get_db_connection(conn_config: dict):
-    """
-    Создаёт соединение к внешней БД по конфигу.
-    Возвращает (connection, db_type).
-    """
-    db_type = conn_config.get("db_type", "postgresql")
-    host = conn_config.get("host", "localhost")
-    port = conn_config.get("port", _DEFAULT_PORTS.get(db_type, 5432))
-    db_name = conn_config.get("db_name", "")
-    login = conn_config.get("login", "")
-    password = conn_config.get("password", "")
-
-    if db_type == "postgresql":
-        try:
-            import psycopg2
-        except ImportError:
-            raise RuntimeError("psycopg2 не установлен. Установите: pip install psycopg2-binary")
-        conn = psycopg2.connect(
-            host=host, port=port, dbname=db_name,
-            user=login, password=password,
-            connect_timeout=10,
-        )
-        conn.set_session(readonly=True)
-        return conn, db_type
-
-    elif db_type == "mysql":
-        try:
-            import mysql.connector
-        except ImportError:
-            raise RuntimeError("mysql-connector-python не установлен. Установите: pip install mysql-connector-python")
-        conn = mysql.connector.connect(
-            host=host, port=port, database=db_name,
-            user=login, password=password,
-            connect_timeout=10,
-        )
-        return conn, db_type
-
-    elif db_type == "oracle":
-        try:
-            import oracledb
-        except ImportError:
-            raise RuntimeError("oracledb не установлен. Установите: pip install oracledb")
-        dsn = oracledb.makedsn(host, port, service_name=db_name)
-        conn = oracledb.connect(user=login, password=password, dsn=dsn)
-        return conn, db_type
-
-    else:
-        raise ValueError(f"Неподдерживаемый тип БД: {db_type}")
 
 
 # ── SQL Safety ────────────────────────────────────────────────────────────────
@@ -112,10 +56,11 @@ _MAX_ROWS = 500
 _QUERY_TIMEOUT_SEC = 30
 
 
-def _validate_sql(sql: str) -> str:
+def _validate_sql(sql: str, dialect: str = "generic") -> str:
     """
     Валидирует SQL-запрос. Разрешены ТОЛЬКО SELECT / WITH / EXPLAIN / SHOW / DESCRIBE.
     Возвращает очищенный SQL или поднимает ValueError.
+    Для Oracle ограничение строк — через FETCH FIRST, для остальных — LIMIT.
     """
     cleaned = sql.strip().rstrip(";")
     if not cleaned:
@@ -124,16 +69,6 @@ def _validate_sql(sql: str) -> str:
     if not _ALLOWED_START.match(cleaned):
         raise ValueError("Разрешены только SELECT-запросы (начало: SELECT, WITH, EXPLAIN, SHOW, DESCRIBE)")
 
-    # Проверяем на запрещённые ключевые слова в теле запроса
-    # Исключаем CTE (WITH ... AS (SELECT ...)) — они допустимы
-    # Проверяем после первого SELECT
-    check_body = cleaned
-    if check_body.upper().startswith("WITH"):
-        # У CTE SELECT может быть внутри скобок — проверяем только финальный запрос
-        pass  # CTE безопасны если нет DML
-
-    # Ищем запрещённые ключевые слова, но пропускаем их внутри строковых литералов
-    # Простая проверка: ищем DML-ключевые слова как отдельные слова
     for match in _FORBIDDEN_KEYWORDS.finditer(cleaned):
         keyword = match.group(0).upper()
         # SHOW / DESCRIBE разрешены в начале
@@ -141,150 +76,13 @@ def _validate_sql(sql: str) -> str:
             continue
         raise ValueError(f"Запрещённое ключевое слово в запросе: {keyword}. Разрешены только SELECT-запросы")
 
-    # Добавляем LIMIT если его нет
-    if not re.search(r'\bLIMIT\b', cleaned, re.IGNORECASE):
-        # Для Oracle используем FETCH FIRST
+    if dialect == "oracle":
+        if not re.search(r'\b(ROWNUM|FETCH\s+FIRST)\b', cleaned, re.IGNORECASE):
+            cleaned += f" FETCH FIRST {_MAX_ROWS} ROWS ONLY"
+    elif not re.search(r'\bLIMIT\b', cleaned, re.IGNORECASE):
         cleaned += f" LIMIT {_MAX_ROWS}"
 
     return cleaned
-
-
-def _validate_sql_oracle(sql: str) -> str:
-    """Oracle-специфичная валидация — ROWNUM вместо LIMIT."""
-    cleaned = sql.strip().rstrip(";")
-    if not cleaned:
-        raise ValueError("Пустой запрос")
-
-    if not _ALLOWED_START.match(cleaned):
-        raise ValueError("Разрешены только SELECT-запросы")
-
-    for match in _FORBIDDEN_KEYWORDS.finditer(cleaned):
-        keyword = match.group(0).upper()
-        if keyword in ("SHOW", "DESCRIBE"):
-            continue
-        raise ValueError(f"Запрещённое ключевое слово: {keyword}")
-
-    # Oracle: добавляем ограничение строк через FETCH FIRST
-    if not re.search(r'\b(ROWNUM|FETCH\s+FIRST)\b', cleaned, re.IGNORECASE):
-        cleaned += f" FETCH FIRST {_MAX_ROWS} ROWS ONLY"
-
-    return cleaned
-
-
-# ── Schema introspect ─────────────────────────────────────────────────────────
-
-def _introspect_postgresql(conn) -> dict:
-    """Получить схему PostgreSQL: таблицы + колонки."""
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT table_schema, table_name
-        FROM information_schema.tables
-        WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-          AND table_type = 'BASE TABLE'
-        ORDER BY table_schema, table_name
-        LIMIT 200
-    """)
-    tables = cur.fetchall()
-
-    schema = {}
-    for tschema, tname in tables:
-        full_name = f"{tschema}.{tname}" if tschema != "public" else tname
-        cur.execute("""
-            SELECT column_name, data_type, is_nullable, column_default
-            FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-            ORDER BY ordinal_position
-        """, (tschema, tname))
-        columns = []
-        for col_name, data_type, nullable, default in cur.fetchall():
-            columns.append({
-                "name": col_name,
-                "type": data_type,
-                "nullable": nullable == "YES",
-                "default": default,
-            })
-        schema[full_name] = columns
-
-    cur.close()
-    return schema
-
-
-def _introspect_mysql(conn) -> dict:
-    """Получить схему MySQL: таблицы + колонки."""
-    cur = conn.cursor()
-    db_name = conn.database
-    cur.execute("""
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = %s AND table_type = 'BASE TABLE'
-        ORDER BY table_name
-        LIMIT 200
-    """, (db_name,))
-    tables = cur.fetchall()
-
-    schema = {}
-    for (tname,) in tables:
-        cur.execute("""
-            SELECT column_name, data_type, is_nullable, column_default
-            FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-            ORDER BY ordinal_position
-        """, (db_name, tname))
-        columns = []
-        for col_name, data_type, nullable, default in cur.fetchall():
-            columns.append({
-                "name": col_name,
-                "type": data_type,
-                "nullable": nullable == "YES",
-                "default": default,
-            })
-        schema[tname] = columns
-
-    cur.close()
-    return schema
-
-
-def _introspect_oracle(conn) -> dict:
-    """Получить схему Oracle: таблицы + колонки."""
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT table_name FROM user_tables
-        ORDER BY table_name
-        FETCH FIRST 200 ROWS ONLY
-    """)
-    tables = cur.fetchall()
-
-    schema = {}
-    for (tname,) in tables:
-        cur.execute("""
-            SELECT column_name, data_type, nullable, data_default
-            FROM user_tab_columns
-            WHERE table_name = :tname
-            ORDER BY column_id
-        """, {"tname": tname})
-        columns = []
-        for col_name, data_type, nullable, default in cur.fetchall():
-            columns.append({
-                "name": col_name,
-                "type": data_type,
-                "nullable": nullable == "Y",
-                "default": str(default).strip() if default else None,
-            })
-        schema[tname] = columns
-
-    cur.close()
-    return schema
-
-
-def _introspect_schema(conn, db_type: str) -> dict:
-    """Роутер introspect по типу БД."""
-    if db_type == "postgresql":
-        return _introspect_postgresql(conn)
-    elif db_type == "mysql":
-        return _introspect_mysql(conn)
-    elif db_type == "oracle":
-        return _introspect_oracle(conn)
-    return {}
 
 
 def _schema_to_text(schema: dict, db_name: str = "") -> str:
@@ -305,7 +103,7 @@ def _schema_to_text(schema: dict, db_name: str = "") -> str:
 
 # ── Execute query ─────────────────────────────────────────────────────────────
 
-def _execute_query(conn, db_type: str, sql: str) -> dict:
+def _execute_query(conn, sql: str) -> dict:
     """
     Выполняет SELECT-запрос и возвращает результат.
     Returns: {"columns": [...], "rows": [...], "row_count": int}
@@ -424,29 +222,37 @@ SQL:"""
 
 # ── CRUD: Connections ─────────────────────────────────────────────────────────
 
+def _enrich_with_driver(conn: dict) -> dict:
+    """Добавляет driver_name/sql_dialect (для бейджей на фронте) — денормализовано из реестра драйверов."""
+    driver = JdbcDriversStore.get_driver(conn.get("driver_id", ""))
+    conn["driver_name"] = driver["name"] if driver else "неизвестный драйвер"
+    conn["sql_dialect"] = driver["sql_dialect"] if driver else "generic"
+    return conn
+
+
 @router.get("/api/testdata/connections")
 def list_connections() -> list[dict]:
-    return TestDataConnectionsStore.list_connections()
+    return [_enrich_with_driver(c) for c in TestDataConnectionsStore.list_connections()]
 
 
 class ConnectionCreateRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
-    db_type: str = Field(default="postgresql")  # postgresql, mysql, oracle
+    driver_id: str = Field(..., min_length=1)  # id драйвера из реестра «Настройка драйверов»
     host: str = Field(default="localhost")
     port: int = Field(default=5432)
     db_name: str = Field(default="")
     login: str = Field(default="")
     password: str = Field(default="")
-    schema_name: str = Field(default="")
+    schema_name: str = Field(default="")  # для Oracle-подобных драйверов: схема
 
 
 @router.post("/api/testdata/connections")
 def create_connection(req: ConnectionCreateRequest) -> dict:
-    if req.db_type not in ("postgresql", "mysql", "oracle"):
-        raise HTTPException(status_code=400, detail=f"Неподдерживаемый тип БД: {req.db_type}")
+    if not JdbcDriversStore.get_driver(req.driver_id):
+        raise HTTPException(status_code=400, detail="Драйвер не найден — выберите его в «Настройке драйверов»")
     conn = TestDataConnectionsStore.create_connection(req.model_dump())
     # Маскируем пароль в ответе
-    conn_safe = {**conn}
+    conn_safe = _enrich_with_driver({**conn})
     if conn_safe.get("password"):
         conn_safe["password"] = "••••••••"
     return {"connection": conn_safe}
@@ -454,10 +260,12 @@ def create_connection(req: ConnectionCreateRequest) -> dict:
 
 @router.put("/api/testdata/connections/{conn_id}")
 def update_connection(conn_id: str, req: ConnectionCreateRequest) -> dict:
+    if not JdbcDriversStore.get_driver(req.driver_id):
+        raise HTTPException(status_code=400, detail="Драйвер не найден — выберите его в «Настройке драйверов»")
     updated = TestDataConnectionsStore.update_connection(conn_id, req.model_dump())
     if not updated:
         raise HTTPException(status_code=404, detail="Подключение не найдено")
-    safe = {**updated}
+    safe = _enrich_with_driver({**updated})
     if safe.get("password"):
         safe["password"] = "••••••••"
     return {"connection": safe}
@@ -481,9 +289,9 @@ async def test_connection(conn_id: str) -> dict:
 
     def _test():
         try:
-            conn, db_type = _get_db_connection(conn_cfg)
+            conn, driver = get_db_connection(conn_cfg)
             cur = conn.cursor()
-            if db_type == "oracle":
+            if driver.get("sql_dialect") == "oracle":
                 cur.execute("SELECT 1 FROM DUAL")
             else:
                 cur.execute("SELECT 1")
@@ -506,9 +314,9 @@ async def introspect_connection(conn_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Подключение не найдено")
 
     def _do():
-        conn, db_type = _get_db_connection(conn_cfg)
+        conn, _driver = get_db_connection(conn_cfg)
         try:
-            schema = _introspect_schema(conn, db_type)
+            schema = introspect_schema(conn)
             # Сохраняем в кэш
             TestDataConnectionsStore.update_cached_schema(conn_id, schema)
             return schema
@@ -547,21 +355,19 @@ async def execute_query(req: QueryRequest) -> dict:
             results[conn_id] = {"error": "Подключение не найдено", "rows": [], "columns": []}
             continue
 
-        db_type = conn_cfg.get("db_type", "postgresql")
+        driver = JdbcDriversStore.get_driver(conn_cfg.get("driver_id", ""))
+        dialect = driver.get("sql_dialect", "generic") if driver else "generic"
 
         try:
-            if db_type == "oracle":
-                validated_sql = _validate_sql_oracle(req.sql)
-            else:
-                validated_sql = _validate_sql(req.sql)
+            validated_sql = _validate_sql(req.sql, dialect)
         except ValueError as e:
             results[conn_id] = {"error": str(e), "rows": [], "columns": []}
             continue
 
-        def _run(cfg=conn_cfg, sql=validated_sql, dt=db_type):
-            conn, _ = _get_db_connection(cfg)
+        def _run(cfg=conn_cfg, sql=validated_sql):
+            conn, _ = get_db_connection(cfg)
             try:
-                return _execute_query(conn, dt, sql)
+                return _execute_query(conn, sql)
             finally:
                 conn.close()
 
@@ -602,7 +408,8 @@ async def generate_query(req: GenerateQueryRequest) -> dict:
         conn_cfg = TestDataConnectionsStore.get_connection(conn_id)
         if not conn_cfg:
             continue
-        db_types.add(conn_cfg.get("db_type", "postgresql"))
+        driver = JdbcDriversStore.get_driver(conn_cfg.get("driver_id", ""))
+        db_types.add(driver["name"] if driver else "SQL")
         schema = conn_cfg.get("cached_schema")
         if schema:
             text = _schema_to_text(schema, conn_cfg.get("display_name", ""))
@@ -616,7 +423,7 @@ async def generate_query(req: GenerateQueryRequest) -> dict:
 
     schemas_text = "\n\n".join(schemas_parts)
     # Используем тип первой БД (обычно они одинаковые)
-    db_type = list(db_types)[0] if db_types else "postgresql"
+    db_type = list(db_types)[0] if db_types else "SQL"
 
     try:
         sql = await asyncio.to_thread(
@@ -652,13 +459,14 @@ async def suggest_script(req: SuggestScriptRequest) -> dict:
         conn_cfg = TestDataConnectionsStore.get_connection(conn_id)
         if not conn_cfg:
             continue
-        db_types.add(conn_cfg.get("db_type", "postgresql"))
+        driver = JdbcDriversStore.get_driver(conn_cfg.get("driver_id", ""))
+        db_types.add(driver["name"] if driver else "SQL")
         schema = conn_cfg.get("cached_schema")
         if schema:
             schemas_parts.append(_schema_to_text(schema, conn_cfg.get("display_name", "")))
 
     schemas_text = "\n\n".join(schemas_parts) if schemas_parts else "(схема неизвестна)"
-    db_type = list(db_types)[0] if db_types else "postgresql"
+    db_type = list(db_types)[0] if db_types else "SQL"
 
     try:
         script = await asyncio.to_thread(
@@ -690,3 +498,99 @@ async def get_schemas_text(connection_ids: list[str]) -> dict:
         if schema:
             parts.append(_schema_to_text(schema, conn_cfg.get("display_name", "")))
     return {"text": "\n\n".join(parts), "connection_count": len(parts)}
+
+
+# ── Реестр JDBC-драйверов («Настройка драйверов», как в DBeaver) ─────────────
+# Все типы БД — PostgreSQL, MySQL, Oracle (встроенные, предзаполненные) и любые
+# свои — подключаются одинаково: класс + шаблон URL + .jar-библиотека.
+
+_MAX_JAR_SIZE = 100 * 1024 * 1024  # 100 МБ
+
+
+@router.get("/api/testdata/drivers")
+def list_drivers() -> list[dict]:
+    return JdbcDriversStore.list_drivers()
+
+
+class DriverCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    driver_class: str = Field(..., min_length=1)
+    url_template: str = Field(..., min_length=1)
+    default_port: Optional[int] = None
+    default_db_name: str = Field(default="")
+    default_login: str = Field(default="")
+
+
+@router.post("/api/testdata/drivers")
+def create_driver(req: DriverCreateRequest) -> dict:
+    """Создать новый пользовательский драйвер (вкладка «Настройки»). Библиотека добавляется отдельно."""
+    driver = JdbcDriversStore.create_driver(req.model_dump())
+    return {"driver": driver}
+
+
+@router.put("/api/testdata/drivers/{driver_id}")
+def update_driver(driver_id: str, req: DriverCreateRequest) -> dict:
+    """Обновить настройки драйвера — доступно и для встроенных (PostgreSQL/MySQL/Oracle)."""
+    updated = JdbcDriversStore.update_driver(driver_id, req.model_dump())
+    if not updated:
+        raise HTTPException(status_code=404, detail="Драйвер не найден")
+    return {"driver": updated}
+
+
+@router.delete("/api/testdata/drivers/{driver_id}")
+def delete_driver(driver_id: str) -> dict:
+    ok = JdbcDriversStore.delete_driver(driver_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="Встроенный драйвер нельзя удалить, либо драйвер не найден")
+    return {"status": "deleted"}
+
+
+@router.post("/api/testdata/drivers/{driver_id}/library")
+async def upload_driver_library(driver_id: str, file: UploadFile = File(...)) -> dict:
+    """Загрузить/заменить .jar драйвера (вкладка «Библиотека»)."""
+    if not JdbcDriversStore.get_driver(driver_id):
+        raise HTTPException(status_code=404, detail="Драйвер не найден")
+    if not file.filename or not file.filename.lower().endswith(".jar"):
+        raise HTTPException(status_code=400, detail="Ожидается .jar файл")
+
+    content = await file.read()
+    if len(content) > _MAX_JAR_SIZE:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 100 МБ)")
+
+    updated = JdbcDriversStore.set_library(driver_id, content, file.filename)
+    return {"driver": updated}
+
+
+@router.delete("/api/testdata/drivers/{driver_id}/library")
+def remove_driver_library(driver_id: str) -> dict:
+    updated = JdbcDriversStore.remove_library(driver_id)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Драйвер не найден")
+    return {"driver": updated}
+
+
+@router.post("/api/testdata/drivers/{driver_id}/test")
+async def test_driver(driver_id: str) -> dict:
+    """Проверяет, что jar и указанный класс драйвера загружаются в JVM (без подключения к реальной БД)."""
+    driver = JdbcDriversStore.get_driver(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Драйвер не найден")
+    if not driver.get("jar_filename"):
+        return {"status": "red", "message": "Библиотека (.jar) не загружена — добавьте её во вкладке «Библиотека»"}
+
+    def _test():
+        try:
+            jvm_jars = ensure_jvm()
+            jar_path = str(JdbcDriversStore.jar_path(driver))
+            if jar_path not in jvm_jars:
+                return {
+                    "status": "yellow",
+                    "message": "Библиотека добавлена после запуска сервера — перезапустите бэкенд для проверки",
+                }
+            import jpype
+            jpype.JClass(driver["driver_class"])
+            return {"status": "green", "message": "Класс драйвера успешно загружен"}
+        except Exception as e:
+            return {"status": "red", "message": f"Ошибка загрузки драйвера: {str(e)[:300]}"}
+
+    return await asyncio.to_thread(_test)

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Network, Search, X, Plus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
 } from "lucide-react";
-import { Modal } from "@/components/ui";
+import { ConnectionsModal, ConnectionRow } from "@/components/ui";
 import {
   listKafkaConnections, createKafkaConnection, updateKafkaConnection, deleteKafkaConnection,
   testKafkaConnection, getKafkaTopics, fetchKafkaMessages,
@@ -317,7 +317,7 @@ export default function KafkaSection() {
         Снапшот последних {limit} сообщений (не realtime). Kafka не индексирует содержимое — поиск идёт по этому окну.
       </p>
 
-      <ConnectionsModal open={manageOpen} onClose={() => setManageOpen(false)}
+      <KafkaConnectionsModal open={manageOpen} onClose={() => setManageOpen(false)}
         connections={connections} onChanged={reloadConnections} />
     </div>
   );
@@ -328,7 +328,7 @@ function emptyConn(): Partial<KafkaConnection> {
   return { name: "", bootstrap_servers: "", security_protocol: "PLAINTEXT", default_limit: 50 };
 }
 
-function ConnectionsModal({
+function KafkaConnectionsModal({
   open, onClose, connections, onChanged,
 }: {
   open: boolean; onClose: () => void; connections: KafkaConnection[]; onChanged: () => Promise<void> | void;
@@ -372,64 +372,55 @@ function ConnectionsModal({
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Kafka-подключения" size="max-w-2xl">
-      {msg && (
-        <div className={`mb-3 rounded-lg border px-3 py-2 text-xs ${msg.ok ? "tone-success" : "tone-danger"}`}>{msg.text}</div>
-      )}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {/* list */}
-        <div className="space-y-1.5">
-          <p className="text-xs font-semibold text-text-muted">Сохранённые ({connections.length})</p>
-          {connections.length === 0 && <p className="text-xs text-text-muted/60">Пока нет подключений.</p>}
-          {connections.map((c) => (
-            <div key={c.id} className="flex items-center gap-2 rounded-lg border border-border-main px-2.5 py-2">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-text-main">{c.name}</p>
-                <p className="truncate font-mono text-[11px] text-text-muted">{c.bootstrap_servers} · {c.security_protocol}</p>
-              </div>
-              <button type="button" onClick={() => test(c.id)} disabled={busy} title="Проверить"
-                className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-emerald-600"><Check className="h-3.5 w-3.5" /></button>
-              <button type="button" onClick={() => { setEditingId(c.id); setForm({ ...c, sasl_password: "" }); setMsg(null); }}
-                title="Изменить" className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-primary"><Pencil className="h-3.5 w-3.5" /></button>
-              <button type="button" onClick={() => remove(c.id)} title="Удалить"
-                className="rounded p-1 text-text-muted hover:bg-red-50 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
-            </div>
-          ))}
-        </div>
-
-        {/* form */}
-        <div className="space-y-2">
-          <p className="text-xs font-semibold text-text-muted">{editingId ? "Изменить" : "Новое подключение"}</p>
-          <input value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="Имя (напр. ИФТ стенд)" className={INPUT} />
-          <input value={form.bootstrap_servers ?? ""} onChange={(e) => setForm({ ...form, bootstrap_servers: e.target.value })}
-            placeholder="host:9092 (можно несколько через запятую)" className={`${INPUT} font-mono`} />
-          <select value={form.security_protocol ?? "PLAINTEXT"}
-            onChange={(e) => setForm({ ...form, security_protocol: e.target.value as KafkaConnection["security_protocol"] })}
-            className={INPUT}>
-            {PROTOCOLS.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-          {sasl && (
-            <div className="grid grid-cols-2 gap-2">
-              <input value={form.sasl_mechanism ?? ""} onChange={(e) => setForm({ ...form, sasl_mechanism: e.target.value })} placeholder="SASL mechanism (PLAIN)" className={INPUT} />
-              <input value={form.sasl_username ?? ""} onChange={(e) => setForm({ ...form, sasl_username: e.target.value })} placeholder="SASL username" className={INPUT} />
-              <input type="password" value={form.sasl_password ?? ""} onChange={(e) => setForm({ ...form, sasl_password: e.target.value })} placeholder="SASL password" className={`${INPUT} col-span-2`} />
-            </div>
-          )}
-          {ssl && (
-            <input value={form.ssl_cafile ?? ""} onChange={(e) => setForm({ ...form, ssl_cafile: e.target.value })} placeholder="Путь до CA файла (опц.)" className={`${INPUT} font-mono`} />
-          )}
-          <div className="flex justify-end gap-2 pt-1">
-            {editingId && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
-            <button type="button" onClick={save} disabled={busy}
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              {editingId ? "Сохранить" : "Добавить"}
-            </button>
+    <ConnectionsModal
+      open={open} onClose={onClose} title="Kafka-подключения" message={msg}
+      listTitle={`Сохранённые (${connections.length})`}
+      list={<>
+        {connections.length === 0 && <p className="text-xs text-text-muted/60">Пока нет подключений.</p>}
+        {connections.map((c) => (
+          <ConnectionRow
+            key={c.id}
+            name={c.name}
+            subtitle={`${c.bootstrap_servers} · ${c.security_protocol}`}
+            actions={[
+              { key: "test", icon: <Check className="h-3.5 w-3.5" />, title: "Проверить", onClick: () => test(c.id), disabled: busy, hoverClass: "hover:text-emerald-600" },
+              { key: "edit", icon: <Pencil className="h-3.5 w-3.5" />, title: "Изменить", onClick: () => { setEditingId(c.id); setForm({ ...c, sasl_password: "" }); setMsg(null); }, hoverClass: "hover:text-primary" },
+              { key: "delete", icon: <Trash2 className="h-3.5 w-3.5" />, title: "Удалить", onClick: () => remove(c.id), hoverClass: "hover:bg-red-50 hover:text-red-500" },
+            ]}
+          />
+        ))}
+      </>}
+      formTitle={editingId ? "Изменить" : "Новое подключение"}
+      form={<>
+        <input value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })}
+          placeholder="Имя (напр. ИФТ стенд)" className={INPUT} />
+        <input value={form.bootstrap_servers ?? ""} onChange={(e) => setForm({ ...form, bootstrap_servers: e.target.value })}
+          placeholder="host:9092 (можно несколько через запятую)" className={`${INPUT} font-mono`} />
+        <select value={form.security_protocol ?? "PLAINTEXT"}
+          onChange={(e) => setForm({ ...form, security_protocol: e.target.value as KafkaConnection["security_protocol"] })}
+          className={INPUT}>
+          {PROTOCOLS.map((p) => <option key={p} value={p}>{p}</option>)}
+        </select>
+        {sasl && (
+          <div className="grid grid-cols-2 gap-2">
+            <input value={form.sasl_mechanism ?? ""} onChange={(e) => setForm({ ...form, sasl_mechanism: e.target.value })} placeholder="SASL mechanism (PLAIN)" className={INPUT} />
+            <input value={form.sasl_username ?? ""} onChange={(e) => setForm({ ...form, sasl_username: e.target.value })} placeholder="SASL username" className={INPUT} />
+            <input type="password" value={form.sasl_password ?? ""} onChange={(e) => setForm({ ...form, sasl_password: e.target.value })} placeholder="SASL password" className={`${INPUT} col-span-2`} />
           </div>
-          <p className="text-[11px] text-text-muted/70">Для ИФТ-стенда (без сертов) достаточно имени и bootstrap servers с протоколом PLAINTEXT.</p>
+        )}
+        {ssl && (
+          <input value={form.ssl_cafile ?? ""} onChange={(e) => setForm({ ...form, ssl_cafile: e.target.value })} placeholder="Путь до CA файла (опц.)" className={`${INPUT} font-mono`} />
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          {editingId && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
+          <button type="button" onClick={save} disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {editingId ? "Сохранить" : "Добавить"}
+          </button>
         </div>
-      </div>
-    </Modal>
+        <p className="text-[11px] text-text-muted/70">Для ИФТ-стенда (без сертов) достаточно имени и bootstrap servers с протоколом PLAINTEXT.</p>
+      </>}
+    />
   );
 }

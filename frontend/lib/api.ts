@@ -252,16 +252,6 @@ export interface AlertScript {
   created_at?:           string;
 }
 
-export interface AlertHistoryEntry {
-  script_id:   string;
-  script_name: string;
-  topic:       string;
-  payload:     string;
-  status:      "ok" | "error";
-  error?:      string;
-  ts:          string;
-}
-
 export async function getAlertFolders(): Promise<AlertFolder[]> {
   return fetchJson("/api/alerts/folders");
 }
@@ -292,22 +282,6 @@ export async function saveAlertScript(script: Partial<AlertScript>): Promise<Ale
 
 export async function deleteAlertScript(id: string): Promise<{ status: string }> {
   return fetchJson(`/api/alerts/scripts/${id}`, { method: "DELETE" });
-}
-
-export async function sendAlert(params: {
-  script_id:       string;
-  values:          Record<string, string>;
-  topic_override?: string;
-}): Promise<{ ok: boolean; payload: string; topic: string; offset?: number; error?: string }> {
-  return fetchJson("/api/alerts/send", {
-    method:  "POST",
-    headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify({ topic_override: "", ...params }),
-  });
-}
-
-export async function getAlertHistory(limit = 20): Promise<AlertHistoryEntry[]> {
-  return fetchJson(`/api/alerts/history?limit=${limit}`);
 }
 
 export async function parseNotebook(file: File): Promise<{ cells: NotebookCell[] }> {
@@ -494,7 +468,9 @@ export async function exportGenSession(id: string, params: {
 export interface TestDataConnection {
   id:                string;
   display_name:      string;
-  db_type:           "postgresql" | "mysql" | "oracle";
+  driver_id:         string;
+  driver_name:       string;
+  sql_dialect:       "postgresql" | "mysql" | "oracle" | "generic";
   host:              string;
   port:              number;
   db_name:           string;
@@ -509,13 +485,85 @@ export interface TestDataConnection {
 
 export interface TestDataConnectionCreate {
   display_name: string;
-  db_type:      "postgresql" | "mysql" | "oracle";
+  driver_id:    string;
   host:         string;
   port:         number;
   db_name:      string;
   login:        string;
   password:     string;
   schema_name?: string;
+}
+
+// ─── JDBC-драйверы («Настройка драйверов», как в DBeaver) ────────────────────
+
+export interface JdbcDriver {
+  id:                string;
+  name:              string;
+  driver_class:      string;
+  url_template:      string;
+  default_port:      number | null;
+  default_db_name:   string;
+  default_login:     string;
+  sql_dialect:       "postgresql" | "mysql" | "oracle" | "generic";
+  jar_filename:      string | null;
+  original_filename: string | null;
+  built_in:          boolean;
+  created_at:        string;
+}
+
+export interface JdbcDriverSettings {
+  name: string;
+  driver_class: string;
+  url_template: string;
+  default_port?: number | null;
+  default_db_name?: string;
+  default_login?: string;
+}
+
+export async function listJdbcDrivers(): Promise<JdbcDriver[]> {
+  return fetchJson("/api/testdata/drivers");
+}
+
+export async function createJdbcDriver(data: JdbcDriverSettings): Promise<{ driver: JdbcDriver }> {
+  return fetchJson("/api/testdata/drivers", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function updateJdbcDriver(id: string, data: JdbcDriverSettings): Promise<{ driver: JdbcDriver }> {
+  return fetchJson(`/api/testdata/drivers/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteJdbcDriver(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/testdata/drivers/${id}`, { method: "DELETE" });
+}
+
+export async function uploadJdbcDriverLibrary(id: string, file: File): Promise<{ driver: JdbcDriver }> {
+  const form = new FormData();
+  form.append("file", file);
+  const ah = authHeaders();
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(ah)) headers.set(k, v);
+  const res = await fetch(`${API_BASE}/api/testdata/drivers/${id}/library`, { method: "POST", headers, body: form });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
+export async function removeJdbcDriverLibrary(id: string): Promise<{ driver: JdbcDriver }> {
+  return fetchJson(`/api/testdata/drivers/${id}/library`, { method: "DELETE" });
+}
+
+export async function testJdbcDriver(id: string): Promise<{ status: string; message: string }> {
+  return fetchJson(`/api/testdata/drivers/${id}/test`, { method: "POST" });
 }
 
 export interface TestDataQueryResult {

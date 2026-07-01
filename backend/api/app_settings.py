@@ -3,10 +3,9 @@
 
 Хранит в таблице metrics_settings (key-value):
   - LLM API ключи и параметры моделей
-  - Kafka-настройки для Алертов (отдельный брокер)
 
 Kafka-настройки Метрик уже хранятся в metrics_settings через metrics_settings.py,
-здесь добавляем только новые ключи (LLM + алерты Kafka).
+здесь добавляем только новые ключи (LLM-провайдеры).
 
 На старте сервера apply_saved_settings_to_env() переносит сохранённые значения
 в os.environ, чтобы LLMClient читал их через os.getenv() без изменений.
@@ -32,8 +31,6 @@ router = APIRouter()
 _SECRET_FIELDS = {
     "gigachat_auth_key",
     "deepseek_api_key",
-    "alerts_kafka_sasl_password",
-    "alerts_kafka_ssl_password",
     "kafka_sasl_password",
     "kafka_ssl_password",
 }
@@ -143,52 +140,6 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Подключения к VPS-платформам агрегации логов (Graylog, Elastic, Loki)",
         "group":       "logs_vps",
     },
-    # Kafka Алерты
-    "alerts_kafka_bootstrap_servers": {
-        "value":       os.getenv("ALERTS_KAFKA_BOOTSTRAP_SERVERS", ""),
-        "description": "Kafka-брокер для алертов (host:port или host1:port1,host2:port2)",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_security_protocol": {
-        "value":       os.getenv("ALERTS_KAFKA_SECURITY_PROTOCOL", "PLAINTEXT"),
-        "description": "Протокол: PLAINTEXT · SASL_PLAINTEXT · SASL_SSL · SSL",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_sasl_mechanism": {
-        "value":       os.getenv("ALERTS_KAFKA_SASL_MECHANISM", ""),
-        "description": "SASL механизм: PLAIN · SCRAM-SHA-256 · SCRAM-SHA-512 · GSSAPI",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_sasl_username": {
-        "value":       os.getenv("ALERTS_KAFKA_SASL_USERNAME", ""),
-        "description": "SASL логин",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_sasl_password": {
-        "value":       os.getenv("ALERTS_KAFKA_SASL_PASSWORD", ""),
-        "description": "SASL пароль",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_ssl_cafile": {
-        "value":       os.getenv("ALERTS_KAFKA_SSL_CAFILE", ""),
-        "description": "Путь к CA-сертификату (для SSL/SASL_SSL)",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_ssl_certfile": {
-        "value":       os.getenv("ALERTS_KAFKA_SSL_CERTFILE", ""),
-        "description": "Путь к клиентскому сертификату Kafka алертов (для mTLS)",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_ssl_keyfile": {
-        "value":       os.getenv("ALERTS_KAFKA_SSL_KEYFILE", ""),
-        "description": "Путь к приватному ключу клиентского сертификата Kafka алертов",
-        "group":       "kafka_alerts",
-    },
-    "alerts_kafka_ssl_password": {
-        "value":       os.getenv("ALERTS_KAFKA_SSL_PASSWORD", ""),
-        "description": "Пароль приватного ключа Kafka алертов, если ключ зашифрован",
-        "group":       "kafka_alerts",
-    },
 }
 
 # Маппинг: ключ настройки → env-переменная (для apply_saved_settings_to_env)
@@ -211,15 +162,6 @@ _ENV_MAP: Dict[str, str] = {
     "deepseek_client_key_path":       "DEEPSEEK_CLIENT_KEY_PATH",
     _CUSTOM_LLM_KEY:                  "CUSTOM_LLM_PROVIDERS",
     _REVISOR_STANDS_KEY:              "REVISOR_API_STANDS",
-    "alerts_kafka_bootstrap_servers": "ALERTS_KAFKA_BOOTSTRAP_SERVERS",
-    "alerts_kafka_security_protocol": "ALERTS_KAFKA_SECURITY_PROTOCOL",
-    "alerts_kafka_sasl_mechanism":    "ALERTS_KAFKA_SASL_MECHANISM",
-    "alerts_kafka_sasl_username":     "ALERTS_KAFKA_SASL_USERNAME",
-    "alerts_kafka_sasl_password":     "ALERTS_KAFKA_SASL_PASSWORD",
-    "alerts_kafka_ssl_cafile":        "ALERTS_KAFKA_SSL_CAFILE",
-    "alerts_kafka_ssl_certfile":      "ALERTS_KAFKA_SSL_CERTFILE",
-    "alerts_kafka_ssl_keyfile":       "ALERTS_KAFKA_SSL_KEYFILE",
-    "alerts_kafka_ssl_password":      "ALERTS_KAFKA_SSL_PASSWORD",
 }
 
 
@@ -372,30 +314,6 @@ def apply_saved_settings_to_env(db: Session) -> None:
         val = rows.get(sk, "")
         if val:
             os.environ[ev] = val
-
-
-def get_alerts_kafka_config(db: Session) -> dict:
-    """
-    Вернуть Kafka-конфиг для алертов из БД.
-    Используется в alerts.py для передачи в KafkaClient.send(kafka_cfg=...).
-    Если bootstrap_servers пустой — вернуть пустой dict (fallback на os.getenv).
-    """
-    _ensure_defaults(db)
-    rows = {r.key: r.value or "" for r in db.query(MetricsSettings).all()}
-    bootstrap = rows.get("alerts_kafka_bootstrap_servers", "")
-    if not bootstrap:
-        return {}
-    return {
-        "kafka_bootstrap_servers":  bootstrap,
-        "kafka_security_protocol":  rows.get("alerts_kafka_security_protocol", "PLAINTEXT"),
-        "kafka_sasl_mechanism":     rows.get("alerts_kafka_sasl_mechanism", ""),
-        "kafka_sasl_username":      rows.get("alerts_kafka_sasl_username", ""),
-        "kafka_sasl_password":      rows.get("alerts_kafka_sasl_password", ""),
-        "kafka_ssl_cafile":         rows.get("alerts_kafka_ssl_cafile", ""),
-        "kafka_ssl_certfile":       rows.get("alerts_kafka_ssl_certfile", ""),
-        "kafka_ssl_keyfile":        rows.get("alerts_kafka_ssl_keyfile", ""),
-        "kafka_ssl_password":       rows.get("alerts_kafka_ssl_password", ""),
-    }
 
 
 
@@ -783,24 +701,6 @@ def test_llm_connection(provider_id: str) -> dict:
         from agents.llm_client import LLMClient
         result = LLMClient.health_check(provider_id)
         return result
-    except Exception as e:
-        return {"status": "red", "message": str(e)[:200]}
-
-
-@router.post("/api/settings/test/kafka-alerts")
-def test_kafka_alerts(db: Session = Depends(get_db)) -> dict:
-    """Тест подключения к Kafka для алертов."""
-    try:
-        cfg = get_alerts_kafka_config(db)
-        bootstrap = cfg.get("kafka_bootstrap_servers", "")
-        if not bootstrap:
-            return {"status": "red", "message": "Bootstrap servers не настроены"}
-        from agents.kafka_client import KafkaClient
-        kwargs = KafkaClient._build_producer_kwargs(cfg)
-        from kafka import KafkaProducer
-        producer = KafkaProducer(**kwargs)
-        producer.close(timeout=5)
-        return {"status": "green", "message": f"Подключено к {bootstrap}"}
     except Exception as e:
         return {"status": "red", "message": str(e)[:200]}
 

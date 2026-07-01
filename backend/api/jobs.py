@@ -25,6 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.api.db_connector import get_db_connection
 from db.jobs_store import JobsStore
 from db.testdata_connections import TestDataConnectionsStore
 
@@ -60,81 +61,20 @@ class BatchExecuteRequest(BaseModel):
 
 # ── DB executor ──────────────────────────────────────────────────────────────
 
-_DEFAULT_PORTS = {
-    "postgresql": 5432,
-    "mysql": 3306,
-    "oracle": 1521,
-}
-
-
 def _execute_update_sync(conn_config: dict, sql: str) -> dict:
     """
-    Подключается к внешней БД и выполняет UPDATE-запрос.
-    Возвращает {"rows_affected": N}.
+    Подключается к внешней БД (через тот же реестр драйверов, что и «Тестовые
+    данные») и выполняет UPDATE-запрос. Возвращает {"rows_affected": N}.
     """
-    db_type  = conn_config.get("db_type", "postgresql")
-    host     = conn_config.get("host", "localhost")
-    port     = conn_config.get("port", _DEFAULT_PORTS.get(db_type, 5432))
-    db_name  = conn_config.get("db_name", "")
-    login    = conn_config.get("login", "")
-    password = conn_config.get("password", "")
-
-    if db_type == "postgresql":
-        try:
-            import psycopg2
-        except ImportError:
-            raise RuntimeError("psycopg2 не установлен")
-        conn = psycopg2.connect(
-            host=host, port=port, dbname=db_name,
-            user=login, password=password,
-            connect_timeout=10,
-        )
-        try:
-            cur = conn.cursor()
-            cur.execute(sql)
-            rows = cur.rowcount
-            conn.commit()
-            return {"rows_affected": rows}
-        finally:
-            conn.close()
-
-    elif db_type == "mysql":
-        try:
-            import mysql.connector
-        except ImportError:
-            raise RuntimeError("mysql-connector-python не установлен")
-        conn = mysql.connector.connect(
-            host=host, port=port, database=db_name,
-            user=login, password=password,
-            connect_timeout=10,
-        )
-        try:
-            cur = conn.cursor()
-            cur.execute(sql)
-            rows = cur.rowcount
-            conn.commit()
-            return {"rows_affected": rows}
-        finally:
-            conn.close()
-
-    elif db_type == "oracle":
-        try:
-            import oracledb
-        except ImportError:
-            raise RuntimeError("oracledb не установлен")
-        dsn = oracledb.makedsn(host, port, service_name=db_name)
-        conn = oracledb.connect(user=login, password=password, dsn=dsn)
-        try:
-            cur = conn.cursor()
-            cur.execute(sql)
-            rows = cur.rowcount
-            conn.commit()
-            return {"rows_affected": rows}
-        finally:
-            conn.close()
-
-    else:
-        raise ValueError(f"Неподдерживаемый тип БД: {db_type}")
+    conn, _driver = get_db_connection(conn_config)
+    try:
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.rowcount
+        conn.commit()
+        return {"rows_affected": rows}
+    finally:
+        conn.close()
 
 
 def _build_sql(template: str, nextfiretime: int) -> str:

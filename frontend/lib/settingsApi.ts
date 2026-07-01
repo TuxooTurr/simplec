@@ -140,12 +140,6 @@ export async function testLlmConnection(providerId: string): Promise<TestResult>
   return r.json();
 }
 
-export async function testKafkaAlerts(): Promise<TestResult> {
-  const r = await af(`${BASE}/test/kafka-alerts`, { method: "POST" });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
 export async function testKafkaMetrics(): Promise<TestResult> {
   const r = await af(`${BASE}/test/kafka-metrics`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
@@ -212,14 +206,6 @@ export async function deleteLogsVpsConnection(connId: string): Promise<{ ok: boo
 
 export async function testLogsVpsConnection(connId: string): Promise<TestResult> {
   const r = await af(`${BASE}/test/logs-vps/${encodeURIComponent(connId)}`, { method: "POST" });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-// ─── Ферма устройств ───────────────────────────────────────────────────────────
-
-export async function testFarm(): Promise<TestResult> {
-  const r = await af(`${BASE}/test/farm`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }

@@ -63,13 +63,13 @@ class TestDataConnectionsStore:
         conn = {
             "id": uuid.uuid4().hex[:12],
             "display_name": data.get("display_name", "").strip(),
-            "db_type": data.get("db_type", "postgresql"),  # postgresql, mysql, oracle
+            "driver_id": data.get("driver_id", ""),  # id драйвера из реестра «Настройка драйверов»
             "host": data.get("host", "localhost").strip(),
             "port": int(data.get("port", 5432)),
             "db_name": data.get("db_name", "").strip(),
             "login": data.get("login", "").strip(),
             "password": data.get("password", ""),
-            "schema_name": data.get("schema_name", ""),  # Для Oracle: schema
+            "schema_name": data.get("schema_name", ""),  # для Oracle-подобных драйверов: схема
             "created_at": now,
             "updated_at": now,
             # Кэш схемы (таблицы + колонки) — обновляется при introspect
@@ -87,7 +87,7 @@ class TestDataConnectionsStore:
         for c in connections:
             if c.get("id") == conn_id:
                 # Обновляем только переданные поля
-                for field in ("display_name", "db_type", "host", "port",
+                for field in ("display_name", "driver_id", "host", "port",
                               "db_name", "login", "schema_name"):
                     if field in data:
                         c[field] = data[field]

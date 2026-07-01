@@ -5,15 +5,16 @@ import {
   Eye, EyeOff, Save, Settings, Plus, Trash2,
   Zap, Database, Radio, Server, Shield, ChevronDown, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Play, ScrollText, Pencil,
-  Smartphone,
+  Check, Settings2, Upload,
 } from "lucide-react";
+import { ConnectionsModal, ConnectionRow, Tabs } from "@/components/ui";
 import {
   getSettings, saveSettings,
   getCustomLlmProviders, saveCustomLlmProvider, deleteCustomLlmProvider,
   getRevisorStands, saveRevisorStand, deleteRevisorStand,
   getLogsVpsConnections, saveLogsVpsConnection, deleteLogsVpsConnection,
-  testLlmConnection, testKafkaAlerts, testKafkaMetrics, testChromaDb, testPostgres,
-  testRevisorStand, testLogsVpsConnection, testFarm,
+  testLlmConnection, testKafkaMetrics, testChromaDb, testPostgres,
+  testRevisorStand, testLogsVpsConnection,
   type SettingsMap, type CustomLlmProvider, type RevisorStandConfig, type RevisorMethodDef,
   type TestResult, type LogsVpsConnection,
 } from "@/lib/settingsApi";
@@ -21,7 +22,9 @@ import {
   getProviders, type ProviderStatus,
   listTestDataConnections, createTestDataConnection, updateTestDataConnection,
   deleteTestDataConnection, testTestDataConnection, introspectTestDataConnection,
-  type TestDataConnection, type TestDataConnectionCreate,
+  listJdbcDrivers, createJdbcDriver, updateJdbcDriver, deleteJdbcDriver,
+  uploadJdbcDriverLibrary, removeJdbcDriverLibrary, testJdbcDriver,
+  type TestDataConnection, type TestDataConnectionCreate, type JdbcDriver, type JdbcDriverSettings,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -41,7 +44,6 @@ const MASKED_PLACEHOLDER = "●●●●●●●●●●●●";
 const SECRET_KEYS = new Set([
   "gigachat_auth_key", "deepseek_api_key",
   "kafka_sasl_password", "kafka_ssl_password",
-  "alerts_kafka_sasl_password", "alerts_kafka_ssl_password",
 ]);
 
 // ── Field definitions ─────────────────────────────────────────────────────────
@@ -186,23 +188,6 @@ const METRICS_KAFKA_FIELDS: FieldDef[] = [
   { key: "kafka_topic_data", label: "Топик DATA" },
   { key: "kafka_topic_metadata", label: "Топик METADATA" },
   { key: "kafka_topic_thresholds", label: "Топик THRESHOLDS" },
-];
-
-const ALERTS_KAFKA_FIELDS: FieldDef[] = [
-  { key: "alerts_kafka_bootstrap_servers", label: "Bootstrap servers" },
-  { key: "alerts_kafka_security_protocol", label: "Security protocol", type: "select", options: ["PLAINTEXT", "SASL_PLAINTEXT", "SASL_SSL", "SSL"] },
-  { key: "alerts_kafka_sasl_mechanism", label: "SASL механизм", type: "select", options: ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"] },
-  { key: "alerts_kafka_sasl_username", label: "SASL логин" },
-  { key: "alerts_kafka_sasl_password", label: "SASL пароль", type: "password" },
-  { key: "alerts_kafka_ssl_cafile", label: "SSL CA файл" },
-  { key: "alerts_kafka_ssl_certfile", label: "SSL client cert" },
-  { key: "alerts_kafka_ssl_keyfile", label: "SSL client key" },
-  { key: "alerts_kafka_ssl_password", label: "SSL key password", type: "password" },
-];
-
-const FARM_FIELDS: FieldDef[] = [
-  { key: "farm_max_sessions_per_user", label: "Макс. сессий на пользователя" },
-  { key: "farm_session_timeout_min", label: "Таймаут сессии (мин)" },
 ];
 
 // ── Shared components ─────────────────────────────────────────────────────────
@@ -636,20 +621,18 @@ function emptyRevisorStand(methods: RevisorMethodDef[]): RevisorStandConfig {
   return { name: "", base_url: "", auth_type: "bearer", token: "", api_key_header: "Authorization", namespace: "", enabled: true, methods: m };
 }
 
-function RevisorInline({ methods, stands, onSave, onDelete }: {
+function RevisorConnectionsModal({ open, onClose, methods, stands, onSave, onDelete }: {
+  open: boolean; onClose: () => void;
   methods: RevisorMethodDef[]; stands: RevisorStandConfig[];
   onSave: (s: RevisorStandConfig) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }) {
   const defs = methods.length ? methods : DEFAULT_REVISOR_METHODS;
   const [form, setForm] = useState<RevisorStandConfig>(() => emptyRevisorStand(defs));
-  const [saving, setSaving] = useState(false);
-  const [errMsg, setErrMsg] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
-  const [testing, setTesting] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  function resetForm() { setForm(emptyRevisorStand(defs)); setErrMsg(""); setSaved(false); }
+  function resetForm() { setForm(emptyRevisorStand(defs)); setMsg(null); }
 
   function setField<K extends keyof RevisorStandConfig>(key: K, value: RevisorStandConfig[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -668,265 +651,417 @@ function RevisorInline({ methods, stands, onSave, onDelete }: {
 
   const enabledMethods = Object.values(form.methods).filter(m => m.enabled && m.path.trim()).length;
 
-  async function handleSave() {
-    setSaving(true); setErrMsg(""); setSaved(false);
-    try { await onSave(form); resetForm(); setSaved(true); setTimeout(() => setSaved(false), 3000); }
-    catch (e) { setErrMsg(e instanceof Error ? e.message : String(e)); }
-    finally { setSaving(false); }
-  }
+  const save = async () => {
+    if (!form.name.trim() || !form.base_url.trim() || enabledMethods === 0) { setMsg({ ok: false, text: "Укажите имя, base URL и хотя бы один метод" }); return; }
+    setBusy(true); setMsg(null);
+    try { await onSave(form); resetForm(); setMsg({ ok: true, text: "Сохранено" }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
 
-  async function handleTest(id: string) {
-    setTesting(id);
-    try { const r = await testRevisorStand(id); setTestResults(prev => ({ ...prev, [id]: r })); }
-    catch { setTestResults(prev => ({ ...prev, [id]: { status: "red", message: "Ошибка запроса" } })); }
-    finally { setTesting(null); }
-  }
+  const test = async (id: string) => {
+    setBusy(true); setMsg(null);
+    try { const r = await testRevisorStand(id); setMsg({ ok: r.status === "green", text: r.message }); }
+    catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (id: string) => {
+    if (!window.confirm("Удалить стенд?")) return;
+    setBusy(true);
+    try { await onDelete(id); if (form.id === id) resetForm(); }
+    finally { setBusy(false); }
+  };
 
   return (
-    <div className="space-y-3">
-      {stands.length > 0 && (
-        <div className="border border-border-main rounded-lg divide-y divide-border-main overflow-hidden">
-          {stands.map((s) => {
-            const active = Object.entries(s.methods ?? {}).filter(([, c]) => c.enabled).map(([k, c]) => c.label || defs.find(m => m.key === k)?.label || k);
+    <ConnectionsModal
+      open={open} onClose={onClose} title="Ревизор — подключения к стендам" message={msg}
+      listTitle={`Сохранённые (${stands.length})`}
+      list={<>
+        {stands.length === 0 && <p className="text-xs text-text-muted/60">Пока нет стендов.</p>}
+        {stands.map((s) => {
+          const active = Object.entries(s.methods ?? {}).filter(([, c]) => c.enabled).map(([k, c]) => c.label || defs.find(m => m.key === k)?.label || k);
+          return (
+            <ConnectionRow
+              key={s.id ?? s.name}
+              name={s.name}
+              subtitle={`${active.join(", ") || "методы не выбраны"} · ${s.base_url}`}
+              actions={[
+                { key: "test", icon: <Check className="h-3.5 w-3.5" />, title: "Проверить", onClick: () => test(s.id ?? ""), disabled: busy, hoverClass: "hover:text-emerald-600" },
+                { key: "edit", icon: <Pencil className="h-3.5 w-3.5" />, title: "Изменить", onClick: () => { const next = emptyRevisorStand(defs); setForm({ ...next, ...s, token: s.token ?? "", methods: { ...next.methods, ...(s.methods ?? {}) } }); setMsg(null); }, hoverClass: "hover:text-primary" },
+                { key: "delete", icon: <Trash2 className="h-3.5 w-3.5" />, title: "Удалить", onClick: () => remove(s.id ?? ""), hoverClass: "hover:bg-red-50 hover:text-red-500" },
+              ]}
+            />
+          );
+        })}
+      </>}
+      formTitle={form.id ? "Изменить" : "Новый стенд"}
+      form={<>
+        <input className={INPUT_CLS} value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="Имя стенда (напр. НТ)" />
+        <input className={INPUT_CLS} value={form.namespace ?? ""} onChange={(e) => setField("namespace", e.target.value)} placeholder="Namespace (опц.)" spellCheck={false} />
+        <input className={INPUT_CLS} value={form.base_url} onChange={(e) => setField("base_url", e.target.value)} placeholder="Base URL — https://stand.example.ru" spellCheck={false} />
+        <select className={SELECT_CLS} value={form.auth_type} onChange={(e) => setField("auth_type", e.target.value as RevisorStandConfig["auth_type"])}>
+          <option value="none">Без токена</option><option value="bearer">Bearer token</option><option value="api_key">API key header</option>
+        </select>
+        {form.auth_type !== "none" && (
+          <PasswordInput fieldKey="token" value={form.token ?? ""} onChange={(_, v) => setField("token", v)} placeholder="Token" />
+        )}
+
+        <div className="rounded-lg border border-border-main overflow-hidden">
+          <div className="grid grid-cols-[1fr,52px,minmax(90px,1fr)] bg-bg-subtle/80 border-b border-border-main">
+            <div className="px-2.5 py-1.5 text-[11px] font-semibold text-text-muted">Метод</div>
+            <div className="px-2.5 py-1.5 text-[11px] font-semibold text-text-muted border-l border-border-main">Вкл.</div>
+            <div className="px-2.5 py-1.5 text-[11px] font-semibold text-text-muted border-l border-border-main">API path</div>
+          </div>
+          {defs.map((method) => {
+            const cfg = form.methods[method.key] ?? { enabled: false, path: "", label: method.label };
             return (
-              <div key={s.id ?? s.name} className="flex items-center gap-3 px-3 py-2">
-                <StatusDot status={testResults[s.id ?? ""]?.status ?? (s.enabled ? "unknown" : "red")} />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-text-main truncate">{s.name}</p>
-                  <p className="text-xs text-text-muted truncate">{active.join(", ") || "методы не выбраны"} · {s.base_url}</p>
+              <div key={method.key} className="grid grid-cols-[1fr,52px,minmax(90px,1fr)] border-b border-border-main last:border-0">
+                <div className="px-2.5 py-1.5 text-xs text-text-main truncate">{method.label}</div>
+                <div className="px-2.5 py-1.5 border-l border-border-main flex items-center justify-center">
+                  <input type="checkbox" checked={cfg.enabled} onChange={(e) => setMethod(method.key, { enabled: e.target.checked })} className="w-3.5 h-3.5 accent-primary" />
                 </div>
-                <StatusBadge result={testResults[s.id ?? ""] ?? null} loading={testing === s.id} />
-                <TestButton onClick={() => handleTest(s.id ?? "")} loading={testing === s.id} />
-                <button onClick={() => { const next = emptyRevisorStand(defs); setForm({ ...next, ...s, token: s.token ?? "", methods: { ...next.methods, ...(s.methods ?? {}) } }); setErrMsg(""); setSaved(false); }}
-                  className="px-2 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-subtle">Изменить</button>
-                <button onClick={() => s.id && onDelete(s.id)}
-                  className="p-1.5 rounded-md text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить"><Trash2 className="w-3.5 h-3.5" /></button>
+                <div className="px-1.5 py-1 border-l border-border-main">
+                  <input className={`${INPUT_CLS} text-xs px-1.5 py-1`} value={cfg.path} onChange={(e) => setMethod(method.key, { path: e.target.value, enabled: cfg.enabled || !!e.target.value })} placeholder={`/api/${method.key}`} spellCheck={false} />
+                </div>
               </div>
             );
           })}
         </div>
-      )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-        <div><label className={LABEL_CLS}>Имя стенда</label><input className={INPUT_CLS} value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="НТ" /></div>
-        <div><label className={LABEL_CLS}>Namespace</label><input className={INPUT_CLS} value={form.namespace ?? ""} onChange={(e) => setField("namespace", e.target.value)} placeholder="production" spellCheck={false} /></div>
-        <div className="sm:col-span-2"><label className={LABEL_CLS}>Base URL</label><input className={INPUT_CLS} value={form.base_url} onChange={(e) => setField("base_url", e.target.value)} placeholder="https://stand.example.ru" spellCheck={false} /></div>
-        <div><label className={LABEL_CLS}>Авторизация</label>
-          <select className={SELECT_CLS} value={form.auth_type} onChange={(e) => setField("auth_type", e.target.value as RevisorStandConfig["auth_type"])}>
-            <option value="none">Без токена</option><option value="bearer">Bearer token</option><option value="api_key">API key header</option>
-          </select>
+        <div className="flex justify-end gap-2 pt-1">
+          {form.id && <button type="button" onClick={resetForm} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
+          <button type="button" onClick={save} disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {form.id ? "Сохранить" : "Добавить"}
+          </button>
         </div>
-        {form.auth_type !== "none" && (
-          <div><label className={LABEL_CLS}>Token <span className="text-[10px] text-text-muted">(секрет)</span></label>
-            <PasswordInput fieldKey="token" value={form.token ?? ""} onChange={(_, v) => setField("token", v)} placeholder="Token" /></div>
-        )}
-      </div>
-
-      <div className="border border-border-main rounded-lg overflow-hidden">
-        <div className="grid grid-cols-[96px,64px,minmax(120px,1fr)] bg-bg-subtle/80 border-b border-border-main">
-          <div className="px-3 py-2 text-xs font-semibold text-text-muted">Метод</div>
-          <div className="px-3 py-2 text-xs font-semibold text-text-muted border-l border-border-main">Вкл.</div>
-          <div className="px-3 py-2 text-xs font-semibold text-text-muted border-l border-border-main">API path</div>
-        </div>
-        {defs.map((method) => {
-          const cfg = form.methods[method.key] ?? { enabled: false, path: "", label: method.label };
-          return (
-            <div key={method.key} className="grid grid-cols-[96px,64px,minmax(120px,1fr)] border-b border-border-main last:border-0">
-              <div className="px-3 py-2 text-sm text-text-main">{method.label}</div>
-              <div className="px-3 py-2 border-l border-border-main flex items-center">
-                <input type="checkbox" checked={cfg.enabled} onChange={(e) => setMethod(method.key, { enabled: e.target.checked })} className="w-4 h-4 accent-primary" />
-              </div>
-              <div className="px-3 py-2 border-l border-border-main">
-                <input className={INPUT_CLS} value={cfg.path} onChange={(e) => setMethod(method.key, { path: e.target.value, enabled: cfg.enabled || !!e.target.value })} placeholder={`/api/${method.key}`} spellCheck={false} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-1">
-        {saved && <span className="text-xs text-green-600 font-medium">Сохранено</span>}
-        {errMsg && <span className="text-xs text-red-500 font-medium truncate max-w-xs">{errMsg}</span>}
-        {form.id && <button onClick={resetForm} className="px-3 py-1.5 text-xs font-medium border border-border-main rounded-lg text-text-muted hover:bg-bg-subtle">Новый стенд</button>}
-        <button onClick={handleSave} disabled={saving || !form.name.trim() || !form.base_url.trim() || enabledMethods === 0}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          <Plus className="w-3 h-3" /> {saving ? "Сохраняю..." : form.id ? "Обновить" : "Добавить стенд"}
-        </button>
-      </div>
-    </div>
+      </>}
+    />
   );
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-// ── Test Data Connections inline ──────────────────────────────────────────────
-
-const DB_TYPES = [
-  { value: "postgresql", label: "PostgreSQL", defaultPort: 5432 },
-  { value: "mysql",      label: "MySQL",      defaultPort: 3306 },
-  { value: "oracle",     label: "Oracle",     defaultPort: 1521 },
-] as const;
+// ── Test Data Connections (единый выбор драйвера — postgresql/mysql/oracle/свой) ─
 
 const EMPTY_TD_CONN: TestDataConnectionCreate = {
-  display_name: "", db_type: "postgresql", host: "localhost", port: 5432, db_name: "", login: "", password: "",
+  display_name: "", driver_id: "", host: "localhost", port: 5432, db_name: "", login: "", password: "",
 };
 
-function TestDataConnectionsInline({ connections, onRefresh }: {
+function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefresh, onManageDrivers }: {
+  open: boolean; onClose: () => void;
   connections: TestDataConnection[];
+  drivers: JdbcDriver[];
   onRefresh: () => Promise<void>;
+  onManageDrivers: () => void;
 }) {
   const [form, setForm] = useState<TestDataConnectionCreate & { id?: string }>(EMPTY_TD_CONN);
-  const [saving, setSaving] = useState(false);
-  const [errMsg, setErrMsg] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [testResults, setTestResults] = useState<Record<string, { status: string; message: string }>>({});
-  const [testing, setTesting] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [introspecting, setIntrospecting] = useState<string | null>(null);
-  const [introspectResults, setIntrospectResults] = useState<Record<string, { table_count: number; column_count: number }>>({});
 
   function setField<K extends keyof (TestDataConnectionCreate & { id?: string })>(key: K, value: (TestDataConnectionCreate & { id?: string })[K]) {
     setForm(prev => ({ ...prev, [key]: value }));
   }
 
-  async function handleSave() {
-    setSaving(true); setErrMsg(""); setSaved(false);
+  const reset = () => { setForm(EMPTY_TD_CONN); setMsg(null); };
+
+  const save = async () => {
+    if (!form.display_name.trim() || !form.host.trim() || !form.db_name.trim()) { setMsg({ ok: false, text: "Укажите название, хост и имя БД" }); return; }
+    if (!form.driver_id) { setMsg({ ok: false, text: "Выберите драйвер" }); return; }
+    setBusy(true); setMsg(null);
     try {
-      if (form.id) {
-        await updateTestDataConnection(form.id, form);
-      } else {
-        await createTestDataConnection(form);
-      }
-      setForm(EMPTY_TD_CONN);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-      await onRefresh();
-    } catch (e) { setErrMsg(e instanceof Error ? e.message : String(e)); }
-    finally { setSaving(false); }
-  }
+      if (form.id) await updateTestDataConnection(form.id, form);
+      else await createTestDataConnection(form);
+      await onRefresh(); reset();
+      setMsg({ ok: true, text: "Сохранено" });
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
 
-  async function handleTest(id: string) {
-    setTesting(id);
-    try { const r = await testTestDataConnection(id); setTestResults(prev => ({ ...prev, [id]: r })); }
-    catch { setTestResults(prev => ({ ...prev, [id]: { status: "red", message: "Ошибка запроса" } })); }
-    finally { setTesting(null); }
-  }
+  const test = async (id: string) => {
+    setBusy(true); setMsg(null);
+    try { const r = await testTestDataConnection(id); setMsg({ ok: r.status === "green", text: r.message }); }
+    catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setBusy(false); }
+  };
 
-  async function handleIntrospect(id: string) {
-    setIntrospecting(id);
+  const introspect = async (id: string) => {
+    setIntrospecting(id); setMsg(null);
     try {
       const r = await introspectTestDataConnection(id);
-      setIntrospectResults(prev => ({ ...prev, [id]: { table_count: r.table_count, column_count: r.column_count } }));
+      setMsg({ ok: true, text: `Схема получена: ${r.table_count} таблиц, ${r.column_count} колонок` });
       await onRefresh();
-    } catch { setIntrospectResults(prev => ({ ...prev, [id]: { table_count: -1, column_count: 0 } })); }
+    } catch (e) { setMsg({ ok: false, text: String(e) }); }
     finally { setIntrospecting(null); }
-  }
+  };
 
-  async function handleDelete(id: string) {
-    try { await deleteTestDataConnection(id); await onRefresh(); }
-    catch { /* ignore */ }
-  }
+  const remove = async (id: string) => {
+    if (!window.confirm("Удалить подключение?")) return;
+    setBusy(true);
+    try { await deleteTestDataConnection(id); await onRefresh(); if (form.id === id) reset(); }
+    finally { setBusy(false); }
+  };
+
+  const selectedDriver = drivers.find(d => d.id === form.driver_id);
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">Подключения к внешним БД</h3>
+    <ConnectionsModal
+      open={open} onClose={onClose} title="Тестовые данные — подключения к БД" message={msg}
+      listTitle={`Сохранённые (${connections.length})`}
+      list={<>
+        {connections.length === 0 && <p className="text-xs text-text-muted/60">Пока нет подключений.</p>}
+        {connections.map((c) => {
+          const dbLabel = drivers.find(d => d.id === c.driver_id)?.name ?? "неизвестный драйвер";
+          const schemaNote = c.cached_schema ? ` · схема: ${Object.keys(c.cached_schema).length} таблиц` : "";
+          return (
+            <ConnectionRow
+              key={c.id}
+              name={c.display_name}
+              subtitle={`${dbLabel} · ${c.host}:${c.port}/${c.db_name}${schemaNote}`}
+              actions={[
+                { key: "test", icon: <Check className="h-3.5 w-3.5" />, title: "Проверить", onClick: () => test(c.id), disabled: busy, hoverClass: "hover:text-emerald-600" },
+                { key: "schema", icon: <Database className="h-3.5 w-3.5" />, title: "Получить схему", onClick: () => introspect(c.id), disabled: introspecting === c.id, hoverClass: "hover:text-teal-600" },
+                { key: "edit", icon: <Pencil className="h-3.5 w-3.5" />, title: "Изменить", onClick: () => { setForm({ ...EMPTY_TD_CONN, ...c, id: c.id, password: c.password }); setMsg(null); }, hoverClass: "hover:text-primary" },
+                { key: "delete", icon: <Trash2 className="h-3.5 w-3.5" />, title: "Удалить", onClick: () => remove(c.id), hoverClass: "hover:bg-red-50 hover:text-red-500" },
+              ]}
+            />
+          );
+        })}
+      </>}
+      formTitle={form.id ? "Изменить" : "Новое подключение"}
+      form={<>
+        <input className={INPUT_CLS} value={form.display_name} onChange={e => setField("display_name", e.target.value)} placeholder="Название (напр. Продуктовая БД)" />
+        <div className="flex gap-2">
+          <select className={`${SELECT_CLS} flex-1`} value={form.driver_id}
+            onChange={e => {
+              const driverId = e.target.value;
+              const drv = drivers.find(d => d.id === driverId);
+              setForm(prev => ({
+                ...prev, driver_id: driverId,
+                port: drv?.default_port ?? prev.port,
+                db_name: prev.db_name || drv?.default_db_name || "",
+                login: prev.login || drv?.default_login || "",
+              }));
+            }}>
+            <option value="">— выберите драйвер —</option>
+            {drivers.map(d => <option key={d.id} value={d.id}>{d.name}{d.built_in ? "" : " (свой)"}</option>)}
+          </select>
+          <button type="button" onClick={onManageDrivers} title="Настройка драйверов"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-main px-2.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
+            <Settings2 className="h-3.5 w-3.5" /> Настройка драйверов
+          </button>
+        </div>
+        {selectedDriver && !selectedDriver.jar_filename && (
+          <p className="text-xs text-amber-600">У драйвера «{selectedDriver.name}» не загружена библиотека — добавьте .jar в «Настройке драйверов».</p>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <input className={INPUT_CLS} value={form.host} onChange={e => setField("host", e.target.value)} placeholder="Хост" spellCheck={false} />
+          <input className={INPUT_CLS} type="number" value={form.port} onChange={e => setField("port", parseInt(e.target.value) || 0)} placeholder="Порт" />
+        </div>
+        <input className={INPUT_CLS} value={form.db_name} onChange={e => setField("db_name", e.target.value)} placeholder="Имя БД" spellCheck={false} />
+        <input className={INPUT_CLS} value={form.login} onChange={e => setField("login", e.target.value)} placeholder="Логин" spellCheck={false} />
+        <PasswordInput fieldKey="password" value={form.password} onChange={(_, v) => setField("password", v)} placeholder="Пароль" />
+        {selectedDriver?.sql_dialect === "oracle" && (
+          <input className={INPUT_CLS} value={form.schema_name ?? ""} onChange={e => setField("schema_name" as "display_name", e.target.value)} placeholder="Schema name" spellCheck={false} />
+        )}
+        <div className="flex justify-end gap-2 pt-1">
+          {form.id && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
+          <button type="button" onClick={save} disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {form.id ? "Сохранить" : "Добавить"}
+          </button>
+        </div>
+      </>}
+    />
+  );
+}
 
-      {connections.length > 0 && (
-        <div className="border border-border-main rounded-lg divide-y divide-border-main overflow-hidden">
-          {connections.map(c => {
-            const tr = testResults[c.id];
-            const ir = introspectResults[c.id];
-            const dbLabel = DB_TYPES.find(d => d.value === c.db_type)?.label ?? c.db_type;
-            return (
-              <div key={c.id} className="px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <StatusDot status={(tr?.status as "green"|"yellow"|"red"|"unknown") ?? (c.cached_schema ? "green" : "unknown")} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-text-main truncate">{c.display_name}</p>
-                    <p className="text-xs text-text-muted truncate">{dbLabel} · {c.host}:{c.port}/{c.db_name}</p>
-                  </div>
-                  {tr && <StatusBadge result={tr as TestResult} loading={testing === c.id} />}
-                  {ir && ir.table_count >= 0 && (
-                    <span className="text-xs text-green-600 whitespace-nowrap">{ir.table_count} таблиц, {ir.column_count} колонок</span>
+// ── Настройка драйверов (DBeaver-style: список + вкладки Настройки/Библиотека) ──
+
+const NEW_DRIVER_ID = "__new__";
+const EMPTY_DRIVER_SETTINGS: JdbcDriverSettings = {
+  name: "", driver_class: "", url_template: "", default_port: null, default_db_name: "", default_login: "",
+};
+
+function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
+  open: boolean; onClose: () => void;
+  drivers: JdbcDriver[];
+  onRefresh: () => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState("");
+  const [activeTab, setActiveTab] = useState<"settings" | "library">("settings");
+  const [settingsForm, setSettingsForm] = useState<JdbcDriverSettings>(EMPTY_DRIVER_SETTINGS);
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const selected = selectedId === NEW_DRIVER_ID ? undefined : drivers.find(d => d.id === selectedId);
+
+  useEffect(() => {
+    if (open && !selectedId && drivers.length > 0) setSelectedId(drivers[0].id);
+  }, [open, drivers, selectedId]);
+
+  useEffect(() => {
+    if (selected) {
+      setSettingsForm({
+        name: selected.name, driver_class: selected.driver_class, url_template: selected.url_template,
+        default_port: selected.default_port, default_db_name: selected.default_db_name, default_login: selected.default_login,
+      });
+    } else if (selectedId === NEW_DRIVER_ID) {
+      setSettingsForm(EMPTY_DRIVER_SETTINGS);
+    }
+    setMsg(null);
+  }, [selectedId]);
+
+  const saveSettings = async () => {
+    if (!settingsForm.name.trim() || !settingsForm.driver_class.trim() || !settingsForm.url_template.trim()) {
+      setMsg({ ok: false, text: "Укажите имя, класс драйвера и шаблон URL" }); return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      if (selectedId === NEW_DRIVER_ID) {
+        const r = await createJdbcDriver(settingsForm);
+        await onRefresh();
+        setSelectedId(r.driver.id);
+        setActiveTab("library");
+        setMsg({ ok: true, text: "Драйвер создан — теперь добавьте библиотеку" });
+      } else if (selected) {
+        await updateJdbcDriver(selected.id, settingsForm);
+        await onRefresh();
+        setMsg({ ok: true, text: "Настройки сохранены" });
+      }
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const uploadLibrary = async (file: File) => {
+    if (!selected) return;
+    setBusy(true); setMsg(null);
+    try { await uploadJdbcDriverLibrary(selected.id, file); await onRefresh(); setMsg({ ok: true, text: "Библиотека загружена" }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const removeLibrary = async () => {
+    if (!selected) return;
+    setBusy(true); setMsg(null);
+    try { await removeJdbcDriverLibrary(selected.id); await onRefresh(); setMsg({ ok: true, text: "Библиотека удалена" }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const testDriver = async () => {
+    if (!selected) return;
+    setTesting(true); setMsg(null);
+    try { const r = await testJdbcDriver(selected.id); setMsg({ ok: r.status === "green", text: r.message }); }
+    catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setTesting(false); }
+  };
+
+  const deleteDriver = async () => {
+    if (!selected || selected.built_in) return;
+    if (!window.confirm("Удалить драйвер? Подключения, использующие его, перестанут работать.")) return;
+    setBusy(true);
+    try {
+      await deleteJdbcDriver(selected.id);
+      await onRefresh();
+      setSelectedId(drivers.find(d => d.id !== selected.id)?.id ?? "");
+    } finally { setBusy(false); }
+  };
+
+  const showForm = !!selected || selectedId === NEW_DRIVER_ID;
+
+  return (
+    <ConnectionsModal
+      open={open} onClose={onClose} title="Настройка драйверов" message={msg} size="max-w-3xl"
+      listTitle={`Драйверы (${drivers.length})`}
+      list={<>
+        {drivers.map((d) => (
+          <button key={d.id} type="button" onClick={() => setSelectedId(d.id)}
+            className={`flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+              selectedId === d.id ? "border-primary bg-primary/5" : "border-border-main hover:bg-bg-subtle"
+            }`}>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-text-main">{d.name}</p>
+              <p className="truncate text-[11px] text-text-muted">
+                {d.built_in ? "Встроенный" : "Свой"} · {d.jar_filename ? d.original_filename : "библиотека не загружена"}
+              </p>
+            </div>
+            {!d.jar_filename && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+          </button>
+        ))}
+        <button type="button" onClick={() => setSelectedId(NEW_DRIVER_ID)}
+          className={`flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed px-2.5 py-2 text-xs font-semibold transition-colors ${
+            selectedId === NEW_DRIVER_ID ? "border-primary bg-primary/5 text-primary" : "border-border-main text-text-muted hover:bg-bg-subtle"
+          }`}>
+          <Plus className="h-3.5 w-3.5" /> Новый драйвер
+        </button>
+      </>}
+      formTitle={selected ? selected.name : selectedId === NEW_DRIVER_ID ? "Новый драйвер" : "Выберите драйвер слева"}
+      form={showForm ? <>
+        <Tabs tabs={[{ id: "settings", label: "Настройки" }, { id: "library", label: "Библиотека" }]}
+          active={activeTab} onChange={(id) => setActiveTab(id as "settings" | "library")} />
+        {activeTab === "settings" ? (
+          <div className="space-y-2 pt-3">
+            <input className={INPUT_CLS} value={settingsForm.name} onChange={e => setSettingsForm(f => ({ ...f, name: e.target.value }))} placeholder="Имя драйвера" />
+            <input className={`${INPUT_CLS} font-mono`} value={settingsForm.driver_class} onChange={e => setSettingsForm(f => ({ ...f, driver_class: e.target.value }))} placeholder="Класс драйвера (напр. org.postgresql.Driver)" spellCheck={false} />
+            <input className={`${INPUT_CLS} font-mono`} value={settingsForm.url_template} onChange={e => setSettingsForm(f => ({ ...f, url_template: e.target.value }))} placeholder="jdbc:postgresql://{host}:{port}/{db_name}" spellCheck={false} />
+            <div className="grid grid-cols-3 gap-2">
+              <input className={INPUT_CLS} type="number" value={settingsForm.default_port ?? ""} onChange={e => setSettingsForm(f => ({ ...f, default_port: e.target.value ? parseInt(e.target.value) : null }))} placeholder="Порт" />
+              <input className={INPUT_CLS} value={settingsForm.default_db_name ?? ""} onChange={e => setSettingsForm(f => ({ ...f, default_db_name: e.target.value }))} placeholder="БД по умолчанию" />
+              <input className={INPUT_CLS} value={settingsForm.default_login ?? ""} onChange={e => setSettingsForm(f => ({ ...f, default_login: e.target.value }))} placeholder="Логин по умолчанию" />
+            </div>
+            <div className="flex items-center justify-between pt-1">
+              {selected && !selected.built_in ? (
+                <button type="button" onClick={deleteDriver} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-red-500 hover:bg-red-50">
+                  <Trash2 className="h-3.5 w-3.5" /> Удалить драйвер
+                </button>
+              ) : <span />}
+              <button type="button" onClick={saveSettings} disabled={busy}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Сохранить
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3 pt-3">
+            {selectedId === NEW_DRIVER_ID ? (
+              <p className="text-xs text-text-muted/70">Сначала сохраните настройки драйвера во вкладке «Настройки» — библиотеку можно будет загрузить сразу после.</p>
+            ) : selected && (
+              <>
+                <div className="flex items-center justify-between rounded-lg border border-border-main px-3 py-2">
+                  <span className="truncate text-sm text-text-main">{selected.original_filename ?? "Библиотека не загружена"}</span>
+                  {selected.jar_filename && (
+                    <button type="button" onClick={removeLibrary} title="Удалить" className="rounded p-1 text-text-muted hover:bg-red-50 hover:text-red-500">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   )}
-                  {c.cached_schema && !ir && (
-                    <span className="text-[10px] text-text-muted whitespace-nowrap">{Object.keys(c.cached_schema).length} таблиц</span>
-                  )}
-                  <TestButton onClick={() => handleTest(c.id)} loading={testing === c.id} />
-                  <button onClick={() => handleIntrospect(c.id)} disabled={introspecting === c.id}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-border-main rounded-lg
-                      text-text-main hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                    title="Получить схему таблиц">
-                    {introspecting === c.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-                    Схема
-                  </button>
-                  <button onClick={() => { setForm({ ...EMPTY_TD_CONN, ...c, id: c.id, password: c.password }); setErrMsg(""); setSaved(false); }}
-                    className="px-2 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-subtle">
-                    Изменить
-                  </button>
-                  <button onClick={() => handleDelete(c.id)}
-                    className="p-1.5 rounded-md text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить">
-                    <Trash2 className="w-3.5 h-3.5" />
+                </div>
+                <label className="flex items-center gap-2 rounded-lg border border-dashed border-border-main px-3 py-2 text-sm text-text-muted cursor-pointer hover:bg-bg-subtle">
+                  <Upload className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{selected.jar_filename ? "Заменить .jar…" : "Выберите .jar файл…"}</span>
+                  <input type="file" accept=".jar" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadLibrary(f); }} />
+                </label>
+                <div className="flex justify-end">
+                  <button type="button" onClick={testDriver} disabled={testing || !selected.jar_filename}
+                    className="flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-xs font-medium text-text-main hover:bg-bg-subtle disabled:opacity-50">
+                    {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Проверить загрузку класса
                   </button>
                 </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-        <div>
-          <label className={LABEL_CLS}>Название</label>
-          <input className={INPUT_CLS} value={form.display_name} onChange={e => setField("display_name", e.target.value)} placeholder="Продуктовая БД" />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Тип БД</label>
-          <select className={SELECT_CLS} value={form.db_type}
-            onChange={e => {
-              const t = e.target.value as "postgresql" | "mysql" | "oracle";
-              const dp = DB_TYPES.find(d => d.value === t)?.defaultPort ?? 5432;
-              setForm(prev => ({ ...prev, db_type: t, port: dp }));
-            }}>
-            {DB_TYPES.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Хост</label>
-          <input className={INPUT_CLS} value={form.host} onChange={e => setField("host", e.target.value)} placeholder="localhost" spellCheck={false} />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Порт</label>
-          <input className={INPUT_CLS} type="number" value={form.port} onChange={e => setField("port", parseInt(e.target.value) || 5432)} />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Имя БД</label>
-          <input className={INPUT_CLS} value={form.db_name} onChange={e => setField("db_name", e.target.value)} placeholder="mydb" spellCheck={false} />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Логин</label>
-          <input className={INPUT_CLS} value={form.login} onChange={e => setField("login", e.target.value)} placeholder="postgres" spellCheck={false} />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>Пароль <span className="text-[10px] text-text-muted">(секрет)</span></label>
-          <PasswordInput fieldKey="password" value={form.password} onChange={(_, v) => setField("password", v)} placeholder="••••••••" />
-        </div>
-        {form.db_type === "oracle" && (
-          <div>
-            <label className={LABEL_CLS}>Schema name</label>
-            <input className={INPUT_CLS} value={form.schema_name ?? ""} onChange={e => setField("schema_name" as "display_name", e.target.value)} placeholder="MYSCHEMA" spellCheck={false} />
+              </>
+            )}
+            <p className="text-[11px] text-text-muted/70">
+              Библиотека, загруженная после запуска сервера, заработает только после перезапуска бэкенда.
+            </p>
           </div>
         )}
-      </div>
-
-      <div className="flex items-center justify-end gap-3 pt-1">
-        {saved && <span className="text-xs text-green-600 font-medium">Сохранено</span>}
-        {errMsg && <span className="text-xs text-red-500 font-medium truncate max-w-xs">{errMsg}</span>}
-        <button onClick={handleSave} disabled={saving || !form.display_name.trim() || !form.host.trim() || !form.db_name.trim()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-          <Plus className="w-3 h-3" /> {saving ? "Сохраняю..." : form.id ? "Обновить" : "Добавить подключение"}
-        </button>
-      </div>
-    </div>
+      </> : <p className="text-xs text-text-muted/60">Выберите драйвер слева или создайте новый.</p>}
+    />
   );
 }
 
@@ -948,172 +1083,104 @@ const VPS_AUTH_OPTIONS = [
   { value: "api_key", label: "API ключ" },
 ];
 
-function LogsVpsInline({
-  connections,
-  onRefresh,
+function LogsVpsConnectionsModal({
+  open, onClose, connections, onRefresh,
 }: {
+  open: boolean; onClose: () => void;
   connections: LogsVpsConnection[];
   onRefresh: () => Promise<void>;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState<Partial<LogsVpsConnection>>({});
-  const [saving, setSaving] = useState(false);
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
-  const [testing, setTesting] = useState<string | null>(null);
+  const [form, setForm] = useState<Partial<LogsVpsConnection>>({ vps_type: "graylog", auth_type: "none", ssl_verify: true, enabled: true });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  function startNew() {
-    setForm({ vps_type: "graylog", auth_type: "none", ssl_verify: true, enabled: true });
-    setEditing(true);
-  }
+  const reset = () => { setForm({ vps_type: "graylog", auth_type: "none", ssl_verify: true, enabled: true }); setMsg(null); };
 
-  function startEdit(c: LogsVpsConnection) {
-    setForm({ ...c });
-    setEditing(true);
-  }
-
-  async function handleSave() {
-    if (!form.name?.trim() || !form.base_url?.trim()) return;
-    setSaving(true);
+  const save = async () => {
+    if (!form.name?.trim() || !form.base_url?.trim()) { setMsg({ ok: false, text: "Укажите название и base URL" }); return; }
+    setBusy(true); setMsg(null);
     try {
       await saveLogsVpsConnection(form as LogsVpsConnection & { name: string; base_url: string });
-      await onRefresh();
-      setEditing(false);
-      setForm({});
-    } catch { /* ignore */ }
-    setSaving(false);
-  }
+      await onRefresh(); reset();
+      setMsg({ ok: true, text: "Сохранено" });
+    } catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
 
-  async function handleDelete(id: string) {
-    await deleteLogsVpsConnection(id);
-    await onRefresh();
-  }
+  const test = async (id: string) => {
+    setBusy(true); setMsg(null);
+    try { const r = await testLogsVpsConnection(id); setMsg({ ok: r.status === "green", text: r.message }); }
+    catch (e) { setMsg({ ok: false, text: String(e) }); }
+    finally { setBusy(false); }
+  };
 
-  async function handleTest(id: string) {
-    setTesting(id);
-    try {
-      const result = await testLogsVpsConnection(id);
-      setTestResults(prev => ({ ...prev, [id]: result }));
-    } catch {
-      setTestResults(prev => ({ ...prev, [id]: { status: "red", message: "Ошибка" } }));
-    }
-    setTesting(null);
-  }
+  const remove = async (id: string) => {
+    if (!window.confirm("Удалить подключение?")) return;
+    setBusy(true);
+    try { await deleteLogsVpsConnection(id); await onRefresh(); if (form.id === id) reset(); }
+    finally { setBusy(false); }
+  };
 
-  if (editing) {
-    const needsToken = form.auth_type === "bearer" || form.auth_type === "api_key";
-    const needsBasic = form.auth_type === "basic";
-
-    return (
-      <div className="space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
-          <div>
-            <label className={LABEL_CLS}>Название</label>
-            <input className={INPUT_CLS} value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Graylog Production" />
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Тип VPS</label>
-            <select className={SELECT_CLS} value={form.vps_type || "graylog"} onChange={e => setForm(f => ({ ...f, vps_type: e.target.value as LogsVpsConnection["vps_type"] }))}>
-              {VPS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          <div className="sm:col-span-2">
-            <label className={LABEL_CLS}>Base URL</label>
-            <input className={INPUT_CLS} value={form.base_url || ""} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))} placeholder="https://graylog.company.ru/api" />
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Авторизация</label>
-            <select className={SELECT_CLS} value={form.auth_type || "none"} onChange={e => setForm(f => ({ ...f, auth_type: e.target.value as LogsVpsConnection["auth_type"] }))}>
-              {VPS_AUTH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </div>
-          {needsToken && (
-            <div>
-              <label className={LABEL_CLS}>{form.auth_type === "bearer" ? "Bearer токен" : "API ключ"}</label>
-              <input className={INPUT_CLS} type="password" value={form.token || ""} onChange={e => setForm(f => ({ ...f, token: e.target.value }))} />
-            </div>
-          )}
-          {needsBasic && <>
-            <div>
-              <label className={LABEL_CLS}>Логин</label>
-              <input className={INPUT_CLS} value={form.username || ""} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} />
-            </div>
-            <div>
-              <label className={LABEL_CLS}>Пароль</label>
-              <input className={INPUT_CLS} type="password" value={form.password || ""} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} />
-            </div>
-          </>}
-          <div>
-            <label className={LABEL_CLS}>Индекс / Стрим (опционально)</label>
-            <input className={INPUT_CLS} value={form.default_index || ""} onChange={e => setForm(f => ({ ...f, default_index: e.target.value }))} placeholder="graylog_stream_id" />
-          </div>
-          <div className="flex items-center gap-3 pt-5">
-            <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer">
-              <input type="checkbox" checked={form.ssl_verify !== false} onChange={e => setForm(f => ({ ...f, ssl_verify: e.target.checked }))} className="rounded border-border-main text-primary focus:ring-primary/30" />
-              SSL verify
-            </label>
-            <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer">
-              <input type="checkbox" checked={form.enabled !== false} onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))} className="rounded border-border-main text-primary focus:ring-primary/30" />
-              Активно
-            </label>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 pt-1">
-          <button onClick={handleSave} disabled={saving || !form.name?.trim() || !form.base_url?.trim()} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-primary text-white hover:bg-primary-dark disabled:opacity-50 transition-colors">
-            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
-            {form.id ? "Обновить" : "Добавить"}
-          </button>
-          <button onClick={() => { setEditing(false); setForm({}); }} className="px-3 py-1.5 text-xs font-medium rounded-lg text-text-muted hover:bg-bg-subtle transition-colors">
-            Отмена
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const needsToken = form.auth_type === "bearer" || form.auth_type === "api_key";
+  const needsBasic = form.auth_type === "basic";
 
   return (
-    <div className="space-y-2">
-      {connections.length === 0 && (
-        <p className="text-sm text-text-muted py-2">Нет подключений. Добавьте VPS-платформу для анализа логов.</p>
-      )}
-      {connections.map(c => {
-        const tr = testResults[c.id || ""];
-        return (
-          <div key={c.id} className="flex items-center justify-between bg-bg-subtle rounded-lg px-4 py-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-text-main">{c.name}</p>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-bg-muted text-text-muted">
-                  {VPS_TYPE_OPTIONS.find(o => o.value === c.vps_type)?.label || c.vps_type}
-                </span>
-                {c.enabled === false && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-500">выкл</span>
-                )}
-              </div>
-              <p className="text-xs text-text-muted truncate">{c.base_url}</p>
-              {tr && (
-                <p className={`text-xs mt-1 ${tr.status === "green" ? "text-green-600" : "text-red-500"}`}>
-                  {tr.message}
-                </p>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              <button onClick={() => handleTest(c.id!)} disabled={testing === c.id} className="p-1.5 rounded-lg hover:bg-bg-muted transition-colors" title="Тест">
-                {testing === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" /> : <Play className="w-3.5 h-3.5 text-text-muted" />}
-              </button>
-              <button onClick={() => startEdit(c)} className="p-1.5 rounded-lg hover:bg-bg-muted transition-colors" title="Редактировать">
-                <Pencil className="w-3.5 h-3.5 text-text-muted" />
-              </button>
-              <button onClick={() => handleDelete(c.id!)} className="p-1.5 rounded-lg hover:bg-red-50 text-text-muted hover:text-red-500 transition-colors" title="Удалить">
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        );
-      })}
-      <button onClick={startNew} className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg text-primary hover:bg-primary/5 transition-colors mt-1">
-        <Plus className="w-3 h-3" /> Добавить подключение
-      </button>
-    </div>
+    <ConnectionsModal
+      open={open} onClose={onClose} title="Логи — подключения к VPS" message={msg}
+      listTitle={`Сохранённые (${connections.length})`}
+      list={<>
+        {connections.length === 0 && <p className="text-xs text-text-muted/60">Пока нет подключений.</p>}
+        {connections.map((c) => (
+          <ConnectionRow
+            key={c.id}
+            name={`${c.name}${c.enabled === false ? " (выкл.)" : ""}`}
+            subtitle={`${VPS_TYPE_OPTIONS.find(o => o.value === c.vps_type)?.label ?? c.vps_type} · ${c.base_url}`}
+            actions={[
+              { key: "test", icon: <Check className="h-3.5 w-3.5" />, title: "Проверить", onClick: () => test(c.id!), disabled: busy, hoverClass: "hover:text-emerald-600" },
+              { key: "edit", icon: <Pencil className="h-3.5 w-3.5" />, title: "Изменить", onClick: () => { setForm({ ...c }); setMsg(null); }, hoverClass: "hover:text-primary" },
+              { key: "delete", icon: <Trash2 className="h-3.5 w-3.5" />, title: "Удалить", onClick: () => remove(c.id!), hoverClass: "hover:bg-red-50 hover:text-red-500" },
+            ]}
+          />
+        ))}
+      </>}
+      formTitle={form.id ? "Изменить" : "Новое подключение"}
+      form={<>
+        <input className={INPUT_CLS} value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Название (напр. Graylog Production)" />
+        <select className={SELECT_CLS} value={form.vps_type || "graylog"} onChange={e => setForm(f => ({ ...f, vps_type: e.target.value as LogsVpsConnection["vps_type"] }))}>
+          {VPS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <input className={`${INPUT_CLS} font-mono`} value={form.base_url || ""} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))} placeholder="https://graylog.company.ru/api" />
+        <select className={SELECT_CLS} value={form.auth_type || "none"} onChange={e => setForm(f => ({ ...f, auth_type: e.target.value as LogsVpsConnection["auth_type"] }))}>
+          {VPS_AUTH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        {needsToken && (
+          <PasswordInput fieldKey="token" value={form.token || ""} onChange={(_, v) => setForm(f => ({ ...f, token: v }))} placeholder={form.auth_type === "bearer" ? "Bearer токен" : "API ключ"} />
+        )}
+        {needsBasic && <div className="grid grid-cols-2 gap-2">
+          <input className={INPUT_CLS} value={form.username || ""} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} placeholder="Логин" spellCheck={false} />
+          <PasswordInput fieldKey="password" value={form.password || ""} onChange={(_, v) => setForm(f => ({ ...f, password: v }))} placeholder="Пароль" />
+        </div>}
+        <input className={INPUT_CLS} value={form.default_index || ""} onChange={e => setForm(f => ({ ...f, default_index: e.target.value }))} placeholder="Индекс / Стрим (опционально)" />
+        <div className="flex items-center gap-3 pt-1">
+          <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer">
+            <input type="checkbox" checked={form.ssl_verify !== false} onChange={e => setForm(f => ({ ...f, ssl_verify: e.target.checked }))} className="rounded border-border-main text-primary focus:ring-primary/30" />
+            SSL verify
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer">
+            <input type="checkbox" checked={form.enabled !== false} onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))} className="rounded border-border-main text-primary focus:ring-primary/30" />
+            Активно
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          {form.id && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
+          <button type="button" onClick={save} disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {form.id ? "Сохранить" : "Добавить"}
+          </button>
+        </div>
+      </>}
+    />
   );
 }
 
@@ -1130,14 +1197,18 @@ export default function SettingsSection() {
   const [revisorStands, setRevisorStands] = useState<RevisorStandConfig[]>([]);
   const [tdConnections, setTdConnections] = useState<TestDataConnection[]>([]);
   const [logsVpsConns, setLogsVpsConns] = useState<LogsVpsConnection[]>([]);
+  const [jdbcDrivers, setJdbcDrivers] = useState<JdbcDriver[]>([]);
+
+  const [revisorModalOpen, setRevisorModalOpen] = useState(false);
+  const [tdModalOpen, setTdModalOpen] = useState(false);
+  const [logsVpsModalOpen, setLogsVpsModalOpen] = useState(false);
+  const [jdbcModalOpen, setJdbcModalOpen] = useState(false);
 
   // LLM provider statuses
   const [llmStatuses, setLlmStatuses] = useState<Record<string, TestResult>>({});
   const [llmTesting, setLlmTesting] = useState<string | null>(null);
 
   // Section test results
-  const [kafkaAlertsResult, setKafkaAlertsResult] = useState<TestResult | null>(null);
-  const [kafkaAlertsTesting, setKafkaAlertsTesting] = useState(false);
   const [kafkaMetricsResult, setKafkaMetricsResult] = useState<TestResult | null>(null);
   const [kafkaMetricsTesting, setKafkaMetricsTesting] = useState(false);
   const [chromaResult, setChromaResult] = useState<TestResult | null>(null);
@@ -1145,23 +1216,18 @@ export default function SettingsSection() {
   const [pgResult, setPgResult] = useState<TestResult | null>(null);
   const [pgTesting, setPgTesting] = useState(false);
 
-  // Ферма устройств — тест
-  const [farmResult, setFarmResult] = useState<TestResult | null>(null);
-  const [farmTesting, setFarmTesting] = useState(false);
-
   // Save statuses per section
   const [llmSave, setLlmSave] = useState<{ status: SaveStatus; err: string }>({ status: "idle", err: "" });
-  const [kafkaAlertsSave, setKafkaAlertsSave] = useState<{ status: SaveStatus; err: string }>({ status: "idle", err: "" });
   const [kafkaMetricsSave, setKafkaMetricsSave] = useState<{ status: SaveStatus; err: string }>({ status: "idle", err: "" });
-  const [farmSave, setFarmSave] = useState<{ status: SaveStatus; err: string }>({ status: "idle", err: "" });
 
   const loadSettings = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [map, custom, revisor, tdConns, logsVps] = await Promise.all([
+      const [map, custom, revisor, tdConns, logsVps, drivers] = await Promise.all([
         getSettings(), getCustomLlmProviders(), getRevisorStands(),
         listTestDataConnections().catch(() => [] as TestDataConnection[]),
         getLogsVpsConnections().catch(() => ({ connections: [] as LogsVpsConnection[] })),
+        listJdbcDrivers().catch(() => [] as JdbcDriver[]),
       ]);
       const vals: Record<string, string> = {};
       const descs: Record<string, string> = {};
@@ -1171,6 +1237,7 @@ export default function SettingsSection() {
       setRevisorMethods(revisor.methods); setRevisorStands(revisor.stands);
       setTdConnections(tdConns);
       setLogsVpsConns(logsVps.connections || []);
+      setJdbcDrivers(drivers);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); }
   }, []);
@@ -1206,28 +1273,12 @@ export default function SettingsSection() {
     } catch (e) { setLlmSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
   }
 
-  async function saveKafkaAlerts() {
-    setKafkaAlertsSave({ status: "saving", err: "" });
-    try {
-      await handleSaveFields(ALERTS_KAFKA_FIELDS.map(f => f.key));
-      setKafkaAlertsSave({ status: "saved", err: "" }); setTimeout(() => setKafkaAlertsSave({ status: "idle", err: "" }), 3000);
-    } catch (e) { setKafkaAlertsSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
-  }
-
   async function saveKafkaMetrics() {
     setKafkaMetricsSave({ status: "saving", err: "" });
     try {
       await handleSaveFields(METRICS_KAFKA_FIELDS.map(f => f.key));
       setKafkaMetricsSave({ status: "saved", err: "" }); setTimeout(() => setKafkaMetricsSave({ status: "idle", err: "" }), 3000);
     } catch (e) { setKafkaMetricsSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
-  }
-
-  async function saveFarm() {
-    setFarmSave({ status: "saving", err: "" });
-    try {
-      await handleSaveFields([...FARM_FIELDS.map(f => f.key), "farm_enabled"]);
-      setFarmSave({ status: "saved", err: "" }); setTimeout(() => setFarmSave({ status: "idle", err: "" }), 3000);
-    } catch (e) { setFarmSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
   }
 
   // Compute overall LLM status
@@ -1292,26 +1343,7 @@ export default function SettingsSection() {
         />
       </SectionCard>
 
-      {/* ═══ 2. Kafka — Алерты ═══ */}
-      <SectionCard
-        icon={<Radio className="w-4 h-4 text-orange-500" />}
-        title="Kafka — Алерты"
-        subtitle="Брокер для отправки алертов из Jupyter скриптов"
-        status={kafkaAlertsResult?.status ?? "unknown"}
-        headerRight={
-          <div className="flex items-center gap-2">
-            <StatusBadge result={kafkaAlertsResult} loading={kafkaAlertsTesting} />
-            <TestButton onClick={async () => { setKafkaAlertsTesting(true); try { setKafkaAlertsResult(await testKafkaAlerts()); } catch { setKafkaAlertsResult({ status: "red", message: "Ошибка" }); } finally { setKafkaAlertsTesting(false); } }} loading={kafkaAlertsTesting} />
-          </div>
-        }
-      >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-          {ALERTS_KAFKA_FIELDS.map(f => renderField(f, values, descriptions, handleChange))}
-        </div>
-        <SaveBar status={kafkaAlertsSave.status} errMsg={kafkaAlertsSave.err} onSave={saveKafkaAlerts} saving={kafkaAlertsSave.status === "saving"} />
-      </SectionCard>
-
-      {/* ═══ 3. Kafka — Метрики ═══ */}
+      {/* ═══ 2. Kafka — Метрики ═══ */}
       <SectionCard
         icon={<Radio className="w-4 h-4 text-violet-500" />}
         title="Kafka — Метрики"
@@ -1330,88 +1362,64 @@ export default function SettingsSection() {
         <SaveBar status={kafkaMetricsSave.status} errMsg={kafkaMetricsSave.err} onSave={saveKafkaMetrics} saving={kafkaMetricsSave.status === "saving"} />
       </SectionCard>
 
-      {/* ═══ 4. Ревизор — API стенды ═══ */}
+      {/* ═══ 3. Ревизор — API стенды ═══ */}
       <SectionCard
         icon={<Server className="w-4 h-4 text-teal-500" />}
         title="Ревизор — API стенды"
         subtitle="Подключения к стендам для сравнения сборок, версий и статусов"
+        headerRight={
+          <button type="button" onClick={() => setRevisorModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
+            <Settings2 className="h-3.5 w-3.5" /> Подключения
+          </button>
+        }
       >
-        <RevisorInline
-          methods={revisorMethods}
-          stands={revisorStands}
-          onSave={async (s) => { await saveRevisorStand(s); await loadSettings(); }}
-          onDelete={async (id) => { await deleteRevisorStand(id); await loadSettings(); }}
-        />
+        <p className="text-sm text-text-muted">
+          {revisorStands.length === 0
+            ? "Подключений пока нет — добавьте стенд, чтобы Ревизор мог сравнивать сборки."
+            : `Настроено стендов: ${revisorStands.length} — ${revisorStands.map(s => s.name).join(", ")}`}
+        </p>
       </SectionCard>
 
-      {/* ═══ 5. Тестовые данные — внешние БД ═══ */}
+      {/* ═══ 4. Тестовые данные — внешние БД ═══ */}
       <SectionCard
         icon={<Server className="w-4 h-4 text-cyan-500" />}
         title="Тестовые данные — подключения к БД"
-        subtitle="Внешние базы данных для поиска и генерации тестовых данных (PostgreSQL, MySQL, Oracle)"
+        subtitle="Внешние базы данных для поиска и генерации тестовых данных — PostgreSQL, MySQL, Oracle или свой JDBC-драйвер"
+        headerRight={
+          <button type="button" onClick={() => setTdModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
+            <Settings2 className="h-3.5 w-3.5" /> Подключения
+          </button>
+        }
       >
-        <TestDataConnectionsInline
-          connections={tdConnections}
-          onRefresh={async () => {
-            const conns = await listTestDataConnections().catch(() => [] as TestDataConnection[]);
-            setTdConnections(conns);
-          }}
-        />
+        <p className="text-sm text-text-muted">
+          {tdConnections.length === 0
+            ? "Подключений пока нет — добавьте внешнюю БД для генерации тестовых данных."
+            : `Настроено подключений: ${tdConnections.length} — ${tdConnections.map(c => c.display_name).join(", ")}`}
+        </p>
       </SectionCard>
 
-      {/* ═══ 6. Логи (VPS) ═══ */}
+      {/* ═══ 5. Логи (VPS) ═══ */}
       <SectionCard
         icon={<ScrollText className="w-4 h-4 text-indigo-500" />}
         title="Логи — подключения к VPS"
         subtitle="Graylog, Elasticsearch, Loki или произвольный REST API для анализа логов микросервисов"
-      >
-        <LogsVpsInline
-          connections={logsVpsConns}
-          onRefresh={async () => {
-            const res = await getLogsVpsConnections().catch(() => ({ connections: [] as LogsVpsConnection[] }));
-            setLogsVpsConns(res.connections || []);
-          }}
-        />
-      </SectionCard>
-
-      {/* ═══ 7. Ферма устройств ═══ */}
-      <SectionCard
-        icon={<Smartphone className="w-4 h-4 text-green-500" />}
-        title="Ферма устройств"
-        subtitle="Встроенный сервер управления мобильными устройствами"
-        status={farmResult?.status ?? "unknown"}
         headerRight={
-          <div className="flex items-center gap-2">
-            <StatusBadge result={farmResult} loading={farmTesting} />
-            <TestButton onClick={async () => {
-              setFarmTesting(true);
-              try {
-                setFarmResult(await testFarm());
-              } catch {
-                setFarmResult({ status: "red", message: "Ошибка подключения" });
-              } finally { setFarmTesting(false); }
-            }} loading={farmTesting} />
-          </div>
+          <button type="button" onClick={() => setLogsVpsModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
+            <Settings2 className="h-3.5 w-3.5" /> Подключения
+          </button>
         }
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
-          {FARM_FIELDS.map(f => renderField(f, values, descriptions, handleChange))}
-          <div className="flex items-center gap-3 pt-5">
-            <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer">
-              <input
-                type="checkbox"
-                checked={values["farm_enabled"] === "true" || values["farm_enabled"] === "1"}
-                onChange={(e) => handleChange("farm_enabled", e.target.checked ? "true" : "false")}
-                className="rounded border-border-main text-primary focus:ring-primary/30"
-              />
-              Включено
-            </label>
-          </div>
-        </div>
-        <SaveBar status={farmSave.status} errMsg={farmSave.err} onSave={saveFarm} saving={farmSave.status === "saving"} />
+        <p className="text-sm text-text-muted">
+          {logsVpsConns.length === 0
+            ? "Подключений пока нет — добавьте VPS-платформу для анализа логов."
+            : `Настроено подключений: ${logsVpsConns.length} — ${logsVpsConns.map(c => c.name).join(", ")}`}
+        </p>
       </SectionCard>
 
-      {/* ═══ 8. Базы данных ═══ */}
+      {/* ═══ 6. Базы данных ═══ */}
       <SectionCard
         icon={<Database className="w-4 h-4 text-emerald-500" />}
         title="Базы данных"
@@ -1447,6 +1455,39 @@ export default function SettingsSection() {
           </div>
         </div>
       </SectionCard>
+
+      <RevisorConnectionsModal
+        open={revisorModalOpen} onClose={() => setRevisorModalOpen(false)}
+        methods={revisorMethods} stands={revisorStands}
+        onSave={async (s) => { await saveRevisorStand(s); await loadSettings(); }}
+        onDelete={async (id) => { await deleteRevisorStand(id); await loadSettings(); }}
+      />
+      <TestDataConnectionsModal
+        open={tdModalOpen} onClose={() => setTdModalOpen(false)}
+        connections={tdConnections}
+        drivers={jdbcDrivers}
+        onManageDrivers={() => setJdbcModalOpen(true)}
+        onRefresh={async () => {
+          const conns = await listTestDataConnections().catch(() => [] as TestDataConnection[]);
+          setTdConnections(conns);
+        }}
+      />
+      <DriverManagerModal
+        open={jdbcModalOpen} onClose={() => setJdbcModalOpen(false)}
+        drivers={jdbcDrivers}
+        onRefresh={async () => {
+          const drivers = await listJdbcDrivers().catch(() => [] as JdbcDriver[]);
+          setJdbcDrivers(drivers);
+        }}
+      />
+      <LogsVpsConnectionsModal
+        open={logsVpsModalOpen} onClose={() => setLogsVpsModalOpen(false)}
+        connections={logsVpsConns}
+        onRefresh={async () => {
+          const res = await getLogsVpsConnections().catch(() => ({ connections: [] as LogsVpsConnection[] }));
+          setLogsVpsConns(res.connections || []);
+        }}
+      />
     </div>
   );
 }

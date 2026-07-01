@@ -572,11 +572,11 @@ export default function GenerationSection() {
                             />
                             <span className="text-text-main truncate">{c.display_name}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                              c.db_type === "postgresql" ? "bg-blue-100 text-blue-700"
-                              : c.db_type === "mysql" ? "bg-orange-100 text-orange-700"
+                              c.sql_dialect === "postgresql" ? "bg-blue-100 text-blue-700"
+                              : c.sql_dialect === "mysql" ? "bg-orange-100 text-orange-700"
                               : "bg-red-100 text-red-700"
                             }`}>
-                              {c.db_type.toUpperCase()}
+                              {c.driver_name}
                             </span>
                             {!hasSchema && (
                               <span className="text-[10px] text-yellow-600">нет схемы</span>

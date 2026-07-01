@@ -245,7 +245,7 @@ export default function TestDataSection() {
                 {connections.map(c => {
                   const checked = selectedConns.has(c.id);
                   const hasSchema = !!c.cached_schema;
-                  const dbColor = DB_TYPE_COLORS[c.db_type] ?? "bg-bg-muted text-text-main";
+                  const dbColor = DB_TYPE_COLORS[c.sql_dialect] ?? "bg-bg-muted text-text-main";
                   return (
                     <label
                       key={c.id}
@@ -262,7 +262,7 @@ export default function TestDataSection() {
                         <div className="flex items-center gap-2">
                           <span className="text-sm font-medium text-text-main truncate">{c.display_name}</span>
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${dbColor}`}>
-                            {c.db_type.toUpperCase()}
+                            {c.driver_name}
                           </span>
                           {!hasSchema && (
                             <span className="text-[10px] text-yellow-600 bg-yellow-50 px-1.5 py-0.5 rounded">

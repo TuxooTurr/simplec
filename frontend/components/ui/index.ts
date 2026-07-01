@@ -8,6 +8,7 @@
 export { Button, type ButtonProps, type ButtonVariant } from "./Button";
 export { Input, Textarea, Select, Label, INPUT_CLS, INPUT_SM, LABEL_CLS, type InputProps, type TextareaProps, type SelectProps } from "./Input";
 export { Modal, type ModalProps } from "./Modal";
+export { ConnectionsModal, ConnectionRow, type ConnectionsModalProps, type ConnectionRowProps, type ConnectionRowAction } from "./ConnectionsModal";
 export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { Toggle, type ToggleProps } from "./Toggle";
 export { SaveBar, type SaveBarProps } from "./SaveBar";

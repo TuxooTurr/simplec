@@ -12,6 +12,7 @@ import AutoModelSection from "./sections/AutoModelSection";
 import TestDataSection from "./sections/TestDataSection";
 import SettingsSection from "./sections/SettingsSection";
 import JobsSection from "./sections/JobsSection";
+import KafkaSection from "./sections/KafkaSection";
 
 export default function SectionRenderer() {
   const { rightSection, dragging } = useWorkspace();
@@ -51,6 +52,7 @@ export default function SectionRenderer() {
     etalons:    <EtalonsSection />,
     bugs:       <BugsSection />,
     alerts:     <AlertsSection />,
+    kafka:      <KafkaSection />,
     jobs:       <JobsSection />,
     metrics:    <MetricsSection />,
     revisor:    <RevisorSection />,

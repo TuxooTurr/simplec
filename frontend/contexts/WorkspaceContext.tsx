@@ -9,6 +9,7 @@ export type SectionId =
   | "bugs"
   | "logs"
   | "alerts"
+  | "kafka"
   | "jobs"
   | "metrics"
   | "revisor"

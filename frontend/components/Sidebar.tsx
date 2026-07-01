@@ -6,10 +6,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Database, Settings,
   LogOut, User, Play, ScrollText, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check,
+  SlidersHorizontal, Check, Network,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
+import RunningAlertsIndicator from "./RunningAlertsIndicator";
 import { ThemeToggle } from "./ui";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -29,6 +30,7 @@ const NAV: {
   { id: "bugs",        href: "/bugs",        label: "Дефекты",                 Icon: Bug,         ai: true },
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText,  ai: true },
   { id: "alerts",      href: "/alerts",      label: "Генератор алертов",       Icon: Bell },
+  { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },
   { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2,   superuserOnly: true },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
   { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen,    superuserOnly: true },
@@ -226,6 +228,7 @@ export default function Sidebar() {
 
       {/* LLM status + User + Settings at bottom */}
       <div className="border-t border-border-main flex-shrink-0">
+        <RunningAlertsIndicator />
         <div className="px-4 py-3 max-h-[38vh] overflow-y-auto">
           <LLMStatusBar />
         </div>

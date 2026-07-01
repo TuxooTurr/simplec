@@ -87,6 +87,16 @@ function datetimeToInputValue(val: string): string {
   return `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`;
 }
 
+function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}ч ${String(m).padStart(2, "0")}м`;
+  if (m > 0) return `${m}м ${String(s).padStart(2, "0")}с`;
+  return `${s}с`;
+}
+
 function inputValueToDatetime(val: string): string {
   if (!val) return "";
   const d = new Date(val);
@@ -566,6 +576,16 @@ export default function AlertsSection() {
   const [openFolders,     setOpenFolders]     = useState<Set<string>>(new Set());
   const [newFolderName,   setNewFolderName]   = useState("");
   const [showNewFolder,   setShowNewFolder]   = useState(false);
+
+  // Тикаем раз в секунду, чтобы "работает X" в статусах обновлялось живьём —
+  // только пока хоть один планировщик активен (не тратим таймер впустую).
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const anySchedActive = Object.values(sessions).some(s => s.schedActive);
+  useEffect(() => {
+    if (!anySchedActive) return;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [anySchedActive]);
   const [renamingFolder,  setRenamingFolder]  = useState<string | null>(null);
   const [renameValue,     setRenameValue]     = useState("");
 
@@ -804,7 +824,11 @@ export default function AlertsSection() {
               let statusColor = "";
               let dotColor    = "bg-bg-muted";
 
-              if (sched) { statusLabel = `Запущен · #${sess?.schedCount ?? 0}`; statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse"; }
+              if (sched) {
+                const elapsed = sess?.schedStartedAt ? formatElapsed(nowTick - sess.schedStartedAt) : "";
+                statusLabel = `Работает ${elapsed} · #${sess?.schedCount ?? 0}`.trim();
+                statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse";
+              }
               else if (exec) { statusLabel = "Выполняется..."; statusColor = "text-amber-600"; dotColor = "bg-amber-400 animate-pulse"; }
               else if (connecting) { statusLabel = "Подключение..."; statusColor = "text-amber-500"; dotColor = "bg-amber-400 animate-pulse"; }
               else if (alive) { statusLabel = "Ядро подключено"; statusColor = "text-green-600"; dotColor = "bg-green-500"; }
@@ -921,7 +945,11 @@ export default function AlertsSection() {
                         let statusColor = "";
                         let dotColor    = "bg-bg-muted";
 
-                        if (sched) { statusLabel = `Запущен · #${sess?.schedCount ?? 0}`; statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse"; }
+                        if (sched) {
+                const elapsed = sess?.schedStartedAt ? formatElapsed(nowTick - sess.schedStartedAt) : "";
+                statusLabel = `Работает ${elapsed} · #${sess?.schedCount ?? 0}`.trim();
+                statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse";
+              }
                         else if (exec) { statusLabel = "Выполняется..."; statusColor = "text-amber-600"; dotColor = "bg-amber-400 animate-pulse"; }
                         else if (connecting) { statusLabel = "Подключение..."; statusColor = "text-amber-500"; dotColor = "bg-amber-400 animate-pulse"; }
                         else if (alive) { statusLabel = "Ядро подключено"; statusColor = "text-green-600"; dotColor = "bg-green-500"; }

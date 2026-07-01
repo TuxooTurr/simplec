@@ -41,7 +41,7 @@ from backend.api import (
     auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
-    testdata, jobs, logs,
+    testdata, jobs, logs, kafka_explorer,
 )
 from db.postgres import init_db
 
@@ -162,6 +162,7 @@ app.include_router(app_settings.router)
 app.include_router(testdata.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
+app.include_router(kafka_explorer.router)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

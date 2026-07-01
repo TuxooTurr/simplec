@@ -27,6 +27,8 @@ export interface OutputLine {
 export interface ScriptSession {
   kernelAlive:      boolean;
   kernelConnecting: boolean;
+  /** Epoch ms — когда подключилось текущее ядро (для отображения времени работы) */
+  kernelStartedAt?: number;
   executing:        boolean;
   output:           OutputLine[];
   schedMode:        "once" | "periodic";
@@ -34,6 +36,8 @@ export interface ScriptSession {
   schedFrom:        string;
   schedTo:          string;
   schedActive:      boolean;
+  /** Epoch ms — когда стартовал текущий планировщик (для отображения времени работы) */
+  schedStartedAt?: number;
   schedCount:       number;
   values:           Record<string, string>;
 }
@@ -252,7 +256,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
       const int = getInternal(sid);
       int.initDone = false;
       int.prevValues = {};
-      patchSession(sid, { kernelAlive: true, kernelConnecting: false });
+      patchSession(sid, { kernelAlive: true, kernelConnecting: false, kernelStartedAt: Date.now() });
       pushOutput(sid, "system",
         res.status === "already_running"
           ? `Ядро уже запущено (${res.kernel_id})`
@@ -272,10 +276,10 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     if (!sid) return;
     const int = getInternal(sid);
     if (int.timer) { clearInterval(int.timer); int.timer = null; }
-    patchSession(sid, { schedActive: false });
+    patchSession(sid, { schedActive: false, schedStartedAt: undefined });
     try { await kernelStop(sid); } catch {}
     int.initDone = false;
-    patchSession(sid, { kernelAlive: false });
+    patchSession(sid, { kernelAlive: false, kernelStartedAt: undefined });
     pushOutput(sid, "system", "Ядро остановлено.");
   }, [patchSession, pushOutput]);
 
@@ -290,7 +294,11 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     const int = getInternal(sid);
     if (int.timer) { clearInterval(int.timer); int.timer = null; }
     int.initDone = false;
-    patchSession(sid, { kernelAlive: false, schedActive: false, executing: false });
+    patchSession(sid, {
+      kernelAlive: false, kernelStartedAt: undefined,
+      schedActive: false, schedStartedAt: undefined,
+      executing: false,
+    });
     pushOutput(sid, "error", "Ядро недоступно — планировщик остановлен.");
   }, [patchSession, pushOutput]);
 
@@ -374,7 +382,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     if (!sid) return;
     const int = getInternal(sid);
     if (int.timer) { clearInterval(int.timer); int.timer = null; }
-    patchSession(sid, { schedActive: false });
+    patchSession(sid, { schedActive: false, schedStartedAt: undefined });
   }, [patchSession]);
 
   const stopSchedule = useCallback(() => {
@@ -387,7 +395,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     if (!sid) return;
     const int = getInternal(sid);
     if (int.timer) { clearInterval(int.timer); int.timer = null; }
-    patchSession(sid, { schedActive: true, schedCount: 0 });
+    patchSession(sid, { schedActive: true, schedCount: 0, schedStartedAt: Date.now() });
 
     const tick = async () => {
       const cur = sessionsRef.current[sid];
@@ -397,7 +405,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
       if (cur.schedTo   && now > new Date(cur.schedTo)) {
         const i = getInternal(sid);
         if (i.timer) { clearInterval(i.timer); i.timer = null; }
-        patchSession(sid, { schedActive: false });
+        patchSession(sid, { schedActive: false, schedStartedAt: undefined });
         return;
       }
       await _doExecute(sid);

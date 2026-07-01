@@ -65,6 +65,106 @@ class KafkaClient:
 
         return KafkaProducer(**KafkaClient._build_producer_kwargs(kafka_cfg))
 
+    # ── Consumer (просмотр топиков) ───────────────────────────────────────────
+
+    @staticmethod
+    def _build_consumer_kwargs(kafka_cfg: Optional[dict] = None) -> dict:
+        """Те же параметры соединения, что и у producer, но без producer-only ключей."""
+        kwargs = KafkaClient._build_producer_kwargs(kafka_cfg)
+        kwargs.pop("max_block_ms", None)  # producer-only — KafkaConsumer его не принимает
+        kwargs.update({
+            "enable_auto_commit": False,
+            "auto_offset_reset": "latest",
+            "consumer_timeout_ms": 4000,
+        })
+        return kwargs
+
+    @classmethod
+    def list_topics(cls, kafka_cfg: Optional[dict] = None) -> list[str]:
+        """Список всех топиков на брокере (отсортирован, без внутренних __ топиков)."""
+        from kafka import KafkaConsumer  # type: ignore
+
+        consumer = KafkaConsumer(**cls._build_consumer_kwargs(kafka_cfg))
+        try:
+            topics = consumer.topics() or set()
+        finally:
+            consumer.close()
+        return sorted(t for t in topics if not str(t).startswith("__"))
+
+    @staticmethod
+    def _record_to_dict(rec) -> dict:
+        def _dec(b):
+            if b is None:
+                return None
+            if isinstance(b, (bytes, bytearray)):
+                return bytes(b).decode("utf-8", "replace")
+            return str(b)
+
+        headers = []
+        for h in (rec.headers or []):
+            try:
+                hk, hv = h
+                headers.append([str(hk), _dec(hv)])
+            except (ValueError, TypeError):
+                continue
+        return {
+            "offset":    rec.offset,
+            "partition": rec.partition,
+            "timestamp": rec.timestamp,
+            "key":       _dec(rec.key),
+            "value":     _dec(rec.value) or "",
+            "headers":   headers,
+        }
+
+    @classmethod
+    def fetch_recent(
+        cls,
+        topic:     str,
+        limit:     int = 50,
+        kafka_cfg: Optional[dict] = None,
+    ) -> list[dict]:
+        """
+        Последние `limit` сообщений топика (снапшот, НЕ realtime).
+        Читает до `limit` записей из каждой партиции, затем берёт глобально
+        последние `limit` по времени. Возвращает по убыванию времени.
+        """
+        from kafka import KafkaConsumer, TopicPartition  # type: ignore
+
+        limit = max(1, min(int(limit or 50), 1000))
+        consumer = KafkaConsumer(**cls._build_consumer_kwargs(kafka_cfg))
+        messages: list[dict] = []
+        try:
+            parts = consumer.partitions_for_topic(topic)
+            if not parts:
+                return []
+            tps = [TopicPartition(topic, p) for p in parts]
+            consumer.assign(tps)
+            begin = consumer.beginning_offsets(tps)
+            end = consumer.end_offsets(tps)
+
+            target = 0
+            for tp in tps:
+                start = max(begin.get(tp, 0), end.get(tp, 0) - limit)
+                consumer.seek(tp, start)
+                target += max(0, end.get(tp, 0) - start)
+            if target == 0:
+                return []
+
+            empty_polls = 0
+            while len(messages) < target and empty_polls < 3:
+                batch = consumer.poll(timeout_ms=1500, max_records=500)
+                if not batch:
+                    empty_polls += 1
+                    continue
+                for _tp, recs in batch.items():
+                    for rec in recs:
+                        messages.append(cls._record_to_dict(rec))
+        finally:
+            consumer.close()
+
+        messages.sort(key=lambda m: m.get("timestamp") or 0, reverse=True)
+        return messages[:limit]
+
     @classmethod
     def send(
         cls,

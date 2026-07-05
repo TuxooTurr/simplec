@@ -25,6 +25,10 @@ export interface ExportPanelParams {
   use_llm: boolean;
   provider: string;
   crit_regress: boolean;
+  project_id: string;
+  jira_version: string;
+  author_name: string;
+  author_tab_num: string;
 }
 
 function downloadBlob(content: string, filename: string, mime: string) {
@@ -163,19 +167,43 @@ const loadList = (key: string): string[] => {
   try { return JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { return []; }
 };
 
+const DEFAULT_PROJECT_KEY   = "SBER911";
+const DEFAULT_PROJECT_ID    = "11000";
+const DEFAULT_JIRA_VERSION  = "9.12.27";
+const DEFAULT_AUTHOR_NAME   = "Застылов Стефан Александрович";
+const DEFAULT_AUTHOR_TABNUM = "16538296";
+const DEFAULT_TEAM   = "Базовые сервисы (00G10021)";
+const DEFAULT_SYSTEM = "Фронтальный компонент [CI07801187]";
+const DEFAULT_DOMAIN = "Omega, Sigma";
+
+interface AuthorInfo { name: string; tabNum: string; }
+
+const loadAuthor = (): AuthorInfo => {
+  try {
+    const saved = JSON.parse(localStorage.getItem("st_author") ?? "null");
+    if (saved?.name && saved?.tabNum) return saved;
+  } catch { /* ignore */ }
+  return { name: DEFAULT_AUTHOR_NAME, tabNum: DEFAULT_AUTHOR_TABNUM };
+};
+
 export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack }: ExportPanelProps) {
   const { provider } = useWorkspace();
   const [feature, setFeature]       = useState("");
   const [platform, setPlatform]     = useState<string[]>(["Web"]);
-  const [project, setProject]       = useState("");
-  const [system, setSystem]         = useState("");
-  const [team, setTeam]             = useState("");
-  const [domain, setDomain]         = useState("");
+  const [project, setProject]       = useState(DEFAULT_PROJECT_KEY);
+  const [system, setSystem]         = useState(DEFAULT_SYSTEM);
+  const [team, setTeam]             = useState(DEFAULT_TEAM);
+  const [domain, setDomain]         = useState(DEFAULT_DOMAIN);
   const [folder, setFolder]         = useState("Новая ТМ");
   const [useLlm, setUseLlm]         = useState(false);
   const [critRegress, setCritRegress] = useState(false);
   const [xmlCopied, setXmlCopied]   = useState(false);
   const [touched, setTouched]       = useState(false);
+
+  const [projectId, setProjectId]     = useState(DEFAULT_PROJECT_ID);
+  const [jiraVersion, setJiraVersion] = useState(DEFAULT_JIRA_VERSION);
+  const [author, setAuthorState]      = useState<AuthorInfo>(loadAuthor);
+  const setAuthor = (a: AuthorInfo) => { setAuthorState(a); localStorage.setItem("st_author", JSON.stringify(a)); };
 
   // Lists from localStorage — shared with SettingsModal in GenerationSection
   const [projectList, setProjectListState] = useState<string[]>(() => loadList("st_projects"));
@@ -190,7 +218,10 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
 
   const handleExport = () => {
     if (requiredMissing) { setTouched(true); return; }
-    onExport({ cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider, crit_regress: critRegress });
+    onExport({
+      cases, qa_doc: qaDoc, project, system, team, domain, folder, use_llm: useLlm, provider, crit_regress: critRegress,
+      project_id: projectId, jira_version: jiraVersion, author_name: author.name, author_tab_num: author.tabNum,
+    });
   };
 
   const ts = new Date().toISOString().slice(0, 16).replace("T", "_").replace(":", "-");
@@ -317,6 +348,50 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
               className="w-full border border-border-main rounded-lg px-3 py-2 text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40
+                transition-shadow duration-150"
+            />
+          </div>
+        </div>
+
+        {/* Реквизиты проекта Zephyr/TM4J */}
+        <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-border-main">
+          <div>
+            <label className="block text-xs text-text-muted mb-1">Project ID</label>
+            <input
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full border border-border-main rounded-lg px-3 py-2 text-sm font-mono
+                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40
+                transition-shadow duration-150"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted mb-1">Jira Version</label>
+            <input
+              value={jiraVersion}
+              onChange={(e) => setJiraVersion(e.target.value)}
+              className="w-full border border-border-main rounded-lg px-3 py-2 text-sm font-mono
+                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40
+                transition-shadow duration-150"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted mb-1">Автор (ФИО)</label>
+            <input
+              value={author.name}
+              onChange={(e) => setAuthor({ ...author, name: e.target.value })}
+              className="w-full border border-border-main rounded-lg px-3 py-2 text-sm
+                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40
+                transition-shadow duration-150"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-text-muted mb-1">Табельный номер</label>
+            <input
+              value={author.tabNum}
+              onChange={(e) => setAuthor({ ...author, tabNum: e.target.value })}
+              className="w-full border border-border-main rounded-lg px-3 py-2 text-sm font-mono
                 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40
                 transition-shadow duration-150"
             />

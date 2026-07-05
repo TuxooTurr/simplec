@@ -21,11 +21,12 @@
 |--------|-----------|
 | **Ручное тестирование (Генерация)** | LLM генерирует тест-кейсы из требований, 4-слойный пайплайн, экспорт в Jira Zephyr Scale |
 | **Автотестирование** | Генерация Java-автотестов, запуск прогонов |
-| **Тестовые данные** | Подключения к внешним БД (PostgreSQL/MySQL/Oracle), LLM-генерация SQL, поиск данных |
+| **Тестовые данные** | Подключения к внешним БД через JDBC-драйверы (PostgreSQL/MySQL/Oracle встроены + свои .jar, как в DBeaver), LLM-генерация SQL, поиск данных |
 | **Jobs** | Произвольные задачи/скрипты с папками и историей запусков |
 | **Дефекты (Bugs)** | LLM-форматирование баг-репортов |
 | **Логи** | Подключения к VPS (Graylog/Elastic/Loki), поиск и LLM-анализ логов |
-| **Генератор алертов** | Jupyter-ядра, запуск скриптов-алертов, планировщик |
+| **Генератор алертов** | Jupyter-ядра, запуск скриптов-алертов, планировщик, глобальный индикатор активных алертов в сайдбаре |
+| **Просмотр Kafka** | Именованные подключения (CLEARTEXT/SSL с сертификатом), снапшот последних N сообщений топика, поиск |
 | **Генератор метрик** | Эмуляция метрик в Kafka по спецификации (8 таблиц БД) |
 | **Ревизор** | Сравнение сборок/версий/статусов на стендах |
 | **Эталоны** | RAG — эталонные пары требование→тест-кейс в ChromaDB |
@@ -57,7 +58,8 @@
 | **Docker** | любая | ❌ нет | только если нужен PostgreSQL или контейнеризация |
 | **PostgreSQL** | 16 | ❌ нет | по умолчанию SQLite; PG нужен только для метрик в проде |
 | **Хотя бы 1 LLM-ключ** | — | ❌ нет* | без ключа приложение **стартует**, но LLM-функции (генерация и т.п.) вернут ошибку. Ключ можно ввести позже в UI → Настройки |
-| Java + Maven/Gradle | — | ❌ нет | только для модуля «Запуск автотестов» (на машине с фреймворком) |
+| **Java (JRE/JDK)** | **17+** | ⚠️ для Тестовых данных | модуль «Тестовые данные»/«Jobs» подключается к БД через JDBC (JPype/jaydebeapi — нужна JVM). Без Java приложение стартует, но подключения к БД вернут ошибку |
+| Maven/Gradle | — | ❌ нет | только для модуля «Запуск автотестов» (на машине с фреймворком) |
 
 Дефолтные логины (захардкожены в `backend/api/auth.py`):
 `Sber911` / `1234567` (superuser), `SberMonitoring` / `1234567` (monitoring).
@@ -285,8 +287,10 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | `metrics_settings.py` | 119 | Настройки Kafka для метрик | `/api/metrics/settings/*` |
 | `metrics_builder.py` | 530 | Сборка и отправка метрик в Kafka | `/api/metrics/*` |
 | `revisor.py` | 439 | Сравнение стендов/сборок | `/api/revisor/*` |
-| `app_settings.py` | ~930 | **Централизованные настройки** (ключ-значение). Группы: `llm`, `llm_custom`, `revisor`, `logs_vps`, `kafka_alerts`, `kafka_metrics`. Маскирует секреты. `apply_saved_settings_to_env()` грузит в `os.environ` | `/api/settings/*` |
-| `testdata.py` | 692 | Подключения к внешним БД + выполнение SELECT + LLM-генерация SQL | `/api/testdata/*` |
+| `app_settings.py` | ~930 | **Централизованные настройки** (ключ-значение). Группы: `llm`, `llm_custom`, `revisor`, `logs_vps`, `kafka_metrics`. GigaChat/DeepSeek — подключение по API-ключу или клиентскому сертификату (переключатель в UI). Маскирует секреты. `apply_saved_settings_to_env()` грузит в `os.environ` | `/api/settings/*` |
+| `testdata.py` | ~740 | Подключения к внешним БД (через реестр JDBC-драйверов, «Настройка драйверов» в UI) + выполнение SELECT + LLM-генерация SQL | `/api/testdata/*` |
+| `db_connector.py` | ~120 | Общий JDBC-коннектор (JPype JVM + jaydebeapi) для testdata и jobs; generic-интроспекция через DatabaseMetaData | — |
+| `kafka_explorer.py` | ~140 | Просмотр Kafka: реестр подключений (SSL-тумблер, серт опционально), топики, снапшот сообщений | `/api/kafka/*` |
 | `jobs.py` | 263 | Jobs + папки + история (`data/jobs.json`, `data/job_folders.json`, `data/job_history.json`) | `/api/jobs/*` |
 | `logs.py` | 324 | Поиск/анализ логов на VPS. Клиенты в `log_clients/` | `/api/logs/*` |
 
@@ -298,12 +302,12 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | Файл | Назначение |
 |------|-----------|
 | `llm_client.py` | **Универсальный LLM-клиент.** Встроены GigaChat, DeepSeek. Остальные — как OpenAI-совместимые endpoints (API key / TLS-сертификат). SSL-логика для корп-прокси (`_get_verify`). Custom-провайдеры из `CUSTOM_LLM_PROVIDERS` (JSON env). Метод `classify_error()` для ретраев |
-| `layered_generator.py` | **4-слойная генерация тест-кейсов:** L1 — QA-документация, L2 — список кейсов (зависит от глубины: `smoke`/`regression`/`full`/`atomary`, словарь `DEPTH_MAP`), L3 — Markdown-кейсы, L4 — LLM-обёртка в XML (для Zephyr) |
+| `layered_generator.py` | **4-слойная генерация тест-кейсов:** L1 — QA-документация, L2 — список кейсов (зависит от глубины: `smoke`/`regression`/`full`/`atomary`, словарь `DEPTH_MAP`), L3 — Markdown-кейсы (+ оценка времени прохождения на кейс), L4 — экспорт в Zephyr Scale/TM4J XML: корень `<project>` с projectId/projectKey/jiraVersion/folders, `<testCase>` с objective/precondition/owner/customFields по корп. спецификации |
 | `file_parser.py` | Парсинг входных файлов (PDF, DOCX, Excel) |
 | `prompt_templates.py` | Шаблоны промптов |
 | `prompt_guard.py` | Защита от prompt-injection |
 | `a2a_builder.py` | Сборка вспомогательных артефактов |
-| `kafka_client.py` | Клиент Kafka (алерты + метрики) |
+| `kafka_client.py` | Клиент Kafka (метрики + просмотр топиков): producer/consumer, SSL с опц. отключением валидации серта (`kafka_ssl_verify`) |
 | `metrics_message_builder.py` | Сборка JSON-сообщений метрик (DATA/METADATA/THRESHOLDS) |
 | `metrics_scheduler.py` | Планировщик периодической отправки метрик |
 
@@ -313,7 +317,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 - **`metrics_models.py`** — все SQLAlchemy-модели:
   - Метрики (8 таблиц): `TestSystem`, `TestMetric`, `TestMetricValuesConfig`, `TestMetricBaselineConfig`, `TestMetricThresholdsConfig`, `TestMetricThresholdRow`, `TestMetricHealthConfig`, `GenerationLog`, `MetricsSettings`
 - **`vector_store.py`** — ChromaDB для эталонов (RAG). Данные в `db/chroma_db/`, `db/chroma_data/`.
-- **JSON-сторы** (файловые, без БД): `alerts_store.py`, `jobs_store.py`, `gen_sessions_store.py`, `testdata_connections.py`, `team_store.py`, `feedback_store.py`, `autotest_runs_store.py`, `secure_config.py`, `audit_log.py`.
+- **JSON-сторы** (файловые, без БД): `alerts_store.py`, `jobs_store.py`, `gen_sessions_store.py`, `testdata_connections.py`, `jdbc_drivers_store.py` (реестр JDBC-драйверов + .jar в `data/jdbc_drivers/`), `kafka_explorer_store.py` (подключения Просмотра Kafka), `team_store.py`, `feedback_store.py`, `autotest_runs_store.py`, `secure_config.py`, `audit_log.py`.
 
 ### 4.5. `backend/schemas.py` — Pydantic-схемы
 
@@ -479,6 +483,38 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
+
+### 2026-07-02 — Готовность к миграции: deploy.sh переписан, JDBC-драйверы, Zephyr XML, Kafka SSL
+- **`deploy.sh` полностью переписан** под текущую архитектуру (был мёртвый Streamlit-скрипт):
+  2 systemd-сервиса (`simpletest-api` uvicorn :8000, `simpletest-next` — Next standalone :3000),
+  nginx `/` → next, `/api|/healthz|/docs` → FastAPI, `/api/ws/` — WebSocket-upgrade;
+  ставит Node.js 20 (NodeSource) и **Java 17 headless** (нужна для JDBC Тестовых данных).
+- **Создан `MIGRATION.md`** — чеклист переноса на новую машину/сервер (что ставить, что переносить руками).
+- **`psycopg2-binary` возвращён в requirements.txt** — нужен ядру приложения при
+  `DATABASE_URL=postgresql://...` (был ошибочно удалён при JDBC-унификации Тестовых данных).
+- **Тестовые данные/Jobs**: все подключения к БД через единый реестр JDBC-драйверов
+  («Настройка драйверов» в стиле DBeaver: вкладки Настройки/Библиотека, загрузка своих .jar).
+  Встроенные PostgreSQL/MySQL/Oracle предзаполнены — требуется только .jar.
+  Нативные Python-драйверы БД из testdata убраны. Общий модуль `backend/api/db_connector.py`.
+  ⚠️ JPype: .jar, загруженный после старта JVM, требует перезапуска бэкенда.
+- **Экспорт Zephyr XML** переписан под корп. спецификацию TM4J: корень `<project>`
+  (projectId/projectKey/modelVersion/jiraVersion/exportDate/folders), в `<testCase>` —
+  attachments/createdBy/createdOn/customFields (Команда, Вид тестирования, АС, Автоматизирован,
+  Крит. регресс, Домен)/objective (цель + время прохождения)/owner (табельный)/precondition/
+  parameters/testScript/updatedBy/updatedOn; sequential id/key с 14710101; в форме экспорта —
+  Project ID, Jira Version, Автор ФИО + табельный (персистится в localStorage `st_author`),
+  дефолты: SBER911/11000/9.12.27/Застылов С.А./16538296.
+- **Генерация**: LLM даёт оценку времени прохождения на кейс (`estimated_minutes`);
+  саммари «Создано N кейсов. Общее время прохождения: M мин» + бейдж времени на карточке.
+- **LLM-провайдеры**: GigaChat в UI переключается API-ключ ⇄ клиентский сертификат
+  (CA/cert/key пути), DeepSeek — по API-ключу. Активный провайдер = клик по статусу в сайдбаре
+  (не персистится — после перезагрузки страницы возвращается GigaChat).
+- **Просмотр Kafka**: форма подключения с тумблерами «CLEARTEXT ⇄ SSL» и
+  «Валидировать сертификат: нет ⇄ да» + опциональные пути (ключ/серт/CA);
+  `ssl_verify=false` строит SSL-контекст без валидации (самоподписанные серты стендов).
+- Все реестры подключений (Kafka/Ревизор/Тестовые данные/Логи VPS) — единый UI-паттерн
+  `ConnectionsModal`/`ConnectionRow` (`frontend/components/ui/ConnectionsModal.tsx`).
+- В `.gitignore` добавлен `data/kafka_explorer_connections.json` (может содержать SASL-пароли).
 
 ### 2026-06-29 — Удалён модуль «Ферма устройств» (Device Farm) + консолидация документации
 - **Удалена вся фича Device Farm** (по решению владельца — мёртвый/тяжёлый модуль):

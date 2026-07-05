@@ -36,6 +36,7 @@ class ConnectionBody(BaseModel):
     ssl_cafile: str = ""
     ssl_certfile: str = ""
     ssl_keyfile: str = ""
+    ssl_verify: bool = True
     default_limit: int = 50
 
 

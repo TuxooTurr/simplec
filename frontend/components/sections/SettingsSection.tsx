@@ -341,11 +341,12 @@ function SaveBar({ status, errMsg, onSave, saving }: {
 // ── Unified LLM Providers ──────────────────────────────────────────────────
 
 function UnifiedLlmProviders({
-  builtinValues, customProviders, onSaveBuiltin, onSaveCustom, onDeleteCustom, onRefresh,
+  builtinValues, customProviders, onSaveBuiltin, onSaveBuiltinBatch, onSaveCustom, onDeleteCustom, onRefresh,
 }: {
   builtinValues: Record<string, string>;
   customProviders: CustomLlmProvider[];
   onSaveBuiltin: (key: string, value: string) => Promise<void>;
+  onSaveBuiltinBatch: (values: Record<string, string>) => Promise<void>;
   onSaveCustom: (p: CustomLlmProvider) => Promise<void>;
   onDeleteCustom: (id: string) => Promise<void>;
   onRefresh: () => Promise<void>;
@@ -359,6 +360,10 @@ function UnifiedLlmProviders({
   const [testing, setTesting] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editKey, setEditKey] = useState("");
+  const [editAuthType, setEditAuthType] = useState<"api_key" | "certificate">("api_key");
+  const [editCaCertPath, setEditCaCertPath] = useState("");
+  const [editClientCertPath, setEditClientCertPath] = useState("");
+  const [editClientKeyPath, setEditClientKeyPath] = useState("");
 
   // ─── Auto-refresh: poll statuses on same interval as status requests ───
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -392,13 +397,16 @@ function UnifiedLlmProviders({
   }, [customProviders, runStatusChecks]);
 
   // Build list of active providers
-  type ActiveProvider = { id: string; name: string; model: string; hasKey: boolean; builtin?: boolean; preset?: ProviderPreset };
+  type ActiveProvider = { id: string; name: string; model: string; hasKey: boolean; builtin?: boolean; preset?: ProviderPreset; authType?: string };
   const activeProviders: ActiveProvider[] = [];
 
-  // Built-in: GigaChat
+  // Built-in: GigaChat — по API-ключу или по клиентскому сертификату
   const gcPreset = PROVIDER_PRESETS.find(p => p.id === "gigachat")!;
-  const gcHasKey = !!(builtinValues["gigachat_auth_key"] && builtinValues["gigachat_auth_key"] !== "");
-  activeProviders.push({ id: "gigachat", name: gcPreset.name, model: builtinValues["gigachat_model"] || gcPreset.model, hasKey: gcHasKey, builtin: true, preset: gcPreset });
+  const gcAuthType = builtinValues["gigachat_auth_type"] || "api_key";
+  const gcHasKey = gcAuthType === "certificate"
+    ? !!(builtinValues["gigachat_client_cert_path"] && builtinValues["gigachat_client_key_path"])
+    : !!(builtinValues["gigachat_auth_key"] && builtinValues["gigachat_auth_key"] !== "");
+  activeProviders.push({ id: "gigachat", name: gcPreset.name, model: builtinValues["gigachat_model"] || gcPreset.model, hasKey: gcHasKey, builtin: true, preset: gcPreset, authType: gcAuthType });
 
   // Built-in: DeepSeek
   const dsPreset = PROVIDER_PRESETS.find(p => p.id === "deepseek")!;
@@ -469,18 +477,59 @@ function UnifiedLlmProviders({
     finally { setSaving(false); }
   }
 
-  async function handleUpdateKey(provider: ActiveProvider, newKey: string) {
-    if (!newKey.trim()) return;
+  function resetEditFields() {
+    setEditKey(""); setEditAuthType("api_key");
+    setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
+  }
+
+  function openEdit(provider: ActiveProvider) {
+    if (editingId === provider.id) { setEditingId(null); resetEditFields(); return; }
+    setEditingId(provider.id);
+    setEditKey("");
+    if (provider.id === "gigachat") {
+      setEditAuthType((builtinValues["gigachat_auth_type"] as "api_key" | "certificate") || "api_key");
+      setEditCaCertPath(builtinValues["gigachat_ca_cert_path"] || "");
+      setEditClientCertPath(builtinValues["gigachat_client_cert_path"] || "");
+      setEditClientKeyPath(builtinValues["gigachat_client_key_path"] || "");
+    } else {
+      setEditAuthType("api_key");
+      setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
+    }
+  }
+
+  async function handleSaveConnection(provider: ActiveProvider) {
     setSaving(true); setErrMsg("");
     try {
-      if (provider.builtin && provider.preset?.settingsKey) {
-        await onSaveBuiltin(provider.preset.settingsKey, newKey.trim());
+      if (provider.id === "gigachat") {
+        if (editAuthType === "certificate") {
+          if (!editClientCertPath.trim() || !editClientKeyPath.trim()) {
+            setErrMsg("Укажите путь к клиентскому сертификату и приватному ключу");
+            setSaving(false);
+            return;
+          }
+          await onSaveBuiltinBatch({
+            gigachat_auth_type: "certificate",
+            gigachat_ca_cert_path: editCaCertPath.trim(),
+            gigachat_client_cert_path: editClientCertPath.trim(),
+            gigachat_client_key_path: editClientKeyPath.trim(),
+          });
+        } else {
+          if (!editKey.trim()) { setErrMsg("Введите AUTH_KEY"); setSaving(false); return; }
+          await onSaveBuiltinBatch({
+            gigachat_auth_type: "api_key",
+            gigachat_auth_key: editKey.trim(),
+          });
+        }
+      } else if (provider.builtin && provider.preset?.settingsKey) {
+        if (!editKey.trim()) { setSaving(false); return; }
+        await onSaveBuiltin(provider.preset.settingsKey, editKey.trim());
       } else {
+        if (!editKey.trim()) { setSaving(false); return; }
         const cp = customProviders.find(c => c.id === provider.id);
-        if (cp) await onSaveCustom({ ...cp, api_key: newKey.trim() });
+        if (cp) await onSaveCustom({ ...cp, api_key: editKey.trim() });
       }
       await onRefresh();
-      setEditingId(null); setEditKey("");
+      setEditingId(null); resetEditFields();
     } catch (e) { setErrMsg(e instanceof Error ? e.message : String(e)); }
     finally { setSaving(false); }
   }
@@ -531,16 +580,19 @@ function UnifiedLlmProviders({
                       {models.map(m => <option key={m} value={m}>{m}</option>)}
                     </select>
                   ) : (
-                    <p className="text-xs text-text-muted">{p.model}{!hasKeyOrNoNeed ? " · нет ключа" : ""}</p>
+                    <p className="text-xs text-text-muted">
+                      {p.model}{!hasKeyOrNoNeed ? " · нет ключа" : ""}
+                      {p.id === "gigachat" && hasKeyOrNoNeed ? (p.authType === "certificate" ? " · по сертификату" : " · по API-ключу") : ""}
+                    </p>
                   )}
                 </div>
                 <StatusBadge result={tr ?? null} loading={testing === p.id} />
                 <TestButton onClick={() => handleTest(p.id)} loading={testing === p.id} />
                 <button
-                  onClick={() => { setEditingId(editingId === p.id ? null : p.id); setEditKey(""); }}
+                  onClick={() => openEdit(p)}
                   className="px-2 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-subtle"
                 >
-                  {editingId === p.id ? "Отмена" : "Ключ"}
+                  {editingId === p.id ? "Отмена" : "Подключение"}
                 </button>
                 {!p.builtin && (
                   <button onClick={() => handleDelete(p.id)}
@@ -550,15 +602,41 @@ function UnifiedLlmProviders({
                 )}
               </div>
               {editingId === p.id && (
-                <div className="mt-2 flex items-center gap-2 pl-8">
-                  <div className="flex-1">
+                <div className="mt-2 pl-8 space-y-2">
+                  {p.id === "gigachat" && (
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
+                        <input type="radio" checked={editAuthType === "api_key"} onChange={() => setEditAuthType("api_key")}
+                          className="text-primary focus:ring-primary/30" />
+                        По API-ключу
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
+                        <input type="radio" checked={editAuthType === "certificate"} onChange={() => setEditAuthType("certificate")}
+                          className="text-primary focus:ring-primary/30" />
+                        По сертификату
+                      </label>
+                    </div>
+                  )}
+                  {p.id === "gigachat" && editAuthType === "certificate" ? (
+                    <div className="space-y-1.5">
+                      <input className={INPUT_CLS} value={editCaCertPath} onChange={(e) => setEditCaCertPath(e.target.value)}
+                        placeholder="Путь к CA bundle (опционально)" spellCheck={false} />
+                      <input className={INPUT_CLS} value={editClientCertPath} onChange={(e) => setEditClientCertPath(e.target.value)}
+                        placeholder="Путь к клиентскому сертификату (.pem/.crt)" spellCheck={false} />
+                      <input className={INPUT_CLS} value={editClientKeyPath} onChange={(e) => setEditClientKeyPath(e.target.value)}
+                        placeholder="Путь к приватному ключу сертификата" spellCheck={false} />
+                    </div>
+                  ) : (
                     <PasswordInput fieldKey="edit_key" value={editKey} onChange={(_, v) => setEditKey(v)}
                       placeholder={p.preset?.apiKeyLabel ?? "API Key"} />
+                  )}
+                  {errMsg && editingId === p.id && <p className="text-xs text-red-500">{errMsg}</p>}
+                  <div className="flex justify-end">
+                    <button onClick={() => handleSaveConnection(p)} disabled={saving}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
+                      <Save className="w-3 h-3" /> Сохранить
+                    </button>
                   </div>
-                  <button onClick={() => handleUpdateKey(p, editKey)} disabled={saving || !editKey.trim()}
-                    className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
-                    <Save className="w-3 h-3" /> Сохранить
-                  </button>
                 </div>
               )}
             </div>
@@ -1323,6 +1401,11 @@ export default function SettingsSection() {
           customProviders={customProviders}
           onSaveBuiltin={async (key, value) => {
             await saveSettings({ [key]: value });
+            await loadSettings();
+            bumpProviders();
+          }}
+          onSaveBuiltinBatch={async (vals) => {
+            await saveSettings(vals);
             await loadSettings();
             bumpProviders();
           }}

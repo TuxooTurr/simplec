@@ -45,17 +45,36 @@ class KafkaClient:
 
         if protocol in ("SSL", "SASL_SSL"):
             cafile = cfg.get("kafka_ssl_cafile") or os.getenv("KAFKA_SSL_CAFILE", "")
-            if cafile:
-                kwargs["ssl_cafile"] = cafile
             certfile = cfg.get("kafka_ssl_certfile") or os.getenv("KAFKA_SSL_CERTFILE", "")
-            if certfile:
-                kwargs["ssl_certfile"] = certfile
             keyfile = cfg.get("kafka_ssl_keyfile") or os.getenv("KAFKA_SSL_KEYFILE", "")
-            if keyfile:
-                kwargs["ssl_keyfile"] = keyfile
             ssl_password = cfg.get("kafka_ssl_password") or os.getenv("KAFKA_SSL_PASSWORD", "")
-            if ssl_password:
-                kwargs["ssl_password"] = ssl_password
+            verify = cfg.get("kafka_ssl_verify", True)
+            if isinstance(verify, str):
+                verify = verify.strip().lower() not in ("0", "false", "no", "нет")
+
+            if not verify:
+                # Без валидации сертификата брокера (самоподписанные серты на стендах):
+                # kafka-python при заданном ssl_context использует только его.
+                import ssl
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                if cafile:
+                    ctx.load_verify_locations(cafile=cafile)
+                if certfile:
+                    ctx.load_cert_chain(certfile=certfile, keyfile=keyfile or None,
+                                        password=ssl_password or None)
+                kwargs["ssl_context"] = ctx
+                kwargs["ssl_check_hostname"] = False
+            else:
+                if cafile:
+                    kwargs["ssl_cafile"] = cafile
+                if certfile:
+                    kwargs["ssl_certfile"] = certfile
+                if keyfile:
+                    kwargs["ssl_keyfile"] = keyfile
+                if ssl_password:
+                    kwargs["ssl_password"] = ssl_password
 
         return kwargs
 

@@ -17,9 +17,15 @@ class TestCaseMarkdown:
     steps: List[dict]
     priority: str = "Normal"
     case_type: str = "positive"
+    estimated_minutes: int = 5
 
     def to_markdown(self) -> str:
-        lines = [f"## {self.name}", f"**Приоритет:** {self.priority}", ""]
+        lines = [
+            f"## {self.name}",
+            f"**Приоритет:** {self.priority}",
+            f"**Оценка времени прохождения:** {self.estimated_minutes} мин",
+            "",
+        ]
         for i, step in enumerate(self.steps, 1):
             lines.append(f"**Шаг {i}:** {step.get('action', '')}")
             lines.append(f"- Тестовые данные: {step.get('test_data', '-')}")
@@ -307,6 +313,7 @@ class LayeredGenerator:
             "КОЛИЧЕСТВО ШАГОВ: " + step_instr + "\n\n"
             "ФОРМАТ — ОБЯЗАТЕЛЬНО использовать ТОЧНО такой синтаксис заголовков шагов:\n\n"
             "## " + case_name + "\n\n"
+            "**Оценка времени прохождения:** 5 мин\n\n"
             "**Шаг 1:** Открыть браузер и перейти на страницу оформления заявки\n"
             "- Тестовые данные: URL https://example.ru/request\n"
             "- UI: Отображается форма заявки с обязательными полями\n"
@@ -318,6 +325,9 @@ class LayeredGenerator:
             "- API: POST /api/requests → 201 Created, body: {\"id\": \"...\"}\n"
             "- БД: таблица requests содержит новую запись со статусом created\n\n"
             "КРИТИЧЕСКИ ВАЖНО:\n"
+            "- Сразу после заголовка кейса ОБЯЗАТЕЛЬНО укажи строку **Оценка времени прохождения:** N мин — "
+            "экспертная оценка в целых минутах, с учётом количества шагов И времени на подготовку тестовых данных "
+            "(создание записей, ожидание статусов и т.п.)\n"
             "- Заголовок шага ВСЕГДА: **Шаг N:** (звёздочки, двоеточие — точно так)\n"
             "- После двоеточия — действие на той же строке\n"
             "- Строки UI / API / БД — всегда присутствуют, без дополнительных отступов\n"
@@ -378,6 +388,15 @@ class LayeredGenerator:
 
         # Strip code fences
         text = re.sub(r'```\w*\n?', '', text).strip()
+
+        # ── Оценка времени прохождения (с учётом подготовки данных) ─────────
+        estimated_minutes = 5
+        time_match = re.search(
+            r'оценка\s+времени\s+прохождени\S*[^\n:]*:\**\s*(\d+)\s*мин',
+            text, re.IGNORECASE,
+        )
+        if time_match:
+            estimated_minutes = int(time_match.group(1))
 
         # ── Step detection: try patterns from most to least strict ──────────
         # Each pattern captures (step_number, block_content)
@@ -453,116 +472,240 @@ class LayeredGenerator:
             name=case_info["name"],
             steps=steps,
             priority=case_info.get("priority", "Normal"),
-            case_type=case_info.get("type", "positive")
+            case_type=case_info.get("type", "positive"),
+            estimated_minutes=estimated_minutes,
         )
 
     # ========================================================
-    # LAYER 4: LLM XML wrapping (HTML-formatted steps)
+    # LAYER 4: Zephyr Scale / TM4J XML export
     # ========================================================
+
+    _CUSTOM_FIELD_TPL = (
+        '        <customField name="{name}" type="{ftype}">\n'
+        '            <value><![CDATA[{value}]]></value>\n'
+        '        </customField>\n'
+    )
+
+    _DEFAULT_AUTHOR_NAME = "Застылов Стефан Александрович"
+    _DEFAULT_AUTHOR_TAB_NUM = "16538296"
+    _DEFAULT_PROJECT_ID = "11000"
+    _DEFAULT_JIRA_VERSION = "9.12.27"
+    _DEFAULT_START_ID = 14710101
+
+    @staticmethod
+    def _case_group(case_name: str) -> str:
+        """Извлекает «Группу проверок» из названия кейса вида [Platform][Feature] Группа. Имя."""
+        import re
+        m = re.search(r'\]\s*([^.\[\]]+)\.', case_name)
+        return m.group(1).strip() if m else ""
+
+    def _fallback_script_xml(self, case) -> str:
+        """Шаги без LLM — из уже распарсенных полей кейса (ui/api/db/test_data)."""
+        steps_xml = []
+        for i, s in enumerate(case.steps):
+            exp = "UI: " + s.get("ui", "-") + "<br/>API: " + s.get("api", "-") + "<br/>БД: " + s.get("db", "-")
+            data = "Что нужно: " + s.get("test_data", "-") + "<br/>SQL: не требуется"
+            steps_xml.append(
+                '        <step index="' + str(i) + '">\n'
+                '            <customFields/>\n'
+                '            <description><![CDATA[' + s.get("action", "") + ']]></description>\n'
+                '            <expectedResult><![CDATA[' + exp + ']]></expectedResult>\n'
+                '            <testData><![CDATA[' + data + ']]></testData>\n'
+                '        </step>\n'
+            )
+        return '<testScript type="steps">\n    <steps>\n' + "".join(steps_xml) + '    </steps>\n</testScript>'
+
+    def _assemble_testcase_xml(self, case, case_id, case_key, project, system, team, domain,
+                                case_folder, critical, priority, objective_xml, precondition_xml,
+                                script_xml, dt, author_name, author_tab_num) -> str:
+        author_name = author_name or self._DEFAULT_AUTHOR_NAME
+        author_tab_num = author_tab_num or self._DEFAULT_AUTHOR_TAB_NUM
+
+        custom_fields = (
+            '    <customFields>\n'
+            + self._CUSTOM_FIELD_TPL.format(name="Команда", ftype="SINGLE_CHOICE_SELECT_LIST", value=team)
+            + self._CUSTOM_FIELD_TPL.format(name="Вид тестирования", ftype="SINGLE_CHOICE_SELECT_LIST", value="Новый функционал")
+            + self._CUSTOM_FIELD_TPL.format(name="АС", ftype="SINGLE_CHOICE_SELECT_LIST", value=system)
+            + self._CUSTOM_FIELD_TPL.format(name="Автоматизирован", ftype="SINGLE_CHOICE_SELECT_LIST", value="Нет")
+            + self._CUSTOM_FIELD_TPL.format(name="Крит. регресс", ftype="CHECKBOX", value=critical)
+            + self._CUSTOM_FIELD_TPL.format(name="Домен", ftype="MULTI_CHOICE_SELECT_LIST", value=domain)
+            + '    </customFields>\n'
+        )
+
+        return (
+            '<testCase id="' + str(case_id) + '" key="' + case_key + '">\n'
+            '    <attachments/>\n'
+            '    <confluencePageLinks/>\n'
+            '    <createdBy>' + author_name + '</createdBy>\n'
+            '    <createdOn>' + dt + '</createdOn>\n'
+            + custom_fields
+            + '    <folder><![CDATA[' + case_folder + ']]></folder>\n'
+            '    <issues/>\n'
+            '    <labels/>\n'
+            '    <name><![CDATA[' + case.name + ']]></name>\n'
+            '    ' + objective_xml + '\n'
+            '    <owner>' + author_tab_num + '</owner>\n'
+            '    ' + precondition_xml + '\n'
+            '    <priority><![CDATA[' + priority + ']]></priority>\n'
+            '    <status><![CDATA[Черновик]]></status>\n'
+            '    <parameters/>\n'
+            '    ' + script_xml + '\n'
+            '    <updatedBy>' + author_name + '</updatedBy>\n'
+            '    <updatedOn>' + dt + '</updatedOn>\n'
+            '</testCase>'
+        )
+
+    def _wrap_project_xml(self, case_xml_parts, folders_seen, project_id, project_key, jira_version, base_dt) -> str:
+        folders_xml = "\n".join(
+            '<folder fullPath="' + path + '" index="' + str(idx) + '"/>'
+            for path, idx in folders_seen.items()
+        )
+        export_date = base_dt.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+        combined = "\n".join(case_xml_parts)
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            '<project>\n'
+            '<projectId>' + str(project_id) + '</projectId>\n'
+            '<projectKey>' + project_key + '</projectKey>\n'
+            '<modelVersion>1.0</modelVersion>\n'
+            '<jiraVersion>' + jira_version + '</jiraVersion>\n'
+            '<exportDate>' + export_date + '</exportDate>\n'
+            '<folders>\n' + folders_xml + '\n</folders>\n'
+            '<testCases>\n' + combined + '\n</testCases>\n'
+            '</project>'
+        )
+
     def wrap_case_to_xml_via_llm(self, case, qa_doc,
                                   project="SBER911", system="",
                                   team="", domain="",
                                   folder="Новая ТМ",
-                                  crit_regress=False):
+                                  crit_regress=False,
+                                  case_id=None,
+                                  created_on=None,
+                                  author_name="",
+                                  author_tab_num=""):
         from agents.llm_client import Message
-        import random
+        from datetime import datetime, timezone
+        import re
 
-        cid = random.randint(10000000, 99999999)
+        case_id = case_id or self._DEFAULT_START_ID
         md_text = case.to_markdown()
-        critical = ("true" if case.priority == "High" else "false") if crit_regress else "false"
-        case_key = project + "-T" + str(cid)
-
-        xml_template = (
-            '<testCase id="' + str(cid) + '" key="' + case_key + '">\n'
-            '    <project><![CDATA[' + project + ']]></project>\n'
-            '    <priority><![CDATA[' + case.priority + ']]></priority>\n'
-            '    <status><![CDATA[Черновик]]></status>\n'
-            '    <customFields>\n'
-            '        <customField name="Крит. регресс" type="CHECKBOX">\n'
-            '            <value><![CDATA[' + critical + ']]></value>\n'
-            '        </customField>\n'
-            '        <customField name="Домен" type="MULTI_CHOICE_SELECT_LIST">\n'
-            '            <value><![CDATA[' + domain + ']]></value>\n'
-            '        </customField>\n'
-            '        <customField name="Команда" type="SINGLE_CHOICE_SELECT_LIST">\n'
-            '            <value><![CDATA[' + team + ']]></value>\n'
-            '        </customField>\n'
-            '        <customField name="АС" type="SINGLE_CHOICE_SELECT_LIST">\n'
-            '            <value><![CDATA[' + system + ']]></value>\n'
-            '        </customField>\n'
-            '    </customFields>\n'
-            '    <name><![CDATA[' + case.name + ']]></name>\n'
-            '    <folder><![CDATA[' + folder + ']]></folder>'
-        )
+        priority = case.priority if case.priority in ("High", "Normal") else "Normal"
+        critical = "true" if (crit_regress and case.priority == "High") else "false"
+        case_key = project + "-T" + str(case_id)
+        group = self._case_group(case.name)
+        case_folder = folder + "/" + group if group else folder
+        dt = (created_on or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
         prompt = (
-            "Ты эксперт по Zephyr Scale XML. Преобразуй Markdown тест-кейс в XML шаги.\n\n"
+            "Ты эксперт по Zephyr Scale / TM4J. На основе Markdown тест-кейса сформируй "
+            "цель, предусловия и шаги в XML.\n\n"
             "ТЕСТ-КЕЙС (Markdown):\n" + md_text + "\n\n"
             "КОНТЕКСТ (QA документация):\n" + qa_doc[:1500] + "\n\n"
-            "Сгенерируй ТОЛЬКО блок <testScript> с шагами в формате:\n\n"
+            "ОЦЕНКА ВРЕМЕНИ ПРОХОЖДЕНИЯ (уже посчитана, используй как есть): "
+            + str(case.estimated_minutes) + " мин\n\n"
+            "Сгенерируй ТОЛЬКО эти три блока:\n\n"
+            "<objective><![CDATA[Что именно проверяет кейс — 1 короткое предложение<br/>"
+            "Оценка времени прохождения (с учётом подготовки данных): "
+            + str(case.estimated_minutes) + " мин]]></objective>\n"
+            "<precondition><![CDATA[1. Первое предусловие<br/>2. Второе предусловие]]></precondition>\n"
             "<testScript type=\"steps\">\n"
             "    <steps>\n"
             '        <step index="0">\n'
-            "            <description><![CDATA[Действие тестировщика]]></description>\n"
-            "            <testData><![CDATA[Конкретные тестовые данные]]></testData>\n"
-            "            <expectedResult><![CDATA[\n"
-            "<strong>UI:</strong>\n"
-            "<ul><li>что видит пользователь</li></ul>\n"
-            "<strong>API:</strong>\n"
-            "<ul><li>метод, endpoint, статус, ответ</li></ul>\n"
-            "<strong>БД:</strong>\n"
-            "<ul><li>таблица, запись, значения</li></ul>\n"
-            "            ]]></expectedResult>\n"
+            "            <customFields/>\n"
+            "            <description><![CDATA[Действие тестировщика с конкретными данными]]></description>\n"
+            "            <expectedResult><![CDATA[UI: что видит пользователь<br/>API: метод, endpoint, статус, ответ<br/>БД: таблица, поле, значение]]></expectedResult>\n"
+            "            <testData><![CDATA[Что нужно: конкретные данные<br/>SQL: SELECT ... (или \"не требуется\", если БД не проверяется)]]></testData>\n"
             "        </step>\n"
             "    </steps>\n"
             "</testScript>\n\n"
             "ПРАВИЛА:\n"
-            "1. expectedResult форматируй HTML: <strong>, <ul>, <li>, <br/>\n"
-            "2. testData — конкретные значения, URL, параметры, JSON\n"
-            "3. description — чёткое действие для Junior тестировщика\n"
-            "4. Если UI/API/БД не применимо — не включай этот блок в expectedResult\n"
-            "5. index шагов начинается с 0\n\n"
-            "Верни ТОЛЬКО <testScript>...</testScript>. Без пояснений."
+            "1. objective — конкретная цель кейса, без воды, и обязательно вторая строка через <br/> с оценкой "
+            "времени ровно как дано выше (" + str(case.estimated_minutes) + " мин) — не пересчитывай\n"
+            "2. precondition — конкретные проверяемые предусловия (не «система работает», а что именно должно "
+            "быть настроено/создано перед прогоном)\n"
+            "3. expectedResult — ВСЕГДА три зоны UI/API/БД через <br/>, если зона неприменима — пиши внутри неё "
+            "«Не требуется», саму зону не пропускай\n"
+            "4. testData — «Что нужно: ...<br/>SQL: ...». SQL — рабочий SELECT под таблицы/поля из кейса, если "
+            "проверка требует БД, иначе «SQL: не требуется»\n"
+            "5. index шагов начинается с 0, количество шагов — как в исходном Markdown-кейсе\n"
+            "6. Не добавляй <testCase>, <name>, <priority> и другие теги — только objective, precondition, testScript\n\n"
+            "Верни ТОЛЬКО эти три блока. Без пояснений, без markdown-обёртки."
         )
 
         response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.3, max_tokens=3000)
+                                  temperature=0.3, max_tokens=3500)
+        raw = response.content.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```\w*\n?", "", raw)
+            raw = re.sub(r"\n?```$", "", raw)
+            raw = raw.strip()
 
-        script_xml = response.content.strip()
-        if script_xml.startswith("```"):
-            import re
-            script_xml = re.sub(r"^```\w*\n?", "", script_xml)
-            script_xml = re.sub(r"\n?```$", "", script_xml)
-            script_xml = script_xml.strip()
+        objective_m = re.search(r'<objective>.*?</objective>', raw, re.DOTALL)
+        precondition_m = re.search(r'<precondition>.*?</precondition>', raw, re.DOTALL)
+        script_m = re.search(r'<testScript.*?</testScript>', raw, re.DOTALL)
 
-        return xml_template + "\n    " + script_xml + "\n</testCase>"
+        objective_xml = objective_m.group(0) if objective_m else (
+            "<objective><![CDATA[" + case.name + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
+            + str(case.estimated_minutes) + " мин]]></objective>"
+        )
+        precondition_xml = precondition_m.group(0) if precondition_m else (
+            "<precondition><![CDATA[1. Тестовые данные подготовлены<br/>2. Пользователь имеет необходимые "
+            "права доступа]]></precondition>"
+        )
+        script_xml = script_m.group(0) if script_m else self._fallback_script_xml(case)
+
+        return self._assemble_testcase_xml(
+            case=case, case_id=case_id, case_key=case_key,
+            project=project, system=system, team=team, domain=domain,
+            case_folder=case_folder, critical=critical, priority=priority,
+            objective_xml=objective_xml, precondition_xml=precondition_xml, script_xml=script_xml,
+            dt=dt, author_name=author_name, author_tab_num=author_tab_num,
+        )
 
     def wrap_all_cases_via_llm(self, cases, qa_doc,
                                 project="SBER911", system="",
                                 team="", domain="",
                                 folder="Новая ТМ",
                                 progress_callback=None,
-                                crit_regress=False):
-        xml_parts = []
+                                crit_regress=False,
+                                project_id=None,
+                                jira_version=None,
+                                start_id=None,
+                                author_name="",
+                                author_tab_num=""):
+        from datetime import datetime, timedelta, timezone
+
         total = len(cases)
+        base_dt = datetime.now(timezone.utc)
+        case_id = start_id or self._DEFAULT_START_ID
+        xml_parts = []
+        folders_seen: dict = {}
 
         for i, case in enumerate(cases):
             if progress_callback:
                 progress_callback(i, total, case.name)
 
+            created_on = base_dt + timedelta(minutes=i)
             case_xml = self.wrap_case_to_xml_via_llm(
                 case, qa_doc, project=project, system=system,
                 team=team, domain=domain, folder=folder,
-                crit_regress=crit_regress
+                crit_regress=crit_regress, case_id=case_id,
+                created_on=created_on, author_name=author_name, author_tab_num=author_tab_num,
             )
             xml_parts.append(case_xml)
 
-        combined = "\n".join(xml_parts)
-        return (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            "<testCases>\n"
-            + combined + "\n"
-            "</testCases>"
+            group = self._case_group(case.name)
+            case_folder = folder + "/" + group if group else folder
+            if case_folder not in folders_seen:
+                folders_seen[case_folder] = len(folders_seen)
+
+            case_id += 1
+
+        return self._wrap_project_xml(
+            xml_parts, folders_seen,
+            project_id or self._DEFAULT_PROJECT_ID, project,
+            jira_version or self._DEFAULT_JIRA_VERSION, base_dt,
         )
 
     # ========================================================
@@ -570,56 +713,47 @@ class LayeredGenerator:
     # ========================================================
     def cases_to_xml(self, cases, project="SBER911",
                      system="", team="", domain="",
-                     folder="Новая ТМ", crit_regress=False):
-        import random
+                     folder="Новая ТМ", crit_regress=False,
+                     project_id=None, jira_version=None, start_id=None,
+                     author_name="", author_tab_num=""):
+        from datetime import datetime, timedelta, timezone
 
+        base_dt = datetime.now(timezone.utc)
+        case_id = start_id or self._DEFAULT_START_ID
         xml_parts = []
-        for case in cases:
-            cid = random.randint(10000000, 99999999)
-            critical = ("true" if case.priority == "High" else "false") if crit_regress else "false"
+        folders_seen: dict = {}
 
-            steps_xml = ""
-            for i, s in enumerate(case.steps):
-                exp = "UI: " + s["ui"] + "<br/><br/>API: " + s["api"] + "<br/><br/>БД: " + s["db"]
-                steps_xml += (
-                    '\n            <step index="' + str(i) + '">'
-                    "\n                <description><![CDATA[" + s["action"] + "]]></description>"
-                    "\n                <testData><![CDATA[" + s["test_data"] + "]]></testData>"
-                    "\n                <expectedResult><![CDATA[" + exp + "]]></expectedResult>"
-                    "\n            </step>"
-                )
+        for i, case in enumerate(cases):
+            priority = case.priority if case.priority in ("High", "Normal") else "Normal"
+            critical = "true" if (crit_regress and case.priority == "High") else "false"
+            case_key = project + "-T" + str(case_id)
+            group = self._case_group(case.name)
+            case_folder = folder + "/" + group if group else folder
+            if case_folder not in folders_seen:
+                folders_seen[case_folder] = len(folders_seen)
+            dt = (base_dt + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
-            xml_parts.append(
-                '<testCase id="' + str(cid) + '" key="' + project + '-T' + str(cid) + '">\n'
-                '    <project><![CDATA[' + project + ']]></project>\n'
-                '    <priority><![CDATA[' + case.priority + ']]></priority>\n'
-                '    <status><![CDATA[Черновик]]></status>\n'
-                '    <customFields>\n'
-                '        <customField name="Крит. регресс" type="CHECKBOX">\n'
-                '            <value><![CDATA[' + critical + ']]></value>\n'
-                '        </customField>\n'
-                '        <customField name="Домен" type="MULTI_CHOICE_SELECT_LIST">\n'
-                '            <value><![CDATA[' + domain + ']]></value>\n'
-                '        </customField>\n'
-                '        <customField name="Команда" type="SINGLE_CHOICE_SELECT_LIST">\n'
-                '            <value><![CDATA[' + team + ']]></value>\n'
-                '        </customField>\n'
-                '        <customField name="АС" type="SINGLE_CHOICE_SELECT_LIST">\n'
-                '            <value><![CDATA[' + system + ']]></value>\n'
-                '        </customField>\n'
-                '    </customFields>\n'
-                '    <name><![CDATA[' + case.name + ']]></name>\n'
-                '    <folder><![CDATA[' + folder + ']]></folder>\n'
-                '    <testScript type="steps">\n'
-                '        <steps>' + steps_xml + '\n'
-                '        </steps>\n'
-                '    </testScript>\n'
-                '</testCase>'
+            objective_xml = (
+                "<objective><![CDATA[" + case.name + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
+                + str(case.estimated_minutes) + " мин]]></objective>"
             )
+            precondition_xml = (
+                "<precondition><![CDATA[1. Тестовые данные подготовлены<br/>2. Пользователь имеет необходимые "
+                "права доступа]]></precondition>"
+            )
+            script_xml = self._fallback_script_xml(case)
 
-        return (
-            '<?xml version="1.0" encoding="UTF-8"?>\n'
-            '<testCases>\n'
-            + "\n".join(xml_parts) + "\n"
-            + '</testCases>'
+            xml_parts.append(self._assemble_testcase_xml(
+                case=case, case_id=case_id, case_key=case_key,
+                project=project, system=system, team=team, domain=domain,
+                case_folder=case_folder, critical=critical, priority=priority,
+                objective_xml=objective_xml, precondition_xml=precondition_xml, script_xml=script_xml,
+                dt=dt, author_name=author_name, author_tab_num=author_tab_num,
+            ))
+            case_id += 1
+
+        return self._wrap_project_xml(
+            xml_parts, folders_seen,
+            project_id or self._DEFAULT_PROJECT_ID, project,
+            jira_version or self._DEFAULT_JIRA_VERSION, base_dt,
         )

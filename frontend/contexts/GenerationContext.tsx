@@ -28,6 +28,7 @@ export interface Case {
   priority: string;
   case_type: string;
   steps: Step[];
+  estimated_minutes?: number;
 }
 
 export interface GenEvent {
@@ -64,6 +65,10 @@ export interface ExportParams {
   provider: string;
   crit_regress?: boolean;
   session_id?: string;
+  project_id?: string;
+  jira_version?: string;
+  author_name?: string;
+  author_tab_num?: string;
 }
 
 // ── Context interface ────────────────────────────────────────────────────────

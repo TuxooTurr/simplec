@@ -74,6 +74,7 @@ class KafkaExplorerStore:
             "ssl_cafile": str(data.get("ssl_cafile", "")).strip(),
             "ssl_certfile": str(data.get("ssl_certfile", "")).strip(),
             "ssl_keyfile": str(data.get("ssl_keyfile", "")).strip(),
+            "ssl_verify": bool(data.get("ssl_verify", True)),
             "default_limit": int(data.get("default_limit", 50) or 50),
             "created_at": now,
             "updated_at": now,
@@ -92,6 +93,8 @@ class KafkaExplorerStore:
                     if field in data and data[field] is not None:
                         val = data[field]
                         c[field] = str(val).strip().upper() if field == "security_protocol" else str(val).strip()
+                if "ssl_verify" in data and data["ssl_verify"] is not None:
+                    c["ssl_verify"] = bool(data["ssl_verify"])
                 if "default_limit" in data and data["default_limit"]:
                     c["default_limit"] = int(data["default_limit"])
                 # Пароль обновляем только если он НЕ маскированный
@@ -124,4 +127,5 @@ class KafkaExplorerStore:
             "kafka_ssl_cafile": conn.get("ssl_cafile", ""),
             "kafka_ssl_certfile": conn.get("ssl_certfile", ""),
             "kafka_ssl_keyfile": conn.get("ssl_keyfile", ""),
+            "kafka_ssl_verify": conn.get("ssl_verify", True),
         }

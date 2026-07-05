@@ -18,6 +18,7 @@ data/gen_sessions.json
 data/testdata_connections.json
 data/jdbc_drivers.json
 data/jdbc_drivers/
+data/kafka_explorer_connections.json
 Linly-Dubbing/
 simpletest.db
 certs/ca-bundle.pem

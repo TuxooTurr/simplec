@@ -419,7 +419,7 @@ export interface GenSessionSummary {
 export interface GenSession extends GenSessionSummary {
   qa_doc:         string;
   case_list:      Array<{ name: string; priority: string; type: string }>;
-  cases:          Array<{ name: string; priority: string; case_type: string; steps: unknown[] }>;
+  cases:          Array<{ name: string; priority: string; case_type: string; steps: unknown[]; estimated_minutes?: number }>;
   export_result:  { xml: string; csv: string; md: string } | null;
   is_running:     boolean;
 }

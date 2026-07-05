@@ -31,6 +31,7 @@ export interface KafkaConnection {
   ssl_cafile?: string;
   ssl_certfile?: string;
   ssl_keyfile?: string;
+  ssl_verify?: boolean;
   default_limit?: number;
   created_at?: string;
   updated_at?: string;

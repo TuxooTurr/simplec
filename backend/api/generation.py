@@ -114,6 +114,7 @@ def _tc_to_dict(tc) -> dict:
         "priority": tc.priority,
         "case_type": tc.case_type,
         "steps": tc.steps,
+        "estimated_minutes": tc.estimated_minutes,
     }
 
 
@@ -124,6 +125,7 @@ def _dict_to_tc(d: dict):
         steps=d.get("steps", []),
         priority=d.get("priority", "Normal"),
         case_type=d.get("case_type", "positive"),
+        estimated_minutes=d.get("estimated_minutes", 5),
     )
 
 
@@ -297,7 +299,9 @@ def _start_generation_task(session_id: str) -> asyncio.Task:
 
 async def _do_export(cases_raw: list, qa_doc: str, project: str, system: str,
                      team: str, domain: str, folder: str, use_llm: bool,
-                     provider: str, crit_regress: bool) -> dict:
+                     provider: str, crit_regress: bool,
+                     project_id: str = "", jira_version: str = "", start_id: Optional[int] = None,
+                     author_name: str = "", author_tab_num: str = "") -> dict:
     cases = [_dict_to_tc(c) for c in cases_raw]
 
     from agents.layered_generator import LayeredGenerator
@@ -310,11 +314,15 @@ async def _do_export(cases_raw: list, qa_doc: str, project: str, system: str,
         gen = LayeredGenerator(llm)
         xml_content = await asyncio.to_thread(
             gen.wrap_all_cases_via_llm,
-            cases, qa_doc, project, system, team, domain, folder, None, crit_regress
+            cases, qa_doc, project, system, team, domain, folder, None, crit_regress,
+            project_id, jira_version, start_id, author_name, author_tab_num,
         )
     else:
         gen = LayeredGenerator(None)
-        xml_content = gen.cases_to_xml(cases, project, system, team, domain, folder, crit_regress)
+        xml_content = gen.cases_to_xml(
+            cases, project, system, team, domain, folder, crit_regress,
+            project_id, jira_version, start_id, author_name, author_tab_num,
+        )
 
     csv_content = await asyncio.to_thread(_cases_to_csv, cases)
     md_content = _cases_to_md(cases, qa_doc)
@@ -423,12 +431,18 @@ async def _handle_ws_export(ws: WebSocket, data: dict):
     use_llm = data.get("use_llm", False)
     provider = str(data.get("provider") or "").strip()
     crit_regress = data.get("crit_regress", False)
+    project_id = data.get("project_id", "")
+    jira_version = data.get("jira_version", "")
+    start_id = data.get("start_id")
+    author_name = data.get("author_name", "")
+    author_tab_num = data.get("author_tab_num", "")
     session_id = data.get("session_id")
 
     try:
         result = await _do_export(
             cases_raw, qa_doc, project, system, team, domain,
             folder, use_llm, provider, crit_regress,
+            project_id, jira_version, start_id, author_name, author_tab_num,
         )
         if session_id:
             GenSessionsStore.update_session(session_id, export_result=result)
@@ -526,6 +540,11 @@ class ExportRequest(BaseModel):
     use_llm: bool = False
     provider: str = ""
     crit_regress: bool = False
+    project_id: str = ""
+    jira_version: str = ""
+    start_id: Optional[int] = None
+    author_name: str = ""
+    author_tab_num: str = ""
 
 
 @router.post("/api/generation/sessions/{session_id}/export")
@@ -545,6 +564,7 @@ async def export_session(session_id: str, req: ExportRequest) -> dict:
         result = await _do_export(
             cases, qa_doc, req.project, req.system, req.team, req.domain,
             req.folder, req.use_llm, req.provider, req.crit_regress,
+            req.project_id, req.jira_version, req.start_id, req.author_name, req.author_tab_num,
         )
         GenSessionsStore.update_session(session_id, export_result=result)
         return result

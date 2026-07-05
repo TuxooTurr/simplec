@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Database, Monitor, Globe, FlaskConical } from "lucide-react";
+import { ChevronDown, Database, Monitor, Globe, FlaskConical, Clock } from "lucide-react";
 import type { Case } from "@/lib/useGeneration";
 
 interface CaseCardProps {
@@ -70,6 +70,11 @@ export default function CaseCard({ index, case_, className = "", style, selectab
         </span>
 
         <span className="text-sm font-medium text-text-main flex-1 truncate">{case_.name}</span>
+
+        <span className="flex items-center gap-0.5 text-[11px] text-text-muted flex-shrink-0" title="Оценка времени прохождения">
+          <Clock className="w-3 h-3" />
+          {case_.estimated_minutes ?? 5} мин
+        </span>
 
         <span className="text-[11px] text-text-muted flex-shrink-0 hidden sm:block">
           {TYPE_LABELS[type] ?? type}

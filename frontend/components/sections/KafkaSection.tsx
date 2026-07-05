@@ -11,7 +11,6 @@ import {
   type KafkaConnection, type KafkaMessage,
 } from "@/lib/kafkaApi";
 
-const PROTOCOLS = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"] as const;
 const INPUT = "w-full rounded-lg border border-border-main bg-[var(--color-input-bg)] px-3 py-2 text-sm text-text-main " +
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40";
 
@@ -325,7 +324,27 @@ export default function KafkaSection() {
 
 /* ── Connections manager modal ───────────────────────────────────── */
 function emptyConn(): Partial<KafkaConnection> {
-  return { name: "", bootstrap_servers: "", security_protocol: "PLAINTEXT", default_limit: 50 };
+  return { name: "", bootstrap_servers: "", security_protocol: "PLAINTEXT", ssl_verify: true, default_limit: 50 };
+}
+
+/* Тумблер с подписями слева/справа: CLEARTEXT —●— SSL, нет —●— да */
+function SideSwitch({
+  label, left, right, on, onChange,
+}: {
+  label: string; left: string; right: string; on: boolean; onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 py-0.5">
+      <span className="text-xs text-text-muted">{label}</span>
+      <button type="button" onClick={() => onChange(!on)} className="flex items-center gap-1.5">
+        <span className={`text-xs font-semibold ${!on ? "text-primary" : "text-text-muted"}`}>{left}</span>
+        <span className={`relative inline-block h-4 w-8 rounded-full transition-colors ${on ? "bg-primary" : "bg-bg-muted"}`}>
+          <span className={`absolute top-0.5 left-0 h-3 w-3 rounded-full bg-white shadow transition-transform ${on ? "translate-x-[18px]" : "translate-x-0.5"}`} />
+        </span>
+        <span className={`text-xs font-semibold ${on ? "text-primary" : "text-text-muted"}`}>{right}</span>
+      </button>
+    </div>
+  );
 }
 
 function KafkaConnectionsModal({
@@ -338,7 +357,6 @@ function KafkaConnectionsModal({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const sasl = form.security_protocol === "SASL_PLAINTEXT" || form.security_protocol === "SASL_SSL";
   const ssl = form.security_protocol === "SSL" || form.security_protocol === "SASL_SSL";
 
   const reset = () => { setForm(emptyConn()); setEditingId(""); setMsg(null); };
@@ -396,20 +414,19 @@ function KafkaConnectionsModal({
           placeholder="Имя (напр. ИФТ стенд)" className={INPUT} />
         <input value={form.bootstrap_servers ?? ""} onChange={(e) => setForm({ ...form, bootstrap_servers: e.target.value })}
           placeholder="host:9092 (можно несколько через запятую)" className={`${INPUT} font-mono`} />
-        <select value={form.security_protocol ?? "PLAINTEXT"}
-          onChange={(e) => setForm({ ...form, security_protocol: e.target.value as KafkaConnection["security_protocol"] })}
-          className={INPUT}>
-          {PROTOCOLS.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
-        {sasl && (
-          <div className="grid grid-cols-2 gap-2">
-            <input value={form.sasl_mechanism ?? ""} onChange={(e) => setForm({ ...form, sasl_mechanism: e.target.value })} placeholder="SASL mechanism (PLAIN)" className={INPUT} />
-            <input value={form.sasl_username ?? ""} onChange={(e) => setForm({ ...form, sasl_username: e.target.value })} placeholder="SASL username" className={INPUT} />
-            <input type="password" value={form.sasl_password ?? ""} onChange={(e) => setForm({ ...form, sasl_password: e.target.value })} placeholder="SASL password" className={`${INPUT} col-span-2`} />
-          </div>
-        )}
+        <SideSwitch label="Подключение по:" left="CLEARTEXT" right="SSL" on={ssl}
+          onChange={(on) => setForm({ ...form, security_protocol: on ? "SSL" : "PLAINTEXT" })} />
         {ssl && (
-          <input value={form.ssl_cafile ?? ""} onChange={(e) => setForm({ ...form, ssl_cafile: e.target.value })} placeholder="Путь до CA файла (опц.)" className={`${INPUT} font-mono`} />
+          <div className="space-y-2 rounded-lg border border-border-main/70 bg-bg-subtle/40 p-2.5">
+            <SideSwitch label="Валидировать сертификат:" left="нет" right="да" on={form.ssl_verify !== false}
+              onChange={(on) => setForm({ ...form, ssl_verify: on })} />
+            <input value={form.ssl_keyfile ?? ""} onChange={(e) => setForm({ ...form, ssl_keyfile: e.target.value })}
+              placeholder="Закрытый ключ — путь на компьютере (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
+            <input value={form.ssl_certfile ?? ""} onChange={(e) => setForm({ ...form, ssl_certfile: e.target.value })}
+              placeholder="Сертификат — путь на компьютере (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
+            <input value={form.ssl_cafile ?? ""} onChange={(e) => setForm({ ...form, ssl_cafile: e.target.value })}
+              placeholder="Сертификаты доверенных CA (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
+          </div>
         )}
         <div className="flex justify-end gap-2 pt-1">
           {editingId && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
@@ -419,7 +436,10 @@ function KafkaConnectionsModal({
             {editingId ? "Сохранить" : "Добавить"}
           </button>
         </div>
-        <p className="text-[11px] text-text-muted/70">Для ИФТ-стенда (без сертов) достаточно имени и bootstrap servers с протоколом PLAINTEXT.</p>
+        <p className="text-[11px] text-text-muted/70">
+          Для ИФТ-стенда без сертификатов достаточно имени и bootstrap servers (CLEARTEXT).
+          Если есть сертификат — включите SSL и укажите пути к файлам на компьютере, где запущен бэкенд.
+        </p>
       </>}
     />
   );

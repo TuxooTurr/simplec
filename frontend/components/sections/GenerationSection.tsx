@@ -92,6 +92,10 @@ function casesToText(cases: Case[]): string {
   }).join("\n---\n\n");
 }
 
+function sumEstimatedMinutes(cases: Case[]): number {
+  return cases.reduce((sum, c) => sum + (c.estimated_minutes ?? 5), 0);
+}
+
 function downloadBlob(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
@@ -664,6 +668,11 @@ export default function GenerationSection() {
                   за {elapsedFinal}с
                 </p>
               )}
+              {state !== "error" && cases.length > 0 && (
+                <p className="text-sm text-text-muted mt-0.5">
+                  Создано {cases.length} кейсов. Общее время прохождения: {sumEstimatedMinutes(cases)} мин
+                </p>
+              )}
             </div>
             <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto scrollbar-thin">
               {state === "error" && sessionId && (
@@ -1135,6 +1144,7 @@ export default function GenerationSection() {
                     </span>
                     <span className="text-xs text-text-muted">
                       {hvCases.length} кейсов{histView.elapsed > 0 ? ` · за ${histView.elapsed}с` : ""}
+                      {hvCases.length > 0 ? ` · время прохождения: ${sumEstimatedMinutes(hvCases)} мин` : ""}
                     </span>
                     <span className="text-xs text-text-muted ml-auto">{formatHistTime(histView.created_at)}</span>
                   </div>

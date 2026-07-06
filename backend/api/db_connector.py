@@ -33,14 +33,53 @@ _jvm_lock = threading.Lock()
 
 def ensure_jvm() -> None:
     """Запускает JVM один раз за процесс (без фиксированного classpath —
-    драйверы грузятся динамически в load_jdbc_driver)."""
+    драйверы грузятся динамически в load_jdbc_driver).
+
+    convertStrings=True — как это делает сам jaydebeapi.connect(): без него
+    java.sql-строки (getString в интроспекции схемы) возвращались бы как
+    java.lang.String, а не python str, и падала бы JSON-сериализация."""
     import jpype
 
     if jpype.isJVMStarted():
         return
     with _jvm_lock:
         if not jpype.isJVMStarted():
-            jpype.startJVM()
+            jpype.startJVM(convertStrings=True)
+
+
+def _ensure_jaydebeapi_ready() -> None:
+    """Готовит окружение jaydebeapi для соединения, собранного в обход
+    jaydebeapi.connect() (мы грузим драйвер своим URLClassLoader).
+
+    jaydebeapi.connect() при каждом вызове делает две вещи, которые иначе
+    не выполняются и приводят к ошибкам:
+      1. attachThreadToJVM() — иначе доступ к JVM из потока пула
+         (asyncio.to_thread у нас во всех вызовах БД) нестабилен;
+      2. лениво инициализирует таблицу типов SQL→Python (_converters) и
+         _java_array_byte — без них Cursor.fetchone() падает с
+         'NoneType' object has no attribute 'get'.
+
+    Реплицируем ровно ту же инициализацию (ветка JPype ≥ 0.7)."""
+    import jaydebeapi
+    import jpype
+
+    if not jpype.isThreadAttachedToJVM():
+        jpype.attachThreadToJVM()
+        jpype.java.lang.Thread.currentThread().setContextClassLoader(
+            jpype.java.lang.ClassLoader.getSystemClassLoader()
+        )
+
+    if jaydebeapi._converters is None:
+        Types = jpype.JClass("java.sql.Types")
+        Modifier = jpype.JClass("java.lang.reflect.Modifier")
+        types_map = {}
+        for f in Types.class_.getFields():
+            if Modifier.isStatic(f.getModifiers()):
+                types_map[str(f.getName())] = int(f.get(None))
+        jaydebeapi._init_types(types_map)
+
+    if getattr(jaydebeapi, "_java_array_byte", None) is None:
+        jaydebeapi._java_array_byte = lambda data: jpype.JArray(jpype.JByte, 1)(data)
 
 
 def load_jdbc_driver(driver_class: str, jar_path: str):
@@ -110,6 +149,7 @@ def get_db_connection(conn_config: dict):
     from jpype import JClass
 
     driver_obj = load_jdbc_driver(driver["driver_class"], jar_path)
+    _ensure_jaydebeapi_ready()   # attach thread + инициализация _converters (иначе fetchone падает)
     Properties = JClass("java.util.Properties")
     props = Properties()
     if login:

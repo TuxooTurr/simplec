@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Network, Search, X, Plus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
+  ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
 } from "lucide-react";
 import { ConnectionsModal, ConnectionRow } from "@/components/ui";
 import {
@@ -30,8 +31,56 @@ function prettyJson(value: string): { text: string; isJson: boolean } {
 }
 
 /* ── One topic column (field 1 / field 2) ────────────────────────── */
+type SortKey = "offset" | "timestamp";
+type SortDir = "asc" | "desc";
+
+/* Видимость необязательных колонок списка сообщений */
+export interface ColumnVisibility {
+  sender: boolean;
+  recipient: boolean;
+  value: boolean;
+}
+
+const COLS_STORAGE_KEY = "st_kafka_cols";
+const DEFAULT_COLS: ColumnVisibility = { sender: true, recipient: true, value: true };
+
+/* Отправитель/получатель берутся из заголовков сообщения — распространённые ключи */
+const SENDER_KEYS = ["from", "sender", "source", "producer", "отправитель"];
+const RECIPIENT_KEYS = ["to", "recipient", "destination", "consumer", "получатель"];
+
+function headerValue(m: KafkaMessage, keys: string[]): string {
+  for (const [k, v] of m.headers ?? []) {
+    if (keys.includes(String(k).toLowerCase())) return v ?? "";
+  }
+  return "";
+}
+
+/* grid-шаблон строки: последняя видимая колонка растягивается */
+function rowTemplate(cols: ColumnVisibility): string {
+  const parts = ["72px", "104px"];
+  if (cols.sender) parts.push("110px");
+  if (cols.recipient) parts.push("110px");
+  if (cols.value) parts.push("minmax(0,1fr)");
+  else parts[parts.length - 1] = "minmax(0,1fr)";
+  return parts.join(" ");
+}
+
+function SortHeader({ label, active, dir, onClick }: {
+  label: string; active: boolean; dir: SortDir; onClick: () => void;
+}) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+        active ? "text-primary" : "text-text-muted hover:text-text-main"
+      }`}>
+      {label}
+      {active ? (dir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />) : <ArrowUpDown className="h-3 w-3 opacity-40" />}
+    </button>
+  );
+}
+
 function TopicColumn({
-  label, topics, topic, onTopic, messages, loading, selectedId, onSelect,
+  label, topics, topic, onTopic, messages, loading, selectedId, onSelect, cols,
 }: {
   label: string;
   topics: string[];
@@ -41,10 +90,31 @@ function TopicColumn({
   loading: boolean;
   selectedId: string;
   onSelect: (m: KafkaMessage) => void;
+  cols: ColumnVisibility;
 }) {
+  const [sortKey, setSortKey] = useState<SortKey>("offset");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("desc"); }
+  };
+
+  const sorted = useMemo(() => {
+    const arr = [...messages];
+    arr.sort((a, b) => {
+      const va = sortKey === "offset" ? a.offset : a.timestamp;
+      const vb = sortKey === "offset" ? b.offset : b.timestamp;
+      return sortDir === "asc" ? va - vb : vb - va;
+    });
+    return arr;
+  }, [messages, sortKey, sortDir]);
+
+  const gridStyle = { gridTemplateColumns: rowTemplate(cols) };
+
   return (
-    <div className="flex min-h-0 flex-1 flex-col rounded-xl border border-border-main bg-bg-card">
-      <div className="flex items-center gap-2 border-b border-border-main p-2">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border-main bg-bg-card">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border-main p-2">
         <span className="shrink-0 rounded bg-bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-text-muted">{label}</span>
         <select
           value={topic}
@@ -56,36 +126,53 @@ function TopicColumn({
         </select>
         {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-text-muted" />}
       </div>
+      {/* Заголовок таблицы: сортировка по offset и дате */}
+      <div style={gridStyle} className="grid shrink-0 gap-x-2 border-b border-border-main bg-bg-subtle/60 py-1 pl-3 pr-2.5">
+        <SortHeader label="Offset" active={sortKey === "offset"} dir={sortDir} onClick={() => toggleSort("offset")} />
+        <SortHeader label="Дата" active={sortKey === "timestamp"} dir={sortDir} onClick={() => toggleSort("timestamp")} />
+        {cols.sender && <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Отправитель</span>}
+        {cols.recipient && <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Получатель</span>}
+        {cols.value && <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Value</span>}
+      </div>
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
         {!topic ? (
           <p className="p-4 text-center text-xs text-text-muted">Выберите топик в списке выше.</p>
         ) : messages.length === 0 && !loading ? (
           <p className="p-4 text-center text-xs text-text-muted">Нет сообщений (по текущему фильтру).</p>
         ) : (
-          messages.map((m) => {
+          sorted.map((m) => {
             // Offset/partition — Kafka присваивает их ПО ТОПИКУ, поэтому разные топики
             // легко имеют одинаковую пару partition:offset. Топик обязателен в id,
             // иначе подсветка выбора «протекает» в другую колонку.
             const id = `${topic}::${m.partition}-${m.offset}`;
             const on = selectedId === id;
+            const sender = headerValue(m, SENDER_KEYS);
+            const recipient = headerValue(m, RECIPIENT_KEYS);
             return (
               <button
                 key={id}
                 type="button"
                 onClick={() => onSelect(m)}
-                className={`relative flex w-full flex-col gap-0.5 border-b border-border-main/60 py-1.5 pl-3 pr-2.5 text-left transition-colors ${
+                title={`p${m.partition} · offset ${m.offset} · ${fmtTime(m.timestamp)}${m.key ? ` · key:${m.key}` : ""}${sender ? ` · от:${sender}` : ""}${recipient ? ` · кому:${recipient}` : ""}`}
+                style={gridStyle}
+                className={`relative grid w-full items-center gap-x-2 border-b border-border-main/60 py-1.5 pl-3 pr-2.5 text-left transition-colors ${
                   on ? "bg-[var(--color-active-bg)]" : "hover:bg-bg-subtle/60"
                 }`}
               >
                 {on && <span className="absolute inset-y-0 left-0 w-1 bg-primary" />}
-                <div className={`flex items-center gap-2 text-[10px] ${on ? "text-primary/80" : "text-text-muted"}`}>
-                  <span className="tabular-nums">{fmtTime(m.timestamp)}</span>
-                  <span className={`rounded px-1 ${on ? "bg-primary/15 text-primary" : "bg-bg-muted"}`}>p{m.partition}·{m.offset}</span>
-                  {m.key && <span className={`truncate font-mono ${on ? "text-primary/70" : "text-text-muted/80"}`}>key:{m.key}</span>}
-                </div>
-                <span className={`truncate font-mono text-xs ${on ? "font-semibold text-primary" : "text-text-muted"}`}>
-                  {m.value.slice(0, 90) || "—"}
-                </span>
+                <span className={`truncate text-xs tabular-nums ${on ? "font-semibold text-primary" : "text-text-muted"}`}>{m.offset}</span>
+                <span className={`truncate text-xs tabular-nums ${on ? "text-primary/80" : "text-text-muted"}`}>{fmtTime(m.timestamp)}</span>
+                {cols.sender && (
+                  <span className={`truncate font-mono text-xs ${on ? "text-primary/80" : "text-text-muted"}`}>{sender || "—"}</span>
+                )}
+                {cols.recipient && (
+                  <span className={`truncate font-mono text-xs ${on ? "text-primary/80" : "text-text-muted"}`}>{recipient || "—"}</span>
+                )}
+                {cols.value && (
+                  <span className={`min-w-0 truncate font-mono text-xs ${on ? "font-semibold text-primary" : "text-text-main"}`}>
+                    {m.value || "—"}
+                  </span>
+                )}
               </button>
             );
           })
@@ -116,6 +203,19 @@ export default function KafkaSection() {
   const [copied, setCopied] = useState(false);
 
   const [manageOpen, setManageOpen] = useState(false);
+
+  // Видимость колонок Отправитель/Получатель/Value (общая для обоих топиков)
+  const [cols, setColsState] = useState<ColumnVisibility>(() => {
+    try { return { ...DEFAULT_COLS, ...JSON.parse(localStorage.getItem(COLS_STORAGE_KEY) ?? "{}") }; }
+    catch { return DEFAULT_COLS; }
+  });
+  const toggleCol = (key: keyof ColumnVisibility) => {
+    setColsState((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(COLS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   const reloadConnections = useCallback(async () => {
     try {
@@ -193,6 +293,25 @@ export default function KafkaSection() {
           <Settings2 className="h-3.5 w-3.5" /> Подключения
         </button>
         <div className="ml-auto flex items-center gap-2">
+          {/* Переключатели видимости колонок списка */}
+          <div className="flex items-center gap-1">
+            {([
+              { key: "sender" as const, label: "Отправитель" },
+              { key: "recipient" as const, label: "Получатель" },
+              { key: "value" as const, label: "Value" },
+            ]).map(({ key, label: colLabel }) => (
+              <button key={key} type="button" onClick={() => toggleCol(key)}
+                title={cols[key] ? `Скрыть колонку «${colLabel}»` : `Показать колонку «${colLabel}»`}
+                className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                  cols[key]
+                    ? "border-primary/40 bg-[var(--color-active-bg)] text-primary"
+                    : "border-border-main text-text-muted hover:text-text-main"
+                }`}>
+                {cols[key] ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                {colLabel}
+              </button>
+            ))}
+          </div>
           <label className="flex items-center gap-1 text-xs text-text-muted">
             последние
             <input type="number" min={1} max={1000} value={limit}
@@ -228,88 +347,84 @@ export default function KafkaSection() {
       ) : topicsErr ? (
         <div className="tone-danger rounded-xl border px-4 py-4 text-sm">{topicsErr}</div>
       ) : (
-        <>
-          {/* Fields 1 & 2 — two topic lists */}
-          <div className="flex min-h-0 flex-1 gap-3">
-            <TopicColumn label="Топик 1" topics={topics} topic={t1} onTopic={setT1}
-              messages={m1} loading={l1 || topicsLoading} selectedId={selectedId}
-              onSelect={(m) => setSelected({ ...m, topic: t1 })} />
-            <TopicColumn label="Топик 2" topics={topics} topic={t2} onTopic={setT2}
-              messages={m2} loading={l2 || topicsLoading} selectedId={selectedId}
-              onSelect={(m) => setSelected({ ...m, topic: t2 })} />
-          </div>
+        <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-3">
+          {/* 4 поля 2×2: все жёстко равны по высоте, контент скроллится внутри.
+              Fields 1 & 2 — two topic lists */}
+          <TopicColumn label="Топик 1" topics={topics} topic={t1} onTopic={setT1}
+            messages={m1} loading={l1 || topicsLoading} selectedId={selectedId}
+            onSelect={(m) => setSelected({ ...m, topic: t1 })} cols={cols} />
+          <TopicColumn label="Топик 2" topics={topics} topic={t2} onTopic={setT2}
+            messages={m2} loading={l2 || topicsLoading} selectedId={selectedId}
+            onSelect={(m) => setSelected({ ...m, topic: t2 })} cols={cols} />
 
-          {/* Fields 3 & 4 — detail (appear on selection) */}
-          <div className="mt-3 grid min-h-[180px] grid-cols-1 gap-3 md:grid-cols-2">
-            {/* Field 3 — message body */}
-            <div className="flex min-h-0 flex-col rounded-xl border border-border-main bg-bg-card">
-              <div className="flex items-center justify-between gap-2 border-b border-border-main p-2">
-                <span className="text-xs font-semibold text-text-main">Сообщение</span>
-                {selected && (
-                  <div className="flex items-center gap-1">
-                    {(["json", "raw"] as const).map((v) => (
-                      <button key={v} type="button" onClick={() => setDetailView(v)}
-                        className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-                          detailView === v ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg-subtle"
-                        }`}>
-                        {v === "json" ? "JSON" : "Текст"}
-                      </button>
-                    ))}
-                    <button type="button" onClick={copyValue} title="Копировать"
-                      className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-text-main">
-                      {copied ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+          {/* Field 3 — message body */}
+          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border-main bg-bg-card">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-main p-2">
+              <span className="text-xs font-semibold text-text-main">Сообщение</span>
+              {selected && (
+                <div className="flex items-center gap-1">
+                  {(["json", "raw"] as const).map((v) => (
+                    <button key={v} type="button" onClick={() => setDetailView(v)}
+                      className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+                        detailView === v ? "bg-primary/10 text-primary" : "text-text-muted hover:bg-bg-subtle"
+                      }`}>
+                      {v === "json" ? "JSON" : "Текст"}
                     </button>
-                  </div>
-                )}
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto scrollbar-thin p-3">
-                {!selected ? (
-                  <p className="text-center text-xs text-text-muted">Выберите сообщение в любом топике.</p>
-                ) : (
-                  <pre className="whitespace-pre-wrap break-words font-mono text-xs text-text-main">
-                    {detailView === "json" ? body?.text : selected.value}
-                  </pre>
-                )}
-              </div>
+                  ))}
+                  <button type="button" onClick={copyValue} title="Копировать"
+                    className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-text-main">
+                    {copied ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              )}
             </div>
-
-            {/* Field 4 — metadata / recipients */}
-            <div className="flex min-h-0 flex-col rounded-xl border border-border-main bg-bg-card">
-              <div className="border-b border-border-main p-2">
-                <span className="text-xs font-semibold text-text-main">Адресаты и метаданные</span>
-              </div>
-              <div className="min-h-0 flex-1 overflow-auto scrollbar-thin p-3 text-xs">
-                {!selected ? (
-                  <p className="text-center text-text-muted">Выберите сообщение — здесь появятся ключ, заголовки и адресаты.</p>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-text-muted">
-                      <span>Ключ:</span><span className="break-all font-mono text-text-main">{selected.key ?? "—"}</span>
-                      <span>Партиция:</span><span className="font-mono text-text-main">{selected.partition}</span>
-                      <span>Offset:</span><span className="font-mono text-text-main">{selected.offset}</span>
-                      <span>Время:</span><span className="font-mono text-text-main">{fmtTime(selected.timestamp)}</span>
-                    </div>
-                    <div>
-                      <p className="mb-1 font-semibold text-text-muted">Заголовки (адресаты от/кому):</p>
-                      {selected.headers.length === 0 ? (
-                        <p className="text-text-muted/60">нет заголовков</p>
-                      ) : (
-                        <div className="space-y-0.5">
-                          {selected.headers.map(([k, v], i) => (
-                            <div key={`${k}-${i}`} className="grid grid-cols-[minmax(0,140px),1fr] gap-x-3">
-                              <span className="truncate font-mono text-primary">{k}</span>
-                              <span className="break-all font-mono text-text-main">{v ?? "—"}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="min-h-0 flex-1 overflow-auto scrollbar-thin p-3">
+              {!selected ? (
+                <p className="text-center text-xs text-text-muted">Выберите сообщение в любом топике.</p>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs text-text-main">
+                  {detailView === "json" ? body?.text : selected.value}
+                </pre>
+              )}
             </div>
           </div>
-        </>
+
+          {/* Field 4 — metadata / recipients */}
+          <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border-main bg-bg-card">
+            <div className="shrink-0 border-b border-border-main p-2">
+              <span className="text-xs font-semibold text-text-main">Адресаты и метаданные</span>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto scrollbar-thin p-3 text-xs">
+              {!selected ? (
+                <p className="text-center text-text-muted">Выберите сообщение — здесь появятся ключ, заголовки и адресаты.</p>
+              ) : (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-text-muted">
+                    <span>Ключ:</span><span className="break-all font-mono text-text-main">{selected.key ?? "—"}</span>
+                    <span>Партиция:</span><span className="font-mono text-text-main">{selected.partition}</span>
+                    <span>Offset:</span><span className="font-mono text-text-main">{selected.offset}</span>
+                    <span>Время:</span><span className="font-mono text-text-main">{fmtTime(selected.timestamp)}</span>
+                  </div>
+                  <div>
+                    <p className="mb-1 font-semibold text-text-muted">Заголовки (адресаты от/кому):</p>
+                    {selected.headers.length === 0 ? (
+                      <p className="text-text-muted/60">нет заголовков</p>
+                    ) : (
+                      <div className="space-y-0.5">
+                        {selected.headers.map(([k, v], i) => (
+                          <div key={`${k}-${i}`} className="grid grid-cols-[minmax(0,140px),1fr] gap-x-3">
+                            <span className="truncate font-mono text-primary">{k}</span>
+                            <span className="break-all font-mono text-text-main">{v ?? "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       <p className="mt-2 text-center text-[11px] text-text-muted/70">

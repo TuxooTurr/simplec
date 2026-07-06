@@ -23,7 +23,7 @@ import {
   listTestDataConnections, createTestDataConnection, updateTestDataConnection,
   deleteTestDataConnection, testTestDataConnection, introspectTestDataConnection,
   listJdbcDrivers, createJdbcDriver, updateJdbcDriver, deleteJdbcDriver,
-  uploadJdbcDriverLibrary, removeJdbcDriverLibrary, testJdbcDriver,
+  uploadJdbcDriverLibrary, setJdbcDriverLibraryPath, removeJdbcDriverLibrary, testJdbcDriver,
   type TestDataConnection, type TestDataConnectionCreate, type JdbcDriver, type JdbcDriverSettings,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -40,6 +40,10 @@ const SELECT_CLS =
   "focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/60 transition";
 
 const MASKED_PLACEHOLDER = "●●●●●●●●●●●●";
+
+/* GigaChat: публичный API (по ключу) и ИФТ-стенд (по сертификату, дефолт) */
+const GIGACHAT_PUBLIC_URL = "https://gigachat.devices.sberbank.ru/api/v1";
+const GIGACHAT_IFT_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1";
 
 const SECRET_KEYS = new Set([
   "gigachat_auth_key", "deepseek_api_key",
@@ -364,6 +368,7 @@ function UnifiedLlmProviders({
   const [editCaCertPath, setEditCaCertPath] = useState("");
   const [editClientCertPath, setEditClientCertPath] = useState("");
   const [editClientKeyPath, setEditClientKeyPath] = useState("");
+  const [editBaseUrl, setEditBaseUrl] = useState("");
 
   // ─── Auto-refresh: poll statuses on same interval as status requests ───
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -480,6 +485,7 @@ function UnifiedLlmProviders({
   function resetEditFields() {
     setEditKey(""); setEditAuthType("api_key");
     setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
+    setEditBaseUrl("");
   }
 
   function openEdit(provider: ActiveProvider) {
@@ -491,9 +497,22 @@ function UnifiedLlmProviders({
       setEditCaCertPath(builtinValues["gigachat_ca_cert_path"] || "");
       setEditClientCertPath(builtinValues["gigachat_client_cert_path"] || "");
       setEditClientKeyPath(builtinValues["gigachat_client_key_path"] || "");
+      setEditBaseUrl(builtinValues["gigachat_base_url"] || GIGACHAT_PUBLIC_URL);
     } else {
       setEditAuthType("api_key");
       setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
+      setEditBaseUrl("");
+    }
+  }
+
+  /* Переключение режима GigaChat: по сертификату по умолчанию идём на ИФТ-стенд,
+     по API-ключу — на публичный API (если пользователь не задал свой URL) */
+  function switchGigachatAuthType(next: "api_key" | "certificate") {
+    setEditAuthType(next);
+    if (next === "certificate" && (!editBaseUrl || editBaseUrl === GIGACHAT_PUBLIC_URL)) {
+      setEditBaseUrl(GIGACHAT_IFT_URL);
+    } else if (next === "api_key" && editBaseUrl === GIGACHAT_IFT_URL) {
+      setEditBaseUrl(GIGACHAT_PUBLIC_URL);
     }
   }
 
@@ -509,6 +528,7 @@ function UnifiedLlmProviders({
           }
           await onSaveBuiltinBatch({
             gigachat_auth_type: "certificate",
+            gigachat_base_url: editBaseUrl.trim() || GIGACHAT_IFT_URL,
             gigachat_ca_cert_path: editCaCertPath.trim(),
             gigachat_client_cert_path: editClientCertPath.trim(),
             gigachat_client_key_path: editClientKeyPath.trim(),
@@ -518,6 +538,7 @@ function UnifiedLlmProviders({
           await onSaveBuiltinBatch({
             gigachat_auth_type: "api_key",
             gigachat_auth_key: editKey.trim(),
+            gigachat_base_url: editBaseUrl.trim() || GIGACHAT_PUBLIC_URL,
           });
         }
       } else if (provider.builtin && provider.preset?.settingsKey) {
@@ -606,12 +627,12 @@ function UnifiedLlmProviders({
                   {p.id === "gigachat" && (
                     <div className="flex items-center gap-4">
                       <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
-                        <input type="radio" checked={editAuthType === "api_key"} onChange={() => setEditAuthType("api_key")}
+                        <input type="radio" checked={editAuthType === "api_key"} onChange={() => switchGigachatAuthType("api_key")}
                           className="text-primary focus:ring-primary/30" />
                         По API-ключу
                       </label>
                       <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
-                        <input type="radio" checked={editAuthType === "certificate"} onChange={() => setEditAuthType("certificate")}
+                        <input type="radio" checked={editAuthType === "certificate"} onChange={() => switchGigachatAuthType("certificate")}
                           className="text-primary focus:ring-primary/30" />
                         По сертификату
                       </label>
@@ -619,6 +640,11 @@ function UnifiedLlmProviders({
                   )}
                   {p.id === "gigachat" && editAuthType === "certificate" ? (
                     <div className="space-y-1.5">
+                      <div>
+                        <label className={LABEL_CLS}>Куда обращаемся (Base URL стенда)</label>
+                        <input className={`${INPUT_CLS} font-mono`} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)}
+                          placeholder={GIGACHAT_IFT_URL} spellCheck={false} />
+                      </div>
                       <input className={INPUT_CLS} value={editCaCertPath} onChange={(e) => setEditCaCertPath(e.target.value)}
                         placeholder="Путь к CA bundle (опционально)" spellCheck={false} />
                       <input className={INPUT_CLS} value={editClientCertPath} onChange={(e) => setEditClientCertPath(e.target.value)}
@@ -932,8 +958,8 @@ function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefre
             <Settings2 className="h-3.5 w-3.5" /> Настройка драйверов
           </button>
         </div>
-        {selectedDriver && !selectedDriver.jar_filename && (
-          <p className="text-xs text-amber-600">У драйвера «{selectedDriver.name}» не загружена библиотека — добавьте .jar в «Настройке драйверов».</p>
+        {selectedDriver && !selectedDriver.jar_path && !selectedDriver.jar_filename && (
+          <p className="text-xs text-amber-600">У драйвера «{selectedDriver.name}» не подключена библиотека — укажите .jar в «Настройке драйверов».</p>
         )}
         <div className="grid grid-cols-2 gap-2">
           <input className={INPUT_CLS} value={form.host} onChange={e => setField("host", e.target.value)} placeholder="Хост" spellCheck={false} />
@@ -973,11 +999,13 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
   const [selectedId, setSelectedId] = useState("");
   const [activeTab, setActiveTab] = useState<"settings" | "library">("settings");
   const [settingsForm, setSettingsForm] = useState<JdbcDriverSettings>(EMPTY_DRIVER_SETTINGS);
+  const [pathInput, setPathInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const selected = selectedId === NEW_DRIVER_ID ? undefined : drivers.find(d => d.id === selectedId);
+  const hasLibrary = (d: JdbcDriver) => !!(d.jar_path || d.jar_filename);
 
   useEffect(() => {
     if (open && !selectedId && drivers.length > 0) setSelectedId(drivers[0].id);
@@ -989,8 +1017,10 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
         name: selected.name, driver_class: selected.driver_class, url_template: selected.url_template,
         default_port: selected.default_port, default_db_name: selected.default_db_name, default_login: selected.default_login,
       });
+      setPathInput(selected.jar_path ?? "");
     } else if (selectedId === NEW_DRIVER_ID) {
       setSettingsForm(EMPTY_DRIVER_SETTINGS);
+      setPathInput("");
     }
     setMsg(null);
   }, [selectedId]);
@@ -1020,6 +1050,16 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
     if (!selected) return;
     setBusy(true); setMsg(null);
     try { await uploadJdbcDriverLibrary(selected.id, file); await onRefresh(); setMsg({ ok: true, text: "Библиотека загружена" }); }
+    catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const saveLibraryPath = async () => {
+    if (!selected) return;
+    const p = pathInput.trim();
+    if (!p) { setMsg({ ok: false, text: "Укажите путь к .jar-файлу" }); return; }
+    setBusy(true); setMsg(null);
+    try { await setJdbcDriverLibraryPath(selected.id, p); await onRefresh(); setMsg({ ok: true, text: "Путь к библиотеке сохранён" }); }
     catch (e) { setMsg({ ok: false, text: e instanceof Error ? e.message : String(e) }); }
     finally { setBusy(false); }
   };
@@ -1066,10 +1106,10 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-medium text-text-main">{d.name}</p>
               <p className="truncate text-[11px] text-text-muted">
-                {d.built_in ? "Встроенный" : "Свой"} · {d.jar_filename ? d.original_filename : "библиотека не загружена"}
+                {d.built_in ? "Встроенный" : "Свой"} · {hasLibrary(d) ? (d.original_filename ?? "библиотека") : "библиотека не подключена"}
               </p>
             </div>
-            {!d.jar_filename && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
+            {!hasLibrary(d) && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />}
           </button>
         ))}
         <button type="button" onClick={() => setSelectedId(NEW_DRIVER_ID)}
@@ -1109,24 +1149,48 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
         ) : (
           <div className="space-y-3 pt-3">
             {selectedId === NEW_DRIVER_ID ? (
-              <p className="text-xs text-text-muted/70">Сначала сохраните настройки драйвера во вкладке «Настройки» — библиотеку можно будет загрузить сразу после.</p>
+              <p className="text-xs text-text-muted/70">Сначала сохраните настройки драйвера во вкладке «Настройки» — библиотеку можно будет подключить сразу после.</p>
             ) : selected && (
               <>
+                {/* Текущее состояние библиотеки */}
                 <div className="flex items-center justify-between rounded-lg border border-border-main px-3 py-2">
-                  <span className="truncate text-sm text-text-main">{selected.original_filename ?? "Библиотека не загружена"}</span>
-                  {selected.jar_filename && (
-                    <button type="button" onClick={removeLibrary} title="Удалить" className="rounded p-1 text-text-muted hover:bg-red-50 hover:text-red-500">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-text-main">{hasLibrary(selected) ? (selected.original_filename ?? "библиотека") : "Библиотека не подключена"}</p>
+                    {hasLibrary(selected) && (
+                      <p className="truncate text-[11px] text-text-muted">{selected.jar_path ? `по пути: ${selected.jar_path}` : "загруженный файл"}</p>
+                    )}
+                  </div>
+                  {hasLibrary(selected) && (
+                    <button type="button" onClick={removeLibrary} title="Отключить библиотеку" className="rounded p-1 text-text-muted hover:bg-red-50 hover:text-red-500">
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   )}
                 </div>
+
+                {/* Способ 1 (рекомендуется): указать путь к .jar на машине */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-text-main">Путь к .jar на этом компьютере <span className="text-text-muted/70">(рекомендуется)</span></label>
+                  <div className="flex gap-2">
+                    <input className={`${INPUT_CLS} font-mono`} value={pathInput} spellCheck={false}
+                      onChange={e => setPathInput(e.target.value)}
+                      placeholder="/Users/you/drivers/postgresql-42.7.jar" />
+                    <button type="button" onClick={saveLibraryPath} disabled={busy || !pathInput.trim()}
+                      className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+                      Указать
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-text-muted/70">Файл не копируется — драйвер читается по пути. Заменить версию = положить новый .jar по тому же пути, перезапуск бэкенда не нужен.</p>
+                </div>
+
+                {/* Способ 2: загрузить .jar в приложение */}
                 <label className="flex items-center gap-2 rounded-lg border border-dashed border-border-main px-3 py-2 text-sm text-text-muted cursor-pointer hover:bg-bg-subtle">
                   <Upload className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{selected.jar_filename ? "Заменить .jar…" : "Выберите .jar файл…"}</span>
+                  <span className="truncate">Или загрузить .jar в приложение…</span>
                   <input type="file" accept=".jar" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadLibrary(f); }} />
                 </label>
+
                 <div className="flex justify-end">
-                  <button type="button" onClick={testDriver} disabled={testing || !selected.jar_filename}
+                  <button type="button" onClick={testDriver} disabled={testing || !hasLibrary(selected)}
                     className="flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-xs font-medium text-text-main hover:bg-bg-subtle disabled:opacity-50">
                     {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />} Проверить загрузку класса
                   </button>
@@ -1134,7 +1198,7 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
               </>
             )}
             <p className="text-[11px] text-text-muted/70">
-              Библиотека, загруженная после запуска сервера, заработает только после перезапуска бэкенда.
+              Драйвер загружается «на лету» при каждом подключении — заменённую библиотеку не нужно ждать до перезапуска бэкенда.
             </p>
           </div>
         )}

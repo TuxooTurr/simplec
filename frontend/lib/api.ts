@@ -506,6 +506,7 @@ export interface JdbcDriver {
   default_login:     string;
   sql_dialect:       "postgresql" | "mysql" | "oracle" | "generic";
   jar_filename:      string | null;
+  jar_path:          string | null;
   original_filename: string | null;
   built_in:          boolean;
   created_at:        string;
@@ -556,6 +557,14 @@ export async function uploadJdbcDriverLibrary(id: string, file: File): Promise<{
     throw new Error(`${res.status}: ${text}`);
   }
   return res.json();
+}
+
+export async function setJdbcDriverLibraryPath(id: string, path: string): Promise<{ driver: JdbcDriver }> {
+  return fetchJson(`/api/testdata/drivers/${id}/library-path`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
 }
 
 export async function removeJdbcDriverLibrary(id: string): Promise<{ driver: JdbcDriver }> {

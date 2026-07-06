@@ -232,6 +232,29 @@ html.theme-transition *::after {
    in dark mode. Pair with layout utilities (padding, rounded, border).
    A `.tone-*-text` variant colours just text/icons. */
 @layer components {
+  /* ── Брендированные выпадающие списки ──────────────────────────
+     Все <select> в приложении: убираем системный вид, рисуем свой
+     шеврон в цветах продукта. padding-right с !important — чтобы
+     утилиты px-* не прижимали текст под шеврон. Цвета option
+     наследуют тему через color-scheme + переменные. */
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
+    background-size: 0.95rem;
+    padding-right: 1.9rem !important;
+    cursor: pointer;
+  }
+  .dark select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+  select option {
+    background-color: var(--color-bg-card);
+    color: var(--color-text-main);
+  }
+
   .tone-success { background-color: #ecfdf5; color: #047857; border-color: #a7f3d0; }
   .tone-warning { background-color: #fffbeb; color: #b45309; border-color: #fde68a; }
   .tone-danger  { background-color: #fef2f2; color: #b91c1c; border-color: #fecaca; }

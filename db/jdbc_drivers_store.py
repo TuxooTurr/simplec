@@ -7,10 +7,16 @@
 
 Встроенные драйверы (PostgreSQL/MySQL/Oracle) заранее прописаны с типовыми
 настройками (класс, URL-шаблон, порт по умолчанию) — пользователю остаётся
-только добавить .jar во вкладке «Библиотека». Их нельзя удалить, но можно
+только указать .jar во вкладке «Библиотека». Их нельзя удалить, но можно
 изменить настройки и заменить/убрать библиотеку.
 
-Файлы: data/jdbc_drivers.json (метаданные), data/jdbc_drivers/ (сами .jar).
+Библиотеку можно подключить двумя способами:
+  • jar_path      — путь к .jar на машине (рекомендуется): файл не копируется,
+                    указывается ссылкой; заменить драйвер = поменять файл по пути;
+  • jar_filename  — .jar, загруженный через UI и сохранённый в data/jdbc_drivers/.
+jar_path имеет приоритет над jar_filename.
+
+Файлы: data/jdbc_drivers.json (метаданные), data/jdbc_drivers/ (загруженные .jar).
 """
 
 import json
@@ -88,7 +94,7 @@ class JdbcDriversStore:
         if missing:
             now = datetime.now(timezone.utc).isoformat()
             seeded = [
-                {**b, "jar_filename": None, "original_filename": None, "built_in": True, "created_at": now}
+                {**b, "jar_filename": None, "jar_path": None, "original_filename": None, "built_in": True, "created_at": now}
                 for b in missing
             ]
             drivers = seeded + drivers
@@ -108,9 +114,25 @@ class JdbcDriversStore:
 
     @classmethod
     def jar_path(cls, driver: dict) -> Optional[Path]:
-        if not driver.get("jar_filename"):
-            return None
-        return _JARS_DIR / driver["jar_filename"]
+        """Абсолютный путь к .jar драйвера. Приоритет — внешний путь (jar_path),
+        иначе загруженный в data/jdbc_drivers/ файл (jar_filename)."""
+        external = driver.get("jar_path")
+        if external:
+            return Path(external)
+        if driver.get("jar_filename"):
+            return _JARS_DIR / driver["jar_filename"]
+        return None
+
+    @staticmethod
+    def has_library(driver: dict) -> bool:
+        return bool(driver.get("jar_path") or driver.get("jar_filename"))
+
+    @staticmethod
+    def library_label(driver: dict) -> Optional[str]:
+        """Что показать в UI как имя подключённой библиотеки."""
+        if driver.get("jar_path"):
+            return driver["jar_path"]
+        return driver.get("original_filename")
 
     @classmethod
     def create_driver(cls, data: dict) -> dict:
@@ -126,6 +148,7 @@ class JdbcDriversStore:
             "default_login": data.get("default_login", "").strip(),
             "sql_dialect": "generic",
             "jar_filename": None,
+            "jar_path": None,
             "original_filename": None,
             "built_in": False,
             "created_at": now,
@@ -151,20 +174,42 @@ class JdbcDriversStore:
         return None
 
     @classmethod
+    def _unlink_uploaded(cls, driver: dict) -> None:
+        """Удалить ранее загруженный (скопированный в data/jdbc_drivers/) .jar, если он есть."""
+        if driver.get("jar_filename"):
+            uploaded = _JARS_DIR / driver["jar_filename"]
+            if uploaded.exists():
+                uploaded.unlink()
+
+    @classmethod
     def set_library(cls, driver_id: str, jar_bytes: bytes, original_filename: str) -> Optional[dict]:
-        """Загрузить/заменить .jar драйвера (вкладка «Библиотека»)."""
+        """Загрузить/заменить .jar драйвера через UI (файл копируется в data/jdbc_drivers/)."""
         drivers = cls._load()
         for d in drivers:
             if d.get("id") == driver_id:
-                old_jar = cls.jar_path(d)
-                if old_jar and old_jar.exists():
-                    old_jar.unlink()
+                cls._unlink_uploaded(d)
                 jar_filename = f"{driver_id}_{_sanitize_filename(original_filename)}"
                 _JARS_DIR.mkdir(parents=True, exist_ok=True)
                 with open(_JARS_DIR / jar_filename, "wb") as f:
                     f.write(jar_bytes)
                 d["jar_filename"] = jar_filename
+                d["jar_path"] = None           # загруженный файл вытесняет внешний путь
                 d["original_filename"] = original_filename
+                cls._save(drivers)
+                return d
+        return None
+
+    @classmethod
+    def set_library_path(cls, driver_id: str, path: str) -> Optional[dict]:
+        """Указать .jar по пути на машине (без копирования — рекомендуемый способ)."""
+        path = path.strip()
+        drivers = cls._load()
+        for d in drivers:
+            if d.get("id") == driver_id:
+                cls._unlink_uploaded(d)         # если раньше был загруженный файл — уберём копию
+                d["jar_filename"] = None
+                d["jar_path"] = path
+                d["original_filename"] = Path(path).name
                 cls._save(drivers)
                 return d
         return None
@@ -174,10 +219,9 @@ class JdbcDriversStore:
         drivers = cls._load()
         for d in drivers:
             if d.get("id") == driver_id:
-                old_jar = cls.jar_path(d)
-                if old_jar and old_jar.exists():
-                    old_jar.unlink()
+                cls._unlink_uploaded(d)
                 d["jar_filename"] = None
+                d["jar_path"] = None            # внешний файл по пути НЕ удаляем — он не наш
                 d["original_filename"] = None
                 cls._save(drivers)
                 return d
@@ -193,7 +237,5 @@ class JdbcDriversStore:
             return False
         drivers = [d for d in drivers if d.get("id") != driver_id]
         cls._save(drivers)
-        jar_file = cls.jar_path(target)
-        if jar_file and jar_file.exists():
-            jar_file.unlink()
+        cls._unlink_uploaded(target)   # чистим только нашу копию; внешний .jar по пути не трогаем
         return True

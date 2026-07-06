@@ -9,37 +9,67 @@
 Python-драйверы: единообразие с DBeaver и с реестром «свой драйвер» — все БД
 подключаются одинаково: класс драйвера + .jar-библиотека + шаблон URL.
 
-Важное ограничение JPype: JVM запускается один раз за процесс, classpath
-фиксируется при старте. Драйвер, у которого библиотека добавлена ПОСЛЕ
-первого запуска JVM, начнёт работать только после перезапуска бэкенда.
+Горячая загрузка драйвера (без перезапуска бэкенда)
+---------------------------------------------------
+JVM запускается один раз за процесс, и её системный classpath после старта
+изменить нельзя. Раньше это означало: добавил/заменил .jar — перезапусти сервер.
+
+Теперь classpath при старте НЕ фиксируется. На каждое подключение .jar
+загружается динамически через java.net.URLClassLoader, из него берётся класс
+драйвера, создаётся экземпляр java.sql.Driver и вызывается его .connect(url,
+props) напрямую (минуя DriverManager, который не видит классы из внешнего
+загрузчика). Благодаря этому:
+  • новую или заменённую библиотеку можно подключить без перезапуска;
+  • .jar может лежать по любому пути на машине (его не обязательно копировать).
 """
 
 import threading
+from pathlib import Path
 
 from db.jdbc_drivers_store import JdbcDriversStore
 
 _jvm_lock = threading.Lock()
-_jvm_jars: set[str] = set()
 
 
-def ensure_jvm() -> set[str]:
-    """Запускает JVM (один раз за процесс) с classpath из всех драйверов, у которых есть .jar."""
+def ensure_jvm() -> None:
+    """Запускает JVM один раз за процесс (без фиксированного classpath —
+    драйверы грузятся динамически в load_jdbc_driver)."""
     import jpype
 
     if jpype.isJVMStarted():
-        return _jvm_jars
-
+        return
     with _jvm_lock:
-        if jpype.isJVMStarted():
-            return _jvm_jars
-        jar_paths = []
-        for d in JdbcDriversStore.list_drivers():
-            p = JdbcDriversStore.jar_path(d)
-            if p:
-                jar_paths.append(str(p))
-        jpype.startJVM(classpath=jar_paths)
-        _jvm_jars.update(jar_paths)
-        return _jvm_jars
+        if not jpype.isJVMStarted():
+            jpype.startJVM()
+
+
+def load_jdbc_driver(driver_class: str, jar_path: str):
+    """Загружает класс JDBC-драйвера из указанного .jar через свежий
+    URLClassLoader и возвращает экземпляр java.sql.Driver.
+
+    Свежий загрузчик на каждый вызов = горячая замена: заменили файл по пути —
+    следующее подключение подхватит новую версию без перезапуска."""
+    ensure_jvm()
+    from jpype import JArray, JClass
+
+    jar = Path(jar_path)
+    if not jar.is_file():
+        raise FileNotFoundError(
+            f"Файл драйвера не найден: {jar_path}. "
+            "Проверьте путь (он проверяется на машине, где запущен бэкенд) "
+            "или укажите библиотеку заново во вкладке «Библиотека»."
+        )
+
+    File = JClass("java.io.File")
+    URL = JClass("java.net.URL")
+    URLClassLoader = JClass("java.net.URLClassLoader")
+    ClassLoader = JClass("java.lang.ClassLoader")
+    Class = JClass("java.lang.Class")
+
+    url = File(str(jar)).toURI().toURL()
+    loader = URLClassLoader(JArray(URL)([url]), ClassLoader.getSystemClassLoader())
+    klass = Class.forName(driver_class, True, loader)
+    return klass.getDeclaredConstructor().newInstance()
 
 
 def get_driver_for_connection(conn_config: dict) -> dict:
@@ -47,8 +77,8 @@ def get_driver_for_connection(conn_config: dict) -> dict:
     driver = JdbcDriversStore.get_driver(driver_id)
     if not driver:
         raise ValueError("Драйвер для этого подключения не найден. Проверьте настройки в «Настройке драйверов»")
-    if not driver.get("jar_filename"):
-        raise ValueError(f"У драйвера «{driver['name']}» не загружена библиотека (.jar). Добавьте её во вкладке «Библиотека»")
+    if not JdbcDriversStore.has_library(driver):
+        raise ValueError(f"У драйвера «{driver['name']}» не подключена библиотека (.jar). Добавьте её во вкладке «Библиотека»")
     return driver
 
 
@@ -66,13 +96,6 @@ def get_db_connection(conn_config: dict):
     driver = get_driver_for_connection(conn_config)
     jar_path = str(JdbcDriversStore.jar_path(driver))
 
-    jvm_jars = ensure_jvm()
-    if jar_path not in jvm_jars:
-        raise RuntimeError(
-            f"Библиотека драйвера «{driver['name']}» добавлена после запуска сервера — JVM уже стартовала без неё "
-            "в classpath. Перезапустите бэкенд, чтобы драйвер заработал."
-        )
-
     host = conn_config.get("host", "localhost")
     port = conn_config.get("port", driver.get("default_port") or 0)
     db_name = conn_config.get("db_name", "")
@@ -84,7 +107,25 @@ def get_db_connection(conn_config: dict):
     except (KeyError, IndexError) as e:
         raise ValueError(f"Некорректный шаблон URL драйвера: отсутствует плейсхолдер {e}")
 
-    conn = jaydebeapi.connect(driver["driver_class"], url, [login, password], jar_path)
+    from jpype import JClass
+
+    driver_obj = load_jdbc_driver(driver["driver_class"], jar_path)
+    Properties = JClass("java.util.Properties")
+    props = Properties()
+    if login:
+        props.setProperty("user", login)
+    if password:
+        props.setProperty("password", password)
+
+    jconn = driver_obj.connect(url, props)
+    if jconn is None:
+        # Контракт JDBC: Driver.connect() возвращает null, если URL не для этого драйвера.
+        raise RuntimeError(
+            f"Драйвер «{driver['name']}» не принял URL. Проверьте шаблон URL и класс драйвера "
+            "(возможно, они не соответствуют выбранной библиотеке)."
+        )
+
+    conn = jaydebeapi.Connection(jconn, jaydebeapi._converters)
     return conn, driver
 
 

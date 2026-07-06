@@ -24,12 +24,13 @@ LLM-генерация SQL, предложение скриптов создан
 import asyncio
 import logging
 import re
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from backend.api.db_connector import ensure_jvm, get_db_connection, introspect_schema
+from backend.api.db_connector import get_db_connection, introspect_schema, load_jdbc_driver
 from db.jdbc_drivers_store import JdbcDriversStore
 from db.testdata_connections import TestDataConnectionsStore
 
@@ -561,6 +562,25 @@ async def upload_driver_library(driver_id: str, file: UploadFile = File(...)) ->
     return {"driver": updated}
 
 
+class DriverLibraryPathRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+
+
+@router.post("/api/testdata/drivers/{driver_id}/library-path")
+def set_driver_library_path(driver_id: str, req: DriverLibraryPathRequest) -> dict:
+    """Указать .jar по пути на машине (без копирования — рекомендуемый способ).
+    Путь проверяется на машине, где запущен бэкенд."""
+    if not JdbcDriversStore.get_driver(driver_id):
+        raise HTTPException(status_code=404, detail="Драйвер не найден")
+    path = req.path.strip()
+    if not path.lower().endswith(".jar"):
+        raise HTTPException(status_code=400, detail="Путь должен указывать на .jar-файл")
+    if not Path(path).is_file():
+        raise HTTPException(status_code=400, detail="Файл не найден по указанному пути (проверяется на машине бэкенда)")
+    updated = JdbcDriversStore.set_library_path(driver_id, path)
+    return {"driver": updated}
+
+
 @router.delete("/api/testdata/drivers/{driver_id}/library")
 def remove_driver_library(driver_id: str) -> dict:
     updated = JdbcDriversStore.remove_library(driver_id)
@@ -575,20 +595,13 @@ async def test_driver(driver_id: str) -> dict:
     driver = JdbcDriversStore.get_driver(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Драйвер не найден")
-    if not driver.get("jar_filename"):
-        return {"status": "red", "message": "Библиотека (.jar) не загружена — добавьте её во вкладке «Библиотека»"}
+    if not JdbcDriversStore.has_library(driver):
+        return {"status": "red", "message": "Библиотека (.jar) не подключена — укажите её во вкладке «Библиотека»"}
 
     def _test():
         try:
-            jvm_jars = ensure_jvm()
             jar_path = str(JdbcDriversStore.jar_path(driver))
-            if jar_path not in jvm_jars:
-                return {
-                    "status": "yellow",
-                    "message": "Библиотека добавлена после запуска сервера — перезапустите бэкенд для проверки",
-                }
-            import jpype
-            jpype.JClass(driver["driver_class"])
+            load_jdbc_driver(driver["driver_class"], jar_path)
             return {"status": "green", "message": "Класс драйвера успешно загружен"}
         except Exception as e:
             return {"status": "red", "message": f"Ошибка загрузки драйвера: {str(e)[:300]}"}

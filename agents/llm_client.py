@@ -1,9 +1,10 @@
 """
 Универсальный LLM клиент.
 
-Встроенные провайдеры: GigaChat, DeepSeek.
-Дополнительные провайдеры подключаются пользователем в настройках как
-chat/completions-compatible endpoint через API key или TLS/client certificate.
+Встроенный провайдер: GigaChat.
+Остальные (DeepSeek, OpenAI, Gemini, Ollama и т.д.) подключаются пользователем
+в настройках как chat/completions-compatible endpoint через API key или
+TLS/client certificate.
 """
 
 import json
@@ -85,19 +86,6 @@ def _auth_type(prefix: str) -> str:
     return value
 
 
-def _client_cert_from_env(prefix: str):
-    cert_file = _env(prefix + "_CLIENT_CERT_PATH")
-    key_file = _env(prefix + "_CLIENT_KEY_PATH")
-    if cert_file and key_file:
-        return (cert_file, key_file)
-    return cert_file or None
-
-
-def _verify_for_env(prefix: str):
-    ca_cert = _env(prefix + "_CA_CERT_PATH")
-    return ca_cert or _get_verify()
-
-
 def _gigachat_ssl_context(ca_cert: str, no_verify: bool):
     """SSLContext для GigaChat SDK с потолком TLS 1.2 — лечит 'Connection reset by
     peer' от старых BIG IP, которые не умеют TLS 1.3 и рвут рукопожатие."""
@@ -177,31 +165,6 @@ def _builtin_status(provider_id: str) -> dict:
             "message": "OK" if not missing else "Не настроено: " + ", ".join(missing),
         }
 
-    if provider_id == "deepseek":
-        try:
-            auth = _auth_type("DEEPSEEK")
-        except ValueError as e:
-            return {"id": "deepseek", "name": "DeepSeek", "status": "no_key", "message": str(e)}
-        base_url = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
-        model = _env("DEEPSEEK_MODEL", "deepseek-chat")
-        api_key = _env("DEEPSEEK_API_KEY")
-        cert_file = _env("DEEPSEEK_CLIENT_CERT_PATH")
-        missing = []
-        if not base_url:
-            missing.append("URL")
-        if not model:
-            missing.append("модель")
-        if auth == "api_key" and not api_key:
-            missing.append("DEEPSEEK_API_KEY")
-        if auth == "certificate" and not cert_file:
-            missing.append("клиентский сертификат")
-        return {
-            "id": "deepseek",
-            "name": "DeepSeek",
-            "status": "ready" if not missing else "no_key",
-            "message": "OK" if not missing else "Не настроено: " + ", ".join(missing),
-        }
-
     return {"id": provider_id, "name": provider_id, "status": "no_key", "message": "Неизвестный провайдер"}
 
 
@@ -245,8 +208,6 @@ class LLMClient:
     def _init_client(self):
         if self.provider == "gigachat":
             self._init_gigachat()
-        elif self.provider == "deepseek":
-            self._init_deepseek()
         else:
             self._init_custom()
 
@@ -278,21 +239,6 @@ class LLMClient:
 
         self.client = GigaChat(**client_kwargs)
 
-    def _init_deepseek(self):
-        import httpx
-        self.auth_type = _auth_type("DEEPSEEK")
-        self.api_key = _env("DEEPSEEK_API_KEY")
-        self.model = _env("DEEPSEEK_MODEL", "deepseek-chat") or "deepseek-chat"
-        self.base_url = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1").rstrip("/")
-        if not self.base_url:
-            raise ValueError("DEEPSEEK_BASE_URL is empty")
-        if self.auth_type == "api_key" and not self.api_key:
-            raise ValueError("DEEPSEEK_API_KEY not found in settings")
-        cert = _client_cert_from_env("DEEPSEEK")
-        if self.auth_type == "certificate" and not cert:
-            raise ValueError("DEEPSEEK_CLIENT_CERT_PATH not found for certificate auth")
-        self.client = httpx.Client(timeout=120.0, verify=_verify_for_env("DEEPSEEK"), cert=cert)
-
     def _init_custom(self):
         import httpx
         cfg = self.custom_config or {}
@@ -322,8 +268,6 @@ class LLMClient:
              max_tokens: int = 4000) -> LLMResponse:
         if self.provider == "gigachat":
             return self._chat_gigachat(messages, temperature, max_tokens)
-        if self.provider == "deepseek":
-            return self._chat_deepseek(messages, temperature, max_tokens)
         return self._chat_custom(messages, temperature, max_tokens)
 
     def _chat_gigachat(self, messages, temperature, max_tokens):
@@ -357,33 +301,6 @@ class LLMClient:
                         continue
                 raise
         raise last_err
-
-    def _chat_deepseek(self, messages, temperature, max_tokens):
-        payload = {
-            "model": self.model,
-            "messages": [{"role": m.role, "content": m.content} for m in messages],
-            "temperature": temperature,
-            "max_tokens": max_tokens
-        }
-        headers = {"Content-Type": "application/json"}
-        if self.auth_type == "api_key":
-            headers["Authorization"] = "Bearer " + self.api_key
-        response = self.client.post(
-            self.base_url + "/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        if response.status_code == 402:
-            raise ValueError("DeepSeek: недостаточно средств (402 Payment Required). Пополните баланс.")
-        if response.status_code == 429:
-            raise ValueError("DeepSeek: превышен лимит запросов (429 Too Many Requests).")
-        response.raise_for_status()
-        data = response.json()
-        return LLMResponse(
-            content=data["choices"][0]["message"]["content"],
-            model=self.model,
-            usage=data.get("usage", {})
-        )
 
     def _custom_headers(self) -> dict:
         headers = {"Content-Type": "application/json"}

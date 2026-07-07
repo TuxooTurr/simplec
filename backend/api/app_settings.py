@@ -30,7 +30,6 @@ router = APIRouter()
 
 _SECRET_FIELDS = {
     "gigachat_auth_key",
-    "deepseek_api_key",
     "kafka_sasl_password",
     "kafka_ssl_password",
 }
@@ -39,7 +38,7 @@ _MASKED_PLACEHOLDER = "●●●●●●●●●●●●"
 _CUSTOM_LLM_KEY = "custom_llm_providers"
 _REVISOR_STANDS_KEY = "revisor_api_stands"
 _LOGS_VPS_KEY = "logs_vps_connections"
-_AUTH_TYPE_FIELDS = {"gigachat_auth_type", "deepseek_auth_type"}
+_AUTH_TYPE_FIELDS = {"gigachat_auth_type"}
 
 # ── Дефолтные значения для новых ключей ──────────────────────────────────────
 
@@ -90,41 +89,6 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Путь к приватному ключу клиентского сертификата GigaChat",
         "group":       "llm",
     },
-    "deepseek_auth_type": {
-        "value":       os.getenv("DEEPSEEK_AUTH_TYPE", "api_key"),
-        "description": "Тип подключения DeepSeek: api_key или certificate",
-        "group":       "llm",
-    },
-    "deepseek_api_key": {
-        "value":       os.getenv("DEEPSEEK_API_KEY", ""),
-        "description": "DeepSeek API Key (platform.deepseek.com → API keys)",
-        "group":       "llm",
-    },
-    "deepseek_base_url": {
-        "value":       os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        "description": "Base URL DeepSeek/chat-completions endpoint",
-        "group":       "llm",
-    },
-    "deepseek_model": {
-        "value":       os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-        "description": "Модель DeepSeek: deepseek-chat или deepseek-reasoner",
-        "group":       "llm",
-    },
-    "deepseek_ca_cert_path": {
-        "value":       os.getenv("DEEPSEEK_CA_CERT_PATH", ""),
-        "description": "Путь к CA bundle для DeepSeek",
-        "group":       "llm",
-    },
-    "deepseek_client_cert_path": {
-        "value":       os.getenv("DEEPSEEK_CLIENT_CERT_PATH", ""),
-        "description": "Путь к клиентскому сертификату DeepSeek",
-        "group":       "llm",
-    },
-    "deepseek_client_key_path": {
-        "value":       os.getenv("DEEPSEEK_CLIENT_KEY_PATH", ""),
-        "description": "Путь к приватному ключу клиентского сертификата DeepSeek",
-        "group":       "llm",
-    },
     _CUSTOM_LLM_KEY: {
         "value":       os.getenv("CUSTOM_LLM_PROVIDERS", "[]"),
         "description": "Пользовательские chat/completions-compatible LLM подключения",
@@ -153,13 +117,6 @@ _ENV_MAP: Dict[str, str] = {
     "gigachat_ca_cert_path":          "GIGACHAT_CA_CERT_PATH",
     "gigachat_client_cert_path":      "GIGACHAT_CLIENT_CERT_PATH",
     "gigachat_client_key_path":       "GIGACHAT_CLIENT_KEY_PATH",
-    "deepseek_auth_type":             "DEEPSEEK_AUTH_TYPE",
-    "deepseek_api_key":               "DEEPSEEK_API_KEY",
-    "deepseek_base_url":              "DEEPSEEK_BASE_URL",
-    "deepseek_model":                 "DEEPSEEK_MODEL",
-    "deepseek_ca_cert_path":          "DEEPSEEK_CA_CERT_PATH",
-    "deepseek_client_cert_path":      "DEEPSEEK_CLIENT_CERT_PATH",
-    "deepseek_client_key_path":       "DEEPSEEK_CLIENT_KEY_PATH",
     _CUSTOM_LLM_KEY:                  "CUSTOM_LLM_PROVIDERS",
     _REVISOR_STANDS_KEY:              "REVISOR_API_STANDS",
 }
@@ -440,7 +397,7 @@ def upsert_custom_llm_provider(body: CustomLlmProvider, db: Session = Depends(ge
     providers = _load_custom_llm_providers(db)
 
     provider_id = (body.id or "").strip().lower() or _slugify_provider_id(body.name)
-    if provider_id in ("gigachat", "deepseek"):
+    if provider_id == "gigachat":
         provider_id = "custom_" + provider_id
     if not provider_id.startswith("custom_"):
         provider_id = "custom_" + provider_id

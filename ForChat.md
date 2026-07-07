@@ -287,7 +287,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | `metrics_settings.py` | 119 | Настройки Kafka для метрик | `/api/metrics/settings/*` |
 | `metrics_builder.py` | 530 | Сборка и отправка метрик в Kafka | `/api/metrics/*` |
 | `revisor.py` | 439 | Сравнение стендов/сборок | `/api/revisor/*` |
-| `app_settings.py` | ~930 | **Централизованные настройки** (ключ-значение). Группы: `llm`, `llm_custom`, `revisor`, `logs_vps`, `kafka_metrics`. GigaChat/DeepSeek — подключение по API-ключу или клиентскому сертификату (переключатель в UI). Маскирует секреты. `apply_saved_settings_to_env()` грузит в `os.environ` | `/api/settings/*` |
+| `app_settings.py` | ~930 | **Централизованные настройки** (ключ-значение). Группы: `llm`, `llm_custom`, `revisor`, `logs_vps`, `kafka_metrics`. GigaChat — подключение по API-ключу или клиентскому сертификату (переключатель в UI). Маскирует секреты. `apply_saved_settings_to_env()` грузит в `os.environ` | `/api/settings/*` |
 | `testdata.py` | ~740 | Подключения к внешним БД (через реестр JDBC-драйверов, «Настройка драйверов» в UI) + выполнение SELECT + LLM-генерация SQL | `/api/testdata/*` |
 | `db_connector.py` | ~120 | Общий JDBC-коннектор (JPype JVM + jaydebeapi) для testdata и jobs; generic-интроспекция через DatabaseMetaData | — |
 | `kafka_explorer.py` | ~140 | Просмотр Kafka: реестр подключений (SSL-тумблер, серт опционально), топики, снапшот сообщений | `/api/kafka/*` |
@@ -301,7 +301,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 | Файл | Назначение |
 |------|-----------|
-| `llm_client.py` | **Универсальный LLM-клиент.** Встроены GigaChat, DeepSeek. Остальные — как OpenAI-совместимые endpoints (API key / TLS-сертификат). SSL-логика для корп-прокси (`_get_verify`). Custom-провайдеры из `CUSTOM_LLM_PROVIDERS` (JSON env). Метод `classify_error()` для ретраев |
+| `llm_client.py` | **Универсальный LLM-клиент.** Встроен только GigaChat (API key / клиентский сертификат-mTLS; `SSL_MAX_TLS12` → `ssl_context` для старых BIG IP). Остальные (DeepSeek/OpenAI/Ollama/…) — custom OpenAI-совместимые endpoints из `CUSTOM_LLM_PROVIDERS` (JSON env), путь `_init_custom`/`_chat_custom`. SSL-логика для корп-прокси (`_get_verify`). `classify_error()` для ретраев |
 | `layered_generator.py` | **4-слойная генерация тест-кейсов:** L1 — QA-документация, L2 — список кейсов (зависит от глубины: `smoke`/`regression`/`full`/`atomary`, словарь `DEPTH_MAP`), L3 — Markdown-кейсы (+ оценка времени прохождения на кейс), L4 — экспорт в Zephyr Scale/TM4J XML: корень `<project>` с projectId/projectKey/jiraVersion/folders, `<testCase>` с objective/precondition/owner/customFields по корп. спецификации |
 | `file_parser.py` | Парсинг входных файлов (PDF, DOCX, Excel) |
 | `prompt_templates.py` | Шаблоны промптов |
@@ -365,9 +365,12 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 ### 5.4. `components/ui/` — дизайн-система
 
-`Badge`, `Button`, `Card`, `EmptyState`, `Input`, `Modal`, `SaveBar`, `Tabs`,
+`Badge`, `Button`, `Card`, `EmptyState`, `Input`, `Modal`, `SaveBar`, `Select`, `Tabs`,
 `ThemeToggle`, `Toggle` + `index.ts` (реэкспорт). Стиль через CSS-переменные:
 `bg-bg-card`, `text-text-main`, `border-border-main` и т.п. (см. `app/globals.css`, `tailwind.config.ts`).
+**`Select`** (`components/ui/Select.tsx`) — кастомный брендированный дропдаун (нативный
+`<select>` красит список средствами ОС): принимает те же `<option>`-дети, `onChange(value)`,
+клавиатура, click-outside. Все выпадающие списки в приложении используют его, нативных `<select>` нет.
 
 ### 5.5. `contexts/` — глобальный стейт
 
@@ -376,6 +379,9 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 - **`AlertsSchedulerContext.tsx`** — Jupyter-ядро + планировщик алертов.
 - **`WorkspaceContext.tsx`** — что показано в правой панели.
 - **`MetricsUiContext.tsx`** — UI-стейт генератора метрик.
+- **`TestDataJobContext.tsx`** — запрос «Тестовых данных» живёт над роутами (в `WorkspaceShell`),
+  поэтому уход на другой раздел не прерывает его (кнопка «Отменить» = AbortController); плюс
+  архив выполненных запросов в localStorage (`st_testdata_archive`): время, БД, запрос, снимок результата.
 
 ### 5.6. `lib/` — HTTP-клиенты
 
@@ -483,6 +489,58 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
+
+### 2026-07-07 — Горячая замена JDBC-драйверов, фиксы SSL/jaydebeapi, DeepSeek→custom, брендированные Select, персист Kafka/Тестовых данных
+
+- **JDBC-драйверы грузятся «на лету» — перезапуск бэкенда больше НЕ нужен**
+  (`backend/api/db_connector.py`). JVM стартует без фиксированного classpath; на каждое
+  подключение драйвер загружается своим `java.net.URLClassLoader`, из него берётся
+  `java.sql.Driver` и вызывается `.connect(url, props)` напрямую (минуя `DriverManager`,
+  который не видит классы внешнего загрузчика). Заменил `.jar` → следующее подключение
+  подхватит новую версию. ⚠️ Отменяет старую заметку «нужен перезапуск JVM» из записи 2026-07-02.
+- **Библиотеку драйвера можно указать путём на диске** (без копирования в проект):
+  поле «Путь к .jar на этом компьютере» во вкладке «Библиотека» (рекомендуемый способ),
+  загрузка файла осталась как альтернатива. Store: поле `jar_path` с приоритетом над
+  `jar_filename`; при снятии внешний .jar по пути не удаляется. Эндпоинт
+  `POST /api/testdata/drivers/{id}/library-path`. Путь машинно-зависимый — после переноса переуказать.
+- **Фикс jaydebeapi при подключении в обход `jaydebeapi.connect()`** (тест БД / интроспекция
+  схемы / Jobs падали): собственная инициализация в `_ensure_jaydebeapi_ready()` —
+  attach потока к JVM (все обращения к БД идут в `asyncio.to_thread`), `_init_types`/`_converters`
+  (иначе `Cursor.fetchone()` → `'NoneType' has no attribute 'get'`), `_java_array_byte`;
+  `ensure_jvm()` стартует JVM с `convertStrings=True` (иначе `getString()` возвращает
+  `java.lang.String` вместо python `str` → падала JSON-сериализация схемы, 500 в Jobs).
+- **GigaChat `[Errno 54] Connection reset by peer` за корп-прокси** — старые BIG IP не умеют
+  TLS 1.3. `SSL_MAX_TLS12=1` раньше до GigaChat SDK не доходил; теперь при этом флаге собирается
+  `SSLContext` с потолком TLS 1.2 (+ `CERT_NONE` при `SSL_NO_VERIFY`, + `OP_LEGACY_SERVER_CONNECT`)
+  и передаётся SDK как `ssl_context` (доходит и до auth-, и до chat-клиента). `agents/llm_client.py`.
+  GigaChat по сертификату = чистый mTLS (SDK не запрашивает OAuth-токен без credentials),
+  дефолтный Base URL cert-режима — ИФТ-стенд `https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1`.
+- **DeepSeek полностью убран из встроенных провайдеров** — единственный встроенный теперь GigaChat
+  (`BUILTIN_PROVIDERS = ["gigachat"]`). DeepSeek подключается как обычный OpenAI-совместимый
+  custom-провайдер через «Добавить провайдер» (`custom_deepseek`, путь `_init_custom`/`_chat_custom`),
+  в одном ряду с OpenAI/Gemini/Ollama/Groq и т.д. Вычищен мёртвый код DeepSeek в `llm_client.py`
+  и настройки `deepseek_*` в `app_settings.py`. Claude/Anthropic в generic-путь не встанет
+  (другой формат API) — отдельная доработка при необходимости.
+- **`onnxruntime` 1.24.1 → 1.23.2** в `requirements.txt`.
+- **Просмотр Kafka — доработки UI:** 4 панели фиксированной равной высоты со скроллом внутри;
+  строка сообщения = Offset / Дата / Отправитель / Получатель / Value с независимой сортировкой
+  по Offset и Дате в каждом топике; тумблеры видимости колонок Отправитель/Получатель/Value
+  (персист в localStorage `st_kafka_cols`); отправитель/получатель берутся из заголовков сообщения.
+  Список топиков сортируется **A→Z**.
+- **Kafka — выбор не сбрасывается:** подключение + оба топика + лимит в `sessionStorage`
+  (`st_kafka_session`) — переживают переход между разделами и перезагрузку, сбрасываются
+  только при закрытии вкладки/браузера. Восстановленный `connId` валидируется по списку.
+- **Тестовые данные — фоновый запрос + архив:** выполнение вынесено в `TestDataJobContext`
+  (в `WorkspaceShell`, над роутами) — уход на другой раздел не прерывает процесс, вернувшись
+  видно прогресс с кнопкой «Отменить» (AbortController), по завершении — результат.
+  Архив запросов в localStorage (`st_testdata_archive`, капы 30 записей / 500 строк на БД):
+  время + список БД + запрос + снимок результата; клик по записи открывает модалку с той самой
+  «страницей» результата (`ResultsView`) + «Подставить в форму». `execute/generateTestDataQuery`
+  принимают `AbortSignal`.
+- **Все выпадающие списки — брендированные:** новый `components/ui/Select.tsx` (своя панель в
+  цветах/шрифте продукта, галочка выбранного, клавиатура, click-outside) заменил все 35 нативных
+  `<select>` (Kafka, Настройки, Метрики, Алерты, Jobs, Эталоны, Автотесты). Старый нативный
+  ui-`Select` из `Input.tsx` удалён.
 
 ### 2026-07-02 — Готовность к миграции: deploy.sh переписан, JDBC-драйверы, Zephyr XML, Kafka SSL
 - **`deploy.sh` полностью переписан** под текущую архитектуру (был мёртвый Streamlit-скрипт):

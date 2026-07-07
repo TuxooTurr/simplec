@@ -98,17 +98,44 @@ def _verify_for_env(prefix: str):
     return ca_cert or _get_verify()
 
 
+def _gigachat_ssl_context(ca_cert: str, no_verify: bool):
+    """SSLContext для GigaChat SDK с потолком TLS 1.2 — лечит 'Connection reset by
+    peer' от старых BIG IP, которые не умеют TLS 1.3 и рвут рукопожатие."""
+    import ssl
+
+    try:
+        import certifi
+        ctx = ssl.create_default_context(cafile=ca_cert or certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+
+    if no_verify and not ca_cert:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
+        ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
+    try:
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    except AttributeError:
+        pass
+    return ctx
+
+
 def _gigachat_tls_kwargs() -> dict:
     """Translate shared env/cert settings into kwargs accepted by gigachat SDK."""
     kwargs: dict = {}
     explicit_ca = _env("GIGACHAT_CA_CERT_PATH")
     global_ca = _env("SSL_CERT_FILE")
     ca_cert = explicit_ca or (global_ca if global_ca and os.path.exists(global_ca) else "")
-    if ca_cert:
+    no_verify = os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes")
+
+    if os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes"):
+        # Явный SSLContext доходит и до auth-, и до chat-клиента GigaChat SDK
+        # (verify_ssl_certs/ca_bundle_file при заданном ssl_context игнорируются).
+        kwargs["ssl_context"] = _gigachat_ssl_context(ca_cert, no_verify)
+    elif ca_cert:
         kwargs["ca_bundle_file"] = ca_cert
         kwargs["verify_ssl_certs"] = True
-    elif os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes"):
-        kwargs["verify_ssl_certs"] = False
     else:
         # Preserve the previous project behavior for GigaChat: local/corp setups
         # often rely on disabled verification unless a CA bundle is configured.

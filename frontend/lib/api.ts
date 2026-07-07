@@ -587,6 +587,33 @@ export async function getGigachatModels(params: {
   });
 }
 
+// ─── GigaChat — пробный чат (POST {base_url}/chat/completions) ────────────────
+export async function testGigachatChat(params: {
+  model: string;
+  base_url?: string;
+  auth_type?: string;
+  client_cert_path?: string;
+  client_key_path?: string;
+  ca_cert_path?: string;
+  no_verify?: boolean;
+}): Promise<{ status: "green" | "yellow" | "red"; message: string }> {
+  return fetchJson("/api/settings/gigachat/test-chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
+// ─── GigaChat — загрузка файла сертификата (cert|key|ca) ─────────────────────
+export async function uploadGigachatCert(kind: "cert" | "key" | "ca", file: File): Promise<{ path: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return fetchJson(`/api/settings/gigachat/cert-upload?kind=${kind}`, {
+    method: "POST",
+    body: fd,
+  });
+}
+
 export async function testJdbcDriver(id: string): Promise<{ status: string; message: string }> {
   return fetchJson(`/api/testdata/drivers/${id}/test`, { method: "POST" });
 }

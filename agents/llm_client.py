@@ -9,6 +9,7 @@ TLS/client certificate.
 
 import base64
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass
@@ -16,8 +17,23 @@ from pathlib import Path
 from typing import List
 
 
+logger = logging.getLogger(__name__)
+
+
 # Кэш распакованных PEM: (путь+mtime) -> временный .pem файл
 _PEM_CACHE: dict[str, str] = {}
+
+
+def _gigachat_no_verify() -> bool:
+    """Отключена ли проверка серверного сертификата для GigaChat.
+
+    Учитываем и глобальный SSL_NO_VERIFY (общий для всех провайдеров), и
+    gigachat-scoped GIGACHAT_NO_VERIFY (сохраняется из формы настроек GigaChat).
+    Так «Загрузить модели», «Тест чата» и рабочий чат используют один флаг."""
+    for name in ("SSL_NO_VERIFY", "GIGACHAT_NO_VERIFY"):
+        if os.environ.get(name, "").lower() in ("1", "true", "yes"):
+            return True
+    return False
 
 
 def _resolve_pem_path(path: str) -> str:
@@ -199,7 +215,9 @@ def list_gigachat_models(
     auth_type = (auth_type or _env("GIGACHAT_AUTH_TYPE", "api_key")).lower()
     ca = ca_cert_path or _env("GIGACHAT_CA_CERT_PATH")
     if no_verify is None:
-        no_verify = os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes")
+        no_verify = _gigachat_no_verify()
+
+    logger.info("GigaChat /models: base_url=%s auth_type=%s no_verify=%s", base_url, auth_type, no_verify)
 
     def _extract(data) -> list[str]:
         items = data.get("data", data) if isinstance(data, dict) else data
@@ -233,6 +251,72 @@ def list_gigachat_models(
     )
     models = g.get_models()
     return sorted({str(getattr(m, "id_", getattr(m, "id", ""))) for m in models.data if getattr(m, "id_", getattr(m, "id", ""))})
+
+
+def probe_gigachat_chat(
+    model: str,
+    base_url: str = "",
+    auth_type: str = "",
+    client_cert_path: str = "",
+    client_key_path: str = "",
+    ca_cert_path: str = "",
+    no_verify: bool | None = None,
+    prompt: str = "ping",
+) -> str:
+    """Пробный чат к стенду GigaChat теми же параметрами, что и «Загрузить модели».
+
+    Используется кнопкой «Тест чата» до сохранения настроек: источник — живая форма,
+    а не os.environ. Возвращает текст ответа модели (или бросает исключение).
+    Пустые аргументы берутся из сохранённых настроек (env)."""
+    import httpx
+
+    base_url = (base_url or _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")).rstrip("/")
+    auth_type = (auth_type or _env("GIGACHAT_AUTH_TYPE", "api_key")).lower()
+    model = (model or _env("GIGACHAT_MODEL", "GigaChat")).strip()
+    if not base_url:
+        raise ValueError("Не указан base_url стенда")
+    if not model:
+        raise ValueError("Не выбрана модель")
+    if no_verify is None:
+        no_verify = _gigachat_no_verify()
+
+    logger.info("GigaChat test-chat: base_url=%s model=%s auth_type=%s no_verify=%s",
+                base_url, model, auth_type, no_verify)
+
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}], "max_tokens": 8}
+
+    if auth_type == "certificate":
+        cert_file = client_cert_path or _env("GIGACHAT_CLIENT_CERT_PATH")
+        key_file = client_key_path or _env("GIGACHAT_CLIENT_KEY_PATH")
+        if not cert_file:
+            raise ValueError("Не указан путь к клиентскому сертификату")
+        cert_file = _resolve_pem_path(cert_file)
+        key_file = _resolve_pem_path(key_file)
+        ca = ca_cert_path or _env("GIGACHAT_CA_CERT_PATH")
+        verify = False if no_verify else (_resolve_pem_path(ca) if ca else _get_verify())
+        cert = (cert_file, key_file) if key_file else cert_file
+        with httpx.Client(timeout=60.0, verify=verify, cert=cert) as c:
+            r = c.post(base_url + "/chat/completions", json=payload,
+                       headers={"Content-Type": "application/json"})
+            r.raise_for_status()
+            data = r.json()
+        return str(data["choices"][0]["message"]["content"])
+
+    # api_key: через SDK (OAuth-токен), модель из формы.
+    from gigachat import GigaChat
+    from gigachat.models import Chat, Messages
+    credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
+    if not credentials:
+        raise ValueError("Не задан GIGACHAT_AUTH_KEY")
+    g = GigaChat(
+        credentials=credentials,
+        scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
+        base_url=base_url,
+        model=model,
+        **_gigachat_tls_kwargs(),
+    )
+    resp = g.chat(Chat(model=model, messages=[Messages(role="user", content=prompt)], max_tokens=8))
+    return str(resp.choices[0].message.content)
 
 
 def _builtin_status(provider_id: str) -> dict:
@@ -325,8 +409,15 @@ class LLMClient:
             cert_file = _resolve_pem_path(cert_file)
             key_file = _resolve_pem_path(key_file)
             ca = _resolve_pem_path(_env("GIGACHAT_CA_CERT_PATH"))
-            verify = ca if ca else _get_verify()   # SSL_NO_VERIFY / SSL_MAX_TLS12 / CA учитываются
+            no_verify = _gigachat_no_verify()
+            # SSL_NO_VERIFY / GIGACHAT_NO_VERIFY / SSL_MAX_TLS12 / CA учитываются.
+            # Порядок как в list_gigachat_models — чат и /models ходят одинаково.
+            verify = False if no_verify else (ca if ca else _get_verify())
             cert = (cert_file, key_file) if key_file else cert_file
+            logger.info(
+                "GigaChat init (certificate): base_url=%s model=%s no_verify=%s ca=%s",
+                self.base_url, self.model, no_verify, bool(ca),
+            )
             self._giga_http = httpx.Client(timeout=120.0, verify=verify, cert=cert)
             self.client = None
             return
@@ -348,6 +439,10 @@ class LLMClient:
         auth_url = _env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
         if auth_url:
             client_kwargs["auth_url"] = auth_url
+        logger.info(
+            "GigaChat init (api_key): base_url=%s model=%s auth_url=%s",
+            self.base_url, self.model, auth_url,
+        )
         self.client = GigaChat(**client_kwargs)
 
     def _init_custom(self):

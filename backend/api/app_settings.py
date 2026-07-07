@@ -15,9 +15,10 @@ import json
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -89,6 +90,13 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Путь к приватному ключу клиентского сертификата GigaChat",
         "group":       "llm",
     },
+    "gigachat_no_verify": {
+        # По умолчанию включено: корп. BIG IP рвёт TLS-верификацию. Пустая строка
+        # = проверка включена (пользователь явно снял галочку в настройках).
+        "value":       os.getenv("GIGACHAT_NO_VERIFY", "1"),
+        "description": "Отключить проверку серверного сертификата GigaChat (корп. BIG IP)",
+        "group":       "llm",
+    },
     _CUSTOM_LLM_KEY: {
         "value":       os.getenv("CUSTOM_LLM_PROVIDERS", "[]"),
         "description": "Пользовательские chat/completions-compatible LLM подключения",
@@ -117,6 +125,7 @@ _ENV_MAP: Dict[str, str] = {
     "gigachat_ca_cert_path":          "GIGACHAT_CA_CERT_PATH",
     "gigachat_client_cert_path":      "GIGACHAT_CLIENT_CERT_PATH",
     "gigachat_client_key_path":       "GIGACHAT_CLIENT_KEY_PATH",
+    "gigachat_no_verify":             "GIGACHAT_NO_VERIFY",
     _CUSTOM_LLM_KEY:                  "CUSTOM_LLM_PROVIDERS",
     _REVISOR_STANDS_KEY:              "REVISOR_API_STANDS",
 }
@@ -688,6 +697,76 @@ def gigachat_models(req: GigachatModelsRequest) -> dict:
         return {"models": models}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Не удалось получить модели: {str(e)[:200]}")
+
+
+class GigachatTestChatRequest(GigachatModelsRequest):
+    model: str = Field(default="")
+
+
+@router.post("/api/settings/gigachat/test-chat")
+def gigachat_test_chat(req: GigachatTestChatRequest) -> dict:
+    """Пробный чат к стенду GigaChat (`POST {base_url}/chat/completions`) теми же
+    живыми параметрами формы, что и «Загрузить модели». Единый источник —
+    рассинхрон с /models исключён. Пустые поля берутся из сохранённых настроек."""
+    from agents.llm_client import LLMClient, probe_gigachat_chat
+    try:
+        answer = probe_gigachat_chat(
+            model=req.model.strip(),
+            base_url=req.base_url.strip(),
+            auth_type=req.auth_type.strip(),
+            client_cert_path=req.client_cert_path.strip(),
+            client_key_path=req.client_key_path.strip(),
+            ca_cert_path=req.ca_cert_path.strip(),
+            no_verify=req.no_verify,
+        )
+        preview = (answer or "").strip().replace("\n", " ")
+        return {"status": "green", "message": f"OK — модель ответила: {preview[:80]}"}
+    except Exception as e:
+        _, friendly = LLMClient.classify_error(e)
+        return {"status": "red", "message": friendly[:200]}
+
+
+# ── Загрузка файлов сертификатов GigaChat ────────────────────────────────────
+# Файлы кладём в защищённую папку с правами 0600 (как _resolve_pem_path/mkstemp).
+_CERTS_DIR = Path(__file__).resolve().parents[2] / "data" / "gigachat_certs"
+_CERT_KINDS = {"cert": ".pem", "key": ".key", "ca": ".pem"}
+_MAX_CERT_SIZE = 1024 * 1024  # 1 МБ — сертификата с запасом хватает
+
+
+@router.post("/api/settings/gigachat/cert-upload")
+async def gigachat_cert_upload(kind: str, file: UploadFile = File(...)) -> dict:
+    """Принять файл сертификата (kind=cert|key|ca), сохранить в защищённую папку
+    с правами 0600 и вернуть путь. Путь затем пишется в соответствующее поле формы.
+    Поддерживается и Base64-PEM .txt (распакуется на лету в LLMClient)."""
+    kind = (kind or "").strip().lower()
+    if kind not in _CERT_KINDS:
+        raise HTTPException(status_code=400, detail="kind должен быть cert, key или ca")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    if len(content) > _MAX_CERT_SIZE:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 1 МБ)")
+
+    _CERTS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(_CERTS_DIR, 0o700)
+    except OSError:
+        pass
+
+    # Сохраняем исходное расширение, если оно есть (.pem/.crt/.cer/.key/.txt),
+    # иначе — дефолт под kind. Имя фиксировано по kind, чтобы не плодить файлы.
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".pem", ".crt", ".cer", ".key", ".txt"):
+        ext = _CERT_KINDS[kind]
+    dest = _CERTS_DIR / f"gigachat_{kind}{ext}"
+
+    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    os.chmod(dest, 0o600)
+
+    return {"path": str(dest)}
 
 
 @router.post("/api/settings/test/kafka-metrics")

@@ -22,3 +22,8 @@ data/kafka_explorer_connections.json
 Linly-Dubbing/
 simpletest.db
 certs/ca-bundle.pem
+
+# Cert vault (secrets, local only)
+data/certs_vault/
+data/.cert_key
+data/gigachat_certs/

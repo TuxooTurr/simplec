@@ -7,10 +7,54 @@
 TLS/client certificate.
 """
 
+import base64
 import json
 import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
+
+
+# Кэш распакованных PEM: (путь+mtime) -> временный .pem файл
+_PEM_CACHE: dict[str, str] = {}
+
+
+def _resolve_pem_path(path: str) -> str:
+    """Возвращает путь к нормальному PEM-файлу.
+
+    Сертификаты СберCA часто выгружаются как .txt, где содержимое — PEM, ещё раз
+    завёрнутый в Base64 (одна длинная строка). Такой файл SSL не примет.
+    Здесь: если файл уже PEM (`-----BEGIN`), возвращаем как есть; если это
+    Base64-обёртка над PEM — декодируем во временный .pem (0600) и отдаём его путь.
+    Иначе возвращаем исходный путь (пусть SSL сам ругнётся)."""
+    if not path:
+        return path
+    p = Path(path)
+    if not p.is_file():
+        return path
+    try:
+        raw = p.read_bytes()
+    except Exception:
+        return path
+    if b"-----BEGIN" in raw:
+        return path  # уже нормальный PEM
+    try:
+        decoded = base64.b64decode("".join(raw.decode("utf-8", "ignore").split()), validate=True)
+    except Exception:
+        return path
+    if b"-----BEGIN" not in decoded:
+        return path
+
+    key = f"{p.resolve()}::{p.stat().st_mtime_ns}"
+    cached = _PEM_CACHE.get(key)
+    if cached and os.path.exists(cached):
+        return cached
+    fd, tmp = tempfile.mkstemp(prefix="st_pem_", suffix=".pem")  # mkstemp -> права 0600
+    with os.fdopen(fd, "wb") as f:
+        f.write(decoded)
+    _PEM_CACHE[key] = tmp
+    return tmp
 
 
 def _get_verify():
@@ -167,7 +211,9 @@ def list_gigachat_models(
         key_file = client_key_path or _env("GIGACHAT_CLIENT_KEY_PATH")
         if not cert_file:
             raise ValueError("Не указан путь к клиентскому сертификату")
-        verify = False if no_verify else (ca or _get_verify())
+        cert_file = _resolve_pem_path(cert_file)
+        key_file = _resolve_pem_path(key_file)
+        verify = False if no_verify else (_resolve_pem_path(ca) if ca else _get_verify())
         cert = (cert_file, key_file) if key_file else cert_file
         with httpx.Client(timeout=30.0, verify=verify, cert=cert) as c:
             r = c.get(base_url + "/models", headers={"Content-Type": "application/json"})
@@ -275,7 +321,10 @@ class LLMClient:
             key_file = _env("GIGACHAT_CLIENT_KEY_PATH")
             if not cert_file:
                 raise ValueError("GIGACHAT_CLIENT_CERT_PATH not found for certificate auth")
-            ca = _env("GIGACHAT_CA_CERT_PATH")
+            # .txt с Base64-PEM (СберCA) автоматически распаковываются в нормальный PEM
+            cert_file = _resolve_pem_path(cert_file)
+            key_file = _resolve_pem_path(key_file)
+            ca = _resolve_pem_path(_env("GIGACHAT_CA_CERT_PATH"))
             verify = ca if ca else _get_verify()   # SSL_NO_VERIFY / SSL_MAX_TLS12 / CA учитываются
             cert = (cert_file, key_file) if key_file else cert_file
             self._giga_http = httpx.Client(timeout=120.0, verify=verify, cert=cert)
@@ -317,9 +366,10 @@ class LLMClient:
         if self.auth_type == "api_key" and not self.api_key:
             raise ValueError("Custom LLM API key is empty")
 
-        verify = str(cfg.get("ca_cert_path", "")).strip() or _get_verify()
-        client_cert = str(cfg.get("client_cert_path", "")).strip()
-        client_key = str(cfg.get("client_key_path", "")).strip()
+        ca_path = str(cfg.get("ca_cert_path", "")).strip()
+        verify = _resolve_pem_path(ca_path) if ca_path else _get_verify()
+        client_cert = _resolve_pem_path(str(cfg.get("client_cert_path", "")).strip())
+        client_key = _resolve_pem_path(str(cfg.get("client_key_path", "")).strip())
         if self.auth_type == "certificate" and not client_cert:
             raise ValueError("Custom LLM client certificate path is empty")
         cert = (client_cert, client_key) if client_cert and client_key else (client_cert or None)

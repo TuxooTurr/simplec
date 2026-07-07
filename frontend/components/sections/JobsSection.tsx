@@ -7,6 +7,7 @@ import {
   FolderOpen, FolderClosed, FolderPlus, Database,
   History, Zap, Eraser, CircleCheck,
 } from "lucide-react";
+import { Select } from "@/components/ui";
 import {
   getJobs, saveJob, deleteJob, executeJob, executeJobBatch,
   getJobHistory, getJobFolders, saveJobFolder, deleteJobFolder,
@@ -836,14 +837,14 @@ function JobModal({ initial, folders, connections, onSave, onClose }: {
           {/* Connection */}
           <div>
             <label className={LABEL_CLS}>База данных *</label>
-            <select className={INPUT_CLS} value={connId} onChange={e => setConnId(e.target.value)}>
+            <Select  value={connId} onChange={(value) => setConnId(value)}>
               <option value="">— Выберите подключение —</option>
               {connections.map(c => (
                 <option key={c.id} value={c.id}>
                   {c.display_name} ({c.driver_name} · {c.host}:{c.port}/{c.db_name})
                 </option>
               ))}
-            </select>
+            </Select>
             {connections.length === 0 && (
               <p className="text-xs text-amber-600 mt-1">Нет подключений. Добавьте БД в настройках.</p>
             )}
@@ -868,10 +869,10 @@ function JobModal({ initial, folders, connections, onSave, onClose }: {
           {folders.length > 0 && (
             <div>
               <label className={LABEL_CLS}>Папка</label>
-              <select value={folderId} onChange={e => setFolderId(e.target.value)} className={INPUT_CLS}>
+              <Select value={folderId} onChange={(value) => setFolderId(value)} >
                 <option value="">— без папки —</option>
                 {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-              </select>
+              </Select>
             </div>
           )}
 

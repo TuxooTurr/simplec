@@ -5,7 +5,7 @@ import {
   Network, Search, X, Plus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
   ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
 } from "lucide-react";
-import { ConnectionsModal, ConnectionRow } from "@/components/ui";
+import { ConnectionsModal, ConnectionRow, Select } from "@/components/ui";
 import {
   listKafkaConnections, createKafkaConnection, updateKafkaConnection, deleteKafkaConnection,
   testKafkaConnection, getKafkaTopics, fetchKafkaMessages,
@@ -126,14 +126,15 @@ function TopicColumn({
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border-main bg-bg-card">
       <div className="flex shrink-0 items-center gap-2 border-b border-border-main p-2">
         <span className="shrink-0 rounded bg-bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-text-muted">{label}</span>
-        <select
+        <Select
           value={topic}
-          onChange={(e) => onTopic(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30"
+          onChange={onTopic}
+          placeholder="— выберите топик —"
+          className="min-w-0 flex-1"
         >
           <option value="">— выберите топик —</option>
           {topics.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        </Select>
         {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-text-muted" />}
       </div>
       {/* Заголовок таблицы: сортировка по offset и дате */}
@@ -252,7 +253,7 @@ export default function KafkaSection() {
     let alive = true;
     setTopicsLoading(true); setTopicsErr("");
     getKafkaTopics(connId)
-      .then((r) => { if (alive) setTopics(r.topics ?? []); })
+      .then((r) => { if (alive) setTopics([...(r.topics ?? [])].sort((a, b) => a.localeCompare(b))); })
       .catch((e) => { if (alive) { setTopics([]); setTopicsErr(e instanceof Error ? e.message : String(e)); } })
       .finally(() => { if (alive) setTopicsLoading(false); });
     return () => { alive = false; };
@@ -299,14 +300,15 @@ export default function KafkaSection() {
           <Network className="h-5 w-5 text-primary" />
           <h1 className="text-lg font-bold text-text-main">Просмотр Kafka</h1>
         </div>
-        <select
+        <Select
           value={connId}
-          onChange={(e) => { setConnId(e.target.value); setT1(""); setT2(""); setSelected(null); }}
-          className="rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30"
+          onChange={(v) => { setConnId(v); setT1(""); setT2(""); setSelected(null); }}
+          placeholder="— подключение —"
+          className="w-56"
         >
           <option value="">— подключение —</option>
           {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        </Select>
         <button type="button" onClick={() => setManageOpen(true)}
           className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
           <Settings2 className="h-3.5 w-3.5" /> Подключения

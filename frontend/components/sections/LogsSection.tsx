@@ -8,6 +8,7 @@ import {
   RefreshCw, Settings, XCircle, CheckCircle2, ChevronRight,
   History, ChevronLeft, Trash2,
 } from "lucide-react";
+import { Select } from "@/components/ui";
 import {
   searchLogs, analyzeLogs, getLogServices,
   type LogEntry, type LogGroup, type LogAnalysis, type LogSearchResult,
@@ -571,17 +572,16 @@ export default function LogsSection() {
         <div className="flex-1" />
 
         {/* VPS selector */}
-        <select
+        <Select
           value={selectedVps}
-          onChange={e => setSelectedVps(e.target.value)}
-          className="px-3 py-1.5 text-sm border border-border-main rounded-lg bg-[var(--color-input-bg)] text-text-main focus:ring-1 focus:ring-primary/40"
+          onChange={(value) => setSelectedVps(value)}
         >
           {connections.map(c => (
             <option key={c.id} value={c.id}>
               {c.name} ({VPS_TYPE_LABELS[c.vps_type] || c.vps_type})
             </option>
           ))}
-        </select>
+        </Select>
 
         <button onClick={() => setStage("history")} className={BTN_GHOST}>
           <History className="w-4 h-4" />

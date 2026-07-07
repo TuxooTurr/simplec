@@ -6,6 +6,7 @@ import {
   Loader2, Smartphone, Tag, X, Save, Paperclip, FileText,
   Code2, Bug, FolderOpen, Upload,
 } from "lucide-react";
+import { Select } from "@/components/ui";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
   listAutotests, addAutotest, deleteAutotest,
@@ -976,16 +977,16 @@ function ContextDocsTab() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <select
+        <Select
           value={filterDocType}
-          onChange={(e) => setFilterDocType(e.target.value)}
-          className={`${INPUT_CLS} w-auto min-w-[140px]`}
+          onChange={(value) => setFilterDocType(value)}
+          className="w-auto min-w-[140px]"
         >
           <option value="">Все типы</option>
           {DOC_TYPES.map((d) => (
             <option key={d.value} value={d.value}>{d.label}</option>
           ))}
-        </select>
+        </Select>
         <div className="relative flex-1 min-w-[140px]">
           <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
           <input value={filterFeature} onChange={(e) => setFilterFeature(e.target.value)}
@@ -1019,12 +1020,12 @@ function ContextDocsTab() {
             </div>
             <div>
               <label className={`block ${LABEL_CLS} mb-1.5`}>Тип документа</label>
-              <select value={addDocType} onChange={(e) => setAddDocType(e.target.value)}
-                className={INPUT_CLS}>
+              <Select value={addDocType} onChange={(value) => setAddDocType(value)}
+                >
                 {DOC_TYPES.map((d) => (
                   <option key={d.value} value={d.value}>{d.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>

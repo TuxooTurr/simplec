@@ -7,7 +7,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, Play, ScrollText, Pencil,
   Check, Settings2, Upload,
 } from "lucide-react";
-import { ConnectionsModal, ConnectionRow, Tabs } from "@/components/ui";
+import { ConnectionsModal, ConnectionRow, Tabs, Select } from "@/components/ui";
 import {
   getSettings, saveSettings,
   getCustomLlmProviders, saveCustomLlmProvider, deleteCustomLlmProvider,
@@ -269,9 +269,9 @@ function renderField(f: FieldDef, values: Record<string, string>, descriptions: 
       {isSecret || f.type === "password" ? (
         <PasswordInput fieldKey={f.key} value={val} onChange={onChange} placeholder={desc} />
       ) : f.type === "select" && f.options ? (
-        <select className={SELECT_CLS} value={val} onChange={(e) => onChange(f.key, e.target.value)}>
+        <Select  value={val} onChange={(value) => onChange(f.key, value)}>
           {f.options.map((o) => <option key={o} value={o}>{o || "— не задано —"}</option>)}
-        </select>
+        </Select>
       ) : (
         <input type="text" className={INPUT_CLS} value={val} onChange={(e) => onChange(f.key, e.target.value)}
           placeholder={desc} spellCheck={false} />
@@ -584,13 +584,13 @@ function UnifiedLlmProviders({
                   <p className="text-sm font-semibold text-text-main">{p.name}</p>
                   {/* Model selector or plain text */}
                   {models.length > 1 ? (
-                    <select
+                    <Select
                       className="text-xs text-text-muted bg-transparent border-none p-0 focus:outline-none focus:ring-0 cursor-pointer hover:text-primary transition-colors"
                       value={p.model}
-                      onChange={(e) => handleModelChange(p, e.target.value)}
+                      onChange={(value) => handleModelChange(p, value)}
                     >
                       {models.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
+                    </Select>
                   ) : (
                     <p className="text-xs text-text-muted">
                       {p.model}{!hasKeyOrNoNeed ? " · нет ключа" : ""}
@@ -667,12 +667,12 @@ function UnifiedLlmProviders({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className={LABEL_CLS}>Нейросеть</label>
-            <select className={SELECT_CLS} value={selectedPreset} onChange={e => { setSelectedPreset(e.target.value); setApiKey(""); setErrMsg(""); }}>
+            <Select  value={selectedPreset} onChange={(value) => { setSelectedPreset(value); setApiKey(""); setErrMsg(""); }}>
               <option value="">— Выберите —</option>
               {availablePresets.map(p => (
                 <option key={p.id} value={p.id}>{p.iconLetter} {p.name}</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
             <label className={LABEL_CLS}>{curPreset?.apiKeyLabel ?? "API Key"} {curPreset?.noKeyNeeded ? "" : <span className="text-[10px] text-text-muted">(секрет)</span>}</label>
@@ -795,9 +795,9 @@ function RevisorConnectionsModal({ open, onClose, methods, stands, onSave, onDel
         <input className={INPUT_CLS} value={form.name} onChange={(e) => setField("name", e.target.value)} placeholder="Имя стенда (напр. НТ)" />
         <input className={INPUT_CLS} value={form.namespace ?? ""} onChange={(e) => setField("namespace", e.target.value)} placeholder="Namespace (опц.)" spellCheck={false} />
         <input className={INPUT_CLS} value={form.base_url} onChange={(e) => setField("base_url", e.target.value)} placeholder="Base URL — https://stand.example.ru" spellCheck={false} />
-        <select className={SELECT_CLS} value={form.auth_type} onChange={(e) => setField("auth_type", e.target.value as RevisorStandConfig["auth_type"])}>
+        <Select  value={form.auth_type} onChange={(value) => setField("auth_type", value as RevisorStandConfig["auth_type"])}>
           <option value="none">Без токена</option><option value="bearer">Bearer token</option><option value="api_key">API key header</option>
-        </select>
+        </Select>
         {form.auth_type !== "none" && (
           <PasswordInput fieldKey="token" value={form.token ?? ""} onChange={(_, v) => setField("token", v)} placeholder="Token" />
         )}
@@ -930,9 +930,9 @@ function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefre
       form={<>
         <input className={INPUT_CLS} value={form.display_name} onChange={e => setField("display_name", e.target.value)} placeholder="Название (напр. Продуктовая БД)" />
         <div className="flex gap-2">
-          <select className={`${SELECT_CLS} flex-1`} value={form.driver_id}
-            onChange={e => {
-              const driverId = e.target.value;
+          <Select className="flex-1" value={form.driver_id}
+            onChange={(value) => {
+              const driverId = value;
               const drv = drivers.find(d => d.id === driverId);
               setForm(prev => ({
                 ...prev, driver_id: driverId,
@@ -943,7 +943,7 @@ function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefre
             }}>
             <option value="">— выберите драйвер —</option>
             {drivers.map(d => <option key={d.id} value={d.id}>{d.name}{d.built_in ? "" : " (свой)"}</option>)}
-          </select>
+          </Select>
           <button type="button" onClick={onManageDrivers} title="Настройка драйверов"
             className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-main px-2.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
             <Settings2 className="h-3.5 w-3.5" /> Настройка драйверов
@@ -1279,13 +1279,13 @@ function LogsVpsConnectionsModal({
       formTitle={form.id ? "Изменить" : "Новое подключение"}
       form={<>
         <input className={INPUT_CLS} value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Название (напр. Graylog Production)" />
-        <select className={SELECT_CLS} value={form.vps_type || "graylog"} onChange={e => setForm(f => ({ ...f, vps_type: e.target.value as LogsVpsConnection["vps_type"] }))}>
+        <Select  value={form.vps_type || "graylog"} onChange={(value) => setForm(f => ({ ...f, vps_type: value as LogsVpsConnection["vps_type"] }))}>
           {VPS_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        </Select>
         <input className={`${INPUT_CLS} font-mono`} value={form.base_url || ""} onChange={e => setForm(f => ({ ...f, base_url: e.target.value }))} placeholder="https://graylog.company.ru/api" />
-        <select className={SELECT_CLS} value={form.auth_type || "none"} onChange={e => setForm(f => ({ ...f, auth_type: e.target.value as LogsVpsConnection["auth_type"] }))}>
+        <Select  value={form.auth_type || "none"} onChange={(value) => setForm(f => ({ ...f, auth_type: value as LogsVpsConnection["auth_type"] }))}>
           {VPS_AUTH_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        </Select>
         {needsToken && (
           <PasswordInput fieldKey="token" value={form.token || ""} onChange={(_, v) => setForm(f => ({ ...f, token: v }))} placeholder={form.auth_type === "bearer" ? "Bearer токен" : "API ключ"} />
         )}

@@ -9,6 +9,7 @@ import {
   RotateCcw, Eye, EyeOff, Clock, User, List,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
 } from "lucide-react";
+import { Select } from "@/components/ui";
 import {
   saveAlertScript, deleteAlertScript, parseNotebook,
   saveAlertFolder, deleteAlertFolder,
@@ -256,16 +257,16 @@ function ParamInput({ param, value, onChange }: {
 
   if (ft === "select" || ft === "dropdown") {
     return (
-      <select
+      <Select
         value={value}
-        onChange={e => onChange(e.target.value)}
-        className={INPUT_CLS}
+        onChange={(value) => onChange(value)}
+        
       >
         <option value="">— выберите —</option>
         {options.map(opt => (
           <option key={opt} value={opt}>{opt}</option>
         ))}
-      </select>
+      </Select>
     );
   }
 
@@ -281,20 +282,20 @@ function ParamInput({ param, value, onChange }: {
     if (ft === "dropdown_multi") {
       return (
         <div>
-          <select
+          <Select
             value=""
-            onChange={e => {
-              if (e.target.value && !selected.includes(e.target.value)) {
-                onChange([...selected, e.target.value].join(", "));
+            onChange={(value) => {
+              if (value && !selected.includes(value)) {
+                onChange([...selected, value].join(", "));
               }
             }}
-            className={`${INPUT_CLS} mb-1.5`}
+            className="mb-1.5"
           >
             <option value="">— добавить —</option>
             {options.filter(o => !selected.includes(o)).map(opt => (
               <option key={opt} value={opt}>{opt}</option>
             ))}
-          </select>
+          </Select>
           {selected.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {selected.map(s => (
@@ -406,16 +407,16 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
           {folders.length > 0 && (
             <div>
               <label className={LABEL_CLS}>Папка</label>
-              <select
+              <Select
                 value={folderId}
-                onChange={e => setFolderId(e.target.value)}
-                className={INPUT_CLS}
+                onChange={(value) => setFolderId(value)}
+                
               >
                 <option value="">— без папки —</option>
                 {folders.map(f => (
                   <option key={f.id} value={f.id}>{f.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
 
@@ -494,15 +495,15 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
                     <div className="grid grid-cols-[1fr_2fr] gap-2 items-start">
                       <div>
                         <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Тип поля</span>
-                        <select
+                        <Select
                           value={p.field_type || "text"}
-                          onChange={e => updateParam(p.id, "field_type", e.target.value)}
-                          className={`${INPUT_CLS} text-xs py-1.5`}
+                          onChange={(value) => updateParam(p.id, "field_type", value)}
+                          className="text-xs py-1.5"
                         >
                           {Object.entries(FIELD_TYPE_LABELS).map(([k, v]) => (
                             <option key={k} value={k}>{v}</option>
                           ))}
-                        </select>
+                        </Select>
                       </div>
                       {(p.field_type === "select" || p.field_type === "multiselect" || p.field_type === "dropdown" || p.field_type === "dropdown_multi") && (
                         <div>

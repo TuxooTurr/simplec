@@ -19,7 +19,7 @@ import {
   type ThresholdsConfig, type ThresholdRow, type HealthConfig,
   type LogEntry, type SendNowResult, type PreviewResult,
 } from "@/lib/metricsApi";
-import { INPUT_CLS, INPUT_SM, LABEL_CLS } from "@/components/ui";
+import { INPUT_CLS, INPUT_SM, LABEL_CLS, Select } from "@/components/ui";
 
 // ── Styles (backward-compat aliases, use <Button> where possible) ────────────
 
@@ -394,9 +394,9 @@ function EditMetricModal({ metric, onSave, onClose }: EditMetricModalProps) {
           </div>
           <div>
             <label className={LABEL_CLS}>Тип *</label>
-            <select className={INPUT_CLS} value={type} onChange={e => setType(e.target.value)}>
+            <Select  value={type} onChange={(value) => setType(value)}>
               {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
-            </select>
+            </Select>
           </div>
           <div>
             <label className={LABEL_CLS}>Ед. измерения</label>
@@ -409,9 +409,9 @@ function EditMetricModal({ metric, onSave, onClose }: EditMetricModalProps) {
           </div>
           <div>
             <label className={LABEL_CLS}>Паттерн</label>
-            <select className={INPUT_CLS} value={pattern} onChange={e => setPattern(e.target.value)}>
+            <Select  value={pattern} onChange={(value) => setPattern(value)}>
               {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
-            </select>
+            </Select>
           </div>
           <div>
             <label className={LABEL_CLS}>Min</label>
@@ -617,10 +617,10 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
               <div className="grid grid-cols-[110px_60px_56px_56px_100px_72px_1fr] gap-x-4 gap-y-2">
                 <div>
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Тип</p>
-                  <select className={INPUT_SM} value={defaults.type}
-                    onChange={e => setDefault("type", e.target.value)}>
+                  <Select sm value={defaults.type}
+                    onChange={(value) => setDefault("type", value)}>
                     {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Период, с</p>
@@ -639,10 +639,10 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Паттерн</p>
-                  <select className={INPUT_SM} value={defaults.pattern}
-                    onChange={e => setDefault("pattern", e.target.value)}>
+                  <Select sm value={defaults.pattern}
+                    onChange={(value) => setDefault("pattern", value)}>
                     {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
-                  </select>
+                  </Select>
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wide mb-1">Ед. изм.</p>
@@ -687,20 +687,20 @@ function BatchAddMetricsModal({ systemId, systemName, onDone, onClose }: BatchAd
                     />
                     <input type="text" className={INPUT_SM} placeholder="%" value={row.unit}
                       onChange={e => setRow(row.id, "unit", e.target.value)} />
-                    <select className={INPUT_SM} value={row.type}
-                      onChange={e => setRow(row.id, "type", e.target.value)}>
+                    <Select sm value={row.type}
+                      onChange={(value) => setRow(row.id, "type", value)}>
                       {METRIC_TYPES_LIST.map(t => <option key={t}>{t}</option>)}
-                    </select>
+                    </Select>
                     <input type="number" min={10} className={INPUT_SM} value={row.period}
                       onChange={e => setRow(row.id, "period", Number(e.target.value))} />
                     <input type="number" className={INPUT_SM} value={row.min}
                       onChange={e => setRow(row.id, "min", Number(e.target.value))} />
                     <input type="number" className={INPUT_SM} value={row.max}
                       onChange={e => setRow(row.id, "max", Number(e.target.value))} />
-                    <select className={INPUT_SM} value={row.pattern}
-                      onChange={e => setRow(row.id, "pattern", e.target.value)}>
+                    <Select sm value={row.pattern}
+                      onChange={(value) => setRow(row.id, "pattern", value)}>
                       {METRIC_PATTERNS_LIST.map(p => <option key={p}>{p}</option>)}
-                    </select>
+                    </Select>
                     <input type="text" className={INPUT_SM} placeholder="CI или название" value={row.ke}
                       onChange={e => setRow(row.id, "ke", e.target.value)} />
                     <button onClick={() => removeRow(row.id)} disabled={rows.length === 1}
@@ -1101,13 +1101,13 @@ function ValuesTab({ metricId, initial, onSaved }: { metricId: number; initial: 
     <div className="flex flex-col gap-4">
       <div>
         <label className={LABEL_CLS}>Паттерн генерации</label>
-        <select className={INPUT_CLS} value={form.pattern}
-          onChange={e => set("pattern", e.target.value as ValuesConfig["pattern"])}>
+        <Select  value={form.pattern}
+          onChange={(value) => set("pattern", value as ValuesConfig["pattern"])}>
           <option value="constant">constant — постоянное значение</option>
           <option value="random">random — случайное в диапазоне</option>
           <option value="sine">sine — синусоида min↔max</option>
           <option value="spike">spike — базовое + редкие пики</option>
-        </select>
+        </Select>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -1178,11 +1178,11 @@ function BaselineTab({ metricId, initial, onSaved }: { metricId: number; initial
         <>
           <div>
             <label className={LABEL_CLS}>Метод расчёта</label>
-            <select className={INPUT_CLS} value={form.calc_method}
-              onChange={e => setForm(p => ({ ...p, calc_method: e.target.value as BaselineConfig["calc_method"] }))}>
+            <Select  value={form.calc_method}
+              onChange={(value) => setForm(p => ({ ...p, calc_method: value as BaselineConfig["calc_method"] }))}>
               <option value="fixed">fixed — фиксированное значение</option>
               <option value="offset">offset — текущее значение + смещение</option>
-            </select>
+            </Select>
           </div>
 
           {form.calc_method === "fixed" && (
@@ -1247,19 +1247,19 @@ function ThresholdsTab({ metricId, initial, onSaved }: { metricId: number; initi
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={LABEL_CLS}>Комбинирование</label>
-              <select className={INPUT_CLS} value={form.combination_selector}
-                onChange={e => setForm(p => ({ ...p, combination_selector: e.target.value as ThresholdsConfig["combination_selector"] }))}>
+              <Select  value={form.combination_selector}
+                onChange={(value) => setForm(p => ({ ...p, combination_selector: value as ThresholdsConfig["combination_selector"] }))}>
                 <option value="worst">worst — берётся худший статус</option>
                 <option value="best">best — берётся лучший статус</option>
-              </select>
+              </Select>
             </div>
             <div>
               <label className={LABEL_CLS}>Тип порогов</label>
-              <select className={INPUT_CLS} value={form.threshold_type}
-                onChange={e => setForm(p => ({ ...p, threshold_type: e.target.value as ThresholdsConfig["threshold_type"] }))}>
+              <Select  value={form.threshold_type}
+                onChange={(value) => setForm(p => ({ ...p, threshold_type: value as ThresholdsConfig["threshold_type"] }))}>
                 <option value="threshold">threshold — абсолютные</option>
                 <option value="baseline">baseline — от базовой линии</option>
-              </select>
+              </Select>
             </div>
           </div>
 
@@ -1289,15 +1289,15 @@ function ThresholdsTab({ metricId, initial, onSaved }: { metricId: number; initi
                   const hl = HEALTH_LABELS[row.health_type] ?? HEALTH_LABELS[3];
                   return (
                     <div key={i} className="grid grid-cols-[110px_1fr_1fr_64px_24px] gap-1.5 items-center">
-                      <select
-                        className={`${INPUT_SM} font-semibold ${hl.cls} border`}
+                      <Select
+                        sm className="font-semibold ${hl.cls} border"
                         value={row.health_type}
-                        onChange={e => setRow(i, "health_type", Number(e.target.value))}
+                        onChange={(value) => setRow(i, "health_type", Number(value))}
                       >
                         {Object.entries(HEALTH_LABELS).map(([k, v]) => (
                           <option key={k} value={k}>{k} — {v.label}</option>
                         ))}
-                      </select>
+                      </Select>
                       <input type="number" placeholder="−∞" className={INPUT_SM}
                         value={row.min_value ?? ""}
                         onChange={e => setRow(i, "min_value", e.target.value === "" ? null : Number(e.target.value))} />
@@ -1358,23 +1358,23 @@ function HealthTab({ metricId, initial, onSaved }: { metricId: number; initial: 
         <>
           <div>
             <label className={LABEL_CLS}>Метод расчёта</label>
-            <select className={INPUT_CLS} value={form.calc_method}
-              onChange={e => setForm(p => ({ ...p, calc_method: e.target.value as HealthConfig["calc_method"] }))}>
+            <Select  value={form.calc_method}
+              onChange={(value) => setForm(p => ({ ...p, calc_method: value as HealthConfig["calc_method"] }))}>
               <option value="auto">auto — из пороговых значений</option>
               <option value="fixed">fixed — фиксированный статус</option>
               <option value="pattern">pattern — паттерн поведения</option>
-            </select>
+            </Select>
           </div>
 
           {form.calc_method === "fixed" && (
             <div>
               <label className={LABEL_CLS}>Фиксированный статус (1–5)</label>
-              <select className={INPUT_CLS} value={form.fixed_status ?? 1}
-                onChange={e => setForm(p => ({ ...p, fixed_status: Number(e.target.value) }))}>
+              <Select  value={form.fixed_status ?? 1}
+                onChange={(value) => setForm(p => ({ ...p, fixed_status: Number(value) }))}>
                 {Object.entries(HEALTH_LABELS).map(([k, v]) => (
                   <option key={k} value={k}>{k} — {v.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
           )}
 
@@ -1382,12 +1382,12 @@ function HealthTab({ metricId, initial, onSaved }: { metricId: number; initial: 
             <>
               <div>
                 <label className={LABEL_CLS}>Паттерн</label>
-                <select className={INPUT_CLS} value={form.health_pattern ?? "stable_ok"}
-                  onChange={e => setForm(p => ({ ...p, health_pattern: e.target.value as HealthConfig["health_pattern"] }))}>
+                <Select  value={form.health_pattern ?? "stable_ok"}
+                  onChange={(value) => setForm(p => ({ ...p, health_pattern: value as HealthConfig["health_pattern"] }))}>
                   <option value="stable_ok">stable_ok — всегда OK (1)</option>
                   <option value="degrading">degrading — деградация 1→5</option>
                   <option value="flapping">flapping — мерцание 1↔3</option>
-                </select>
+                </Select>
               </div>
 
               {form.health_pattern === "degrading" && (

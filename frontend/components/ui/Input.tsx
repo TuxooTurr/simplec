@@ -53,26 +53,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
 );
 Textarea.displayName = "Textarea";
 
-/* ── Select ───────────────────────────────────────────────────── */
-
-export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
-  sm?: boolean;
-}
-
-export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ sm, className = "", children, ...rest }, ref) => {
-    return (
-      <select
-        ref={ref}
-        className={`${sm ? inputSm : inputBase} ${className}`}
-        {...rest}
-      >
-        {children}
-      </select>
-    );
-  },
-);
-Select.displayName = "Select";
+/* Select вынесен в отдельный файл ./Select (кастомный брендированный дропдаун). */
 
 /* ── Label ────────────────────────────────────────────────────── */
 

@@ -6,7 +6,7 @@ import {
   Plus, RefreshCw, Save, Search, Settings2, Sparkles, Trash2, Zap,
 } from "lucide-react";
 import { analyzeProject, type ProjectAnalysis } from "@/lib/api";
-import { Modal } from "@/components/ui";
+import { Modal, Select } from "@/components/ui";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import TestTree from "@/components/autotest/TestTree";
 import {
@@ -427,10 +427,9 @@ export default function AutotestRunPanel() {
             ) : enabledRunners.length === 1 ? (
               <span className="text-sm font-semibold text-text-main">{enabledRunners[0].name}</span>
             ) : (
-              <select value={runnerId} onChange={(e) => setRunnerId(e.target.value)}
-                className="rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30">
+              <Select value={runnerId} onChange={(value) => setRunnerId(value)}>
                 {enabledRunners.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              </Select>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -556,15 +555,15 @@ export default function AutotestRunPanel() {
                     </div>
                     <div className="md:col-span-2">
                       <label className="mb-1 block text-xs font-semibold text-text-muted">Чем запускать</label>
-                      <select value="" onChange={(e) => {
-                        const id = e.target.value;
+                      <Select value="" onChange={(value) => {
+                        const id = value;
                         if (id && !rule.script_ids.includes(id)) updateRule(rule.id, { script_ids: [...rule.script_ids, id] });
-                      }} className={SMALL_INPUT}>
+                      }} sm>
                         <option value="">Добавить сценарий…</option>
                         {config.scripts.filter((s) => !rule.script_ids.includes(s.id)).map((s) => (
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
-                      </select>
+                      </Select>
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {rule.script_ids.map((id) => {
                           const s = config.scripts.find((x) => x.id === id);
@@ -704,14 +703,14 @@ export default function AutotestRunPanel() {
                     <div>
                       <label className="mb-1 block text-xs font-semibold text-text-muted">Скрипт запуска</label>
                       {discovered.length > 0 && (
-                        <select value={discovered.find((o) => o.relative_path === script.script_path || o.path === script.script_path)?.relative_path ?? ""}
-                          onChange={(e) => {
-                            const opt = discovered.find((o) => o.relative_path === e.target.value);
-                            updateScript(script.id, { script_path: e.target.value, name: opt && script.name === "Новый сценарий" ? opt.name : script.name });
-                          }} className={`${SMALL_INPUT} mb-2 font-mono`}>
+                        <Select value={discovered.find((o) => o.relative_path === script.script_path || o.path === script.script_path)?.relative_path ?? ""}
+                          onChange={(value) => {
+                            const opt = discovered.find((o) => o.relative_path === value);
+                            updateScript(script.id, { script_path: value, name: opt && script.name === "Новый сценарий" ? opt.name : script.name });
+                          }} sm className="mb-2 font-mono">
                           <option value="">Выбрать из фреймворка…</option>
                           {discovered.map((o) => <option key={o.relative_path} value={o.relative_path}>{o.relative_path}</option>)}
-                        </select>
+                        </Select>
                       )}
                       <input value={script.script_path} onChange={(e) => updateScript(script.id, { script_path: e.target.value })}
                         placeholder="scripts/run.sh" className={`${SMALL_INPUT} font-mono`} />

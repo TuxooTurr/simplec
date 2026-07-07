@@ -2,15 +2,14 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Database, Search, Sparkles, Play, Copy, CheckCheck,
+  Database, Sparkles, Play, Copy, CheckCheck,
   Loader2, AlertTriangle, ChevronDown, FileCode, Download,
-  RefreshCw, X, Table2, Server,
+  RefreshCw, X, Table2, Server, Ban, History, Trash2, Clock,
 } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useTestDataJob, type TdArchiveEntry } from "@/contexts/TestDataJobContext";
 import {
   listTestDataConnections,
-  executeTestDataQuery,
-  generateTestDataQuery,
   suggestTestDataScript,
   type TestDataConnection,
   type TestDataQueryResult,
@@ -54,6 +53,79 @@ function formatRowCount(n: number): string {
   if (n === 1) return "1 строка";
   if (n >= 2 && n <= 4) return `${n} строки`;
   return `${n} строк`;
+}
+
+/* Таблицы результата по каждой БД. Переиспользуется живым результатом и снимком из архива. */
+function ResultsView({ results, nameFor }: {
+  results: Record<string, TestDataQueryResult>;
+  nameFor: (connId: string, r: TestDataQueryResult) => string;
+}) {
+  return (
+    <div className="space-y-4">
+      {Object.entries(results).map(([connId, result]) => {
+        const dbName = nameFor(connId, result);
+        const hasError = !!result.error;
+        const isEmpty = !hasError && result.row_count === 0;
+        return (
+          <div key={connId} className="bg-bg-card rounded-xl border border-border-main overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-border-main bg-bg-subtle/50">
+              <Table2 className="w-4 h-4 text-text-muted" />
+              <span className="text-sm font-medium text-text-main">{dbName}</span>
+              {!hasError && (
+                <span className={`text-xs px-2 py-0.5 rounded-full ${isEmpty ? "bg-yellow-50 text-yellow-600" : "bg-green-50 text-green-600"}`}>
+                  {formatRowCount(result.row_count)}
+                </span>
+              )}
+              {!hasError && result.row_count > 0 && (
+                <button
+                  onClick={() => {
+                    const csv = [result.columns.join(","), ...result.rows.map(r => r.map(v => `"${String(v ?? "")}"`).join(","))].join("\n");
+                    downloadBlob(csv, `${dbName}_result.csv`, "text/csv");
+                  }}
+                  className="ml-auto text-xs text-text-muted hover:text-primary flex items-center gap-1"
+                >
+                  <Download className="w-3 h-3" /> CSV
+                </button>
+              )}
+            </div>
+            {hasError ? (
+              <div className="p-4 text-sm text-red-600 bg-red-50/50">
+                <AlertTriangle className="w-4 h-4 inline mr-1.5" />
+                {result.error}
+              </div>
+            ) : isEmpty ? (
+              <div className="p-6 text-center text-sm text-text-muted">Данные не найдены</div>
+            ) : (
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-bg-subtle sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-main w-8">#</th>
+                      {result.columns.map(col => (
+                        <th key={col} className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-main whitespace-nowrap">{col}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.rows.map((row, ri) => (
+                      <tr key={ri} className="hover:bg-bg-subtle/50 border-b border-border-main/50 last:border-0">
+                        <td className="px-3 py-1.5 text-text-muted">{ri + 1}</td>
+                        {row.map((val, ci) => (
+                          <td key={ci} className="px-3 py-1.5 text-text-main whitespace-nowrap max-w-[300px] truncate" title={String(val ?? "")}>
+                            {val === null ? <span className="text-text-muted italic">NULL</span> : String(val)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -103,59 +175,44 @@ export default function TestDataSection() {
     });
   }
 
-  // ── Query ──────────────────────────────────────────────────────
+  // ── Query (состояние выполнения живёт в контексте — переживает навигацию) ──
+  const { job, archive, runSql, runNatural, cancel, clearArchive, removeArchiveEntry } = useTestDataJob();
   const [queryText, setQueryText] = useState("");
   const [naturalQuery, setNaturalQuery] = useState("");
   const [queryMode, setQueryMode] = useState<"sql" | "natural">("natural");
-  const [executing, setExecuting] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [results, setResults] = useState<Record<string, TestDataQueryResult> | null>(null);
-  const [queryError, setQueryError] = useState("");
+
+  const executing = job.running;
+  const generating = job.running && job.phase === "generating";
+  const results = job.results;
+  const queryError = job.error;
+  const generatedSql = job.mode === "natural" ? job.sql : "";
 
   // ── Script suggestion ──────────────────────────────────────────
   const [suggestedScript, setSuggestedScript] = useState("");
   const [scriptGenerating, setScriptGenerating] = useState(false);
   const [scriptCopied, setScriptCopied] = useState(false);
 
-  // ── History ────────────────────────────────────────────────────
-  const [history, setHistory] = useState<{ query: string; mode: "sql" | "natural"; ts: number }[]>([]);
+  // ── Просмотр записи архива (снимок «страницы» результата) ───────
+  const [viewEntry, setViewEntry] = useState<TdArchiveEntry | null>(null);
 
   const selectedConnIds = Array.from(selectedConns);
   const hasSelectedConns = selectedConnIds.length > 0;
   const hasSchema = connections.some(c => selectedConns.has(c.id) && c.cached_schema);
+  const connNamesFor = (ids: string[]) =>
+    ids.map(id => connections.find(c => c.id === id)?.display_name ?? id);
 
   // ── Execute SQL query ──────────────────────────────────────────
-  async function handleExecuteSQL() {
+  function handleExecuteSQL() {
     if (!queryText.trim() || !hasSelectedConns) return;
-    setExecuting(true); setQueryError(""); setResults(null); setSuggestedScript("");
-    try {
-      const res = await executeTestDataQuery({ connection_ids: selectedConnIds, sql: queryText });
-      setResults(res.results);
-      setHistory(prev => [{ query: queryText, mode: "sql", ts: Date.now() }, ...prev.slice(0, 19)]);
-    } catch (e) {
-      setQueryError(e instanceof Error ? e.message : String(e));
-    } finally { setExecuting(false); }
+    setSuggestedScript("");
+    runSql({ connIds: selectedConnIds, connNames: connNamesFor(selectedConnIds), sql: queryText });
   }
 
   // ── Generate SQL from natural language ─────────────────────────
-  async function handleGenerateAndExecute() {
+  function handleGenerateAndExecute() {
     if (!naturalQuery.trim() || !hasSelectedConns || !provider) return;
-    setGenerating(true); setQueryError(""); setResults(null); setSuggestedScript("");
-    try {
-      const gen = await generateTestDataQuery({
-        connection_ids: selectedConnIds,
-        requirement: naturalQuery,
-        provider,
-      });
-      setQueryText(gen.sql);
-
-      // Execute the generated query
-      const res = await executeTestDataQuery({ connection_ids: selectedConnIds, sql: gen.sql });
-      setResults(res.results);
-      setHistory(prev => [{ query: naturalQuery, mode: "natural", ts: Date.now() }, ...prev.slice(0, 19)]);
-    } catch (e) {
-      setQueryError(e instanceof Error ? e.message : String(e));
-    } finally { setGenerating(false); }
+    setSuggestedScript("");
+    runNatural({ connIds: selectedConnIds, connNames: connNamesFor(selectedConnIds), requirement: naturalQuery, provider });
   }
 
   // ── Suggest insert script ──────────────────────────────────────
@@ -320,13 +377,18 @@ export default function TestDataSection() {
             <div className="flex items-center gap-3">
               <button
                 onClick={handleGenerateAndExecute}
-                disabled={generating || !naturalQuery.trim() || !hasSelectedConns || !provider || !hasSchema}
+                disabled={executing || !naturalQuery.trim() || !hasSelectedConns || !provider || !hasSchema}
                 className={BTN_PRIMARY}
               >
-                {generating
-                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Генерация и поиск...</>
+                {executing
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> {generating ? "Генерация SQL..." : "Поиск данных..."}</>
                   : <><Sparkles className="w-4 h-4" /> Найти данные</>}
               </button>
+              {executing && (
+                <button onClick={cancel} className={BTN_SECONDARY + " border-red-300 text-red-600 hover:bg-red-50"}>
+                  <Ban className="w-3.5 h-3.5" /> Отменить
+                </button>
+              )}
               {!provider && <span className="text-xs text-yellow-600">Выберите LLM-провайдер</span>}
               {!hasSchema && hasSelectedConns && (
                 <span className="text-xs text-yellow-600">У выбранных БД нет схемы. Выполните introspect в Настройках.</span>
@@ -355,6 +417,11 @@ export default function TestDataSection() {
                   ? <><Loader2 className="w-4 h-4 animate-spin" /> Выполнение...</>
                   : <><Play className="w-4 h-4" /> Выполнить</>}
               </button>
+              {executing && (
+                <button onClick={cancel} className={BTN_SECONDARY + " border-red-300 text-red-600 hover:bg-red-50"}>
+                  <Ban className="w-3.5 h-3.5" /> Отменить
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -368,11 +435,11 @@ export default function TestDataSection() {
         )}
 
         {/* Generated SQL preview */}
-        {queryMode === "natural" && queryText && (
+        {queryMode === "natural" && generatedSql && (
           <div className="space-y-1">
             <p className="text-xs font-medium text-text-muted">Сгенерированный SQL:</p>
             <pre className="bg-bg-subtle border border-border-main rounded-lg p-3 text-xs font-mono text-text-main overflow-x-auto whitespace-pre-wrap">
-              {queryText}
+              {generatedSql}
             </pre>
           </div>
         )}
@@ -381,75 +448,10 @@ export default function TestDataSection() {
       {/* Results */}
       {results && (
         <div className="space-y-4">
-          {Object.entries(results).map(([connId, result]) => {
-            const conn = connections.find(c => c.id === connId);
-            const dbName = result.db_name ?? conn?.display_name ?? connId;
-            const hasError = !!result.error;
-            const isEmpty = !hasError && result.row_count === 0;
-
-            return (
-              <div key={connId} className="bg-bg-card rounded-xl border border-border-main overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-border-main bg-bg-subtle/50">
-                  <Table2 className="w-4 h-4 text-text-muted" />
-                  <span className="text-sm font-medium text-text-main">{dbName}</span>
-                  {!hasError && (
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${isEmpty ? "bg-yellow-50 text-yellow-600" : "bg-green-50 text-green-600"}`}>
-                      {formatRowCount(result.row_count)}
-                    </span>
-                  )}
-                  {!hasError && result.row_count > 0 && (
-                    <button
-                      onClick={() => {
-                        const csv = [result.columns.join(","), ...result.rows.map(r => r.map(v => `"${String(v ?? "")}"`).join(","))].join("\n");
-                        downloadBlob(csv, `${dbName}_result.csv`, "text/csv");
-                      }}
-                      className="ml-auto text-xs text-text-muted hover:text-primary flex items-center gap-1"
-                    >
-                      <Download className="w-3 h-3" /> CSV
-                    </button>
-                  )}
-                </div>
-
-                {hasError ? (
-                  <div className="p-4 text-sm text-red-600 bg-red-50/50">
-                    <AlertTriangle className="w-4 h-4 inline mr-1.5" />
-                    {result.error}
-                  </div>
-                ) : isEmpty ? (
-                  <div className="p-6 text-center text-sm text-text-muted">
-                    Данные не найдены
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-bg-subtle sticky top-0">
-                        <tr>
-                          <th className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-main w-8">#</th>
-                          {result.columns.map(col => (
-                            <th key={col} className="px-3 py-2 text-left text-text-muted font-medium border-b border-border-main whitespace-nowrap">
-                              {col}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {result.rows.map((row, ri) => (
-                          <tr key={ri} className="hover:bg-bg-subtle/50 border-b border-border-main/50 last:border-0">
-                            <td className="px-3 py-1.5 text-text-muted">{ri + 1}</td>
-                            {row.map((val, ci) => (
-                              <td key={ci} className="px-3 py-1.5 text-text-main whitespace-nowrap max-w-[300px] truncate" title={String(val ?? "")}>
-                                {val === null ? <span className="text-text-muted italic">NULL</span> : String(val)}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          <ResultsView
+            results={results}
+            nameFor={(connId, r) => r.db_name ?? connections.find(c => c.id === connId)?.display_name ?? connId}
+          />
 
           {/* Suggest script if no data found */}
           {totalRows === 0 && (
@@ -505,34 +507,95 @@ export default function TestDataSection() {
         </div>
       )}
 
-      {/* Query history */}
-      {history.length > 0 && (
+      {/* Архив запросов — время, БД, снимок результата */}
+      {archive.length > 0 && (
         <div className="bg-bg-card rounded-xl border border-border-main p-4">
           <div className="flex items-center justify-between mb-3">
-            <label className={LABEL_CLS}>История запросов</label>
-            <button onClick={() => setHistory([])} className="text-xs text-text-muted hover:text-red-500">
-              Очистить
-            </button>
+            <label className={LABEL_CLS + " flex items-center gap-1.5 mb-0"}>
+              <History className="w-3.5 h-3.5" /> Архив запросов ({archive.length})
+            </label>
+            <button onClick={clearArchive} className="text-xs text-text-muted hover:text-red-500">Очистить всё</button>
           </div>
           <div className="space-y-1">
-            {history.map((h, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  if (h.mode === "sql") { setQueryMode("sql"); setQueryText(h.query); }
-                  else { setQueryMode("natural"); setNaturalQuery(h.query); }
-                }}
-                className="w-full text-left px-3 py-2 rounded-lg hover:bg-bg-subtle transition-colors group"
-              >
-                <div className="flex items-center gap-2">
-                  {h.mode === "sql" ? <FileCode className="w-3 h-3 text-text-muted" /> : <Sparkles className="w-3 h-3 text-text-muted" />}
-                  <span className="text-xs text-text-main truncate flex-1 group-hover:text-primary">{h.query}</span>
-                  <span className="text-[10px] text-text-muted">
-                    {new Date(h.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-                  </span>
+            {archive.map((e) => {
+              const totalRows = e.results ? Object.values(e.results).reduce((s, r) => s + (r.row_count ?? 0), 0) : 0;
+              return (
+                <div key={e.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-bg-subtle transition-colors group">
+                  <button onClick={() => setViewEntry(e)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                    {e.mode === "sql" ? <FileCode className="w-3.5 h-3.5 text-text-muted shrink-0" /> : <Sparkles className="w-3.5 h-3.5 text-text-muted shrink-0" />}
+                    <span className="text-[11px] text-text-muted shrink-0 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />{new Date(e.ts).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <span className="text-xs text-text-main truncate flex-1 group-hover:text-primary" title={e.connNames.join(", ")}>
+                      {e.connNames.join(", ") || "—"}
+                    </span>
+                    {e.error
+                      ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 shrink-0">ошибка</span>
+                      : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-muted text-text-muted shrink-0">{formatRowCount(totalRows)}</span>}
+                  </button>
+                  <button onClick={() => removeArchiveEntry(e.id)} title="Удалить из архива"
+                    className="p-1 text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-              </button>
-            ))}
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Просмотр снимка запроса из архива — та самая «страница», что была получена тогда */}
+      {viewEntry && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto" onClick={() => setViewEntry(null)}>
+          <div className="bg-bg-main rounded-2xl border border-border-main w-full max-w-4xl my-8 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-semibold text-text-main">
+                  {viewEntry.mode === "sql" ? <FileCode className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
+                  Запрос от {new Date(viewEntry.ts).toLocaleString("ru-RU")}
+                </div>
+                <p className="text-xs text-text-muted truncate mt-0.5">БД: {viewEntry.connNames.join(", ") || "—"}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    if (viewEntry.mode === "sql") { setQueryMode("sql"); setQueryText(viewEntry.sql); }
+                    else { setQueryMode("natural"); setNaturalQuery(viewEntry.requirement); }
+                    setViewEntry(null);
+                  }}
+                  className={BTN_SECONDARY}
+                >
+                  <RefreshCw className="w-3 h-3" /> Подставить в форму
+                </button>
+                <button onClick={() => setViewEntry(null)} className="p-1.5 text-text-muted hover:text-text-main rounded-lg hover:bg-bg-subtle">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
+              {viewEntry.mode === "natural" && viewEntry.requirement && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-text-muted">Запрос на естественном языке:</p>
+                  <p className="text-sm text-text-main bg-bg-subtle border border-border-main rounded-lg p-3">{viewEntry.requirement}</p>
+                </div>
+              )}
+              {viewEntry.sql && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-text-muted">SQL:</p>
+                  <pre className="bg-bg-subtle border border-border-main rounded-lg p-3 text-xs font-mono text-text-main overflow-x-auto whitespace-pre-wrap">{viewEntry.sql}</pre>
+                </div>
+              )}
+              {viewEntry.error ? (
+                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span className="break-all">{viewEntry.error}</span>
+                </div>
+              ) : viewEntry.results ? (
+                <ResultsView results={viewEntry.results} nameFor={(id, r) => r.db_name ?? id} />
+              ) : (
+                <p className="text-sm text-text-muted">Результат не сохранён.</p>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -7,6 +7,7 @@ import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { GenerationProvider } from "@/contexts/GenerationContext";
 import { AlertsSchedulerProvider } from "@/contexts/AlertsSchedulerContext";
 import { MetricsUiProvider } from "@/contexts/MetricsUiContext";
+import { TestDataJobProvider } from "@/contexts/TestDataJobContext";
 
 export default function WorkspaceShell({ children }: { children: React.ReactNode }) {
   return (
@@ -14,13 +15,15 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
       <GenerationProvider>
         <AlertsSchedulerProvider>
           <MetricsUiProvider>
-            <div className="flex h-screen bg-bg-main overflow-hidden">
-              <Sidebar />
-              <ResizablePanels
-                left={children}
-                right={<SectionRenderer />}
-              />
-            </div>
+            <TestDataJobProvider>
+              <div className="flex h-screen bg-bg-main overflow-hidden">
+                <Sidebar />
+                <ResizablePanels
+                  left={children}
+                  right={<SectionRenderer />}
+                />
+              </div>
+            </TestDataJobProvider>
           </MetricsUiProvider>
         </AlertsSchedulerProvider>
       </GenerationProvider>

@@ -44,6 +44,16 @@ export interface ColumnVisibility {
 const COLS_STORAGE_KEY = "st_kafka_cols";
 const DEFAULT_COLS: ColumnVisibility = { sender: true, recipient: true, value: true };
 
+/* Выбор подключения и топиков живёт в sessionStorage: переживает навигацию между
+   разделами и перезагрузку страницы, но сбрасывается при закрытии вкладки/браузера. */
+const SESSION_KEY = "st_kafka_session";
+interface KafkaSessionState { connId: string; t1: string; t2: string; limit: number; }
+function readSession(): Partial<KafkaSessionState> {
+  if (typeof window === "undefined") return {};
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) ?? "{}"); }
+  catch { return {}; }
+}
+
 /* Отправитель/получатель берутся из заголовков сообщения — распространённые ключи */
 const SENDER_KEYS = ["from", "sender", "source", "producer", "отправитель"];
 const RECIPIENT_KEYS = ["to", "recipient", "destination", "consumer", "получатель"];
@@ -184,19 +194,27 @@ function TopicColumn({
 
 /* ── Component ────────────────────────────────────────────────────── */
 export default function KafkaSection() {
+  const initial = useRef<Partial<KafkaSessionState>>(readSession());
+
   const [connections, setConnections] = useState<KafkaConnection[]>([]);
-  const [connId, setConnId] = useState("");
+  const [connId, setConnId] = useState(initial.current.connId ?? "");
   const [topics, setTopics] = useState<string[]>([]);
   const [topicsErr, setTopicsErr] = useState("");
   const [topicsLoading, setTopicsLoading] = useState(false);
 
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(initial.current.limit ?? 50);
   const [search, setSearch] = useState("");
   const debounced = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [effSearch, setEffSearch] = useState("");
 
-  const [t1, setT1] = useState(""); const [m1, setM1] = useState<KafkaMessage[]>([]); const [l1, setL1] = useState(false);
-  const [t2, setT2] = useState(""); const [m2, setM2] = useState<KafkaMessage[]>([]); const [l2, setL2] = useState(false);
+  const [t1, setT1] = useState(initial.current.t1 ?? ""); const [m1, setM1] = useState<KafkaMessage[]>([]); const [l1, setL1] = useState(false);
+  const [t2, setT2] = useState(initial.current.t2 ?? ""); const [m2, setM2] = useState<KafkaMessage[]>([]); const [l2, setL2] = useState(false);
+
+  // Сохраняем выбор в sessionStorage при любом изменении подключения/топиков/лимита
+  useEffect(() => {
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ connId, t1, t2, limit })); }
+    catch { /* ignore */ }
+  }, [connId, t1, t2, limit]);
 
   const [selected, setSelected] = useState<(KafkaMessage & { topic: string }) | null>(null);
   const [detailView, setDetailView] = useState<"json" | "raw">("json");
@@ -221,7 +239,8 @@ export default function KafkaSection() {
     try {
       const list = await listKafkaConnections();
       setConnections(list);
-      setConnId((prev) => prev || (list[0]?.id ?? ""));
+      // сохраняем восстановленный из сессии connId, если он ещё существует; иначе — первый
+      setConnId((prev) => (prev && list.some((c) => c.id === prev) ? prev : (list[0]?.id ?? "")));
     } catch { /* show empty */ }
   }, []);
 

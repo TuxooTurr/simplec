@@ -625,11 +625,12 @@ export async function introspectTestDataConnection(
 export async function executeTestDataQuery(params: {
   connection_ids: string[];
   sql:            string;
-}): Promise<{ results: Record<string, TestDataQueryResult> }> {
+}, signal?: AbortSignal): Promise<{ results: Record<string, TestDataQueryResult> }> {
   return fetchJson("/api/testdata/query", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(params),
+    signal,
   });
 }
 
@@ -637,11 +638,12 @@ export async function generateTestDataQuery(params: {
   connection_ids: string[];
   requirement:    string;
   provider:       string;
-}): Promise<{ sql: string; db_type: string }> {
+}, signal?: AbortSignal): Promise<{ sql: string; db_type: string }> {
   return fetchJson("/api/testdata/generate-query", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
     body:    JSON.stringify(params),
+    signal,
   });
 }
 

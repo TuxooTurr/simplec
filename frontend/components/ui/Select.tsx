@@ -11,12 +11,16 @@
  *   <select value={v} onChange={e => setV(e.target.value)}>...</select>
  *   →
  *   <Select value={v} onChange={setV}>...</Select>
+ *
+ * Панель списка рендерится в портал (position: fixed по координатам кнопки), чтобы
+ * её не обрезали родители с overflow: hidden/auto (карточки, модалки).
  */
 
 import {
-  Children, Fragment, isValidElement, useCallback, useEffect, useRef, useState,
+  Children, Fragment, isValidElement, useCallback, useEffect, useLayoutEffect, useRef, useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Check } from "lucide-react";
 import { INPUT_CLS, INPUT_SM } from "./Input";
 
@@ -31,13 +35,6 @@ function collectOptions(children: ReactNode, acc: Opt[]) {
       acc.push({ value: String(p.value ?? ""), label: p.children ?? "", disabled: !!p.disabled });
     }
   });
-}
-
-function labelToText(label: ReactNode): string {
-  if (typeof label === "string" || typeof label === "number") return String(label);
-  const acc: string[] = [];
-  Children.forEach(label, (c) => { if (typeof c === "string" || typeof c === "number") acc.push(String(c)); });
-  return acc.join("");
 }
 
 export interface SelectProps {
@@ -61,7 +58,8 @@ export function Select({
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const options: Opt[] = [];
@@ -73,11 +71,31 @@ export function Select({
 
   const close = useCallback(() => { setOpen(false); setActive(-1); }, []);
 
-  // click-outside + Escape
+  const reposition = useCallback(() => {
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+  }, []);
+
+  // позиционируем панель под кнопкой; репозиция на скролл/resize пока открыто
+  useLayoutEffect(() => {
+    if (!open) return;
+    reposition();
+    const onScroll = () => reposition();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => { window.removeEventListener("scroll", onScroll, true); window.removeEventListener("resize", onScroll); };
+  }, [open, reposition]);
+
+  // click-outside (учитывая портал) + Escape
   useEffect(() => {
     if (!open) return;
     function onDoc(e: MouseEvent) {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) close();
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t)) return;
+      if (listRef.current?.contains(t)) return;
+      close();
     }
     function onKey(e: KeyboardEvent) { if (e.key === "Escape") close(); }
     document.addEventListener("mousedown", onDoc);
@@ -137,31 +155,13 @@ export function Select({
     ? `inline-flex items-center gap-1 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${className}`
     : `${base} flex w-full items-center justify-between gap-2 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`;
 
-  return (
-    <div ref={rootRef} className={wrapperCls}>
-      <button
-        type="button"
-        id={id}
-        title={title}
-        aria-label={ariaLabel}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        onKeyDown={onButtonKey}
-        className={buttonCls}
-      >
-        <span className={`truncate ${bare ? "" : selected ? "text-text-main" : "text-text-muted/60"}`}>
-          {selectedLabel || " "}
-        </span>
-        <ChevronDown className={`${bare ? "h-3 w-3" : "h-4 w-4"} shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-
-      {open && (
+  const panel = open && coords && typeof document !== "undefined"
+    ? createPortal(
         <div
           ref={listRef}
           role="listbox"
-          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-border-main bg-bg-card py-1 shadow-lg animate-fade-in"
+          style={{ position: "fixed", top: coords.top, left: coords.left, width: bare ? undefined : coords.width, minWidth: bare ? coords.width : undefined }}
+          className="z-[9999] max-h-60 overflow-auto rounded-lg border border-border-main bg-bg-card py-1 shadow-lg animate-fade-in"
         >
           {options.length === 0 ? (
             <div className="px-3 py-2 text-sm text-text-muted">Нет вариантов</div>
@@ -187,8 +187,32 @@ export function Select({
               </button>
             );
           })}
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div className={wrapperCls}>
+      <button
+        ref={btnRef}
+        type="button"
+        id={id}
+        title={title}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        onKeyDown={onButtonKey}
+        className={buttonCls}
+      >
+        <span className={`truncate ${bare ? "" : selected ? "text-text-main" : "text-text-muted/60"}`}>
+          {selectedLabel || " "}
+        </span>
+        <ChevronDown className={`${bare ? "h-3 w-3" : "h-4 w-4"} shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {panel}
     </div>
   );
 }

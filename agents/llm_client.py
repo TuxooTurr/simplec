@@ -224,7 +224,9 @@ class LLMResponse:
 
 
 class LLMClient:
-    BUILTIN_PROVIDERS = ["gigachat", "deepseek"]
+    # Единственный встроенный (обязательный) провайдер — GigaChat.
+    # DeepSeek и прочие подключаются пользователем как custom (OpenAI-совместимый эндпоинт).
+    BUILTIN_PROVIDERS = ["gigachat"]
     SUPPORTED_PROVIDERS = BUILTIN_PROVIDERS
 
     def __init__(self, provider: str = "gigachat"):
@@ -492,7 +494,6 @@ class LLMClient:
         providers = []
 
         providers.append(_builtin_status("gigachat"))
-        providers.append(_builtin_status("deepseek"))
 
         for cfg in _load_custom_providers():
             provider_id = str(cfg.get("id", "")).strip().lower()

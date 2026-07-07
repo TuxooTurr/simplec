@@ -46,7 +46,7 @@ const GIGACHAT_PUBLIC_URL = "https://gigachat.devices.sberbank.ru/api/v1";
 const GIGACHAT_IFT_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1";
 
 const SECRET_KEYS = new Set([
-  "gigachat_auth_key", "deepseek_api_key",
+  "gigachat_auth_key",
   "kafka_sasl_password", "kafka_ssl_password",
 ]);
 
@@ -60,10 +60,6 @@ interface FieldDef {
 
 const GIGACHAT_FIELDS: FieldDef[] = [
   { key: "gigachat_auth_key", label: "AUTH_KEY", type: "password" },
-];
-
-const DEEPSEEK_FIELDS: FieldDef[] = [
-  { key: "deepseek_api_key", label: "API Key", type: "password" },
 ];
 
 // ── Provider presets — Top-10 нейросетей ─────────────────────────────────────
@@ -111,7 +107,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     logo: "/logos/deepseek.svg",
     base_url: "https://api.deepseek.com/v1", model: "deepseek-chat",
     models: ["deepseek-chat", "deepseek-reasoner"],
-    apiKeyLabel: "API Key", builtin: true, settingsKey: "deepseek_api_key", modelSettingsKey: "deepseek_model",
+    apiKeyLabel: "API Key",
   },
   {
     id: "openai", name: "OpenAI", color: "#000000", iconLetter: "O",
@@ -387,13 +383,13 @@ function UnifiedLlmProviders({
   useEffect(() => {
     // Initial status check for all providers
     const allIds: string[] = [];
-    allIds.push("gigachat", "deepseek");
+    allIds.push("gigachat");
     for (const cp of customProviders) allIds.push(cp.id ?? cp.name);
     runStatusChecks(allIds);
 
     // Auto-refresh every 60s
     autoRefreshRef.current = setInterval(() => {
-      const ids: string[] = ["gigachat", "deepseek"];
+      const ids: string[] = ["gigachat"];
       for (const cp of customProviders) ids.push(cp.id ?? cp.name);
       runStatusChecks(ids);
     }, 60000);
@@ -412,11 +408,6 @@ function UnifiedLlmProviders({
     ? !!(builtinValues["gigachat_client_cert_path"] && builtinValues["gigachat_client_key_path"])
     : !!(builtinValues["gigachat_auth_key"] && builtinValues["gigachat_auth_key"] !== "");
   activeProviders.push({ id: "gigachat", name: gcPreset.name, model: builtinValues["gigachat_model"] || gcPreset.model, hasKey: gcHasKey, builtin: true, preset: gcPreset, authType: gcAuthType });
-
-  // Built-in: DeepSeek
-  const dsPreset = PROVIDER_PRESETS.find(p => p.id === "deepseek")!;
-  const dsHasKey = !!(builtinValues["deepseek_api_key"] && builtinValues["deepseek_api_key"] !== "");
-  activeProviders.push({ id: "deepseek", name: dsPreset.name, model: builtinValues["deepseek_model"] || dsPreset.model, hasKey: dsHasKey, builtin: true, preset: dsPreset });
 
   // Custom providers
   for (const cp of customProviders) {
@@ -1410,7 +1401,7 @@ export default function SettingsSection() {
   async function saveLlm() {
     setLlmSave({ status: "saving", err: "" });
     try {
-      await handleSaveFields([...GIGACHAT_FIELDS, ...DEEPSEEK_FIELDS].map(f => f.key), true);
+      await handleSaveFields(GIGACHAT_FIELDS.map(f => f.key), true);
       setLlmSave({ status: "saved", err: "" }); setTimeout(() => setLlmSave({ status: "idle", err: "" }), 3000);
     } catch (e) { setLlmSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
   }

@@ -138,6 +138,57 @@ def _gigachat_tls_kwargs() -> dict:
     return kwargs
 
 
+def list_gigachat_models(
+    base_url: str = "",
+    auth_type: str = "",
+    client_cert_path: str = "",
+    client_key_path: str = "",
+    ca_cert_path: str = "",
+    no_verify: bool | None = None,
+) -> list[str]:
+    """Список моделей стенда GigaChat (`GET {base_url}/models`). Пустые аргументы
+    берутся из сохранённых настроек (env). Для cert-режима — прямой httpx (mTLS),
+    для api_key — OAuth-токен через SDK. Возвращает id моделей, отсортированные."""
+    import httpx
+
+    base_url = (base_url or _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")).rstrip("/")
+    auth_type = (auth_type or _env("GIGACHAT_AUTH_TYPE", "api_key")).lower()
+    ca = ca_cert_path or _env("GIGACHAT_CA_CERT_PATH")
+    if no_verify is None:
+        no_verify = os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes")
+
+    def _extract(data) -> list[str]:
+        items = data.get("data", data) if isinstance(data, dict) else data
+        out = [str(m.get("id")) for m in items if isinstance(m, dict) and m.get("id")]
+        return sorted(set(out))
+
+    if auth_type == "certificate":
+        cert_file = client_cert_path or _env("GIGACHAT_CLIENT_CERT_PATH")
+        key_file = client_key_path or _env("GIGACHAT_CLIENT_KEY_PATH")
+        if not cert_file:
+            raise ValueError("Не указан путь к клиентскому сертификату")
+        verify = False if no_verify else (ca or _get_verify())
+        cert = (cert_file, key_file) if key_file else cert_file
+        with httpx.Client(timeout=30.0, verify=verify, cert=cert) as c:
+            r = c.get(base_url + "/models", headers={"Content-Type": "application/json"})
+            r.raise_for_status()
+            return _extract(r.json())
+
+    # api_key: получить токен через SDK и дёрнуть список моделей
+    from gigachat import GigaChat
+    credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
+    if not credentials:
+        raise ValueError("Не задан GIGACHAT_AUTH_KEY")
+    g = GigaChat(
+        credentials=credentials,
+        scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
+        base_url=base_url,
+        **_gigachat_tls_kwargs(),
+    )
+    models = g.get_models()
+    return sorted({str(getattr(m, "id_", getattr(m, "id", ""))) for m in models.data if getattr(m, "id_", getattr(m, "id", ""))})
+
+
 def _builtin_status(provider_id: str) -> dict:
     """Return readiness without making a network request."""
     if provider_id == "gigachat":
@@ -212,31 +263,42 @@ class LLMClient:
             self._init_custom()
 
     def _init_gigachat(self):
-        from gigachat import GigaChat
         self.auth_type = _auth_type("GIGACHAT")
         self.model = _env("GIGACHAT_MODEL", "GigaChat") or "GigaChat"
+        self.base_url = _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1").rstrip("/")
+
+        # Certificate (mTLS): ходим НАПРЯМУЮ по httpx, как рабочий curl — без SDK и без OAuth.
+        # SDK в ряде версий даже в cert-режиме пытается получить токен; прямой путь надёжнее.
+        if self.auth_type == "certificate":
+            import httpx
+            cert_file = _env("GIGACHAT_CLIENT_CERT_PATH")
+            key_file = _env("GIGACHAT_CLIENT_KEY_PATH")
+            if not cert_file:
+                raise ValueError("GIGACHAT_CLIENT_CERT_PATH not found for certificate auth")
+            ca = _env("GIGACHAT_CA_CERT_PATH")
+            verify = ca if ca else _get_verify()   # SSL_NO_VERIFY / SSL_MAX_TLS12 / CA учитываются
+            cert = (cert_file, key_file) if key_file else cert_file
+            self._giga_http = httpx.Client(timeout=120.0, verify=verify, cert=cert)
+            self.client = None
+            return
+
+        # API key: через SDK (OAuth-токен).
+        from gigachat import GigaChat
         credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
+        if not credentials:
+            raise ValueError("GIGACHAT_AUTH_KEY not found in settings")
         client_kwargs = {
             "scope": _env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
             "model": self.model,
             "timeout": 120.0,
+            "credentials": credentials,
             **_gigachat_tls_kwargs(),
         }
-        base_url = _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
         auth_url = _env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
-        if base_url:
-            client_kwargs["base_url"] = base_url.rstrip("/")
         if auth_url:
             client_kwargs["auth_url"] = auth_url
-
-        if self.auth_type == "api_key":
-            if not credentials:
-                raise ValueError("GIGACHAT_AUTH_KEY not found in settings")
-            client_kwargs["credentials"] = credentials
-        elif self.auth_type == "certificate":
-            if not _env("GIGACHAT_CLIENT_CERT_PATH"):
-                raise ValueError("GIGACHAT_CLIENT_CERT_PATH not found for certificate auth")
-
         self.client = GigaChat(**client_kwargs)
 
     def _init_custom(self):
@@ -271,6 +333,31 @@ class LLMClient:
         return self._chat_custom(messages, temperature, max_tokens)
 
     def _chat_gigachat(self, messages, temperature, max_tokens):
+        # Certificate (mTLS): прямой POST /chat/completions по httpx (как curl), без SDK/OAuth.
+        if self.auth_type == "certificate":
+            payload = {
+                "model": self.model,
+                "messages": [{"role": m.role, "content": m.content} for m in messages],
+            }
+            if temperature is not None:
+                payload["temperature"] = temperature
+            if max_tokens:
+                payload["max_tokens"] = max_tokens
+            resp = self._giga_http.post(
+                self.base_url + "/chat/completions",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            choice = data["choices"][0]
+            return LLMResponse(
+                content=choice["message"]["content"],
+                model=data.get("model", self.model),
+                usage=data.get("usage", {}),
+                finish_reason=str(choice.get("finish_reason") or "stop"),
+            )
+
         import time
         from gigachat.models import Chat, Messages
         chat = Chat(

@@ -662,6 +662,34 @@ def test_llm_connection(provider_id: str) -> dict:
         return {"status": "red", "message": str(e)[:200]}
 
 
+class GigachatModelsRequest(BaseModel):
+    base_url: str = Field(default="")
+    auth_type: str = Field(default="")
+    client_cert_path: str = Field(default="")
+    client_key_path: str = Field(default="")
+    ca_cert_path: str = Field(default="")
+    no_verify: Optional[bool] = None
+
+
+@router.post("/api/settings/gigachat/models")
+def gigachat_models(req: GigachatModelsRequest) -> dict:
+    """Список моделей стенда GigaChat (`GET {base_url}/models`) для автоподгрузки в UI.
+    Пустые поля берутся из сохранённых настроек; для cert-режима — прямой mTLS."""
+    from agents.llm_client import list_gigachat_models
+    try:
+        models = list_gigachat_models(
+            base_url=req.base_url.strip(),
+            auth_type=req.auth_type.strip(),
+            client_cert_path=req.client_cert_path.strip(),
+            client_key_path=req.client_key_path.strip(),
+            ca_cert_path=req.ca_cert_path.strip(),
+            no_verify=req.no_verify,
+        )
+        return {"models": models}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Не удалось получить модели: {str(e)[:200]}")
+
+
 @router.post("/api/settings/test/kafka-metrics")
 def test_kafka_metrics(db: Session = Depends(get_db)) -> dict:
     """Тест подключения к Kafka для метрик."""

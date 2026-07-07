@@ -571,6 +571,22 @@ export async function removeJdbcDriverLibrary(id: string): Promise<{ driver: Jdb
   return fetchJson(`/api/testdata/drivers/${id}/library`, { method: "DELETE" });
 }
 
+// ─── GigaChat — список моделей стенда (GET {base_url}/models) ─────────────────
+export async function getGigachatModels(params: {
+  base_url?: string;
+  auth_type?: string;
+  client_cert_path?: string;
+  client_key_path?: string;
+  ca_cert_path?: string;
+  no_verify?: boolean;
+}): Promise<{ models: string[] }> {
+  return fetchJson("/api/settings/gigachat/models", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
 export async function testJdbcDriver(id: string): Promise<{ status: string; message: string }> {
   return fetchJson(`/api/testdata/drivers/${id}/test`, { method: "POST" });
 }

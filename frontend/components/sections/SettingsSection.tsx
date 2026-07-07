@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Save, Settings, Plus, Trash2,
   Zap, Database, Radio, Server, Shield, ChevronDown, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Play, ScrollText, Pencil,
-  Check, Settings2, Upload,
+  Check, Settings2, Upload, RefreshCw,
 } from "lucide-react";
 import { ConnectionsModal, ConnectionRow, Tabs, Select } from "@/components/ui";
 import {
@@ -24,6 +24,7 @@ import {
   deleteTestDataConnection, testTestDataConnection, introspectTestDataConnection,
   listJdbcDrivers, createJdbcDriver, updateJdbcDriver, deleteJdbcDriver,
   uploadJdbcDriverLibrary, setJdbcDriverLibraryPath, removeJdbcDriverLibrary, testJdbcDriver,
+  getGigachatModels,
   type TestDataConnection, type TestDataConnectionCreate, type JdbcDriver, type JdbcDriverSettings,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -365,6 +366,11 @@ function UnifiedLlmProviders({
   const [editClientCertPath, setEditClientCertPath] = useState("");
   const [editClientKeyPath, setEditClientKeyPath] = useState("");
   const [editBaseUrl, setEditBaseUrl] = useState("");
+  const [editModel, setEditModel] = useState("");
+  const [editNoVerify, setEditNoVerify] = useState(true);
+  const [gigaModels, setGigaModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [modelsErr, setModelsErr] = useState("");
 
   // ─── Auto-refresh: poll statuses on same interval as status requests ───
   const autoRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -483,12 +489,14 @@ function UnifiedLlmProviders({
     if (editingId === provider.id) { setEditingId(null); resetEditFields(); return; }
     setEditingId(provider.id);
     setEditKey("");
+    setGigaModels([]); setModelsErr("");
     if (provider.id === "gigachat") {
       setEditAuthType((builtinValues["gigachat_auth_type"] as "api_key" | "certificate") || "api_key");
       setEditCaCertPath(builtinValues["gigachat_ca_cert_path"] || "");
       setEditClientCertPath(builtinValues["gigachat_client_cert_path"] || "");
       setEditClientKeyPath(builtinValues["gigachat_client_key_path"] || "");
       setEditBaseUrl(builtinValues["gigachat_base_url"] || GIGACHAT_PUBLIC_URL);
+      setEditModel(builtinValues["gigachat_model"] || "");
     } else {
       setEditAuthType("api_key");
       setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
@@ -507,6 +515,26 @@ function UnifiedLlmProviders({
     }
   }
 
+  /* Автоподгрузка списка моделей со стенда (GET {base_url}/models) по текущим полям формы. */
+  async function loadGigaModels() {
+    setLoadingModels(true); setModelsErr("");
+    try {
+      const r = await getGigachatModels({
+        base_url: editBaseUrl.trim(),
+        auth_type: editAuthType,
+        client_cert_path: editClientCertPath.trim(),
+        client_key_path: editClientKeyPath.trim(),
+        ca_cert_path: editCaCertPath.trim(),
+        no_verify: editNoVerify,
+      });
+      setGigaModels(r.models);
+      if (r.models.length && !r.models.includes(editModel)) setEditModel(r.models[0]);
+      if (!r.models.length) setModelsErr("Стенд вернул пустой список моделей");
+    } catch (e) {
+      setModelsErr(e instanceof Error ? e.message : String(e));
+    } finally { setLoadingModels(false); }
+  }
+
   async function handleSaveConnection(provider: ActiveProvider) {
     setSaving(true); setErrMsg("");
     try {
@@ -523,6 +551,7 @@ function UnifiedLlmProviders({
             gigachat_ca_cert_path: editCaCertPath.trim(),
             gigachat_client_cert_path: editClientCertPath.trim(),
             gigachat_client_key_path: editClientKeyPath.trim(),
+            ...(editModel.trim() ? { gigachat_model: editModel.trim() } : {}),
           });
         } else {
           if (!editKey.trim()) { setErrMsg("Введите AUTH_KEY"); setSaving(false); return; }
@@ -643,6 +672,31 @@ function UnifiedLlmProviders({
                         placeholder="Путь к клиентскому сертификату (.pem/.crt)" spellCheck={false} />
                       <input className={INPUT_CLS} value={editClientKeyPath} onChange={(e) => setEditClientKeyPath(e.target.value)}
                         placeholder="Путь к приватному ключу сертификата" spellCheck={false} />
+                      <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer select-none pt-0.5">
+                        <input type="checkbox" checked={editNoVerify} onChange={(e) => setEditNoVerify(e.target.checked)}
+                          className="rounded border-border-main accent-primary" />
+                        Не проверять серверный сертификат (корп. BIG IP)
+                      </label>
+                      {/* Модель: список тянется со стенда GET {base_url}/models */}
+                      <div>
+                        <label className={LABEL_CLS}>Модель</label>
+                        <div className="flex gap-2">
+                          {gigaModels.length > 0 ? (
+                            <Select className="flex-1" value={editModel} onChange={setEditModel}>
+                              {gigaModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                            </Select>
+                          ) : (
+                            <input className={`${INPUT_CLS} flex-1 font-mono`} value={editModel} onChange={(e) => setEditModel(e.target.value)}
+                              placeholder="напр. GigaChat-2-Max" spellCheck={false} />
+                          )}
+                          <button type="button" onClick={loadGigaModels} disabled={loadingModels || !editClientCertPath.trim()}
+                            className="shrink-0 flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-2 text-xs font-medium text-text-main hover:bg-bg-subtle disabled:opacity-50">
+                            {loadingModels ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                            Загрузить модели
+                          </button>
+                        </div>
+                        {modelsErr && <p className="mt-1 text-xs text-red-500">{modelsErr}</p>}
+                      </div>
                     </div>
                   ) : (
                     <PasswordInput fieldKey="edit_key" value={editKey} onChange={(_, v) => setEditKey(v)}

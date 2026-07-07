@@ -46,6 +46,8 @@ export interface SelectProps {
   children?: ReactNode;
   className?: string;
   sm?: boolean;
+  /** Без базовой input-обводки: минимальная inline-кнопка (для «текстовых» селектов). */
+  bare?: boolean;
   disabled?: boolean;
   placeholder?: string;
   id?: string;
@@ -54,7 +56,7 @@ export interface SelectProps {
 }
 
 export function Select({
-  value, onChange, children, className = "", sm = false, disabled = false,
+  value, onChange, children, className = "", sm = false, bare = false, disabled = false,
   placeholder, id, title, "aria-label": ariaLabel,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
@@ -128,9 +130,15 @@ export function Select({
   }
 
   const base = sm ? INPUT_SM : INPUT_CLS;
+  // bare: минимальная inline-кнопка (className уходит на кнопку). Обычный режим:
+  // input-обводка на кнопке, className — на обёртку (layout: flex-1/w-56/…).
+  const wrapperCls = bare ? "relative inline-flex max-w-full" : `relative ${className}`;
+  const buttonCls = bare
+    ? `inline-flex items-center gap-1 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${className}`
+    : `${base} flex w-full items-center justify-between gap-2 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`;
 
   return (
-    <div ref={rootRef} className={`relative ${className}`}>
+    <div ref={rootRef} className={wrapperCls}>
       <button
         type="button"
         id={id}
@@ -141,12 +149,12 @@ export function Select({
         disabled={disabled}
         onClick={() => !disabled && setOpen((o) => !o)}
         onKeyDown={onButtonKey}
-        className={`${base} flex w-full items-center justify-between gap-2 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`}
+        className={buttonCls}
       >
-        <span className={`truncate ${selected ? "text-text-main" : "text-text-muted/60"}`}>
+        <span className={`truncate ${bare ? "" : selected ? "text-text-main" : "text-text-muted/60"}`}>
           {selectedLabel || " "}
         </span>
-        <ChevronDown className={`h-4 w-4 shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
+        <ChevronDown className={`${bare ? "h-3 w-3" : "h-4 w-4"} shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
       {open && (

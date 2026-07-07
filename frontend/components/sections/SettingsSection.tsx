@@ -585,7 +585,8 @@ function UnifiedLlmProviders({
                   {/* Model selector or plain text */}
                   {models.length > 1 ? (
                     <Select
-                      className="text-xs text-text-muted bg-transparent border-none p-0 focus:outline-none focus:ring-0 cursor-pointer hover:text-primary transition-colors"
+                      bare
+                      className="text-xs text-text-muted hover:text-primary transition-colors"
                       value={p.model}
                       onChange={(value) => handleModelChange(p, value)}
                     >

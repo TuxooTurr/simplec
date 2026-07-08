@@ -53,12 +53,12 @@ export function Modal({ open, onClose, title, children, size = "max-w-md" }: Mod
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
-        className={`w-full ${size} rounded-xl shadow-2xl p-6 t-modal-panel ${closing ? "is-closing" : ""}
+        className={`flex max-h-[90vh] w-full ${size} flex-col rounded-xl shadow-2xl t-modal-panel ${closing ? "is-closing" : ""}
           bg-[var(--color-modal-bg)] border border-border-main`}
       >
-        {/* Header */}
+        {/* Header — не скроллится, всегда виден крестик закрытия */}
         {title && (
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex shrink-0 items-center justify-between px-6 pt-6 pb-4">
             <h3 className="text-base font-semibold text-text-main">{title}</h3>
             <button
               onClick={onClose}
@@ -70,7 +70,10 @@ export function Modal({ open, onClose, title, children, size = "max-w-md" }: Mod
             </button>
           </div>
         )}
-        {children}
+        {/* Тело — скроллится, если контент выше окна: кнопки больше не уезжают за экран */}
+        <div className={`overflow-y-auto px-6 pb-6 ${title ? "" : "pt-6"}`}>
+          {children}
+        </div>
       </div>
     </div>
   );

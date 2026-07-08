@@ -188,7 +188,6 @@ const loadAuthor = (): AuthorInfo => {
 
 export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack }: ExportPanelProps) {
   const { provider } = useWorkspace();
-  const [feature, setFeature]       = useState("");
   const [platform, setPlatform]     = useState<string[]>(["Web"]);
   const [project, setProject]       = useState(DEFAULT_PROJECT_KEY);
   const [system, setSystem]         = useState(DEFAULT_SYSTEM);
@@ -214,7 +213,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
   const setTeamList    = (l: string[]) => { setTeamListState(l);    localStorage.setItem("st_teams",    JSON.stringify(l)); };
   const setKeList      = (l: string[]) => { setKeListState(l);      localStorage.setItem("st_ke",       JSON.stringify(l)); };
 
-  const requiredMissing = !feature.trim() || !project.trim() || !team.trim() || !system.trim();
+  const requiredMissing = !project.trim() || !team.trim() || !system.trim();
 
   const handleExport = () => {
     if (requiredMissing) { setTouched(true); return; }
@@ -248,23 +247,8 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
           <FileCode2 className="w-4 h-4 text-text-muted" />
           Настройки Zephyr XML
         </h3>
-        {/* Feature + Platform */}
+        {/* Platform (фича задаётся на шаге ввода требований и уже вшита в имена кейсов) */}
         <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <label className="block text-xs text-text-muted mb-1">
-              Фича <span className="text-red-400">*</span>
-            </label>
-            <input
-              value={feature}
-              onChange={(e) => setFeature(e.target.value)}
-              placeholder="Например: Оплата картой"
-              className={`w-full border rounded-lg px-3 py-2 text-sm transition-shadow duration-150
-                focus:outline-none focus:ring-2
-                ${touched && !feature.trim()
-                  ? "border-red-300 focus:ring-red-100 focus:border-red-400"
-                  : "border-border-main focus:ring-primary/30 focus:border-primary/40"}`}
-            />
-          </div>
           <div>
             <label className="block text-xs text-text-muted mb-1">Платформа</label>
             <div className="grid grid-cols-2 gap-1">

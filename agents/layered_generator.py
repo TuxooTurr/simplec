@@ -38,47 +38,11 @@ class TestCaseMarkdown:
 
 
 class LayeredGenerator:
-    """3-layer generator with depth-aware case generation."""
+    """3-layer generator: единый режим максимального покрытия.
 
-    DEPTH_MAP = {
-        "smoke": {
-            "min": 1, "max": 5,
-            "name": "Smoke (1-5 e2e кейсов)",
-            "description": "Полноценные e2e тест-кейсы с множеством шагов. "
-                           "Проверяют основной сквозной сценарий от начала до конца. "
-                           "Каждый кейс содержит 5-10 детальных шагов.",
-            "steps_per_case": "5-10 шагов",
-            "focus": "E2E сквозные сценарии, happy path с полной проверкой всех слоёв",
-            "case_style": "Полноценные многошаговые кейсы"
-        },
-        "regression": {
-            "min": 5, "max": 10,
-            "name": "Regression (5-10 кейсов)",
-            "description": "Основные сценарии + негативные кейсы. "
-                           "Покрывают happy path, основные ошибки, валидацию.",
-            "steps_per_case": "3-7 шагов",
-            "focus": "Основные позитивные + ключевые негативные сценарии",
-            "case_style": "Смесь позитивных и негативных кейсов"
-        },
-        "full": {
-            "min": 11, "max": 30,
-            "name": "Full (11-30 кейсов)",
-            "description": "Полное покрытие тестовой модели. "
-                           "Все ветвления логики, граничные значения, интеграции, безопасность.",
-            "steps_per_case": "3-5 шагов",
-            "focus": "Полная тестовая модель: все ветки, границы, роли, ошибки",
-            "case_style": "Детальное покрытие каждого аспекта"
-        },
-        "atomary": {
-            "min": 31, "max": 100,
-            "name": "Atomary (31-100 кейсов)",
-            "description": "Атомарные проверки по 1 шагу. "
-                           "Максимально детальное покрытие каждого параметра, поля, условия.",
-            "steps_per_case": "1 шаг",
-            "focus": "Каждый параметр, каждое поле, каждое условие = отдельный кейс в 1 шаг",
-            "case_style": "Атомарные одношаговые проверки"
-        }
-    }
+    Кейсы = последовательные клиентские пути (сценарии) с несколькими шагами,
+    упорядоченные так, чтобы тестировщик шёл по фиче последовательно.
+    Режимы глубины (smoke/regression/full/atomary) удалены."""
 
     def __init__(self, llm_client):
         self.llm = llm_client
@@ -160,88 +124,81 @@ class LayeredGenerator:
         return response.content.strip()
 
     # ========================================================
-    # LAYER 2: Case list (depth-aware)
+    # LAYER 2: Case list (максимальное покрытие, клиентские пути)
     # ========================================================
-    def generate_case_list(self, qa_doc, depth="smoke", system="", feature="", platform="W"):
+    def generate_case_list(self, qa_doc, system="", feature=""):
         from agents.llm_client import Message
         import json
         import re
 
-        depth_info = self.DEPTH_MAP.get(depth, self.DEPTH_MAP["smoke"])
-
-        depth_rules = {
-            "smoke": (
-                "- Только СКВОЗНЫЕ e2e сценарии\n"
-                "- Каждый кейс проходит весь путь: UI -> API -> БД -> Ответ\n"
-                "- Первый кейс = полный Happy Path\n"
-                "- Остальные = ключевые альтернативные e2e пути\n"
-                "- НЕ дробить на мелкие проверки"
-            ),
-            "regression": (
-                "- Основные позитивные сценарии (happy path + альтернативы)\n"
-                "- Ключевые негативные сценарии (ошибки валидации, авторизации)\n"
-                "- Баланс: ~60% позитивных, ~40% негативных\n"
-                "- Каждый кейс проверяет конкретный бизнес-сценарий"
-            ),
-            "full": (
-                "- ВСЕ ветвления бизнес-логики = отдельный кейс\n"
-                "- ВСЕ граничные значения\n"
-                "- ВСЕ роли пользователей\n"
-                "- ВСЕ коды ошибок API\n"
-                "- Интеграционные сценарии\n"
-                "- Проверки безопасности\n"
-                "- Полная матрица покрытия"
-            ),
-            "atomary": (
-                "- КАЖДЫЙ параметр = отдельный кейс\n"
-                "- КАЖДОЕ поле формы = отдельный кейс\n"
-                "- КАЖДОЕ граничное значение = отдельный кейс\n"
-                "- КАЖДЫЙ код ответа API = отдельный кейс\n"
-                "- КАЖДАЯ роль x действие = отдельный кейс\n"
-                "- Кейсы максимально атомарные (1 проверка = 1 кейс)\n"
-                "- Название кейса должно чётко указывать ЧТО проверяется"
-            )
-        }
-
-        rules = depth_rules.get(depth, depth_rules["smoke"])
-
         prompt = (
-            "Проанализируй QA документацию и создай список тест-кейсов.\n\n"
+            "Проанализируй QA документацию и создай список тест-кейсов с МАКСИМАЛЬНЫМ покрытием.\n\n"
             "QA ДОКУМЕНТАЦИЯ:\n" + qa_doc + "\n\n"
-            "ГЛУБИНА ТЕСТИРОВАНИЯ: " + depth_info["name"] + "\n"
-            "ОПИСАНИЕ ГЛУБИНЫ: " + depth_info["description"] + "\n"
-            "ФОКУС: " + depth_info["focus"] + "\n"
-            "СТИЛЬ КЕЙСОВ: " + depth_info["case_style"] + "\n"
-            "КОЛИЧЕСТВО КЕЙСОВ: от " + str(depth_info["min"]) + " до " + str(depth_info["max"]) + "\n\n"
-            "ПРАВИЛА ДЛЯ ГЛУБИНЫ \"" + depth + "\":\n" + rules + "\n\n"
+            "ПОДХОД — ПОСЛЕДОВАТЕЛЬНЫЕ КЛИЕНТСКИЕ ПУТИ:\n"
+            "- Каждый кейс = осмысленный клиентский путь (сценарий) из нескольких последовательных шагов, "
+            "а НЕ атомарная проверка «один кейс — один шаг».\n"
+            "- Сначала выдели клиентские пути: как пользователь реально проходит фичу от входа до результата "
+            "(основной путь, альтернативные ветки, пути с ошибками, разные роли).\n"
+            "- Смежные проверки одного пути объединяй в один кейс — тестировщик проверяет их по ходу сценария, "
+            "а не бегает между кейсами.\n"
+            "- Упорядочи кейсы так, чтобы тестировщик шёл по фиче ПОСЛЕДОВАТЕЛЬНО: "
+            "сначала основной успешный путь, затем альтернативы, затем границы и негативные сценарии, "
+            "затем роли/доступы, интеграции и безопасность.\n\n"
+            "ПОКРЫТИЕ — ПО МАКСИМУМУ:\n"
+            "- ВСЕ ветвления бизнес-логики\n"
+            "- ВСЕ граничные значения\n"
+            "- ВСЕ роли пользователей\n"
+            "- ВСЕ коды ошибок API\n"
+            "- Интеграционные сценарии\n"
+            "- Проверки безопасности\n"
+            "- Количество кейсов не ограничено — столько, сколько нужно для полного покрытия "
+            "(обычно 10-40, зависит от объёма документации). Не раздувай искусственно и не ужимай.\n\n"
             "ФОРМАТ (JSON массив):\n"
             "[\n"
-            '  {"name": "[' + platform + '][' + feature + '] HappyPath. Описание основного сценария", "priority": "High", "type": "positive"},\n'
-            '  {"name": "[' + platform + '][' + feature + '] Boundary. Описание граничного случая", "priority": "Normal", "type": "boundary"}\n'
+            '  {"name": "[' + feature + '] HappyPath. Описание основного сценария", "priority": "High", "type": "positive"},\n'
+            '  {"name": "[' + feature + '] Boundary. Описание граничного случая", "priority": "Normal", "type": "boundary"}\n'
             "]\n\n"
             "ПРАВИЛА ИМЕНОВАНИЯ:\n"
-            "- Формат СТРОГО: [" + platform + "][" + feature + "] ГруппаПроверок. Наименование кейса\n"
+            "- Формат СТРОГО: [" + feature + "] ГруппаПроверок. Наименование проверки\n"
+            "- Префикс [" + feature + "] используй ДОСЛОВНО как задан — НЕ заменяй его названием фичи из документации\n"
             "- ГруппаПроверок — ОДНО слово из: HappyPath | Regression | Boundary | Security | Authorization | Integration | Error | Smoke\n"
             "- Наименование — конкретное, понятное Junior-тестировщику, без аббревиатур и технического жаргона\n"
-            '- Пример хорошего названия: "[' + platform + '][' + feature + '] HappyPath. Пользователь успешно выполняет основное действие"\n'
-            '- Пример плохого названия: "[' + platform + '][' + feature + '] TC_001_positive"\n'
+            '- Пример хорошего названия: "[' + feature + '] HappyPath. Пользователь успешно выполняет основное действие"\n'
+            '- Пример плохого названия: "[' + feature + '] TC_001_positive"\n'
             "- priority: High (критичные), Normal (основные), Low (дополнительные)\n"
             "- type: positive, negative, boundary, integration, security\n\n"
             "Верни ТОЛЬКО JSON массив. Никакого текста до или после."
         )
 
-        # Токенов нужно: ~120 токенов на кейс + запас. Для atomary (100 кейсов) = ~14000
-        _max_tokens = min(depth_info["max"] * 140 + 2000, 16000)
+        # Токенов: ~140 на кейс, ориентир до ~40 кейсов + запас
         response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.5, max_tokens=_max_tokens)
+                                  temperature=0.5, max_tokens=8000)
 
         text = response.content.strip()
+
+        def _normalize(cases):
+            """Гарантия формата имён: [Фича из поля] Группа. Наименование.
+
+            LLM может подменить префикс названием фичи из документации (особенно
+            когда RAG-контекст «говорит» о другом) — принудительно ставим фичу,
+            указанную пользователем."""
+            if not feature:
+                return cases
+            prefix = "[" + feature + "] "
+            for c in cases:
+                if not isinstance(c, dict):
+                    continue
+                name = str(c.get("name", "")).strip()
+                # срезаем все ведущие [...]-префиксы, какими бы они ни были
+                bare = re.sub(r'^\s*(?:\[[^\]]*\]\s*)+', '', name)
+                c["name"] = prefix + (bare or name)
+            return cases
 
         # 1. Прямой парсинг — LLM вернул чистый JSON
         try:
             cases = json.loads(text)
             if isinstance(cases, list) and cases:
-                return cases
+                return _normalize(cases)
         except Exception:
             pass
 
@@ -251,7 +208,7 @@ class LayeredGenerator:
             try:
                 cases = json.loads(match.group())
                 if isinstance(cases, list) and cases:
-                    return cases
+                    return _normalize(cases)
             except Exception:
                 pass
 
@@ -269,34 +226,31 @@ class LayeredGenerator:
                 try:
                     cases = json.loads(repaired)
                     if isinstance(cases, list) and cases:
-                        return cases
+                        return _normalize(cases)
                 except Exception:
                     pass
 
         # 4. Fallback — только если LLM совсем не справился
         return [
-            {"name": "[" + platform + "][" + feature + "] HappyPath. Основной успешный сценарий", "priority": "High", "type": "positive"},
-            {"name": "[" + platform + "][" + feature + "] Error. Ошибка при некорректных входных данных", "priority": "Normal", "type": "negative"},
+            {"name": "[" + feature + "] HappyPath. Основной успешный сценарий", "priority": "High", "type": "positive"},
+            {"name": "[" + feature + "] Error. Ошибка при некорректных входных данных", "priority": "Normal", "type": "negative"},
         ]
 
     # ========================================================
     # LAYER 3: Markdown cases (template-enhanced)
     # ========================================================
-    def generate_case_markdown(self, case_info, qa_doc, depth="smoke"):
+    def generate_case_markdown(self, case_info, qa_doc):
         from agents.llm_client import Message
         from agents.prompt_templates import PromptTemplateManager
         import re
 
-        depth_info = self.DEPTH_MAP.get(depth, self.DEPTH_MAP["smoke"])
         enhanced = PromptTemplateManager.get_enhanced_prompt(qa_doc)
 
-        step_instructions = {
-            "atomary": "Напиши РОВНО 1 шаг. Этот кейс атомарный — одна конкретная проверка.",
-            "smoke": "Напиши 5-10 шагов. Это e2e кейс — пройди весь путь от начала до конца.",
-            "regression": "Напиши 3-7 шагов. Покрой основной сценарий с проверками.",
-            "full": "Напиши 3-5 шагов."
-        }
-        step_instr = step_instructions.get(depth, "Напиши 3-5 шагов.")
+        step_instr = (
+            "Напиши столько шагов, сколько нужно для полного прохождения сценария (обычно 4-12). "
+            "Кейс — последовательный клиентский путь: тестировщик идёт по нему шаг за шагом "
+            "от входа до результата, проверяя смежные вещи по ходу. НЕ дроби на атомарные одношаговые проверки."
+        )
 
         case_name = case_info["name"]
         case_type = case_info.get("type", "positive")

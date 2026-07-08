@@ -156,9 +156,7 @@ async def _run_generation(session_id: str):
 
     requirement = session["requirement"]
     feature = session["feature"]
-    depth = session["depth"]
     provider = session["provider"]
-    platform = session["platform"]
 
     t_start = time.time()
 
@@ -214,7 +212,7 @@ async def _run_generation(session_id: str):
             store.update_session(session_id, current_layer=2)
 
             case_list = await asyncio.to_thread(
-                gen.generate_case_list, qa_doc, depth, "", feature, platform
+                gen.generate_case_list, qa_doc, "", feature
             )
             t2 = round(time.time() - t_start)
 
@@ -240,7 +238,7 @@ async def _run_generation(session_id: str):
                 "type": "case_start", "i": i + 1, "total": total, "name": case_name,
             })
 
-            tc = await asyncio.to_thread(gen.generate_case_markdown, case_info, qa_doc, depth)
+            tc = await asyncio.to_thread(gen.generate_case_markdown, case_info, qa_doc)
             case_dict = _tc_to_dict(tc)
             all_cases.append(case_dict)
 
@@ -336,13 +334,16 @@ async def _handle_ws_start(ws: WebSocket, data: dict):
     from agents.prompt_guard import sanitize_input
 
     raw_requirement = data.get("requirement", "")
-    raw_feature = data.get("feature", "Feature")
-    depth = data.get("depth", "smoke")
+    raw_feature = str(data.get("feature") or "").strip()
+    depth = data.get("depth", "max")
     provider = str(data.get("provider") or "").strip()
     platform = data.get("platform", "Web")
 
     if not raw_requirement:
         await ws.send_json({"type": "error", "message": "Требование не может быть пустым"})
+        return
+    if not raw_feature:
+        await ws.send_json({"type": "error", "message": "Укажите название фичи — оно нужно для имён кейсов"})
         return
     if not provider:
         await ws.send_json({"type": "error", "message": "LLM-провайдер не выбран"})

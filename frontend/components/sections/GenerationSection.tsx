@@ -21,12 +21,10 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
 
-const DEPTHS = [
-  { id: "smoke",      label: "Smoke",      sub: "1-5 e2e",      hint: "~30–60 сек" },
-  { id: "regression", label: "Regression", sub: "5-10 кейсов",  hint: "~1–3 мин" },
-  { id: "full",       label: "Full",       sub: "11-30 кейсов", hint: "~3–8 мин" },
-  { id: "atomary",    label: "Atomary",    sub: "31-100",        hint: "~10–20 мин" },
-];
+/* Лейблы глубины — только для отображения старых записей истории */
+const DEPTH_LABELS: Record<string, string> = {
+  smoke: "Smoke", regression: "Regression", full: "Full", atomary: "Atomary", max: "Максимум",
+};
 
 const PLATFORMS = [
   { id: "Web",     label: "Web" },
@@ -161,14 +159,9 @@ export default function GenerationSection() {
 
   const [requirement, setRequirement] = useState("");
 
-  // Depth and platform persist across navigation via localStorage
-  const [depth, setDepthState] = useState<string>(() => {
-    try { return localStorage.getItem("st_depth") ?? "smoke"; } catch { return "smoke"; }
-  });
-  const setDepth = (d: string) => {
-    setDepthState(d);
-    try { localStorage.setItem("st_depth", d); } catch {}
-  };
+  // Название фичи — обязательное, идёт в имена кейсов: [Фича] Группа. Наименование
+  const [featureName, setFeatureName] = useState("");
+  const [featureTouched, setFeatureTouched] = useState(false);
 
   const [stage, setStage]             = useState<Stage>("input");
   const [elapsedFinal, setElapsedFinal] = useState(0);
@@ -222,7 +215,7 @@ export default function GenerationSection() {
   const [histFromStage, setHistFromStage] = useState<Stage>("input");
   const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string; sessionId?: string } | null>(null);
   const [exportBackStage, setExportBackStage] = useState<Stage>("review");
-  const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "smoke", platform: ["Web"] as string[], requirement: "" });
+  const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "max", platform: ["Web"] as string[], requirement: "" });
   const historySavedRef = useRef(false);
   const currentHistIdRef = useRef<string | null>(null);
   const exportingHistIdRef = useRef<string | null>(null);
@@ -344,6 +337,7 @@ export default function GenerationSection() {
   }, [state, events]);
 
   const handleGenerate = async () => {
+    if (!featureName.trim()) { setFeatureTouched(true); return; }
     const text = buildLlmSourceText(requirement, fileAttachments);
     if (!text) return;
 
@@ -364,9 +358,9 @@ export default function GenerationSection() {
       }
     }
 
-    genMetaRef.current = { feature: "", project: "", team: "", ke: "", depth, platform: ["Web"], requirement: finalText };
+    genMetaRef.current = { feature: featureName.trim(), project: "", team: "", ke: "", depth: "max", platform: ["Web"], requirement: finalText };
     historySavedRef.current = false;
-    start({ requirement: finalText, feature: "", depth, provider, platform: "Web" });
+    start({ requirement: finalText, feature: featureName.trim(), depth: "max", provider, platform: "Web" });
   };
 
 
@@ -375,11 +369,12 @@ export default function GenerationSection() {
     reset();
     setStage("input");
     setRequirement("");
+    setFeatureName("");
+    setFeatureTouched(false);
     setFileAttachments([]);
     setQaExpanded(false);
   };
 
-  const currentDepth = DEPTHS.find((d) => d.id === depth);
   const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
   const hasGenerationSource = Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
 
@@ -405,32 +400,27 @@ export default function GenerationSection() {
             Вставьте требование или загрузите файлы — AI изучит все источники и создаст тест-кейсы для Zephyr Scale.
           </p>
 
-          {/* Depth */}
+          {/* Название фичи — для имён кейсов: [Фича] Группа проверок. Наименование проверки */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
-            <div className="mb-2">
-              <label className={LABEL_CLS + " mb-0"}>Глубина</label>
-            </div>
-
-            <div className="grid grid-cols-4 gap-1.5">
-              {DEPTHS.map((d) => (
-                <button
-                  key={d.id}
-                  onClick={() => setDepth(d.id)}
-                  className={`px-2 py-2 rounded-lg text-xs font-medium border transition-all duration-150 text-center
-                    ${depth === d.id
-                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
-                      : "border-border-main bg-bg-card text-text-muted hover:border-primary/40 hover:text-text-main"}`}
-                >
-                  <div className="font-semibold">{d.label}</div>
-                  <div className="text-[10px] opacity-70 mt-0.5">{d.sub}</div>
-                </button>
-              ))}
-            </div>
-            {currentDepth && (
-              <p className="flex items-center gap-1 text-xs text-text-muted mt-1.5">
-                <Clock className="w-3 h-3" />
-                {currentDepth.hint}
-              </p>
+            <label className={LABEL_CLS}>
+              Название фичи <span className="text-red-400">*</span>
+            </label>
+            <input
+              value={featureName}
+              onChange={(e) => setFeatureName(e.target.value)}
+              onBlur={() => setFeatureTouched(true)}
+              placeholder="Например: Оплата картой"
+              className={`w-full border rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 transition-shadow duration-150
+                focus:outline-none focus:ring-2
+                ${featureTouched && !featureName.trim()
+                  ? "border-red-300 focus:ring-red-100 focus:border-red-400"
+                  : "border-border-main focus:ring-primary/30 focus:border-primary/40"}`}
+            />
+            <p className="text-xs text-text-muted mt-1.5">
+              Пойдёт в имена кейсов: <code className="bg-bg-subtle px-1 py-0.5 rounded text-[11px]">[{featureName.trim() || "Фича"}] Группа проверок. Наименование проверки</code>
+            </p>
+            {featureTouched && !featureName.trim() && (
+              <p className="text-xs text-red-500 mt-1">Укажите название фичи — оно нужно для имён кейсов</p>
             )}
           </div>
 
@@ -622,10 +612,10 @@ export default function GenerationSection() {
           <div className="flex items-center justify-between mb-4 max-w-2xl">
             <div className="flex items-center gap-3">
               <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
-              {currentDepth && (
+              {genMetaRef.current.feature && (
                 <span className="text-sm text-text-muted flex items-center gap-1">
-                  <Clock className="w-3.5 h-3.5" />
-                  {currentDepth.hint}
+                  <FlaskConical className="w-3.5 h-3.5" />
+                  {genMetaRef.current.feature}
                 </span>
               )}
             </div>
@@ -940,7 +930,7 @@ export default function GenerationSection() {
                               <p className="text-xs text-text-muted mt-0.5">
                                 {entry.case_count > 0 ? `${entry.case_count} кейсов` : "кейсы не готовы"}
                                 {" · "}
-                                {DEPTHS.find(d => d.id === entry.depth)?.label ?? entry.depth}
+                                {DEPTH_LABELS[entry.depth] ?? entry.depth}
                                 {" · "}
                                 {entry.platform}
                                 {entry.elapsed > 0 ? ` · ${entry.elapsed}с` : ""}
@@ -1137,7 +1127,7 @@ export default function GenerationSection() {
                   {/* Meta badges */}
                   <div className="flex items-center gap-2 flex-wrap mb-4">
                     <span className="text-xs bg-[var(--color-active-bg)] text-primary border border-indigo-100 px-2 py-1 rounded-md font-medium">
-                      {DEPTHS.find(d => d.id === histView.depth)?.label ?? histView.depth}
+                      {DEPTH_LABELS[histView.depth] ?? histView.depth}
                     </span>
                     <span className="text-xs bg-bg-subtle text-text-muted border border-border-main px-2 py-1 rounded-md">
                       {histView.platform}

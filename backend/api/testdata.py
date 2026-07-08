@@ -146,7 +146,7 @@ def _generate_sql_via_llm(
     db_type: str = "postgresql",
 ) -> str:
     """LLM генерирует SELECT-запрос на основании требования и схемы БД."""
-    from agents.llm_client import LLMClient
+    from agents.llm_client import LLMClient, Message
 
     llm = LLMClient(provider=provider)
 
@@ -168,9 +168,9 @@ def _generate_sql_via_llm(
 
 SQL:"""
 
-    response = llm.chat(prompt)
+    response = llm.chat([Message(role="user", content=prompt)])
     # Очищаем от markdown code blocks
-    sql = response.strip()
+    sql = (response.content or "").strip()
     sql = re.sub(r'^```(?:sql)?\s*', '', sql)
     sql = re.sub(r'\s*```$', '', sql)
     return sql.strip()
@@ -184,7 +184,7 @@ def _suggest_insert_script(
     query_result_empty: bool = True,
 ) -> str:
     """LLM генерирует INSERT-скрипт для создания тестовых данных (НЕ выполняется!)."""
-    from agents.llm_client import LLMClient
+    from agents.llm_client import LLMClient, Message
 
     llm = LLMClient(provider=provider)
 
@@ -210,8 +210,8 @@ def _suggest_insert_script(
 
 SQL:"""
 
-    response = llm.chat(prompt)
-    sql = response.strip()
+    response = llm.chat([Message(role="user", content=prompt)])
+    sql = (response.content or "").strip()
     sql = re.sub(r'^```(?:sql)?\s*', '', sql)
     sql = re.sub(r'\s*```$', '', sql)
     return sql.strip()

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Network, Search, X, Plus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
+  Network, Search, X, Plus, Minus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
   ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
 } from "lucide-react";
 import { ConnectionsModal, ConnectionRow, Select } from "@/components/ui";
@@ -47,12 +47,17 @@ const DEFAULT_COLS: ColumnVisibility = { sender: true, recipient: true, value: t
 /* Выбор подключения и топиков живёт в sessionStorage: переживает навигацию между
    разделами и перезагрузку страницы, но сбрасывается при закрытии вкладки/браузера. */
 const SESSION_KEY = "st_kafka_session";
-interface KafkaSessionState { connId: string; t1: string; t2: string; limit: number; }
+interface KafkaSessionState {
+  connId: string; t1: string; t2: string; t3: string; t4: string; limit: number; topicCount: number;
+}
 function readSession(): Partial<KafkaSessionState> {
   if (typeof window === "undefined") return {};
   try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) ?? "{}"); }
   catch { return {}; }
 }
+
+const MIN_TOPIC_ZONES = 2;
+const MAX_TOPIC_ZONES = 4;
 
 /* Отправитель/получатель берутся из заголовков сообщения — распространённые ключи */
 const SENDER_KEYS = ["from", "sender", "source", "producer", "отправитель"];
@@ -90,7 +95,7 @@ function SortHeader({ label, active, dir, onClick }: {
 }
 
 function TopicColumn({
-  label, topics, topic, onTopic, messages, loading, selectedId, onSelect, cols,
+  label, topics, topic, onTopic, messages, loading, selectedId, onSelect, cols, onRemove,
 }: {
   label: string;
   topics: string[];
@@ -101,6 +106,7 @@ function TopicColumn({
   selectedId: string;
   onSelect: (m: KafkaMessage) => void;
   cols: ColumnVisibility;
+  onRemove?: () => void;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("offset");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -131,11 +137,19 @@ function TopicColumn({
           onChange={onTopic}
           placeholder="— выберите топик —"
           className="min-w-0 flex-1"
+          searchable
+          searchPlaceholder="Поиск топика по имени…"
         >
           <option value="">— выберите топик —</option>
           {topics.map((t) => <option key={t} value={t}>{t}</option>)}
         </Select>
         {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-text-muted" />}
+        {onRemove && (
+          <button type="button" onClick={onRemove} title="Убрать эту рабочую зону"
+            className="shrink-0 rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-red-500">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       {/* Заголовок таблицы: сортировка по offset и дате */}
       <div style={gridStyle} className="grid shrink-0 gap-x-2 border-b border-border-main bg-bg-subtle/60 py-1 pl-3 pr-2.5">
@@ -210,12 +224,31 @@ export default function KafkaSection() {
 
   const [t1, setT1] = useState(initial.current.t1 ?? ""); const [m1, setM1] = useState<KafkaMessage[]>([]); const [l1, setL1] = useState(false);
   const [t2, setT2] = useState(initial.current.t2 ?? ""); const [m2, setM2] = useState<KafkaMessage[]>([]); const [l2, setL2] = useState(false);
+  const [t3, setT3] = useState(initial.current.t3 ?? ""); const [m3, setM3] = useState<KafkaMessage[]>([]); const [l3, setL3] = useState(false);
+  const [t4, setT4] = useState(initial.current.t4 ?? ""); const [m4, setM4] = useState<KafkaMessage[]>([]); const [l4, setL4] = useState(false);
+
+  // Кол-во активных рабочих зон для топиков: 2 (по умолчанию) — 4
+  const [topicCount, setTopicCount] = useState(() => {
+    const n = initial.current.topicCount ?? MIN_TOPIC_ZONES;
+    return Math.min(MAX_TOPIC_ZONES, Math.max(MIN_TOPIC_ZONES, n));
+  });
+
+  const addTopicZone = () => setTopicCount((n) => Math.min(MAX_TOPIC_ZONES, n + 1));
+  const removeLastTopicZone = () => {
+    setTopicCount((n) => {
+      if (n <= MIN_TOPIC_ZONES) return n;
+      const removed = n; // индекс (1-based) удаляемой зоны
+      if (removed === 3) { setT3(""); setM3([]); }
+      if (removed === 4) { setT4(""); setM4([]); }
+      return n - 1;
+    });
+  };
 
   // Сохраняем выбор в sessionStorage при любом изменении подключения/топиков/лимита
   useEffect(() => {
-    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ connId, t1, t2, limit })); }
+    try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ connId, t1, t2, t3, t4, limit, topicCount })); }
     catch { /* ignore */ }
-  }, [connId, t1, t2, limit]);
+  }, [connId, t1, t2, t3, t4, limit, topicCount]);
 
   const [selected, setSelected] = useState<(KafkaMessage & { topic: string }) | null>(null);
   const [detailView, setDetailView] = useState<"json" | "raw">("json");
@@ -280,8 +313,27 @@ export default function KafkaSection() {
 
   useEffect(() => { loadColumn(t1, setM1, setL1); }, [t1, loadColumn]);
   useEffect(() => { loadColumn(t2, setM2, setL2); }, [t2, loadColumn]);
+  useEffect(() => { loadColumn(t3, setM3, setL3); }, [t3, loadColumn]);
+  useEffect(() => { loadColumn(t4, setM4, setL4); }, [t4, loadColumn]);
 
-  const refresh = () => { loadColumn(t1, setM1, setL1); loadColumn(t2, setM2, setL2); };
+  const refresh = () => {
+    loadColumn(t1, setM1, setL1); loadColumn(t2, setM2, setL2);
+    loadColumn(t3, setM3, setL3); loadColumn(t4, setM4, setL4);
+  };
+
+  // Собираем активные зоны в массив — упрощает рендер и подсчёт колонок сетки.
+  const topicSlots = useMemo(() => ([
+    { label: "Топик 1", topic: t1, setTopic: setT1, messages: m1, loading: l1 },
+    { label: "Топик 2", topic: t2, setTopic: setT2, messages: m2, loading: l2 },
+    { label: "Топик 3", topic: t3, setTopic: setT3, messages: m3, loading: l3 },
+    { label: "Топик 4", topic: t4, setTopic: setT4, messages: m4, loading: l4 },
+  ].slice(0, topicCount)), [t1, m1, l1, t2, m2, l2, t3, m3, l3, t4, m4, l4, topicCount]);
+
+  // При 4 зонах на колонку остаётся мало места — оставляем только Offset и Дату,
+  // Отправитель/Получатель/Value гасим независимо от пользовательских тумблеров.
+  const effectiveCols: ColumnVisibility = topicCount >= MAX_TOPIC_ZONES
+    ? { sender: false, recipient: false, value: false }
+    : cols;
 
   const selectedId = selected ? `${selected.topic}::${selected.partition}-${selected.offset}` : "";
   const body = useMemo(() => selected ? prettyJson(selected.value) : null, [selected]);
@@ -302,7 +354,7 @@ export default function KafkaSection() {
         </div>
         <Select
           value={connId}
-          onChange={(v) => { setConnId(v); setT1(""); setT2(""); setSelected(null); }}
+          onChange={(v) => { setConnId(v); setT1(""); setT2(""); setT3(""); setT4(""); setSelected(null); }}
           placeholder="— подключение —"
           className="w-56"
         >
@@ -313,22 +365,36 @@ export default function KafkaSection() {
           className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
           <Settings2 className="h-3.5 w-3.5" /> Подключения
         </button>
+        {/* Кол-во рабочих зон для топиков: 2–4 */}
+        <div className="flex items-center gap-1 rounded-lg border border-border-main px-1.5 py-1">
+          <span className="px-1 text-[11px] text-text-muted">Топики</span>
+          <button type="button" onClick={removeLastTopicZone} disabled={topicCount <= MIN_TOPIC_ZONES}
+            title="Убрать рабочую зону" className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-text-main disabled:cursor-not-allowed disabled:opacity-30">
+            <Minus className="h-3.5 w-3.5" />
+          </button>
+          <span className="w-4 text-center text-xs font-semibold tabular-nums text-text-main">{topicCount}</span>
+          <button type="button" onClick={addTopicZone} disabled={topicCount >= MAX_TOPIC_ZONES}
+            title="Добавить рабочую зону для топика" className="rounded p-1 text-text-muted hover:bg-bg-subtle hover:text-text-main disabled:cursor-not-allowed disabled:opacity-30">
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <div className="ml-auto flex items-center gap-2">
-          {/* Переключатели видимости колонок списка */}
+          {/* Переключатели видимости колонок списка — при 4 зонах места не остаётся,
+              поэтому гасим до Offset/Дата и блокируем тумблеры. */}
           <div className="flex items-center gap-1">
             {([
               { key: "sender" as const, label: "Отправитель" },
               { key: "recipient" as const, label: "Получатель" },
               { key: "value" as const, label: "Value" },
             ]).map(({ key, label: colLabel }) => (
-              <button key={key} type="button" onClick={() => toggleCol(key)}
-                title={cols[key] ? `Скрыть колонку «${colLabel}»` : `Показать колонку «${colLabel}»`}
-                className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
-                  cols[key]
+              <button key={key} type="button" onClick={() => toggleCol(key)} disabled={topicCount >= MAX_TOPIC_ZONES}
+                title={topicCount >= MAX_TOPIC_ZONES ? "При 4 рабочих зонах остаются только Offset и Дата" : (cols[key] ? `Скрыть колонку «${colLabel}»` : `Показать колонку «${colLabel}»`)}
+                className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-30 ${
+                  effectiveCols[key]
                     ? "border-primary/40 bg-[var(--color-active-bg)] text-primary"
                     : "border-border-main text-text-muted hover:text-text-main"
                 }`}>
-                {cols[key] ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                {effectiveCols[key] ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
                 {colLabel}
               </button>
             ))}
@@ -368,16 +434,20 @@ export default function KafkaSection() {
       ) : topicsErr ? (
         <div className="tone-danger rounded-xl border px-4 py-4 text-sm">{topicsErr}</div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-3">
-          {/* 4 поля 2×2: все жёстко равны по высоте, контент скроллится внутри.
-              Fields 1 & 2 — two topic lists */}
-          <TopicColumn label="Топик 1" topics={topics} topic={t1} onTopic={setT1}
-            messages={m1} loading={l1 || topicsLoading} selectedId={selectedId}
-            onSelect={(m) => setSelected({ ...m, topic: t1 })} cols={cols} />
-          <TopicColumn label="Топик 2" topics={topics} topic={t2} onTopic={setT2}
-            messages={m2} loading={l2 || topicsLoading} selectedId={selectedId}
-            onSelect={(m) => setSelected({ ...m, topic: t2 })} cols={cols} />
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          {/* Верхний ряд: рабочие зоны топиков (2–4) — сжимаются равномерно по ширине.
+              При 4 зонах effectiveCols гасит Отправителя/Получателя/Value, остаются Offset и Дата. */}
+          <div className="grid min-h-0 flex-1 gap-3" style={{ gridTemplateColumns: `repeat(${topicCount}, minmax(0, 1fr))` }}>
+            {topicSlots.map((slot, i) => (
+              <TopicColumn key={slot.label} label={slot.label} topics={topics} topic={slot.topic} onTopic={slot.setTopic}
+                messages={slot.messages} loading={slot.loading || topicsLoading} selectedId={selectedId}
+                onSelect={(m) => setSelected({ ...m, topic: slot.topic })} cols={effectiveCols}
+                onRemove={i === topicCount - 1 && topicCount > MIN_TOPIC_ZONES ? removeLastTopicZone : undefined} />
+            ))}
+          </div>
 
+          {/* Нижний ряд: тело сообщения + адресаты/метаданные — фиксированные 2 колонки */}
+          <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
           {/* Field 3 — message body */}
           <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border-main bg-bg-card">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-main p-2">
@@ -444,6 +514,7 @@ export default function KafkaSection() {
                 </div>
               )}
             </div>
+          </div>
           </div>
         </div>
       )}

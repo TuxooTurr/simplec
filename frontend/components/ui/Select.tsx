@@ -21,7 +21,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Check } from "lucide-react";
+import { ChevronDown, Check, Search } from "lucide-react";
 import { INPUT_CLS, INPUT_SM } from "./Input";
 
 interface Opt { value: string; label: ReactNode; disabled: boolean }
@@ -50,26 +50,35 @@ export interface SelectProps {
   id?: string;
   title?: string;
   "aria-label"?: string;
+  /** Показывать строку поиска вверху панели — фильтрует опции по тексту. */
+  searchable?: boolean;
+  searchPlaceholder?: string;
 }
 
 export function Select({
   value, onChange, children, className = "", sm = false, bare = false, disabled = false,
-  placeholder, id, title, "aria-label": ariaLabel,
+  placeholder, id, title, "aria-label": ariaLabel, searchable = false, searchPlaceholder = "Поиск…",
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [query, setQuery] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const options: Opt[] = [];
   collectOptions(children, options);
+
+  const filtered = searchable && query.trim()
+    ? options.filter((o) => typeof o.label === "string" && o.label.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
 
   const current = value != null ? String(value) : "";
   const selected = options.find((o) => o.value === current);
   const selectedLabel = selected ? selected.label : (placeholder ?? "");
 
-  const close = useCallback(() => { setOpen(false); setActive(-1); }, []);
+  const close = useCallback(() => { setOpen(false); setActive(-1); setQuery(""); }, []);
 
   const reposition = useCallback(() => {
     const el = btnRef.current;
@@ -103,17 +112,24 @@ export function Select({
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open, close]);
 
-  // при открытии — подсветить текущий и проскроллить к нему
+  // при открытии — подсветить текущий и проскроллить к нему; для поиска — сфокусировать инпут
   useEffect(() => {
     if (open) {
-      const idx = options.findIndex((o) => o.value === current);
+      const idx = filtered.findIndex((o) => o.value === current);
       setActive(idx);
       requestAnimationFrame(() => {
         listRef.current?.querySelector<HTMLElement>(`[data-idx="${idx}"]`)?.scrollIntoView({ block: "nearest" });
+        if (searchable) searchRef.current?.focus();
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // при вводе в поиск — подсветить первый результат
+  useEffect(() => {
+    if (open && searchable) setActive(filtered.length > 0 ? 0 : -1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query]);
 
   function pick(o: Opt) {
     if (o.disabled) return;
@@ -124,9 +140,9 @@ export function Select({
   function moveActive(dir: 1 | -1) {
     setActive((prev) => {
       let i = prev;
-      for (let n = 0; n < options.length; n++) {
-        i = (i + dir + options.length) % options.length;
-        if (!options[i].disabled) break;
+      for (let n = 0; n < filtered.length; n++) {
+        i = (i + dir + filtered.length) % filtered.length;
+        if (!filtered[i].disabled) break;
       }
       requestAnimationFrame(() => {
         listRef.current?.querySelector<HTMLElement>(`[data-idx="${i}"]`)?.scrollIntoView({ block: "nearest" });
@@ -135,16 +151,21 @@ export function Select({
     });
   }
 
+  function onListKey(e: React.KeyboardEvent) {
+    if (e.key === "ArrowDown") { e.preventDefault(); moveActive(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveActive(-1); }
+    else if (e.key === "Enter") { e.preventDefault(); if (active >= 0 && filtered[active]) pick(filtered[active]); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+    else if (e.key === "Tab") { close(); }
+  }
+
   function onButtonKey(e: React.KeyboardEvent) {
     if (disabled) return;
     if (!open) {
       if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") { e.preventDefault(); setOpen(true); }
       return;
     }
-    if (e.key === "ArrowDown") { e.preventDefault(); moveActive(1); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); moveActive(-1); }
-    else if (e.key === "Enter") { e.preventDefault(); if (active >= 0 && options[active]) pick(options[active]); }
-    else if (e.key === "Tab") { close(); }
+    onListKey(e);
   }
 
   const base = sm ? INPUT_SM : INPUT_CLS;
@@ -161,11 +182,25 @@ export function Select({
           ref={listRef}
           role="listbox"
           style={{ position: "fixed", top: coords.top, left: coords.left, width: bare ? undefined : coords.width, minWidth: bare ? coords.width : undefined }}
-          className="z-[9999] max-h-60 overflow-auto rounded-lg border border-border-main bg-bg-card py-1 shadow-lg animate-fade-in"
+          className="z-[9999] flex max-h-72 flex-col overflow-hidden rounded-lg border border-border-main bg-bg-card shadow-lg animate-fade-in"
         >
-          {options.length === 0 ? (
-            <div className="px-3 py-2 text-sm text-text-muted">Нет вариантов</div>
-          ) : options.map((o, i) => {
+          {searchable && (
+            <div className="relative shrink-0 border-b border-border-main p-1.5">
+              <Search className="pointer-events-none absolute left-4 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text-muted" />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={onListKey}
+                placeholder={searchPlaceholder}
+                className="w-full rounded-md border border-border-main bg-[var(--color-input-bg)] py-1 pl-7 pr-2 text-sm text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-auto py-1">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-text-muted">{searchable && query.trim() ? "Ничего не найдено" : "Нет вариантов"}</div>
+          ) : filtered.map((o, i) => {
             const isSel = o.value === current;
             const isActive = i === active;
             return (
@@ -187,6 +222,7 @@ export function Select({
               </button>
             );
           })}
+          </div>
         </div>,
         document.body,
       )

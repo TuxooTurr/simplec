@@ -6,12 +6,13 @@ import {
   ScrollText, Search, Loader2, AlertTriangle, ChevronDown, ChevronUp,
   Copy, CheckCheck, Bug, Sparkles, Filter, Clock, Server,
   RefreshCw, Settings, XCircle, CheckCircle2, ChevronRight,
-  History, ChevronLeft, Trash2,
+  History, ChevronLeft, Trash2, Upload, FileText, Send,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import {
-  searchLogs, analyzeLogs, getLogServices,
+  searchLogs, analyzeLogs, getLogServices, uploadLogFile, chatLogs,
   type LogEntry, type LogGroup, type LogAnalysis, type LogSearchResult,
+  type LogFileAnalysis, type LogChatMsg,
 } from "@/lib/api";
 import {
   getLogsVpsConnections,
@@ -254,6 +255,202 @@ function LogErrorCard({
   );
 }
 
+/* ── Анализ файла логов (без VPS-подключения) ───────────────────────────── */
+
+function FileLogAnalysis({ provider, onBack }: { provider: string; onBack: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<LogFileAnalysis | null>(null);
+
+  // Диалог-уточнения после анализа
+  const [chatMsgs, setChatMsgs] = useState<LogChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [chatMsgs, chatSending]);
+
+  const pickFile = (f: File | null) => {
+    setFile(f);
+    setError("");
+  };
+
+  const handleAnalyze = async () => {
+    if (!file) return;
+    setAnalyzing(true);
+    setError("");
+    setResult(null);
+    setChatMsgs([]);
+    try {
+      const res = await uploadLogFile(file, provider);
+      setResult(res);
+    } catch (e) {
+      setError(String(e));
+    }
+    setAnalyzing(false);
+  };
+
+  const sendChat = async () => {
+    const q = chatInput.trim();
+    if (!q || !result || chatSending) return;
+    const nextMsgs: LogChatMsg[] = [...chatMsgs, { role: "user", content: q }];
+    setChatMsgs(nextMsgs);
+    setChatInput("");
+    setChatSending(true);
+    try {
+      const res = await chatLogs({
+        excerpt: result.excerpt,
+        analysis: result.analysis,
+        messages: nextMsgs,
+        provider,
+      });
+      setChatMsgs([...nextMsgs, { role: "assistant", content: res.reply }]);
+    } catch (e) {
+      setChatMsgs([...nextMsgs, { role: "assistant", content: `⚠️ Не удалось получить ответ: ${String(e)}` }]);
+    }
+    setChatSending(false);
+  };
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
+        <button onClick={onBack}
+          className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group">
+          <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+          Назад
+        </button>
+        <span className="text-text-muted/40">·</span>
+        <FileText className="w-5 h-5 text-primary" />
+        <h1 className="text-lg font-bold text-text-main">Анализ файла логов</h1>
+      </div>
+
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
+        <div className="max-w-4xl mx-auto p-6 space-y-6">
+
+          {/* Выбор файла */}
+          <div className="bg-bg-card border border-border-main rounded-xl p-5 space-y-4">
+            <label
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => {
+                e.preventDefault(); setDragOver(false);
+                pickFile(e.dataTransfer.files?.[0] ?? null);
+              }}
+              className={`flex flex-col items-center justify-center gap-2 px-6 py-8 rounded-xl border-2 border-dashed cursor-pointer transition-colors ${
+                dragOver ? "border-primary bg-primary/5" : "border-border-main hover:border-primary/40 hover:bg-bg-subtle/50"
+              }`}
+            >
+              <input type="file" className="hidden" accept=".log,.txt,.out,.json,.jsonl,.csv"
+                onChange={e => pickFile(e.target.files?.[0] ?? null)} />
+              <Upload className="w-8 h-8 text-text-muted/50" />
+              {file ? (
+                <div className="text-center">
+                  <p className="text-sm font-medium text-text-main">{file.name}</p>
+                  <p className="text-xs text-text-muted">{(file.size / 1024).toFixed(1)} КБ</p>
+                </div>
+              ) : (
+                <div className="text-center">
+                  <p className="text-sm font-medium text-text-main">Перетащите файл логов или нажмите для выбора</p>
+                  <p className="text-xs text-text-muted mt-0.5">.log, .txt, .out, .json — до 5 МБ</p>
+                </div>
+              )}
+            </label>
+
+            <button onClick={handleAnalyze} disabled={!file || analyzing} className={`${BTN_PRIMARY} w-full`}>
+              {analyzing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              {analyzing ? "ИИ анализирует логи…" : "Анализировать"}
+            </button>
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+              <XCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-red-800">Ошибка анализа</p>
+                <p className="text-xs text-red-600 mt-1">{error}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Результат анализа */}
+          {result && (
+            <div className="bg-bg-card border border-border-main rounded-xl p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-4 h-4 text-primary" />
+                <span className="text-sm font-semibold text-primary uppercase tracking-wide">AI-анализ</span>
+                <span className="text-xs text-text-muted">
+                  {result.filename} · строк: {result.meta.total_lines}
+                  {result.meta.truncated && " · файл обрезан до выжимки ошибок"}
+                </span>
+              </div>
+              <NotionRenderer text={result.analysis} />
+            </div>
+          )}
+
+          {/* Диалог-уточнения */}
+          {result && (
+            <div className="bg-bg-card border border-border-main rounded-xl overflow-hidden">
+              <div className="px-5 py-3 border-b border-border-main">
+                <span className="text-sm font-semibold text-text-main">Уточнения по логу</span>
+                <span className="text-xs text-text-muted ml-2">ИИ помнит лог и свой анализ — задавайте вопросы</span>
+              </div>
+
+              <div className="max-h-96 overflow-y-auto scrollbar-thin p-4 space-y-3">
+                {chatMsgs.length === 0 && !chatSending && (
+                  <p className="text-xs text-text-muted text-center py-2">
+                    Например: «Какая из ошибок самая критичная?», «Что проверить в первую очередь?»
+                  </p>
+                )}
+                {chatMsgs.map((m, i) => (
+                  m.role === "user" ? (
+                    <div key={i} className="flex justify-end">
+                      <div className="max-w-[80%] rounded-2xl rounded-br-sm bg-primary text-white px-4 py-2 text-sm whitespace-pre-wrap">
+                        {m.content}
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={i} className="flex justify-start">
+                      <div className="max-w-[90%] rounded-2xl rounded-bl-sm bg-bg-subtle border border-border-main px-4 py-2 text-sm">
+                        <NotionRenderer text={m.content} />
+                      </div>
+                    </div>
+                  )
+                ))}
+                {chatSending && (
+                  <div className="flex items-center gap-2 text-xs text-text-muted">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" /> ИИ думает…
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              <div className="px-4 py-3 border-t border-border-main flex items-center gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && sendChat()}
+                  placeholder="Уточняющий вопрос по логу…"
+                  className={INPUT_CLS}
+                  disabled={chatSending}
+                />
+                <button onClick={sendChat} disabled={!chatInput.trim() || chatSending}
+                  className={`${BTN_PRIMARY} !px-3`} title="Отправить">
+                  <Send className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Основной компонент ─────────────────────────────────────────────────── */
 
 export default function LogsSection() {
@@ -285,8 +482,8 @@ export default function LogsSection() {
   const [analyzingAll, setAnalyzingAll] = useState(false);
   const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
 
-  // История
-  const [stage, setStage] = useState<"search" | "history">("search");
+  // История / анализ файла
+  const [stage, setStage] = useState<"search" | "history" | "file">("search");
   const [history, setHistory] = useState<SearchHistEntry[]>(() => loadSearchHistory());
 
   /* ── Загрузка подключений ────────────────────────────────────────────── */
@@ -534,6 +731,12 @@ export default function LogsSection() {
     </div>
   );
 
+  /* ── Анализ загруженного файла (доступен без подключений) ────────────── */
+
+  if (stage === "file") return (
+    <FileLogAnalysis provider={provider} onBack={() => setStage("search")} />
+  );
+
   /* ── Пустое состояние: нет подключений ───────────────────────────────── */
 
   if (!loadingConns && connections.length === 0) return (
@@ -546,13 +749,26 @@ export default function LogsSection() {
         Подключите платформу агрегации логов (Graylog, Elasticsearch, Loki) в настройках,
         чтобы начать анализ ошибок микросервисов.
       </p>
-      <button
-        onClick={() => router.push("/settings")}
-        className={BTN_PRIMARY}
-      >
-        <Settings className="w-4 h-4" />
-        Открыть настройки
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => router.push("/settings")}
+          className={BTN_PRIMARY}
+        >
+          <Settings className="w-4 h-4" />
+          Открыть настройки
+        </button>
+        <button
+          onClick={() => setStage("file")}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-border-main text-text-main hover:bg-bg-subtle transition-colors"
+        >
+          <Upload className="w-4 h-4" />
+          Загрузить файл логов
+        </button>
+      </div>
+      <p className="text-xs text-text-muted mt-3 max-w-md">
+        Без подключения к API можно загрузить лог файлом — ИИ проанализирует его
+        и ответит на уточняющие вопросы.
+      </p>
     </div>
   );
 

@@ -895,3 +895,34 @@ export async function analyzeLogs(params: {
 export async function getLogServices(vpsId: string): Promise<{ services: string[] }> {
   return fetchJson(`/api/logs/services?vps_id=${encodeURIComponent(vpsId)}`);
 }
+
+// ─── Logs: анализ загруженного файла (без VPS) ───────────────────────────────
+
+export interface LogFileAnalysis {
+  analysis: string;   // markdown-анализ от ИИ
+  excerpt:  string;   // выжимка лога — контекст для чата-уточнений
+  filename: string;
+  meta: { total_lines: number; truncated: boolean; error_lines: number };
+}
+
+export async function uploadLogFile(file: File, provider: string): Promise<LogFileAnalysis> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("provider", provider);
+  return fetchJson("/api/logs/upload-analyze", { method: "POST", body });
+}
+
+export interface LogChatMsg { role: "user" | "assistant"; content: string }
+
+export async function chatLogs(params: {
+  excerpt:  string;
+  analysis: string;
+  messages: LogChatMsg[];
+  provider: string;
+}): Promise<{ reply: string }> {
+  return fetchJson("/api/logs/chat", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify(params),
+  });
+}

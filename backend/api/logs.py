@@ -2,9 +2,11 @@
 Анализатор логов микросервисов.
 
 Эндпоинты:
-  POST /api/logs/search    — поиск логов по фильтрам
-  POST /api/logs/analyze   — LLM-анализ выбранных ошибок
-  GET  /api/logs/services  — список микросервисов из VPS
+  POST /api/logs/search          — поиск логов по фильтрам
+  POST /api/logs/analyze         — LLM-анализ выбранных ошибок
+  GET  /api/logs/services        — список микросервисов из VPS
+  POST /api/logs/upload-analyze  — анализ загруженного файла логов (без VPS)
+  POST /api/logs/chat            — уточняющий диалог по проанализированному файлу
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -40,6 +42,18 @@ class LogSearchRequest(BaseModel):
 class LogAnalyzeRequest(BaseModel):
     vps_id: str
     entries: list[dict]  # LogEntry dicts с log данными
+    provider: str = "gigachat"
+
+
+class LogChatMessage(BaseModel):
+    role: str      # "user" | "assistant"
+    content: str
+
+
+class LogChatRequest(BaseModel):
+    excerpt: str                 # выжимка лога, по которой шёл анализ
+    analysis: str = ""           # первичный ИИ-анализ (контекст диалога)
+    messages: list[LogChatMessage] = Field(default_factory=list)
     provider: str = "gigachat"
 
 
@@ -322,3 +336,167 @@ async def get_log_services(
         raise HTTPException(502, f"Ошибка получения списка сервисов: {str(e)[:200]}")
 
     return {"services": services}
+
+
+# ── Анализ загруженного файла логов (без VPS) ────────────────────────────────
+
+_UPLOAD_MAX_BYTES = 5 * 1024 * 1024   # 5 МБ файла достаточно для разового анализа
+_EXCERPT_MAX_CHARS = 24_000           # выжимка, которая уходит в LLM и в чат-контекст
+_ERROR_MARKERS = (
+    "error", "fatal", "exception", "traceback", "critical",
+    "caused by", "panic", "severe", "fail", "warn",
+)
+
+
+def _make_log_excerpt(text: str) -> tuple[str, dict]:
+    """
+    Выжимка из произвольного лог-файла для LLM.
+
+    Маленький файл уходит целиком. Большой — приоритет строкам с маркерами
+    ошибок (+ строка контекста до/после), затем хвост файла до лимита:
+    свежие записи в логах важнее старых.
+    """
+    lines = text.splitlines()
+    meta = {"total_lines": len(lines), "truncated": False, "error_lines": 0}
+
+    error_idx: set[int] = set()
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if any(m in low for m in _ERROR_MARKERS):
+            error_idx.update((i - 1, i, i + 1))
+            meta["error_lines"] += 1
+
+    if len(text) <= _EXCERPT_MAX_CHARS:
+        return text, meta
+
+    meta["truncated"] = True
+    picked: list[str] = []
+    budget = _EXCERPT_MAX_CHARS
+
+    # 1) блоки с ошибками (в исходном порядке)
+    prev = None
+    for i in sorted(x for x in error_idx if 0 <= x < len(lines)):
+        if prev is not None and i > prev + 1:
+            picked.append("…")
+        line = lines[i][:2000]
+        if budget - len(line) < 0:
+            break
+        picked.append(line)
+        budget -= len(line) + 1
+        prev = i
+
+    # 2) хвост файла в остаток бюджета
+    tail: list[str] = []
+    for line in reversed(lines):
+        line = line[:2000]
+        if budget - len(line) < 0:
+            break
+        tail.append(line)
+        budget -= len(line) + 1
+    if tail:
+        picked.append("… (хвост файла)")
+        picked.extend(reversed(tail))
+
+    return "\n".join(picked), meta
+
+
+def _uploaded_analysis_prompt(filename: str, excerpt: str, meta: dict) -> str:
+    trunc_note = (
+        f"Файл обрезан: показаны строки с ошибками и хвост (всего строк в файле: {meta['total_lines']})."
+        if meta.get("truncated") else "Файл показан целиком."
+    )
+    return f"""Ты senior DevOps/SRE инженер и QA-эксперт. Пользователь загрузил файл логов «{filename}». {trunc_note}
+
+════════ ЛОГИ ════════
+{excerpt}
+══════════════════════
+
+Проанализируй лог и ответь в markdown на русском строго по структуре:
+
+## Сводка
+1-3 предложения: что в целом происходит в логе, есть ли проблемы.
+
+## Найденные ошибки
+Для каждой уникальной ошибки (если есть):
+- **Что произошло** — суть ошибки
+- **Вероятная причина**
+- **Влияние**
+- **Рекомендация по исправлению**
+
+## Что уточнить
+1-3 конкретных вопроса пользователю, если данных не хватает для точного вывода.
+
+Используй только заголовки ## и ###, жирный текст и списки — без заголовков глубже ###.
+Не выдумывай — основывайся только на данных из лога. Если ошибок нет — так и скажи."""
+
+
+@router.post("/api/logs/upload-analyze")
+async def upload_analyze(
+    file: UploadFile = File(...),
+    provider: str = Form("gigachat"),
+) -> dict:
+    """ИИ-анализ загруженного файла логов — работает без VPS-подключений."""
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Файл пустой")
+    if len(raw) > _UPLOAD_MAX_BYTES:
+        raise HTTPException(400, f"Файл больше {_UPLOAD_MAX_BYTES // (1024 * 1024)} МБ — приложите фрагмент лога")
+
+    text = raw.decode("utf-8", errors="replace")
+    excerpt, meta = _make_log_excerpt(text)
+    prompt = _uploaded_analysis_prompt(file.filename or "logs", excerpt, meta)
+
+    def _run() -> str:
+        from agents.llm_client import LLMClient, Message
+        llm = LLMClient(provider=provider)
+        resp = llm.chat([Message(role="user", content=prompt)], temperature=0.2, max_tokens=4000)
+        return resp.content.strip()
+
+    try:
+        analysis = await asyncio.to_thread(_run)
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка LLM анализа: {str(e)[:300]}")
+
+    return {
+        "analysis": analysis,
+        "excerpt": excerpt,
+        "filename": file.filename or "logs",
+        "meta": meta,
+    }
+
+
+@router.post("/api/logs/chat")
+async def chat_about_logs(body: LogChatRequest) -> dict:
+    """Уточняющий диалог по проанализированному файлу логов."""
+    if not body.excerpt.strip():
+        raise HTTPException(400, "Нет контекста лога — сначала загрузите и проанализируйте файл")
+    if not body.messages or body.messages[-1].role != "user":
+        raise HTTPException(400, "Последнее сообщение должно быть вопросом пользователя")
+
+    system = f"""Ты senior DevOps/SRE инженер и QA-эксперт. Пользователь загрузил файл логов, ты его уже проанализировал. Отвечай на уточняющие вопросы кратко, по делу, в markdown, только на основе лога и анализа. Если в логе нет ответа — честно скажи об этом.
+
+════════ ЛОГИ ════════
+{body.excerpt[:_EXCERPT_MAX_CHARS]}
+══════════════════════
+
+════════ ТВОЙ ПЕРВИЧНЫЙ АНАЛИЗ ════════
+{body.analysis[:6000]}
+═══════════════════════════════════════"""
+
+    def _run() -> str:
+        from agents.llm_client import LLMClient, Message
+        llm = LLMClient(provider=body.provider)
+        msgs = [Message(role="system", content=system)]
+        # последние 12 сообщений диалога — достаточно для уточнений
+        for m in body.messages[-12:]:
+            role = m.role if m.role in ("user", "assistant") else "user"
+            msgs.append(Message(role=role, content=m.content[:8000]))
+        resp = llm.chat(msgs, temperature=0.2, max_tokens=2500)
+        return resp.content.strip()
+
+    try:
+        reply = await asyncio.to_thread(_run)
+    except Exception as e:
+        raise HTTPException(502, f"Ошибка LLM: {str(e)[:300]}")
+
+    return {"reply": reply}

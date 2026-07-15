@@ -130,6 +130,8 @@ export default function BugsSection() {
   const [description, setDescription] = useState("");
   const [loading, setLoading]         = useState(false);
   const [report, setReport]           = useState("");
+  // Части структурированного отчёта — для автоподстановки в Jira
+  const [parsed, setParsed] = useState<{ title: string; description: string; priority: string } | null>(null);
   const [copied, setCopied]           = useState(false);
   const [bugError, setBugError]       = useState<{ message: string; llm_error: boolean } | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -208,6 +210,7 @@ export default function BugsSection() {
     try {
       const res = await formatBug({ platform, feature, description, provider, files: attachedFiles });
       setReport(res.report);
+      setParsed({ title: res.title, description: res.description, priority: res.priority });
       setAttachedFiles([]);
       saveHistEntry({
         id: Date.now().toString(),
@@ -506,6 +509,7 @@ export default function BugsSection() {
                 <button
                   onClick={() => {
                     setReport("");
+                    setParsed(null);
                     setDescription("");
                     setFeature("");
                     setBugError(null);
@@ -535,11 +539,12 @@ export default function BugsSection() {
           </div>
         )}
 
-        {/* Регистрация дефекта в Jira — доступна после оформления отчёта */}
+        {/* Регистрация дефекта в Jira: название/описание/приоритет — из структуры ИИ-отчёта */}
         {report && (
           <JiraRegisterPanel
-            summary={feature ? `[${platform}] ${feature}` : `[${platform}] ${description.slice(0, 100)}`}
-            description={report}
+            summary={parsed?.title || (feature ? `[${platform}] ${feature}` : `[${platform}] ${description.slice(0, 100)}`)}
+            description={parsed?.description || report}
+            priorityHint={parsed?.priority || ""}
           />
         )}
 

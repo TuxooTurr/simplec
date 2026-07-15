@@ -56,6 +56,10 @@ class BugFormatRequest(BaseModel):
 
 class BugFormatResponse(BaseModel):
     report: str
+    # Части структурированного отчёта — для автоподстановки в Jira
+    title: str = ""
+    description: str = ""
+    priority: str = ""
 
 
 class ExportResponse(BaseModel):

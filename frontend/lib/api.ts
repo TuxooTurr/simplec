@@ -346,7 +346,7 @@ export async function formatBug(params: {
   description: string;
   provider: string;
   files?: File[];
-}): Promise<{ report: string }> {
+}): Promise<{ report: string; title: string; description: string; priority: string }> {
   const body = new FormData();
   body.append("platform", params.platform);
   body.append("feature", params.feature);

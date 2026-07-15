@@ -20,6 +20,24 @@ def _get_store():
     return VectorStore()
 
 
+def _err_detail(e: Exception) -> str:
+    """Человекочитаемая причина вместо «Внутренняя ошибка сервера».
+
+    Частый случай: при первом сохранении Chroma качает модель эмбеддингов
+    с huggingface.co — в закрытой сети это падает, и без деталей причина неясна.
+    """
+    msg = str(e) or type(e).__name__
+    low = msg.lower()
+    if any(k in low for k in ("huggingface", "connection", "getaddrinfo", "max retries", "timed out", "offline", "ssl")):
+        return (
+            "Не удалось загрузить модель эмбеддингов — при первом сохранении нужен доступ "
+            "к huggingface.co. В закрытой сети скопируйте с другой машины папку "
+            "~/.cache/huggingface/hub/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2. "
+            f"Детали: {msg[:200]}"
+        )
+    return f"Ошибка векторного хранилища: {msg[:300]}"
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Тест-кейсы
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -60,7 +78,7 @@ def list_etalons(platform: str = "", feature: str = "", limit: int = 50, offset:
         return {"items": items, "total": len(items)}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.get("/api/etalons/stats")
@@ -109,7 +127,7 @@ async def add_etalon(
         return {"id": pair_id, "status": "added"}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.delete("/api/etalons/{pair_id}")
@@ -120,7 +138,7 @@ def delete_etalon(pair_id: str):
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,7 +173,7 @@ def list_autotests(feature: str = "", limit: int = 50, offset: int = 0):
         return {"items": items, "total": len(items)}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.post("/api/autotests")
@@ -194,7 +212,7 @@ async def add_autotest(
         return {"id": pair_id, "status": "added"}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.delete("/api/autotests/{pair_id}")
@@ -205,7 +223,7 @@ def delete_autotest(pair_id: str):
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -240,7 +258,7 @@ def list_defects(feature: str = "", limit: int = 50, offset: int = 0):
         return {"items": items, "total": len(items)}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.post("/api/defects")
@@ -267,7 +285,7 @@ async def add_defect(
         return {"id": pair_id, "status": "added"}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.delete("/api/defects/{pair_id}")
@@ -278,7 +296,7 @@ def delete_defect(pair_id: str):
         return {"status": "deleted", "id": pair_id}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте эталонов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -320,7 +338,7 @@ def list_context_docs(doc_type: str = "", feature: str = "", limit: int = 50, of
         return {"items": items, "total": len(items)}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте контекстных документов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.post("/api/context-docs")
@@ -358,7 +376,7 @@ async def add_context_doc(
         return {"id": doc_id, "status": "added"}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте контекстных документов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))
 
 
 @router.delete("/api/context-docs/{doc_id}")
@@ -369,4 +387,4 @@ def delete_context_doc(doc_id: str):
         return {"status": "deleted", "id": doc_id}
     except Exception as e:
         logger.exception("Ошибка в эндпоинте контекстных документов")
-        raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера")
+        raise HTTPException(status_code=500, detail=_err_detail(e))

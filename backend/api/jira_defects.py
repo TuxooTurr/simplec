@@ -119,7 +119,12 @@ def _jira_request(cfg: dict, method: str, path: str,
     import requests
 
     url = cfg["base_url"] + path
-    headers = {"Accept": "application/json"}
+    # UA обязателен: корп. WAF/BIG IP часто блокирует дефолтный python-requests (403),
+    # при этом curl с тем же токеном проходит.
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+    }
     if auth is None:
         headers["Authorization"] = "Bearer " + _resolve_token(cfg)
 
@@ -163,38 +168,18 @@ _fields_cache: dict[str, tuple[float, dict]] = {}
 _FIELDS_TTL = 600  # 10 минут
 
 
-def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
-    """
-    createmeta проекта → маппинг логических полей на id + allowedValues.
-    Возвращает: {logical: {"id": "customfield_...", "name": "...", "allowed": [..]}}
-    """
-    cache_key = f"{cfg['base_url']}|{project}|{issuetype}"
-    now = time.time()
-    hit = _fields_cache.get(cache_key)
-    if hit and now - hit[0] < _FIELDS_TTL:
-        return hit[1]
-
-    data = _jira_request(cfg, "GET", "/rest/api/2/issue/createmeta", params={
-        "projectKeys": project,
-        "expand": "projects.issuetypes.fields",
-    })
-    projects = data.get("projects", [])
-    if not projects:
-        raise HTTPException(404, f"Проект «{project}» не найден или нет прав на создание задач в нём")
-
-    issuetypes = projects[0].get("issuetypes", [])
-    it = next((t for t in issuetypes if t.get("name", "").lower() == issuetype.lower()), None)
+def _pick_issuetype(issuetypes: list[dict], wanted: str) -> Optional[dict]:
+    it = next((t for t in issuetypes if t.get("name", "").lower() == wanted.lower()), None)
     if it is None:
-        # Bug как запасной вариант, иначе первый тип
-        it = next((t for t in issuetypes if t.get("name", "").lower() in ("bug", "баг", "ошибка")),
+        it = next((t for t in issuetypes if t.get("name", "").lower() in ("bug", "баг", "ошибка", "дефект")),
                   issuetypes[0] if issuetypes else None)
-    if it is None:
-        raise HTTPException(404, f"В проекте «{project}» нет доступных типов задач")
+    return it
 
-    fields = it.get("fields", {})
-    resolved: dict[str, Any] = {"_issuetype": it.get("name", issuetype), "_available": []}
 
-    for fid, fdef in fields.items():
+def _match_fields(field_items: list[tuple[str, dict]], issuetype_name: str) -> dict:
+    """field_items: [(field_id, {name, allowedValues}), ...] → маппинг логических полей."""
+    resolved: dict[str, Any] = {"_issuetype": issuetype_name, "_available": []}
+    for fid, fdef in field_items:
         fname = str(fdef.get("name", "")).strip()
         resolved["_available"].append(fname)
         low = fname.lower()
@@ -207,9 +192,73 @@ def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
                     for v in fdef.get("allowedValues", []) or []
                 ]
                 resolved[logical] = {"id": fid, "name": fname, "allowed": [a for a in allowed if a]}
+    return resolved
+
+
+def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
+    """
+    Маппинг логических полей (КЭ, среда, стенд, эпик) на customfield-id + allowedValues.
+
+    Пробуем два API:
+      1) классический createmeta с expand (Jira ≤ 8.x);
+      2) постраничный createmeta Jira 8.4+/9 (/createmeta/{key}/issuetypes/{id}) —
+         старый эндпоинт там отключён и отдаёт 403/404/405.
+    При полном провале возвращаем {"_error": ...} — создание работает без кастомных полей.
+    """
+    cache_key = f"{cfg['base_url']}|{project}|{issuetype}"
+    now = time.time()
+    hit = _fields_cache.get(cache_key)
+    if hit and now - hit[0] < _FIELDS_TTL:
+        return hit[1]
+
+    errors: list[str] = []
+    resolved: Optional[dict] = None
+
+    # ── Вариант 1: классический createmeta ──
+    try:
+        data = _jira_request(cfg, "GET", "/rest/api/2/issue/createmeta", params={
+            "projectKeys": project,
+            "expand": "projects.issuetypes.fields",
+        })
+        projects = data.get("projects", [])
+        if projects:
+            it = _pick_issuetype(projects[0].get("issuetypes", []), issuetype)
+            if it and it.get("fields"):
+                resolved = _match_fields(list(it["fields"].items()), it.get("name", issuetype))
+        if resolved is None:
+            errors.append("createmeta: проект/тип задачи не найден в ответе")
+    except HTTPException as e:
+        errors.append(f"createmeta: {e.detail}")
+
+    # ── Вариант 2: Jira 8.4+/9 постраничный API ──
+    if resolved is None:
+        try:
+            its = _jira_request(cfg, "GET", f"/rest/api/2/issue/createmeta/{project}/issuetypes",
+                                params={"maxResults": 100})
+            it = _pick_issuetype(its.get("values", []), issuetype)
+            if it is None:
+                raise HTTPException(404, "нет доступных типов задач")
+            fdata = _jira_request(
+                cfg, "GET",
+                f"/rest/api/2/issue/createmeta/{project}/issuetypes/{it.get('id', '')}",
+                params={"maxResults": 200},
+            )
+            items = [(f.get("fieldId", ""), f) for f in fdata.get("values", []) if f.get("fieldId")]
+            resolved = _match_fields(items, it.get("name", issuetype))
+        except HTTPException as e:
+            errors.append(f"createmeta v2: {e.detail}")
+
+    if resolved is None:
+        resolved = {"_issuetype": issuetype, "_available": [], "_error": "; ".join(errors)[:400]}
 
     _fields_cache[cache_key] = (now, resolved)
     return resolved
+
+
+# ── Кэш списка проектов (ответ /project в корп. Jira ~4 МБ) ──────────────────
+
+_projects_cache: dict[str, tuple[float, list]] = {}
+_PROJECTS_TTL = 600
 
 
 # ── Markdown → Jira wiki (минимально достаточно для отчёта) ──────────────────
@@ -322,21 +371,54 @@ def test_connection(db: Session = Depends(get_db)) -> dict:
 
 # ── Routes: справочники ──────────────────────────────────────────────────────
 
+@router.get("/api/jira/projects")
+def list_projects(db: Session = Depends(get_db)) -> dict:
+    """Все проекты, доступные по токену — для выпадающего списка с поиском."""
+    cfg = _load_cfg(db)
+    now = time.time()
+    hit = _projects_cache.get(cfg["base_url"])
+    if hit and now - hit[0] < _PROJECTS_TTL:
+        return {"projects": hit[1]}
+    data = _jira_request(cfg, "GET", "/rest/api/2/project", timeout=90)
+    projects = sorted(
+        [{"key": p.get("key", ""), "name": p.get("name", "")} for p in data if p.get("key")],
+        key=lambda p: p["key"],
+    )
+    _projects_cache[cfg["base_url"]] = (now, projects)
+    return {"projects": projects}
+
+
 @router.get("/api/jira/meta")
 def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> dict:
+    """Справочники проекта. Ошибка одного справочника не валит остальные."""
     cfg = _load_cfg(db)
-    priorities = _jira_request(cfg, "GET", "/rest/api/2/priority")
-    components = _jira_request(cfg, "GET", f"/rest/api/2/project/{project}/components")
+    warnings: list[str] = []
+
+    try:
+        priorities = [p.get("name", "") for p in _jira_request(cfg, "GET", "/rest/api/2/priority")]
+    except HTTPException as e:
+        priorities, _ = [], warnings.append(f"приоритеты: {e.detail}")
+
+    try:
+        components = [c.get("name", "") for c in
+                      _jira_request(cfg, "GET", f"/rest/api/2/project/{project}/components")]
+    except HTTPException as e:
+        components, _ = [], warnings.append(f"компоненты: {e.detail}")
+
     fields = _resolve_fields(cfg, project, cfg["issuetype"])
+    if fields.get("_error"):
+        warnings.append(f"поля (КЭ/среда/стенд/эпик): {fields['_error']}")
+
     return {
-        "priorities": [p.get("name", "") for p in priorities],
-        "components": [c.get("name", "") for c in components],
+        "priorities": priorities,
+        "components": components,
         "issuetype":  fields.get("_issuetype", cfg["issuetype"]),
         "fields": {
             k: {"name": v["name"], "allowed": v["allowed"]}
             for k, v in fields.items() if not k.startswith("_")
         },
         "labels_presets": cfg["labels"],
+        "warnings": warnings,
     }
 
 
@@ -358,10 +440,17 @@ def search_epics(project: str = Query(...), query: str = Query(""),
 
 
 @router.get("/api/jira/users")
-def search_users(query: str = Query(...), db: Session = Depends(get_db)) -> dict:
+def search_users(query: str = Query(...), project: str = Query(""),
+                 db: Session = Depends(get_db)) -> dict:
+    """Поиск исполнителя. С project — только назначаемые участники этого проекта."""
     cfg = _load_cfg(db)
-    data = _jira_request(cfg, "GET", "/rest/api/2/user/search",
-                         params={"username": query.strip(), "maxResults": 10})
+    if project.strip():
+        data = _jira_request(cfg, "GET", "/rest/api/2/user/assignable/search",
+                             params={"project": project.strip(),
+                                     "username": query.strip(), "maxResults": 15})
+    else:
+        data = _jira_request(cfg, "GET", "/rest/api/2/user/search",
+                             params={"username": query.strip(), "maxResults": 15})
     return {"users": [
         {"name": u.get("name", ""), "display": u.get("displayName", ""),
          "email": u.get("emailAddress", "")}
@@ -401,20 +490,29 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if body.assignee.strip():
         fields["assignee"] = {"name": body.assignee.strip()}
 
-    def _set_custom(logical: str, value: str):
+    warnings: list[str] = []
+
+    def _set_custom(logical: str, value: str, label: str):
+        if not value.strip():
+            return
         info = resolved.get(logical)
-        if not info or not value.strip():
+        if not info:
+            warnings.append(f"«{label}» не установлено — поле не найдено в проекте")
             return
         v = value.strip()
         # select-поля требуют {"value": ...}; текстовые — строку
         fields[info["id"]] = {"value": v} if info["allowed"] else v
 
-    if body.epic_key.strip() and "epic_link" in resolved:
-        fields[resolved["epic_link"]["id"]] = body.epic_key.strip()
-    _set_custom("ke", body.ke)
-    _set_custom("environment", body.environment)
-    _set_custom("stand", body.stand)
+    if body.epic_key.strip():
+        if "epic_link" in resolved:
+            fields[resolved["epic_link"]["id"]] = body.epic_key.strip()
+        else:
+            warnings.append("«Эпик» не установлен — поле Epic Link не найдено в проекте")
+    _set_custom("ke", body.ke, "КЭ")
+    _set_custom("environment", body.environment, "Среда обнаружения")
+    _set_custom("stand", body.stand, "Стенд")
 
     created = _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": fields})
     key = created.get("key", "")
-    return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}"}
+    return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}",
+            "warnings": warnings}

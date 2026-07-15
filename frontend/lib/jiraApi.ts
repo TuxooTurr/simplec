@@ -36,6 +36,13 @@ export interface JiraProjectMeta {
   issuetype: string;
   fields: Record<string, { name: string; allowed: string[] }>;
   labels_presets: string[];
+  warnings: string[];
+}
+
+export interface JiraProject { key: string; name: string }
+
+export function getJiraProjects(): Promise<{ projects: JiraProject[] }> {
+  return fetchJson("/api/jira/projects");
 }
 
 export interface JiraEpic { key: string; summary: string }
@@ -73,8 +80,8 @@ export function searchJiraEpics(project: string, query: string): Promise<{ epics
   return fetchJson(`/api/jira/epics?project=${encodeURIComponent(project)}&query=${encodeURIComponent(query)}`);
 }
 
-export function searchJiraUsers(query: string): Promise<{ users: JiraUser[] }> {
-  return fetchJson(`/api/jira/users?query=${encodeURIComponent(query)}`);
+export function searchJiraUsers(query: string, project = ""): Promise<{ users: JiraUser[] }> {
+  return fetchJson(`/api/jira/users?query=${encodeURIComponent(query)}&project=${encodeURIComponent(project)}`);
 }
 
 export interface CreateJiraDefect {
@@ -91,7 +98,7 @@ export interface CreateJiraDefect {
   stand: string;
 }
 
-export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: string; key: string; url: string }> {
+export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: string; key: string; url: string; warnings: string[] }> {
   return fetchJson("/api/jira/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -2,5 +2,25 @@
   {
     "id": "fld-1dff74db",
     "name": "Kafka-алерты"
+  },
+  {
+    "id": "fld-681eeeee",
+    "name": "PKAP insert"
+  },
+  {
+    "id": "fld-62f453f0",
+    "name": "PKAP update"
+  },
+  {
+    "id": "fld-053ae053",
+    "name": "Сценарии/Alerts"
+  },
+  {
+    "id": "fld-44fb9946",
+    "name": "AutoHealing"
+  },
+  {
+    "id": "fld-7b490180",
+    "name": "MCP/шаблон"
   }
 ]

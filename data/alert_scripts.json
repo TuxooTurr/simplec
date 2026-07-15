@@ -1,5 +1,588 @@
 [
   {
+    "id": "c46447d8",
+    "name": "ЗНО",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783512956152-oema",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1783512958217-juyv",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nZNO_TOPIC = \"REPL.PKAP1173.911_ZNO\"\n\n# ⚠️ Тестовый префикс — НЕ ПЕРЕСЕКАЕТСЯ с реальными SR от ПКАП\nZNO_TEST_PREFIX = \"SR9000000000\"\n\n# Локальный реестр отправленных тестовых SR (общий для INSERT/UPDATE-ноутбуков)\nZNO_REGISTRY_PATH = os.path.abspath(\"./zno_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_test_zno_id(suffix: int) -> str:\n    \"\"\"Тестовый business_id ЗНО, например: SR90000000000007.\"\"\"\n    return f\"{ZNO_TEST_PREFIX}{suffix:04d}\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(ZNO_REGISTRY_PATH):\n        return {}\n    try:\n        with open(ZNO_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(ZNO_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"businessid\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(business_id: str) -> dict | None:\n    return _load_registry().get(business_id)\n\n\ndef registry_list(prefix: str = ZNO_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [bid for bid in reg.keys() if bid.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:        {BROKERS}\")\nprint(f\"   Топик ЗНО:      {ZNO_TOPIC}\")\nprint(f\"   Префикс тест.:  {ZNO_TEST_PREFIX}\")\nprint(f\"   Реестр:         {ZNO_REGISTRY_PATH}\")\n"
+      },
+      {
+        "id": "cell-1783512968259-6ptj",
+        "type": "init",
+        "source": "def make_zno_record(\n    business_id: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    statecode: str = \"Зарегистрирован/Зарегистрирован\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись ЗНО для таблицы datamart.t_rdd_911_esm_zno.\"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"businessid\": business_id,                     # Номер ЗНО (УНИК.)\n        \"key\": str(uuid.uuid4()),                      # Технический UUID\n        # ─── Категоризация ────────────────────────────────────────────\n        \"categorycode\": \"Запрос информации\",\n        \"requesttype\": \"Нестандартный\",\n        \"creationtype\": \"Инженерный интерфейс\",\n        \"prioritycode\": \"Средний\",\n        \"statecode\": statecode,                        # >255 → обрезать\n        # ─── Услуга / КЭ / РГ ─────────────────────────────────────────\n        \"itservice\": \"CI02264516\",\n        \"configurationelement\": \"CI02618701\",\n        \"workgroup\": \"ДС SberНадежность (Кузнецов Н.Ф.)\", # >512 → обрезать\n        \"workgrouproutingruleid\": \"RR0000000524\",\n        # ─── Люди ─────────────────────────────────────────────────────\n        \"initiator\": \"Тестовый Пользователь\",\n        \"contact\":   \"Тестовый Пользователь\",\n        \"assignee\":  \"Тестовый Исполнитель\",\n        \"owner\": None,\n        \"createdby\": \"Тестовый Пользователь\",\n        \"updatedby\": \"Тестовый Пользователь\",\n        # ─── Системы ──────────────────────────────────────────────────\n        \"systemcreatedby\": \"CI02264516\",\n        \"systemchangedby\": \"CI02264516\",\n        # ─── Текстовые поля ───────────────────────────────────────────\n        \"title\": \"ТЕСТ: Вход в АС ППРБ Адъютант\",      # >255 → обрезать\n        \"description\": \"ТЕСТОВАЯ ЗАЯВКА. Не для прода.\",\n        \"tags\": \"#test_sber911\",                       # >255 → обрезать\n        # ─── Даты ─────────────────────────────────────────────────────\n        \"createdat\":      now_str(),\n        \"updatedat\":      now_str(),\n        \"lastchangedate\": now_str(),\n        \"factstartdate\":  \"2026-05-27 00:00:00.474\",\n        \"factfinishdate\": \"2026-05-27 23:31:54.172\",\n        \"factclosedate\":  \"2026-05-27 00:00:00.474\",\n        \"planfinishdate\": \"2026-05-27 14:44:47.079\",\n        \"targetdate\":     \"2026-06-17 14:50:00.079\",\n        \"snap_datetime\":  now_str(),\n        # ─── Срыв КС / результат ──────────────────────────────────────\n        \"targetdatelatereason\": \"Тестовая причина\",    # >255 → обрезать\n        \"expired\": False,\n        \"qreturninwork\": 0,\n        \"football\": 0,\n        \"resolutioncode\": \"RESOLVED\",\n        \"resolutiondescription\": \"Тест. Решено.\",\n        \"sensitives\": False,\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,\n        \"ctl_validfrom\": ctl_validfrom or now_str(),\n        # ─── V1.1: табельные номера ───────────────────────────────────\n        \"initiatorIdTab\": \"\",\n        \"contactIdTab\":   \"\",\n        \"assigneeIdTab\":  \"\",\n        \"createdByTab\":   \"\",\n        \"updatedByTab\":   \"\",\n        \"ownerTab\":       \"\",\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_zno_message(records: list) -> dict:\n    return {\n        \"table_name\": \"t_rdd_911_esm_zno\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон ЗНО загружен\")\n"
+      },
+      {
+        "id": "cell-1783513003039-r8lc",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")\n"
+      },
+      {
+        "id": "cell-1783513005300-ksgh",
+        "type": "loop",
+        "source": "          # Параметры — переопредели по необходимости\nOVERRIDES = {\n    \"statecode\": \"Назначен в рабочую группу/Назначен\",\n    \"title\": \"ТЕСТ: Кастомный заголовок\",\n    \"description\": \"ТЕСТ: Кастомное описание\",\n    \"prioritycode\": \"Высокий\",\n    # \"workgroup\": \"Моя РГ\",\n}\n\nbusiness_id = make_test_zno_id(suffix=random.randint(1, 9999))\n\nrec = make_zno_record(\n    business_id=business_id,\n    ctl_action=\"I\",\n    ctl_validfrom=now_str(),\n    **OVERRIDES,\n)\nmsg = make_zno_message([rec])\n\nprint(f\"🆕 INSERT business_id = {business_id}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(ZNO_TOPIC, msg, key=business_id)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {business_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783513060619-qjp",
+        "label": "КЭ Услуги",
+        "code_key": "configurationelement",
+        "placeholder": "CI02618701",
+        "field_type": "dropdown",
+        "options": [
+          "CI02618701",
+          "CI00641491",
+          "CI00233293",
+          "CI03229258"
+        ]
+      },
+      {
+        "id": "param-1783513077687-7l5",
+        "label": "Статус",
+        "code_key": "statecode",
+        "placeholder": "Назначен в рабочую группу/Назначен",
+        "field_type": "dropdown",
+        "options": [
+          "Назначен в рабочую группу/Назначен",
+          "Зарегистрирован"
+        ]
+      },
+      {
+        "id": "param-1783513092655-9y5",
+        "label": "Тема ЗНО ",
+        "code_key": "title",
+        "placeholder": "ТЕСТ: Кастомный заголовок",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783513110292-vt3",
+        "label": "Описание ЗНО",
+        "code_key": "description",
+        "placeholder": "ТЕСТ: Кастомное описание",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-08T14:34:04.632542+00:00"
+  },
+  {
+    "id": "fc5c3a21",
+    "name": "Alert Reflex",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783507847613-8isc",
+        "type": "init",
+        "source": "import json\nimport jwt\n# import base64\nimport random\nimport uuid\nfrom time import sleep, time\nfrom datetime import datetime, timezone\nfrom kafka import KafkaConsumer, KafkaProducer, TopicPartition\n\n\nTOPIC = \"REPL.alert_event_in\" #\"alert_event_in\"\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nTEST_CI = \"CI00641491\"#\"CI03421642\"#\"CI03388027\"#\"CI03421642\"#\"CI02470352\"#\"CI03388027\"#\n\ndef get_byte_string(obj):\n    # print(type(obj))\n    if type(obj) == str: return obj.encode('utf-8')\n    if type(obj) == dict: return json.dumps(obj).encode('utf-8')\n    "
+      },
+      {
+        "id": "cell-1783513603332-a5vj",
+        "type": "init",
+        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_TOKEN)),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
+      },
+      {
+        "id": "cell-1783513612322-xl4u",
+        "type": "init",
+        "source": "with open(\"/Users/16538296/Documents/Скрипты/Алерты/2026-05-22_prom_alerts.json\", \"r\") as f:\n    ALERTS = [json.loads(item[\"value\"]) for item in json.load(f)]\n\n# for alert in ALERTS:\n#     alert[\"systems\"] = [TEST_CI] # + alert[\"systems\"]"
+      },
+      {
+        "id": "cell-1783513629601-qiuz",
+        "type": "loop",
+        "source": "producer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\nproducer = KafkaProducer(**producer_kafka_config)\ntry:\n    for i in range(1):\n        sleep(.5)\n        alert = random.choice(ALERTS)\n        alert[\"systems\"] = [TEST_CI] # + alert[\"systems\"]\n        alert[\"loadTime\"] = int(time()*1000)\n        alert[\"problemId\"] = f\"PROBLEM_{uuid.uuid4()}\"\n        alert[\"alertId\"] = f\"ALERT_{uuid.uuid4()}\"\n        info = f\"CI: {alert['systems']}\\nproblemId: {alert['problemId']}\\nalertId: {alert['alertId']}\"\n        alert = json.dumps(alert, ensure_ascii=False) # MONITORING_ALERTS[0]# \n        # alert = json.dumps(random.choice(ALERTS), ensure_ascii=False) # MONITORING_ALERTS[0]# \n        future = producer.send(TOPIC, get_byte_string(alert), partition=0)\n        future.get()\n        print(info, future.value, future.is_done, sep=\"\\n\")\nexcept KeyboardInterrupt:\n    pass\nfinally:\n    producer.close()"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-053ae053",
+    "created_at": "2026-07-10T11:50:34.134380+00:00"
+  },
+  {
+    "id": "8cbe11a6",
+    "name": "ЗНР",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783683939797-e80h",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1783683942528-cmn0",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nZNR_TOPIC = \"REPL.PKAP1173.911_ZNR\"\n\n# ⚠️ Тестовые префиксы — НЕ ПЕРЕСЕКАЮТСЯ с реальными от ПКАП\nZNR_TEST_PREFIX = \"SRT9000000000\"   # business_id ЗНР\nZNO_TEST_PREFIX = \"SR9000000000\"    # requestobjectid (родительское ЗНО)\n\n# Локальный реестр отправленных тестовых ЗНР\nZNR_REGISTRY_PATH = os.path.abspath(\"./znr_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_test_znr_id(suffix: int) -> str:\n    \"\"\"Тестовый business_id ЗНР, например: SRT90000000000007.\"\"\"\n    return f\"{ZNR_TEST_PREFIX}{suffix:04d}\"\n\n\ndef make_test_zno_id(suffix: int) -> str:\n    \"\"\"Тестовый requestobjectid (родительское ЗНО), например: SR90000000000007.\"\"\"\n    return f\"{ZNO_TEST_PREFIX}{suffix:04d}\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(ZNR_REGISTRY_PATH):\n        return {}\n    try:\n        with open(ZNR_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(ZNR_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"businessid\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(business_id: str) -> dict | None:\n    return _load_registry().get(business_id)\n\n\ndef registry_list(prefix: str = ZNR_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [bid for bid in reg.keys() if bid.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:         {BROKERS}\")\nprint(f\"   Топик ЗНР:       {ZNR_TOPIC}\")\nprint(f\"   Префикс ЗНР:     {ZNR_TEST_PREFIX}\")\nprint(f\"   Префикс ЗНО:     {ZNO_TEST_PREFIX}\")\nprint(f\"   Реестр:          {ZNR_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1783684001047-hstv",
+        "type": "init",
+        "source": "import uuid\nfrom datetime import datetime, timezone\n\ndef now_str():\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_znr_record(\n    business_id: str,\n    request_object_id: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    statecode: str = \"Назначен в рабочую группу/Назначен\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись ЗНР для таблицы datamart.t_rdd_911_esm_znr.\"\"\"\n    rec = {\n        # ─── Идентификаторы ───\n        \"businessid\": business_id,\n        \"requestobjectid\": request_object_id,      # ✅ ИСПРАВЛЕНО (было zno_pkap...)\n        \"key\": str(uuid.uuid4()),\n        # ─── Услуга / КЭ / РГ ───\n        \"itservice\": \"CI02264516\",\n        \"configurationelement\": \"CI02618701\",\n        \"workgroup\": \"ДС SberНадежность (Кузнецов Н.Ф.)\",\n        # ─── Люди ───\n        \"initiator\": \"Тестовый Пользователь\",\n        \"contact\":   \"Тестовый Пользователь\",\n        \"assignee\":  \"Тестовый Исполнитель\",\n        \"owner\": None,\n        \"createdby\": \"Тестовый Пользователь\",\n        \"updatedby\": \"Тестовый Пользователь\",\n        # ─── Системы ───\n        \"systemchangedby\": \"CI02264516\",\n        # ─── Текстовые поля ───\n        \"title\": \"ТЕСТ: Вход в АС ППРБ Адъютант\",\n        \"description\": \"ТЕСТОВАЯ ЗНР. Не для прода.\",\n        \"tags\": \"#test_sber911\",\n        \"statecode\": statecode,\n        # ─── Признаки / этап ───\n        \"isstandardtemplate\": True,\n        \"resolutionzno\": True,\n        \"sensitives\": False,\n        \"step\": 1,\n        # ─── Результат ───\n        \"resolutioncode\": \"Выполнен\",\n        \"resolutiondescription\": \"Тест. Решено.\",\n        # ─── Даты ───\n        \"createdat\":      now_str(),\n        \"updatedat\":      now_str(),\n        \"lastchangedate\": now_str(),\n        \"planstartdate\":  \"2026-05-27 00:00:00.474\",\n        \"planfinishdate\": \"2026-05-27 14:44:47.079\",\n        \"factstartdate\":  \"2026-05-27 00:00:00.474\",\n        \"factfinishdate\": \"2026-05-27 23:31:54.172\",\n        \"targetdate\":     \"2026-06-17 14:50:00.079\",\n        \"snap_datetime\":  now_str(),\n        # ─── CTL ───\n        \"ctl_action\": ctl_action,\n        \"ctl_validfrom\": ctl_validfrom or now_str(),\n        # ─── V1.1: табельные номера ───\n        \"initiatorIdTab\": \"\",\n        \"assigneeIdTab\":  \"\",\n        \"updatedByTab\":   \"\",\n        \"createdByTab\":   \"\",\n        \"ownerTab\":       \"\",\n        \"contactTab\":     \"\",\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_znr_message(records: list) -> dict:\n    return {\n        \"table_name\": \"t_rdd_911_esm_znr\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }"
+      },
+      {
+        "id": "cell-1783684003739-5let",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1783684013256-t3la",
+        "type": "loop",
+        "source": "# Параметры — переопредели по необходимости\nOVERRIDES = {\n    \"statecode\": \"Назначен в рабочую группу/Назначен\",\n    \"title\": \"ТЕСТ: Кастомный заголовок ЗНР\",\n    \"description\": \"ТЕСТ: Кастомное описание ЗНР\",\n    \"step\": 1,\n    # \"workgroup\": \"Моя РГ\",\n}\n\n# Один общий suffix, чтобы ЗНР и её родительское ЗНО были связаны логически\nsuffix = random.randint(1, 9999)\nbusiness_id = make_test_znr_id(suffix=suffix)          # SRT...\nrequest_object_id = make_test_zno_id(suffix=suffix)    # SR...\n\nrec = make_znr_record(\n    business_id=business_id,\n    request_object_id=request_object_id,\n    ctl_action=\"I\",\n    ctl_validfrom=now_str(),\n    **OVERRIDES,\n)\nmsg = make_znr_message([rec])\n\nprint(f\"🆕 INSERT business_id (ЗНР) = {business_id}\")\nprint(f\"   requestobjectid (ЗНО)   = {request_object_id}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(ZNR_TOPIC, msg, key=business_id)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {business_id}\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-10T12:51:13.808849+00:00"
+  },
+  {
+    "id": "5a00343c",
+    "name": "ERKC-Mon",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783511541228-u2c7",
+        "type": "init",
+        "source": "# ====================================================================\n# ====  ОТПРАВКА СОБЫТИЯ В KAFKA (ИФТ)  =============================\n# ====  Топик: repl.autohealing-event-in                       ======\n# ====  Библиотека: kafka-python | PLAINTEXT | порт 9092       ======\n# ====================================================================\nimport json\nimport uuid\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ---------- KAFKA (ИФТ) ----------\nTOPIC = \"repl.autohealing-event-in\"\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\n\n# ====================================================================\n#  PRODUCER\n# ====================================================================\ndef create_producer() -> KafkaProducer:\n    producer = KafkaProducer(\n        bootstrap_servers=BROKERS,\n        security_protocol=\"PLAINTEXT\",\n        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode(\"utf-8\"),\n        key_serializer=lambda k: k.encode(\"utf-8\") if k else None,\n        acks=\"all\",              # ждём подтверждения от брокера\n        retries=3,\n    )\n    print(\"✅ Producer создан.\")\n    return producer\n\n\n# ====================================================================\n#  ФОРМИРОВАНИЕ СОБЫТИЯ\n# ====================================================================\ndef build_event() -> dict:\n    event_id = str(uuid.uuid4())\n    now = datetime.now(timezone.utc)\n    ts = now.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{now.microsecond // 1000:03d}Z\"\n\n    event = {\n        \"eventId\": event_id,\n        \"timestamp\": ts,\n        # ==========================================================\n        # ↓↓↓  ПОДСТАВЬ СВОИ ПОЛЯ СОБЫТИЯ  ↓↓↓\n        # ==========================================================\n        # \"source\": \"...\",\n        # \"type\": \"...\",\n        # \"payload\": { ... },\n        # ==========================================================\n    }\n    return event\n\n\n# ====================================================================\n#  ОТПРАВКА\n# ====================================================================\ndef send_event(producer: KafkaProducer, event: dict):\n    key = event[\"eventId\"]\n\n    headers = [\n        (\"ContexId\", event[\"eventId\"].encode(\"utf-8\")),\n    ]\n\n    print(f\"📤 Отправка события | eventId={key}\")\n\n    future = producer.send(\n        TOPIC,\n        value=event,\n        key=key,\n        headers=headers,\n    )\n\n    meta = future.get(timeout=15)   # блокирующе ждём подтверждения доставки\n    producer.flush()\n\n    print(f\"✅ Доставлено | topic={meta.topic} | partition={meta.partition} | offset={meta.offset}\")\n    print(f\"📌 eventId: {key}\")\n\n\n# ====================================================================\n# =====================  ЗАПУСК  =====================================\n# ====================================================================\nif __name__ == \"__main__\":\n    print(\"\\n🚀 Отправка события в Kafka\")\n\n    producer = create_producer()\n\n    try:\n        event = build_event()\n\n        print(\"\\n--- Тело события ---\")\n        print(json.dumps(event, ensure_ascii=False, indent=2))\n        print(\"--------------------\\n\")\n\n        send_event(producer, event)\n\n    except Exception as ex:\n        print(f\"❌ Ошибка: {ex}\")\n\n    finally:\n        producer.close()\n        print(\"🏁 Готово.\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-07-10T15:07:57.292905+00:00"
+  },
+  {
+    "id": "1dd9c2d7",
+    "name": "Alert Reflex Mass",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783515140159-uvzj",
+        "type": "init",
+        "source": "import json\nimport jwt\n# import base64\nimport random\nimport uuid\nfrom time import sleep, time\nfrom datetime import datetime, timezone\nfrom kafka import KafkaConsumer, KafkaProducer, TopicPartition\n\n\nTOPIC = \"REPL.alert_event_in\" #\"alert_event_in\"\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nTEST_CI = \"CI00641491\"#\"CI03421642\"#\"CI03388027\"#\"CI03421642\"#\"CI02470352\"#\"CI03388027\"#\n\ndef get_byte_string(obj):\n    # print(type(obj))\n    if type(obj) == str: return obj.encode('utf-8')\n    if type(obj) == dict: return json.dumps(obj).encode('utf-8')\n    "
+      },
+      {
+        "id": "cell-1783515149160-gwlk",
+        "type": "init",
+        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_TOKEN)),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
+      },
+      {
+        "id": "cell-1783515158775-e76j",
+        "type": "init",
+        "source": "with open(\"/Users/16538296/Documents/Скрипты/Алерты/2026-05-22_prom_alerts.json\", \"r\") as f:\n    ALERTS = [json.loads(item[\"value\"]) for item in json.load(f)]\n\n# for alert in ALERTS:\n#     alert[\"systems\"] = [TEST_CI] # + alert[\"systems\"]"
+      },
+      {
+        "id": "cell-1783515173107-qx45",
+        "type": "loop",
+        "source": "producer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\nALERTS_COUNT = 9   # сколько алертов отправить\nSEND_INTERVAL = 1   # интервал между отправками в секундах\n\nproducer = KafkaProducer(**producer_kafka_config)\ntry:\n    for i in range(ALERTS_COUNT):\n        alert = random.choice(ALERTS)\n        alert[\"systems\"] = [TEST_CI] # + alert[\"systems\"]\n        alert[\"loadTime\"] = int(time()*1000)\n        alert[\"problemId\"] = f\"PROBLEM_{uuid.uuid4()}\"\n        alert[\"alertId\"] = f\"ALERT_{uuid.uuid4()}\"\n        info = f\"[{i+1}/{ALERTS_COUNT}]\\nCI: {alert['systems']}\\nproblemId: {alert['problemId']}\\nalertId: {alert['alertId']}\"\n        alert = json.dumps(alert, ensure_ascii=False) # MONITORING_ALERTS[0]#\n        # alert = json.dumps(random.choice(ALERTS), ensure_ascii=False) # MONITORING_ALERTS[0]#\n        future = producer.send(TOPIC, get_byte_string(alert), partition=0)\n        future.get()\n        print(info, future.value, future.is_done, sep=\"\\n\")\n        print(\"-\" * 50)\n        if i < ALERTS_COUNT - 1:\n            sleep(SEND_INTERVAL)\nexcept KeyboardInterrupt:\n    pass\nfinally:\n    producer.close()"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-053ae053",
+    "created_at": "2026-07-10T11:50:29.810567+00:00"
+  },
+  {
+    "id": "2c1cfcbe",
+    "name": "МПО",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783682009350-ni2k",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1783682011481-33aj",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMPO_TOPIC = \"REPL.PKAP1173.911_MPO\"\n\n# ⚠️ Тестовый префикс — НЕ ПЕРЕСЕКАЕТСЯ с реальными SWUT от ПКАП\nMPO_TEST_PREFIX = \"SWUT9000\"\n\n# Локальный реестр отправленных тестовых МПО (общий для INSERT/UPDATE-ноутбуков)\nMPO_REGISTRY_PATH = os.path.abspath(\"./mpo_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_test_mpo_id(suffix: int) -> str:\n    \"\"\"Тестовый business_id МПО, например: SWUT90000007.\"\"\"\n    return f\"{MPO_TEST_PREFIX}{suffix:04d}\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(MPO_REGISTRY_PATH):\n        return {}\n    try:\n        with open(MPO_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(MPO_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"number\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(business_id: str) -> dict | None:\n    return _load_registry().get(business_id)\n\n\ndef registry_list(prefix: str = MPO_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [bid for bid in reg.keys() if bid.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:        {BROKERS}\")\nprint(f\"   Топик МПО:      {MPO_TOPIC}\")\nprint(f\"   Префикс тест.:  {MPO_TEST_PREFIX}\")\nprint(f\"   Реестр:         {MPO_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1783682022185-hpde",
+        "type": "init",
+        "source": "def make_mpo_record(\n    business_id: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    status: str = \"1 Зарегистрировано\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись МПО (SWUT) для таблицы datamart.sbsoftupdatetaskm1_911.\"\"\"\n    rec = {\n        # ─── Идентификатор ────────────────────────────────────────────\n        \"number\": business_id,                          # Номер МПО (SWUT) (УНИК. business_id)\n        # ─── Рабочая группа / услуга / КЭ ─────────────────────────────\n        \"assignment_name\": \"Группа владельцев Backend Solution\",   # >500 → обрезать\n        \"affected_item\": \"CI02264516\",                  # КЭ, >255 → обрезать\n        \"tps_name\": \"ТЕСТ: Наименование услуги\",        # >570 → обрезать\n        # ─── Люди ─────────────────────────────────────────────────────\n        \"sb_service_man_name\": \"Грошев И. Н. (592650)\", # Менеджер ИТ-услуги\n        \"coordinator_name\":    \"Грошев И. Н. (592650)\", # ФИО инициатора\n        \"assignee_name\":       \"Грошев И. Н. (592650)\", # ФИО исполнителя\n        # ─── Текст ────────────────────────────────────────────────────\n        \"description\": \"ТЕСТОВОЕ МПО. Не для прода. Необходимо обновить клиентскую часть ТС Аудит\",  # >4000 → обрезать\n        # ─── Статус ───────────────────────────────────────────────────\n        \"status\": status,                               # >60 → обрезать\n        # ─── Даты ─────────────────────────────────────────────────────\n        \"open_time\":       now_str(),                   # Дата/время регистрации\n        \"hpc_next_breach\": \"2026-06-17 14:50:00.079\",   # Дата/время контрольного срока\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,                       # I / U / D / null\n        \"ctl_validfrom\": ctl_validfrom or now_str(),    # Время обновления в КАП\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_mpo_message(records: list) -> dict:\n    return {\n        \"table_name\": \"sbsoftupdatetaskm1_911\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон МПО загружен\")"
+      },
+      {
+        "id": "cell-1783682029813-7ei5",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1783682039481-rger",
+        "type": "loop",
+        "source": "# Параметры — переопредели по необходимости\nOVERRIDES = {\n    \"status\": \"4 Закрыто\",\n    \"description\": \"ТЕСТ: Кастомное описание МПО\",\n    \"assignment_name\": \"Группа владельцев Backend Solution\",\n    # \"tps_name\": \"Моя услуга\",\n    # \"sb_service_man_name\": \"Иванов И. И. (123456)\",\n}\n\nbusiness_id = make_test_mpo_id(suffix=random.randint(1, 9999))\n\nrec = make_mpo_record(\n    business_id=business_id,\n    ctl_action=\"I\",\n    ctl_validfrom=now_str(),\n    **OVERRIDES,\n)\nmsg = make_mpo_message([rec])\n\nprint(f\"🆕 INSERT business_id = {business_id}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(MPO_TOPIC, msg, key=business_id)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {business_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783682129166-gym",
+        "label": "КЭ Услуги",
+        "code_key": "affected_item",
+        "placeholder": "CI02264516",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783682154141-fgh",
+        "label": "Статус ",
+        "code_key": "status",
+        "placeholder": "4 Закрыто",
+        "field_type": "dropdown",
+        "options": [
+          "1 Создано",
+          "2 В работе",
+          "3 В работе"
+        ]
+      },
+      {
+        "id": "param-1783682172601-7sw",
+        "label": "Описание ",
+        "code_key": "description",
+        "placeholder": "ТЕСТ: Кастомное описание МПО",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783682201028-iqd",
+        "label": "Рабочая группа",
+        "code_key": "assignment_name",
+        "placeholder": "Группа владельцев Backend Solution",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-10T12:13:18.628789+00:00"
+  },
+  {
+    "id": "db4b0d75",
+    "name": "ЗНР (U)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783684407071-6z15",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1783684408873-7wd0",
+        "type": "init",
+        "source": "import json\nimport uuid\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\n# ==================================================================\n#                     ПАРАМЕТРЫ (редактируй тут)\n# ==================================================================\n\n# ── KAFKA ──────────────────────────────────────────────────────────\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nZNR_TOPIC = \"REPL.PKAP1173.911_ZNR\"\n\n# ── Что обновляем ──────────────────────────────────────────────────\n# ⚠️ Укажи номер ЗНР, который хочешь обновить:\nBUSINESS_ID = \"SRT900000000001234\"          # <-- номер ЗНР\nREQUEST_OBJECT_ID = \"SR900000000001234\"     # <-- номер родительского ЗНО\n\n# Изменяемые поля (оставь только то, что меняешь):\nCHANGES = {\n    \"statecode\": \"Закрыт/Выполнен\",\n    \"description\": \"ОБНОВЛЕНО: новое описание ЗНР по тесту\",\n    # \"step\": 2,\n    # \"resolutioncode\": \"Выполнен\",\n    # \"resolutiondescription\": \"Работы выполнены полностью\",\n    # \"assignee\": \"Новый Исполнитель\",\n    # \"title\": \"ОБНОВЛЕНО: новый заголовок\",\n}\n# ==================================================================\n\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_znr_update_record(\n    business_id: str,\n    request_object_id: str,\n    ctl_validfrom: str = None,\n    statecode: str = \"Назначен в рабочую группу/Назначен\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ЗНР-запись с ctl_action='U' для datamart.t_rdd_911_esm_znr.\n\n    ВАЖНО: по требованиям, если апдейт приходит без предшествующего insert,\n    сервис сам создаст запись. Поэтому шлём полный набор полей.\n    \"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"businessid\": business_id,                     # Бизнес-идентификатор ЗНР (УНИК.)\n        \"requestobjectid\": request_object_id,          # Бизнес-идентификатор ЗНО (родитель)\n        \"key\": str(uuid.uuid4()),                      # Технический UUID сообщения\n        # ─── Услуга / КЭ / РГ ─────────────────────────────────────────\n        \"itservice\": \"CI02264516\",\n        \"configurationelement\": \"CI02618701\",\n        \"workgroup\": \"ДС SberНадежность (Кузнецов Н.Ф.)\", # >512 → обрезать\n        # ─── Люди ─────────────────────────────────────────────────────\n        \"initiator\": \"Тестовый Пользователь\",\n        \"contact\":   \"Тестовый Пользователь\",\n        \"assignee\":  \"Тестовый Исполнитель\",\n        \"owner\": None,\n        \"createdby\": \"Тестовый Пользователь\",\n        \"updatedby\": \"Тестовый Пользователь\",\n        # ─── Системы ──────────────────────────────────────────────────\n        \"systemchangedby\": \"CI02264516\",\n        # ─── Текстовые поля ───────────────────────────────────────────\n        \"title\": \"ТЕСТ: Вход в АС ППРБ Адъютант\",      # >255 → обрезать\n        \"description\": \"ТЕСТОВАЯ ЗНР. Не для прода.\",\n        \"tags\": \"#test_sber911\",                       # >255 → обрезать\n        \"statecode\": statecode,                        # >255 → обрезать\n        # ─── Признаки / этап ──────────────────────────────────────────\n        \"isstandardtemplate\": True,                    # null → false\n        \"resolutionzno\": True,                         # null → false\n        \"sensitives\": False,                           # null → false\n        \"step\": 1,                                     # Номер этапа\n        # ─── Результат ────────────────────────────────────────────────\n        \"resolutioncode\": \"Выполнен\",\n        \"resolutiondescription\": \"Тест. Решено.\",\n        # ─── Даты ─────────────────────────────────────────────────────\n        \"createdat\":      now_str(),\n        \"updatedat\":      now_str(),\n        \"lastchangedate\": now_str(),\n        \"planstartdate\":  \"2026-05-27 00:00:00.474\",\n        \"planfinishdate\": \"2026-05-27 14:44:47.079\",\n        \"factstartdate\":  \"2026-05-27 00:00:00.474\",\n        \"factfinishdate\": \"2026-05-27 23:31:54.172\",\n        \"targetdate\":     \"2026-06-17 14:50:00.079\",\n        \"snap_datetime\":  now_str(),\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": \"U\",                             # UPDATE\n        \"ctl_validfrom\": ctl_validfrom or now_str(),   # Время обновления в КАП\n        # ─── V1.1: табельные номера ───────────────────────────────────\n        \"initiatorIdTab\": \"\",\n        \"assigneeIdTab\":  \"\",\n        \"updatedByTab\":   \"\",\n        \"createdByTab\":   \"\",\n        \"ownerTab\":       \"\",\n        \"contactTab\":     \"\",\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_znr_message(records: list) -> dict:\n    return {\n        \"table_name\": \"t_rdd_911_esm_znr\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\n# ── Продюсер ────────────────────────────────────────────────────────\nproducer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")\n\n\n# ==================================================================\n#                         ОТПРАВКА UPDATE\n# ==================================================================\nvalidfrom = now_str()\n\nrec = make_znr_update_record(\n    business_id=BUSINESS_ID,\n    request_object_id=REQUEST_OBJECT_ID,\n    ctl_validfrom=validfrom,\n    **CHANGES,\n)\nmsg = make_znr_message([rec])\n\nprint(f\"✏️  UPDATE business_id (ЗНР) = {BUSINESS_ID}\")\nprint(f\"   requestobjectid (ЗНО)    = {REQUEST_OBJECT_ID}\")\nprint(f\"   ctl_validfrom            = {validfrom}\")\nprint(f\"   Изменённые поля          = {list(CHANGES.keys())}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\n\nsend_to_kafka(ZNR_TOPIC, msg, key=BUSINESS_ID)\nprint(f\"🏁 Готово. UPDATE по {BUSINESS_ID} отправлен.\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783684454940-6y7",
+        "label": "Номер ЗНР",
+        "code_key": "BUSINESS_ID",
+        "placeholder": "SRT900000000001234",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783684475010-40u",
+        "label": "Статус",
+        "code_key": "statecode",
+        "placeholder": "Закрыт/Выполнен",
+        "field_type": "dropdown",
+        "options": [
+          "Создана",
+          "Зарегистрирована/-",
+          "Назначена в рабочую группу/Назначена",
+          "В работе/В работе",
+          "В работе/Уточнение информации",
+          "В работе/Получена дополнительная информация",
+          "Зарегистрирована",
+          "Назначена в рабочую группу",
+          "В работе",
+          "Отозвана",
+          "Выполнена"
+        ]
+      },
+      {
+        "id": "param-1783684494612-at0",
+        "label": "Описание",
+        "code_key": "description",
+        "placeholder": "ОБНОВЛЕНО: новое описание ЗНР по тесту",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-62f453f0",
+    "created_at": "2026-07-10T12:41:42.885262+00:00"
+  },
+  {
+    "id": "0c782394",
+    "name": "AH-EVENT-IN",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783692276708-d2tp",
+        "type": "loop",
+        "source": "# ====================================================================\n# ====  ОТПРАВКА СОБЫТИЯ AUTOHEALING В KAFKA (ИФТ)  ================\n# ====  Топик: repl.autohealing-event-in                       ======\n# ====  Библиотека: kafka-python | PLAINTEXT | порт 9092       ======\n# ====================================================================\nimport json\nimport uuid\nimport time\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ---------- KAFKA (ИФТ) ----------\nTOPIC = \"repl.autohealing-event-in\"\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\n\n# ====================================================================\n#  ⬇⬇⬇  ТЕЛО СОБЫТИЯ  ⬇⬇⬇\n#  Схема из требований (topic repl.autohealing-event-in)\n# ====================================================================\ndef build_event() -> dict:\n    now_epoch = int(time.time())          # unix-время в секундах (как в примере требований)\n    event_id = str(uuid.uuid4())\n\n    event = {\n        \"version\":               \"1.0\",\n        \"eventId\":               event_id,\n        \"itService\":             \"CI00221084\",                  # КЭ ИТ-услуги инцидента\n        \"priorityCode\":          \"LOW\",                         # LOW/MEDIUM/HIGH/IMPORTANT/CRITICAL\n        \"title\":                 \"Тестовая Тема\",\n        \"description\":           \"Тестовое описание\",\n        \"resolutionDescription\": \"Тестовое решение\",\n        \"itServiceRecoveryCi\":   \"CI00080068\",                  # КЭ услуги-инструмента\n        \"toolName\":              \"autoHealing_restart\",                  # наименование инструмента\n        \"scenarioName\":          \"restarting_virtual_machine\",  # наименование сценария\n        \"factStartDate\":         now_epoch,                     # факт. время возникновения\n        \"startDate\":             now_epoch,                     # время начала работ\n        \"finishDate\":            now_epoch,                     # время окончания работ\n    }\n    return event\n# ====================================================================\n\n\ndef create_producer() -> KafkaProducer:\n    producer = KafkaProducer(\n        bootstrap_servers=BROKERS,\n        security_protocol=\"PLAINTEXT\",\n        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode(\"utf-8\"),\n        key_serializer=lambda k: k.encode(\"utf-8\") if k else None,\n        acks=\"all\",\n        retries=3,\n    )\n    print(\"✅ Producer создан.\")\n    return producer\n\n\ndef send_event(producer: KafkaProducer, event: dict):\n    key = event[\"eventId\"]                # ключ = eventId\n\n    future = producer.send(TOPIC, value=event, key=key)\n    meta = future.get(timeout=15)         # блокирующе ждём подтверждения\n    producer.flush()\n\n    print(f\"✅ Доставлено | topic={meta.topic} | partition={meta.partition} | offset={meta.offset}\")\n    print(f\"📌 eventId: {key}\")\n\n\n# ====================================================================\n# =====================  ЗАПУСК  =====================================\n# ====================================================================\nif __name__ == \"__main__\":\n    print(\"\\n🚀 Отправка события AutoHealing в Kafka\")\n\n    producer = create_producer()\n    try:\n        event = build_event()\n\n        print(\"\\n--- Тело события (отправляем) ---\")\n        print(json.dumps(event, ensure_ascii=False, indent=2))\n        print(\"---------------------------------\\n\")\n\n        send_event(producer, event)\n\n    except Exception as ex:\n        print(f\"❌ Ошибка: {ex}\")\n    finally:\n        producer.close()\n        print(\"🏁 Готово.\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783698069580-mdt",
+        "label": "КЭ Услуги",
+        "code_key": "itService",
+        "placeholder": "CI00221084",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783698081063-mlw",
+        "label": "Тема инцидента",
+        "code_key": "title",
+        "placeholder": "Тестовая Тема",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783698101487-39z",
+        "label": "Описание инцидента",
+        "code_key": "description",
+        "placeholder": "Тестовое описание",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783699064770-07y",
+        "label": "Приоритет",
+        "code_key": "priorityCode",
+        "placeholder": "LOW",
+        "field_type": "dropdown",
+        "options": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "IMPORTANT",
+          "CRITICAL"
+        ]
+      },
+      {
+        "id": "param-1783866263149-jvq",
+        "label": "Сценарий",
+        "code_key": "scenarioName",
+        "placeholder": "restarting_virtual_machine",
+        "field_type": "dropdown",
+        "options": [
+          "fake_scenary",
+          "restarting_virtual_machine",
+          "restarting_application_pods",
+          "using_liveness_readiness_probes",
+          "automatic_removal_node_ddi",
+          "automatic_restart_servers",
+          "autoswitch_database",
+          "automatic_deletion_node_ignite",
+          "rebalancing_corax",
+          "rebalancing_skeeper",
+          "autoswitch_reserve_component",
+          "automatic_restart_services",
+          "rate_limiter",
+          "automatic_cleaning_space",
+          "automatic_reduction_service_level",
+          "removing_component_balancing",
+          "automatic_restart_component",
+          "automatic_reset_processes_db_os_ppo",
+          "switching_standIn_automatic_recovery",
+          "automatic_increase_number_instances"
+        ]
+      },
+      {
+        "id": "param-1783938785322-mbr",
+        "label": "Инструмент ",
+        "code_key": "toolName",
+        "placeholder": "autoHealing_restart",
+        "field_type": "dropdown",
+        "options": [
+          "autoSwitch",
+          "autoHealing_restart"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-44fb9946",
+    "created_at": "2026-07-14T14:08:02.962156+00:00"
+  },
+  {
+    "id": "60bd0f39",
+    "name": "AH-EVENT-ESM",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783698867932-tyb0",
+        "type": "loop",
+        "source": "# ====================================================================\n# ====  ОТПРАВКА ИНЦИДЕНТА В SberESM ЧЕРЕЗ KAFKA (ИФТ)  ============\n# ====  Топик: repl.autohealing-events-to-sberesm             ======\n# ====  Библиотека: kafka-python | PLAINTEXT | порт 9092      ======\n# ====================================================================\nimport json\nimport uuid\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ---------- KAFKA (ИФТ) ----------\nTOPIC = \"repl.autohealing-events-to-sberesm\"\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\n# статичный шаблон (валиден для всех стендов, из требований)\nINCIDENT_TEMPLATE_VERSION_ID = \"7b9e3a1c-4d5f-4e8a-9b2c-1d3e5f7a8b0c\"\n\n\n# ====================================================================\n#  ⬇⬇⬇  ТЕЛО ИНЦИДЕНТА ДЛЯ SberESM  ⬇⬇⬇\n#  Схема из требований (topic repl.autohealing-events-to-sberesm)\n# ====================================================================\ndef build_incident() -> dict:\n    inc_id = str(uuid.uuid4())\n\n    # ISO-8601 UTC с миллисекундами: 2026-03-23T14:11:23.083Z\n    now = datetime.now(timezone.utc)\n    ts_iso = now.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{now.microsecond // 1000:03d}Z\"\n\n    incident = {\n        \"id\":                        inc_id,\n        \"incidentTemplateVersionId\": INCIDENT_TEMPLATE_VERSION_ID,\n        \"itService\":                 \"CI00221084\",                  # КЭ услуги инцидента\n        \"priorityCode\":              \"LOW\",                         # LOW/MEDIUM/HIGH/IMPORTANT/CRITICAL\n        \"incType\":                   \"AVAILABILITY_INC\",            # всегда статичное\n        \"isAutoHealing\":             True,                          # true/false\n        \"title\":                     \"Тестовая Тема\",\n        \"description\":               \"Тестовое описание\",\n        \"resolutionDescription\":     \"Тестовое решение\",\n        \"itServiceRecoveryCi\":       \"CI00238564\",                  # КЭ услуги-инструмента\n        \"toolName\":                  \"autoSwitch\",                  # инструмент\n        \"scenarioName\":              \"restarting_virtual_machine\",  # сценарий\n        \"factStartDate\":             ts_iso,                        # ISO-8601\n        \"startDate\":                 ts_iso,                        # ISO-8601\n        \"finishDate\":                ts_iso,                        # ISO-8601\n        \"actionType\":                \"create\",                      # всегда статичное\n        \"systemCreatedBy\":           \"CI00233293\",                  # КЭ системы-источника\n    }\n    return incident\n# ====================================================================\n\n\ndef create_producer() -> KafkaProducer:\n    producer = KafkaProducer(\n        bootstrap_servers=BROKERS,\n        security_protocol=\"PLAINTEXT\",\n        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode(\"utf-8\"),\n        key_serializer=lambda k: k.encode(\"utf-8\") if k else None,\n        acks=\"all\",\n        retries=3,\n    )\n    print(\"✅ Producer создан.\")\n    return producer\n\n\ndef send_incident(producer: KafkaProducer, incident: dict):\n    key = incident[\"id\"]                  # ключ = id инцидента\n\n    future = producer.send(TOPIC, value=incident, key=key)\n    meta = future.get(timeout=15)         # блокирующе ждём подтверждения\n    producer.flush()\n\n    print(f\"✅ Доставлено | topic={meta.topic} | partition={meta.partition} | offset={meta.offset}\")\n    print(f\"📌 id: {key}\")\n\n\n# ====================================================================\n# =====================  ЗАПУСК  =====================================\n# ====================================================================\nif __name__ == \"__main__\":\n    print(\"\\n🚀 Отправка инцидента AutoHealing в SberESM\")\n\n    producer = create_producer()\n    try:\n        incident = build_incident()\n\n        print(\"\\n--- Тело инцидента (отправляем) ---\")\n        print(json.dumps(incident, ensure_ascii=False, indent=2))\n        print(\"-----------------------------------\\n\")\n\n        send_incident(producer, incident)\n\n    except Exception as ex:\n        print(f\"❌ Ошибка: {ex}\")\n    finally:\n        producer.close()\n        print(\"🏁 Готово.\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783867456719-4pm",
+        "label": "КЭ Услуги",
+        "code_key": "itService",
+        "placeholder": "CI00221084",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783867500820-x6o",
+        "label": "Тема",
+        "code_key": "title",
+        "placeholder": "Тестовая Тема",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783867512084-ckc",
+        "label": "Описание",
+        "code_key": "description",
+        "placeholder": "Тестовое описание",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783867537189-oen",
+        "label": "КЭ Услуги",
+        "code_key": "itService",
+        "placeholder": "CI00221084",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783867565043-9kl",
+        "label": "Приоритет",
+        "code_key": "priorityCode",
+        "placeholder": "LOW",
+        "field_type": "dropdown",
+        "options": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "IMPORTANT",
+          "CRITICAL"
+        ]
+      },
+      {
+        "id": "param-1783867681786-1sa",
+        "label": "Признак Хилинга",
+        "code_key": "isAutoHealing",
+        "placeholder": "True",
+        "field_type": "dropdown",
+        "options": [
+          "True",
+          "False"
+        ]
+      },
+      {
+        "id": "param-1783945858085-abf",
+        "label": "Тип инцидента",
+        "code_key": "incType",
+        "placeholder": "AVAILABILITY_INC",
+        "field_type": "dropdown",
+        "options": [
+          "AVAILABILITY_INC",
+          "VSP_INC"
+        ]
+      },
+      {
+        "id": "param-1783947097146-f49",
+        "label": "Сценарии",
+        "code_key": "scenarioName",
+        "placeholder": "restarting_virtual_machine",
+        "field_type": "dropdown",
+        "options": [
+          "fake_scenary",
+          "restarting_virtual_machine",
+          "restarting_application_pods",
+          "using_liveness_readiness_probes",
+          "automatic_removal_node_ddi",
+          "automatic_restart_servers",
+          "autoswitch_database",
+          "automatic_deletion_node_ignite",
+          "rebalancing_corax",
+          "rebalancing_skeeper",
+          "autoswitch_reserve_component",
+          "automatic_restart_services",
+          "rate_limiter",
+          "automatic_cleaning_space",
+          "automatic_reduction_service_level",
+          "removing_component_balancing",
+          "automatic_restart_component",
+          "automatic_reset_processes_db_os_ppo",
+          "switching_standIn_automatic_recovery",
+          "automatic_increase_number_instances"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-44fb9946",
+    "created_at": "2026-07-13T12:57:28.629600+00:00"
+  },
+  {
+    "id": "b34ef231",
+    "name": "Проверка",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783849726898-swfz",
+        "type": "loop",
+        "source": "import socket\n\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\ndef check_connectivity(brokers):\n    for b in brokers:\n        host, port = b.split(\":\")\n        # проверка DNS\n        try:\n            ip = socket.gethostbyname(host)\n            print(f\"🔎 {host} -> {ip}\")\n        except Exception as e:\n            print(f\"❌ DNS не резолвится для {host}: {e}\")\n            continue\n        # проверка порта\n        try:\n            with socket.create_connection((host, int(port)), timeout=5):\n                print(f\"✅ {b} — порт доступен\")\n        except Exception as e:\n            print(f\"❌ {b} — порт недоступен: {e}\")\n\ncheck_connectivity(BROKERS)"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": null,
+    "created_at": "2026-07-12T09:50:18.948763+00:00"
+  },
+  {
+    "id": "226fa223",
+    "name": "AH-EVENT-ESD-upd",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1783932169975-kjgv",
+        "type": "loop",
+        "source": "# ====================================================================\n# ====  ОБНОВЛЕНИЕ ИНЦИДЕНТА В SberESM ЧЕРЕЗ KAFKA (ИФТ)  ==========\n# ====  Топик: repl.autohealing-events-to-sberesm             ======\n# ====  Библиотека: kafka-python | PLAINTEXT | порт 9092      ======\n# ====================================================================\nimport json\nfrom kafka import KafkaProducer\n\n# ---------- KAFKA (ИФТ) ----------\nTOPIC = \"repl.autohealing-events-to-sberesm\"\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\n\n# ====================================================================\n#  ⬇⬇⬇  ТЕЛО ИНЦИДЕНТА ДЛЯ SberESM (UPDATE)  ⬇⬇⬇\n# ====================================================================\ndef build_incident() -> dict:\n    incident = {\n   \"id\": \"baca985a-944a-471a-8856-59080867e5c6\",\n   \"isAutoHealing\": False,\n   \"actionType\": \"update\",\n\"systemChangedBy\": \"CI00233293\"\n}\n    return incident\n# ====================================================================\n\n\ndef create_producer() -> KafkaProducer:\n    producer = KafkaProducer(\n        bootstrap_servers=BROKERS,\n        security_protocol=\"PLAINTEXT\",\n        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode(\"utf-8\"),\n        key_serializer=lambda k: k.encode(\"utf-8\") if k else None,\n        acks=\"all\",\n        retries=3,\n    )\n    print(\"✅ Producer создан.\")\n    return producer\n\n\ndef send_incident(producer: KafkaProducer, incident: dict):\n    key = incident[\"id\"]                  # ключ = id инцидента\n\n    future = producer.send(TOPIC, value=incident, key=key)\n    meta = future.get(timeout=15)         # блокирующе ждём подтверждения\n    producer.flush()\n\n    print(f\"✅ Доставлено | topic={meta.topic} | partition={meta.partition} | offset={meta.offset}\")\n    print(f\"📌 id: {key}\")\n\n\n# ====================================================================\n# =====================  ЗАПУСК  =====================================\n# ====================================================================\nif __name__ == \"__main__\":\n    print(\"\\n🚀 Отправка обновления (update) инцидента в SberESM\")\n\n    producer = create_producer()\n    try:\n        incident = build_incident()\n\n        print(\"\\n--- Тело инцидента (отправляем) ---\")\n        print(json.dumps(incident, ensure_ascii=False, indent=2))\n        print(\"-----------------------------------\\n\")\n\n        send_incident(producer, incident)\n\n    except Exception as ex:\n        print(f\"❌ Ошибка: {ex}\")\n    finally:\n        producer.close()\n        print(\"🏁 Готово.\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1783945633326-bml",
+        "label": "id события",
+        "code_key": "id",
+        "placeholder": "baca985a-944a-471a-8856-59080867e5c6",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1783945661792-11w",
+        "label": "Признак Autohealing",
+        "code_key": "isAutoHealing",
+        "placeholder": "False",
+        "field_type": "dropdown",
+        "options": [
+          "False",
+          "True"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-44fb9946",
+    "created_at": "2026-07-13T12:28:21.358779+00:00"
+  },
+  {
     "id": "27ca74ba",
     "name": "Время",
     "topic": "",
@@ -17,5 +600,100 @@
     "visible_to_monitoring": false,
     "folder_id": "fld-1dff74db",
     "created_at": "2026-06-04T08:42:18.595926+00:00"
+  },
+  {
+    "id": "54604fad",
+    "name": "ЗНИ (T)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1784045757267-ruu3",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1784045757091-it93",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ ТОЛЬКО ИФТ — на другие стенды (ПСИ/ПРОМ ПКАП) этот скрипт не направлять\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nZNI_TOPIC = \"REPL.PKAP1173.911_ZNI_TASK\"\n\n# ⚠️ Тестовый префикс — НЕ ПЕРЕСЕКАЕТСЯ с реальными T-задачами от ПКАП\nZNI_TEST_PREFIX = \"T90000\"\n\n# Локальный реестр отправленных тестовых ЗНИ (общий для INSERT/UPDATE-ноутбуков)\nZNI_REGISTRY_PATH = os.path.abspath(\"./zni_task_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_test_zni_id(suffix: int) -> str:\n    \"\"\"Тестовый business_id ЗНИ (T), например: T900000007.\"\"\"\n    return f\"{ZNI_TEST_PREFIX}{suffix:04d}\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(ZNI_REGISTRY_PATH):\n        return {}\n    try:\n        with open(ZNI_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(ZNI_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"number\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(business_id: str) -> dict | None:\n    return _load_registry().get(business_id)\n\n\ndef registry_list(prefix: str = ZNI_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [bid for bid in reg.keys() if bid.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры (ИФТ):  {BROKERS}\")\nprint(f\"   Топик ЗНИ:      {ZNI_TOPIC}\")\nprint(f\"   Префикс тест.:  {ZNI_TEST_PREFIX}\")\nprint(f\"   Реестр:         {ZNI_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1784045757505-22ch",
+        "type": "init",
+        "source": "def make_zni_record(\n    business_id: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    hpc_status: str = \"07 Назначено\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись задачи ЗНИ (T) для таблицы datamart.cm3tm1_911.\"\"\"\n    rec = {\n        # ─── Идентификатор ────────────────────────────────────────────\n        \"number\": business_id,                          # ID сущности (business_id, УНИК.)\n        # ─── Рабочая группа / услуга / КЭ ─────────────────────────────\n        \"hpc_assign_dept_name\": \"ДИТ КИБ Trade Finance\",           # Рабочая группа, >500 → обрезать\n        \"affected_item\": \"CI01780472\",                             # КЭ, >255 → обрезать\n        \"sb_affected_item_name\": \"Фабрика Инсталляций (CI01780472)\", # Наименование услуги, >570 → обрезать\n        # ─── Люди ─────────────────────────────────────────────────────\n        \"sb_service_man_name\": \"\",                                  # Менеджер ИТ-услуги\n        \"hpc_initiator_name\": \"Курбатов Я. С. (1175337)\",          # ФИО инициатора, >255 → обрезать\n        \"hpc_assignee_name\":  \"Курбатов Я. С. (1175337)\",          # ФИО исполнителя, >255 → обрезать\n        # ─── Текст ────────────────────────────────────────────────────\n        \"description\": \"ТЕСТОВАЯ ЗНИ. Не для прода. Необходимо обновить клиентскую часть ТС Аудит\",  # >4000 → обрезать\n        \"brief_desc\": \"ТЕСТ: Установка обновлений УВДО Major-GO\",   # Тема, >255 → обрезать\n        # ─── Статус / приоритет ───────────────────────────────────────\n        \"hpc_status\": hpc_status,                                  # Статус, >60 → обрезать\n        \"priority_code\": \"Низкий\",                                 # Приоритет, >60 → обрезать\n        # ─── Даты ─────────────────────────────────────────────────────\n        \"hpc_open_time\":   now_str(),                              # Дата/время регистрации\n        \"hpc_next_breach\": \"2026-01-14 21:30:00.000\",              # Дата/время контрольного срока\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,                                  # I / U / D / null\n        \"ctl_validfrom\": ctl_validfrom or now_str(),               # Время обновления в КАП\n        # ─── V1.1: табельные номера + ФИО ─────────────────────────────\n        \"manager_it_service_personnel_number\": \"1175333\",         # Таб. № менеджера ИТ-услуги\n        \"manager_it_service_full_name\": \"Курбатов Ян Сергеевич\",  # ФИО менеджера ИТ-услуги\n        \"hpc_created_by_personnel_number\": \"1175334\",             # Таб. № инициатора\n        \"hpc_created_by_full_name\": \"Курбатов Ян Сергеевич\",      # ФИО инициатора\n        \"assignee_personnel_number\": \"1175335\",                   # Таб. № исполнителя\n        \"assignee_full_name\": \"Курбатов Ян Сергеевич\",           # ФИО исполнителя\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_zni_message(records: list) -> dict:\n    return {\n        \"table_name\": \"cm3tm1_911\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон ЗНИ загружен\")"
+      },
+      {
+        "id": "cell-1784045757150-oq0b",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1784045756882-mebi",
+        "type": "loop",
+        "source": "# Параметры — подставляются с фронта (placeholder → значение из UI)\nOVERRIDES = {\n    \"hpc_status\": \"07 Назначено\",\n    \"brief_desc\": \"ТЕСТ: Кастомная тема ЗНИ\",\n    \"description\": \"ТЕСТ: Кастомное описание ЗНИ\",\n    \"priority_code\": \"Низкий\",\n    \"affected_item\": \"CI01780472\",\n    \"hpc_assign_dept_name\": \"ДИТ КИБ Trade Finance\",\n}\n\nbusiness_id = make_test_zni_id(suffix=random.randint(1, 9999))\n\nrec = make_zni_record(\n    business_id=business_id,\n    ctl_action=\"I\",\n    ctl_validfrom=now_str(),\n    **OVERRIDES,\n)\nmsg = make_zni_message([rec])\n\nprint(f\"🆕 INSERT business_id = {business_id}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(ZNI_TOPIC, msg, key=business_id)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {business_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1784045757247-f6i",
+        "label": "КЭ Услуги",
+        "code_key": "affected_item",
+        "placeholder": "CI01780472",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1784045757594-pym",
+        "label": "Статус",
+        "code_key": "hpc_status",
+        "placeholder": "07 Назначено",
+        "field_type": "dropdown",
+        "options": [
+          "07 Назначено",
+          "01 Зарегистрировано",
+          "02 В работе",
+          "08 Закрыто"
+        ]
+      },
+      {
+        "id": "param-1784045757168-qfb",
+        "label": "Приоритет",
+        "code_key": "priority_code",
+        "placeholder": "Низкий",
+        "field_type": "dropdown",
+        "options": [
+          "Низкий",
+          "Средний",
+          "Высокий",
+          "Критический"
+        ]
+      },
+      {
+        "id": "param-1784045757765-5rw",
+        "label": "Тема",
+        "code_key": "brief_desc",
+        "placeholder": "ТЕСТ: Кастомная тема ЗНИ",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1784045757618-9fd",
+        "label": "Описание",
+        "code_key": "description",
+        "placeholder": "ТЕСТ: Кастомное описание ЗНИ",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1784045757296-phg",
+        "label": "Рабочая группа",
+        "code_key": "hpc_assign_dept_name",
+        "placeholder": "ДИТ КИБ Trade Finance",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-14T16:15:56.875986+00:00"
   }
 ]

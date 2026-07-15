@@ -22,13 +22,37 @@ _FIELDS = (
     "ssl_cafile", "ssl_certfile", "ssl_keyfile",
 )
 
+# Обязательное подключение проекта: создаётся автоматически, если файла
+# подключений ещё нет (свежий клон / первый запуск). Без секретов — PLAINTEXT.
+# Удалённое пользователем подключение повторно не создаётся (файл уже существует).
+_SEED_CONNECTIONS = [
+    {
+        "id": "ift-delta-default",
+        "name": "ИФТ ПКАП (delta)",
+        "bootstrap_servers": "tvldq-sber00010.delta.sbrf.ru:9092,tvldq-sber00011.delta.sbrf.ru:9092",
+        "security_protocol": "PLAINTEXT",
+        "sasl_mechanism": "",
+        "sasl_username": "",
+        "sasl_password": "",
+        "ssl_cafile": "",
+        "ssl_certfile": "",
+        "ssl_keyfile": "",
+        "ssl_verify": True,
+        "default_limit": 50,
+        "created_at": "2026-07-14T00:00:00+00:00",
+        "updated_at": "2026-07-14T00:00:00+00:00",
+    },
+]
+
 
 class KafkaExplorerStore:
 
     @staticmethod
     def _load() -> list[dict]:
         if not _FILE.exists():
-            return []
+            seeded = [dict(c) for c in _SEED_CONNECTIONS]
+            KafkaExplorerStore._save(seeded)
+            return seeded
         try:
             with open(_FILE, encoding="utf-8") as f:
                 return json.load(f)

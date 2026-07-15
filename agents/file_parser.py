@@ -59,8 +59,13 @@ def parse_file(data: bytes, filename: str) -> str:
 
 
 def _parse_pdf(data: bytes) -> str:
+    # Ошибки поднимаем, а не возвращаем заглушкой: иначе в LLM молча уходит
+    # «[PDF: текст не извлечён]» вместо содержимого, и модель «не видит файл».
     try:
         from PyPDF2 import PdfReader
+    except ImportError:
+        raise ValueError("PDF не обработан: на сервере не установлен PyPDF2")
+    try:
         reader = PdfReader(io.BytesIO(data))
         pages = []
         for i, page in enumerate(reader.pages):
@@ -70,13 +75,14 @@ def _parse_pdf(data: bytes) -> str:
                     "--- Страница " + str(i + 1) + " ---\n" + text
                 )
         result = "\n\n".join(pages)
-        if not result.strip():
-            return "[PDF: текст не извлечён, возможно скан]"
-        return result
-    except ImportError:
-        return "[Ошибка: установите PyPDF2]"
     except Exception as e:
-        return "[Ошибка PDF: " + str(e) + "]"
+        raise ValueError("Не удалось прочитать PDF: " + str(e)[:200])
+    if not result.strip():
+        raise ValueError(
+            "В PDF нет текстового слоя (похоже, это скан). "
+            "Сохраните страницы как PNG/JPG и приложите их — сработает распознавание текста (OCR)."
+        )
+    return result
 
 
 def _parse_docx(data: bytes) -> str:
@@ -149,18 +155,32 @@ def _parse_xml(data: bytes) -> str:
 
 
 def _parse_image(data: bytes) -> str:
+    # Ошибки поднимаем, а не возвращаем заглушкой: раньше при отсутствии
+    # tesseract в LLM молча уходило «[OCR недоступен]» и модель «не видела» картинку.
     try:
         from PIL import Image
         import pytesseract
+    except ImportError:
+        raise ValueError(
+            "Распознавание изображений недоступно: не установлены Pillow/pytesseract "
+            "(pip install Pillow pytesseract)"
+        )
+    try:
         img = Image.open(io.BytesIO(data))
         text = pytesseract.image_to_string(img, lang="rus+eng")
-        if not text.strip():
-            return "[Изображение: текст не распознан]"
-        return text
-    except ImportError:
-        return "[OCR недоступен: установите Pillow и pytesseract]"
+    except pytesseract.TesseractNotFoundError:
+        raise ValueError(
+            "Распознавание изображений недоступно: не установлен движок Tesseract. "
+            "macOS: brew install tesseract tesseract-lang · Linux: apt install tesseract-ocr tesseract-ocr-rus"
+        )
     except Exception as e:
-        return "[Ошибка OCR: " + str(e) + "]"
+        raise ValueError("Не удалось распознать изображение: " + str(e)[:200])
+    if not text.strip():
+        raise ValueError(
+            "На изображении не распознан текст. Проверьте качество скриншота "
+            "(масштаб, контраст) или перенесите текст в поле требования вручную."
+        )
+    return text
 
 
 def _parse_txt(data: bytes) -> str:

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { formatBug, addDefect } from "@/lib/api";
 import NotionRenderer from "@/components/NotionRenderer";
+import JiraRegisterPanel from "@/components/JiraRegisterPanel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 /* ── History helpers ──────────────────────────────────────────────── */
@@ -532,6 +533,14 @@ export default function BugsSection() {
             </div>
             <NotionRenderer text={report} className="mt-1" />
           </div>
+        )}
+
+        {/* Регистрация дефекта в Jira — доступна после оформления отчёта */}
+        {report && (
+          <JiraRegisterPanel
+            summary={feature ? `[${platform}] ${feature}` : `[${platform}] ${description.slice(0, 100)}`}
+            description={report}
+          />
         )}
 
         {/* Bottom action row */}

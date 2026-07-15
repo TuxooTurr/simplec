@@ -5,9 +5,10 @@ import {
   Eye, EyeOff, Save, Settings, Plus, Trash2,
   Zap, Database, Radio, Server, Shield, ChevronDown, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Play, ScrollText, Pencil,
-  Check, Settings2, Upload, RefreshCw,
+  Check, Settings2, Upload, RefreshCw, Bug,
 } from "lucide-react";
 import { ConnectionsModal, ConnectionRow, Tabs, Select } from "@/components/ui";
+import JiraSettingsBlock from "@/components/JiraSettingsBlock";
 import {
   getSettings, saveSettings,
   getCustomLlmProviders, saveCustomLlmProvider, deleteCustomLlmProvider,
@@ -1653,6 +1654,15 @@ export default function SettingsSection() {
             ? "Подключений пока нет — добавьте внешнюю БД для генерации тестовых данных."
             : `Настроено подключений: ${tdConnections.length} — ${tdConnections.map(c => c.display_name).join(", ")}`}
         </p>
+      </SectionCard>
+
+      {/* ═══ Jira — регистрация дефектов ═══ */}
+      <SectionCard
+        icon={<Bug className="w-4 h-4 text-red-500" />}
+        title="Jira — регистрация дефектов"
+        subtitle="Токен по логину/паролю Сигмы, файлом или строкой; проект и лейблы — на вкладке Дефекты"
+      >
+        <JiraSettingsBlock />
       </SectionCard>
 
       {/* ═══ 5. Логи (VPS) ═══ */}

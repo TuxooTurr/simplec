@@ -167,6 +167,8 @@ export default function GenerationSection() {
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
   const [qaCopied, setQaCopied]       = useState(false);
+  // Панель QA-дока на экране генерации: открыта сразу, чтобы читать не дожидаясь конца
+  const [liveQaExpanded, setLiveQaExpanded] = useState(true);
   const [fileLoading, setFileLoading] = useState(false);
   const [fileAttachments, setFileAttachments] = useState<ParsedFileAttachment[]>([]);
   const reqFileRef = useRef<HTMLInputElement>(null);
@@ -637,6 +639,68 @@ export default function GenerationSection() {
           <div className="max-w-2xl">
             <StatusPanel events={events} progress={progress} />
           </div>
+
+          {/* QA документация доступна сразу после слоя 1 — читаем, пока собираются кейсы */}
+          {qaDoc && (
+            <div className="max-w-2xl mt-4 bg-bg-card border border-border-main rounded-xl overflow-hidden animate-fade-in">
+              <button
+                onClick={() => setLiveQaExpanded((v) => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
+                  text-text-main hover:bg-bg-subtle/70 transition-colors"
+              >
+                <span className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-primary" />
+                  QA Документация
+                  <span className="text-xs font-normal text-green-600 bg-green-50 border border-green-200 rounded-full px-2 py-0.5">
+                    готова — можно читать
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`w-4 h-4 text-text-muted transition-transform duration-200 ${liveQaExpanded ? "rotate-180" : ""}`}
+                />
+              </button>
+              {liveQaExpanded && (
+                <div className="border-t border-border-main animate-fade-in">
+                  <div className="flex justify-end px-4 pt-3">
+                    <button
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(qaDoc);
+                        setQaCopied(true);
+                        setTimeout(() => setQaCopied(false), 2000);
+                      }}
+                      className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
+                        ${qaCopied
+                          ? "bg-green-50 border-green-200 text-green-700"
+                          : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
+                    >
+                      {qaCopied ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</> : <><Copy className="w-3.5 h-3.5" /> Копировать</>}
+                    </button>
+                  </div>
+                  <div className="px-5 py-4 max-h-[50vh] overflow-y-auto scrollbar-thin">
+                    <NotionRenderer text={qaDoc} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Готовые кейсы появляются по мере генерации */}
+          {cases.length > 0 && (
+            <div className="max-w-2xl mt-4 animate-fade-in">
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">
+                Готовые кейсы ({cases.length})
+              </p>
+              <div className="space-y-1.5">
+                {cases.map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 px-3 py-2 bg-bg-card border border-border-main rounded-lg text-sm">
+                    <CheckCheck className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                    <span className="truncate text-text-main">{c.name}</span>
+                    <span className="ml-auto text-xs text-text-muted flex-shrink-0">{c.steps?.length ?? 0} шаг.</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

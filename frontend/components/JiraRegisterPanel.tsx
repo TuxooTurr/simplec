@@ -69,6 +69,7 @@ export default function JiraRegisterPanel({
   const [newLabel, setNewLabel] = useState("");
   const [components, setComponents] = useState<string[]>([]);
   const [stand, setStand] = useState("");
+  const [standType, setStandType] = useState("");
 
   // Эпик: кнопка «Выгрузить» → полный список активных эпиков → Select с поиском
   const [epicKey, setEpicKey] = useState("");
@@ -104,6 +105,7 @@ export default function JiraRegisterPanel({
       .then(m => {
         setMeta(m);
         setPriority(prev => prev || matchPriority(priorityHint, m.priorities));
+        setStandType(prev => prev || m.default_stand_type);
       })
       .catch(e => setMetaErr(String(e)))
       .finally(() => setMetaLoading(false));
@@ -167,6 +169,7 @@ export default function JiraRegisterPanel({
         ke: "",           // КЭ подставляется бэкендом из компонентов
         environment: "", // Среда обнаружения — всегда СТ (дефолт справочника)
         stand,
+        stand_type: standType,
       });
       setCreated({ key: res.key, url: res.url, warnings: res.warnings });
     } catch (e) { setCreateErr(String(e)); }
@@ -316,10 +319,17 @@ export default function JiraRegisterPanel({
             исполнитель назначается в Jira вручную, КЭ — автоматом из компонента,
             среда — всегда СТ (дефолты справочника на бэкенде) */}
 
-        {/* Стенд */}
+        {/* Стенд — свой справочник (meta.stands), т.к. в Jira это свободный текст
+            без allowedValues; на дин. поле Jira и на ручной ввод падаем только
+            если справочник ещё не заполнен */}
         <div>
           <label className={LBL}>Стенд</label>
-          {standField && standField.allowed.length > 0 ? (
+          {meta && meta.stands.length > 0 ? (
+            <Select value={stand} onChange={setStand} placeholder="— стенд —" searchable searchPlaceholder="Поиск стенда…">
+              <option value="">— стенд —</option>
+              {meta.stands.map(v => <option key={v} value={v}>{v}</option>)}
+            </Select>
+          ) : standField && standField.allowed.length > 0 ? (
             <Select value={stand} onChange={setStand} placeholder="— стенд —">
               <option value="">— стенд —</option>
               {standField.allowed.map(v => <option key={v} value={v}>{v}</option>)}
@@ -329,6 +339,17 @@ export default function JiraRegisterPanel({
               placeholder="Название стенда" className={INPUT_CLS} />
           )}
         </div>
+
+        {/* Тип стенда (Major-Check / Major-GO) — видимый выбор, не тихий дефолт */}
+        {(meta?.stand_types.length ?? 0) > 0 && (
+          <div>
+            <label className={LBL}>Тип стенда</label>
+            <Select value={standType} onChange={setStandType} placeholder="— тип стенда —">
+              <option value="">— тип стенда —</option>
+              {meta!.stand_types.map(v => <option key={v} value={v}>{v}</option>)}
+            </Select>
+          </div>
+        )}
       </div>
 
       {/* Результат / ошибка / кнопка */}

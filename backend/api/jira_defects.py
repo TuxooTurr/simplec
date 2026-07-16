@@ -301,6 +301,7 @@ class CreateDefectBody(BaseModel):
     ke: str = ""               # КЭ текстом — для проектов без маппинга компонент→КЭ
     environment: str = ""      # среда обнаружения — для проектов без дефолта в справочнике
     stand: str = ""            # стенд
+    stand_type: str = ""       # тип стенда (Major-Check / Major-GO) — если пусто, берём дефолт справочника
     description_is_markdown: bool = True
 
 
@@ -402,6 +403,11 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
         # компонент → КЭ (для автоподстановки и отображения), мобильные компоненты
         "ke_by_component": {k: v["value"] for k, v in JC.COMPONENT_KE.items()} if is_sber911 else {},
         "mobile_components": sorted(JC.MOBILE_COMPONENTS) if is_sber911 else [],
+        # стенды — свой справочник (Jira отдаёт поле свободным текстом, без allowedValues)
+        "stands": JC.STANDS if is_sber911 else [],
+        # тип стенда (customfield_17500) — Major-Check / Major-GO, видимый выбор
+        "stand_types": sorted(JC.STAND_TYPE.keys()) if is_sber911 else [],
+        "default_stand_type": JC.DEFAULT_STAND_TYPE if is_sber911 else "",
     }
 
 
@@ -496,6 +502,10 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
         for fid, value in JC.DEFAULT_FIELDS.items():
             fields.setdefault(fid, value)
+        # Тип стенда — видимый выбор пользователя; если не выбрал, берём дефолт справочника
+        stand_type_name = body.stand_type.strip() or JC.DEFAULT_STAND_TYPE
+        if stand_type_name in JC.STAND_TYPE:
+            fields[JC.FIELD_STAND_TYPE] = {"id": JC.STAND_TYPE[stand_type_name]}
 
     warnings: list[str] = []
 

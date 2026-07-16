@@ -39,6 +39,9 @@ export interface JiraProjectMeta {
   warnings: string[];
   ke_by_component: Record<string, string>;
   mobile_components: string[];
+  stands: string[];
+  stand_types: string[];
+  default_stand_type: string;
 }
 
 export interface JiraEpic { key: string; summary: string; status?: string }
@@ -87,6 +90,7 @@ export interface CreateJiraDefect {
   ke: string;
   environment: string;
   stand: string;
+  stand_type: string;
 }
 
 export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: string; key: string; url: string; warnings: string[] }> {

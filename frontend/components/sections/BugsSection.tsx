@@ -21,6 +21,11 @@ interface BugHistEntry {
   feature: string;
   description: string;
   report: string;
+  // Разбор report на части для автоподстановки в Jira (см. backend/api/bugs.py::_parse_report).
+  // Опционально — записи, сохранённые до появления этого разбора, его не содержат.
+  title?: string;
+  parsedDescription?: string;
+  priority?: string;
   loadedAsEtalon?: boolean;
 }
 
@@ -219,6 +224,9 @@ export default function BugsSection() {
         feature,
         description,
         report: res.report,
+        title: res.title,
+        parsedDescription: res.description,
+        priority: res.priority,
       });
     } catch (err) {
       const raw = String(err);
@@ -296,6 +304,11 @@ export default function BugsSection() {
                           setFeature(entry.feature);
                           setDescription(entry.description);
                           setReport(entry.report);
+                          // Старые записи (до появления разбора) title не содержат —
+                          // тогда панель Jira откатится на [Platform] Feature.
+                          setParsed(entry.title
+                            ? { title: entry.title, description: entry.parsedDescription ?? entry.report, priority: entry.priority ?? "" }
+                            : null);
                           setStage("input");
                         }}
                       >

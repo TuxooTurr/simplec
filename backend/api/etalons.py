@@ -101,13 +101,16 @@ async def add_etalon(
     """Добавить эталонную пару. Принимает текст или файл для каждой части."""
     from agents.file_parser import parse_file
 
-    if req_file:
-        data = await req_file.read()
-        req_text = parse_file(data, req_file.filename)
+    try:
+        if req_file:
+            data = await req_file.read()
+            req_text = parse_file(data, req_file.filename)
 
-    if tc_file:
-        data = await tc_file.read()
-        tc_text = parse_file(data, tc_file.filename)
+        if tc_file:
+            data = await tc_file.read()
+            tc_text = parse_file(data, tc_file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if not req_text or not tc_text:
         raise HTTPException(status_code=400, detail="req_text и tc_text обязательны")
@@ -188,13 +191,16 @@ async def add_autotest(
     """Добавить пару XML → Java."""
     from agents.file_parser import parse_file
 
-    if xml_file:
-        data = await xml_file.read()
-        xml_text = parse_file(data, xml_file.filename)
+    try:
+        if xml_file:
+            data = await xml_file.read()
+            xml_text = parse_file(data, xml_file.filename)
 
-    if java_file:
-        data = await java_file.read()
-        java_text = parse_file(data, java_file.filename)
+        if java_file:
+            data = await java_file.read()
+            java_text = parse_file(data, java_file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     if not xml_text or not java_text:
         raise HTTPException(status_code=400, detail="xml_text и java_text обязательны")
@@ -354,7 +360,10 @@ async def add_context_doc(
     filename = ""
     if file:
         data = await file.read()
-        content = parse_file(data, file.filename)
+        try:
+            content = parse_file(data, file.filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         filename = file.filename or ""
         if not name:
             name = filename

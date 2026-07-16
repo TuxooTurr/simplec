@@ -8,7 +8,7 @@ import io
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls",
-    ".xml", ".png", ".jpg", ".jpeg", ".txt"
+    ".xml", ".png", ".jpg", ".jpeg", ".txt", ".log"
 }
 
 
@@ -52,7 +52,7 @@ def parse_file(data: bytes, filename: str) -> str:
         return _parse_xml(data)
     elif ext in ("png", "jpg", "jpeg"):
         return _parse_image(data)
-    elif ext == "txt":
+    elif ext in ("txt", "log"):
         return _parse_txt(data)
     else:
         return data.decode("utf-8", errors="ignore")
@@ -86,8 +86,13 @@ def _parse_pdf(data: bytes) -> str:
 
 
 def _parse_docx(data: bytes) -> str:
+    # Ошибки поднимаем, а не возвращаем заглушкой (см. _parse_pdf) — иначе текст
+    # вида «[Ошибка DOCX: ...]» уходит в LLM как будто это содержимое файла.
     try:
         from docx import Document
+    except ImportError:
+        raise ValueError("DOCX не обработан: на сервере не установлен python-docx")
+    try:
         doc = Document(io.BytesIO(data))
         paragraphs = []
         for para in doc.paragraphs:
@@ -104,18 +109,23 @@ def _parse_docx(data: bytes) -> str:
                     paragraphs.append(" | ".join(cells))
 
         result = "\n".join(paragraphs)
-        if not result.strip():
-            return "[DOCX: документ пустой]"
-        return result
-    except ImportError:
-        return "[Ошибка: установите python-docx]"
     except Exception as e:
-        return "[Ошибка DOCX: " + str(e) + "]"
+        raise ValueError(
+            "Не удалось прочитать DOCX: " + str(e)[:200] + ". "
+            "Если файл в старом формате .doc — пересохраните его как .docx в Word."
+        )
+    if not result.strip():
+        raise ValueError("Документ DOCX пустой")
+    return result
 
 
 def _parse_xlsx(data: bytes) -> str:
+    # Ошибки поднимаем, а не возвращаем заглушкой (см. _parse_pdf).
     try:
         from openpyxl import load_workbook
+    except ImportError:
+        raise ValueError("XLSX не обработан: на сервере не установлен openpyxl")
+    try:
         wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         sheets = []
         for sheet_name in wb.sheetnames:
@@ -135,23 +145,21 @@ def _parse_xlsx(data: bytes) -> str:
                 )
         wb.close()
         result = "\n\n".join(sheets)
-        if not result.strip():
-            return "[XLSX: таблица пустая]"
-        return result
-    except ImportError:
-        return "[Ошибка: установите openpyxl]"
     except Exception as e:
-        return "[Ошибка XLSX: " + str(e) + "]"
+        raise ValueError(
+            "Не удалось прочитать XLSX: " + str(e)[:200] + ". "
+            "Если файл в старом формате .xls — пересохраните его как .xlsx в Excel."
+        )
+    if not result.strip():
+        raise ValueError("Таблица XLSX пустая")
+    return result
 
 
 def _parse_xml(data: bytes) -> str:
-    try:
-        text = data.decode("utf-8", errors="ignore")
-        if not text.strip():
-            return "[XML: файл пустой]"
-        return text
-    except Exception as e:
-        return "[Ошибка XML: " + str(e) + "]"
+    text = data.decode("utf-8", errors="ignore")
+    if not text.strip():
+        raise ValueError("XML-файл пустой")
+    return text
 
 
 def _parse_image(data: bytes) -> str:
@@ -184,15 +192,13 @@ def _parse_image(data: bytes) -> str:
 
 
 def _parse_txt(data: bytes) -> str:
-    try:
-        for encoding in ("utf-8", "cp1251", "latin-1"):
-            try:
-                text = data.decode(encoding)
-                if text.strip():
-                    return text
-            except UnicodeDecodeError:
-                continue
-        return "[TXT: не удалось декодировать]"
-    except Exception as e:
-        return "[Ошибка TXT: " + str(e) + "]"
+    # Ошибки поднимаем, а не возвращаем заглушкой (см. _parse_pdf).
+    for encoding in ("utf-8", "cp1251", "latin-1"):
+        try:
+            text = data.decode(encoding)
+            if text.strip():
+                return text
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("Не удалось декодировать текстовый файл (пустой или нетекстовый файл)")
 

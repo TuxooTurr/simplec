@@ -255,12 +255,6 @@ def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
     return resolved
 
 
-# ── Кэш списка проектов (ответ /project в корп. Jira ~4 МБ) ──────────────────
-
-_projects_cache: dict[str, tuple[float, list]] = {}
-_PROJECTS_TTL = 600
-
-
 # ── Markdown → Jira wiki (минимально достаточно для отчёта) ──────────────────
 
 def _md_to_jira(text: str) -> str:
@@ -299,13 +293,13 @@ class CreateDefectBody(BaseModel):
     project: str
     summary: str
     description: str = ""
-    priority: str = ""         # имя приоритета Jira («Критический» и т.п.)
+    priority: str = ""         # имя приоритета Jira («Высокий» и т.п.)
     labels: list[str] = Field(default_factory=list)
     epic_key: str = ""
-    component: str = ""
+    components: list[str] = Field(default_factory=list)
     assignee: str = ""         # username
-    ke: str = ""               # КЭ (CIXXXXXXXX)
-    environment: str = ""      # среда обнаружения
+    ke: str = ""               # КЭ текстом — для проектов без маппинга компонент→КЭ
+    environment: str = ""      # среда обнаружения — для проектов без дефолта в справочнике
     stand: str = ""            # стенд
     description_is_markdown: bool = True
 
@@ -371,22 +365,6 @@ def test_connection(db: Session = Depends(get_db)) -> dict:
 
 # ── Routes: справочники ──────────────────────────────────────────────────────
 
-@router.get("/api/jira/projects")
-def list_projects(db: Session = Depends(get_db)) -> dict:
-    """Все проекты, доступные по токену — для выпадающего списка с поиском."""
-    cfg = _load_cfg(db)
-    now = time.time()
-    hit = _projects_cache.get(cfg["base_url"])
-    if hit and now - hit[0] < _PROJECTS_TTL:
-        return {"projects": hit[1]}
-    data = _jira_request(cfg, "GET", "/rest/api/2/project", timeout=90)
-    projects = sorted(
-        [{"key": p.get("key", ""), "name": p.get("name", "")} for p in data if p.get("key")],
-        key=lambda p: p["key"],
-    )
-    _projects_cache[cfg["base_url"]] = (now, projects)
-    return {"projects": projects}
-
 
 @router.get("/api/jira/meta")
 def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> dict:
@@ -409,6 +387,8 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
     if fields.get("_error"):
         warnings.append(f"поля (КЭ/среда/стенд/эпик): {fields['_error']}")
 
+    from backend.api import jira_constants as JC
+    is_sber911 = project.strip().upper() == JC.PROJECT_KEY
     return {
         "priorities": priorities,
         "components": components,
@@ -419,43 +399,56 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
         },
         "labels_presets": cfg["labels"],
         "warnings": warnings,
+        # компонент → КЭ (для автоподстановки и отображения), мобильные компоненты
+        "ke_by_component": {k: v["value"] for k, v in JC.COMPONENT_KE.items()} if is_sber911 else {},
+        "mobile_components": sorted(JC.MOBILE_COMPONENTS) if is_sber911 else [],
     }
 
 
+_epics_cache: dict[str, tuple[float, list]] = {}
+_EPICS_TTL = 300
+
+
 @router.get("/api/jira/epics")
-def search_epics(project: str = Query(...), query: str = Query(""),
-                 db: Session = Depends(get_db)) -> dict:
+def list_epics(project: str = Query(...), db: Session = Depends(get_db)) -> dict:
+    """Все активные эпики проекта (без Отменён/Сделан/Closed) с пагинацией."""
     cfg = _load_cfg(db)
-    q = query.replace('"', "").strip()
-    jql = f'project = "{project}" AND issuetype = Epic'
-    if q:
-        jql += f' AND summary ~ "{q}*"'
-    jql += " ORDER BY updated DESC"
-    data = _jira_request(cfg, "GET", "/rest/api/2/search",
-                         params={"jql": jql, "maxResults": 15, "fields": "summary"})
-    return {"epics": [
-        {"key": i.get("key", ""), "summary": i.get("fields", {}).get("summary", "")}
-        for i in data.get("issues", [])
-    ]}
+    now = time.time()
+    cache_key = f"{cfg['base_url']}|{project}"
+    hit = _epics_cache.get(cache_key)
+    if hit and now - hit[0] < _EPICS_TTL:
+        return {"epics": hit[1]}
 
+    jql_active = (f'project = "{project}" AND issuetype = Epic '
+                  'AND status not in (Отменён, Сделан, Closed) ORDER BY key ASC')
+    jql_all = f'project = "{project}" AND issuetype = Epic ORDER BY key ASC'
 
-@router.get("/api/jira/users")
-def search_users(query: str = Query(...), project: str = Query(""),
-                 db: Session = Depends(get_db)) -> dict:
-    """Поиск исполнителя. С project — только назначаемые участники этого проекта."""
-    cfg = _load_cfg(db)
-    if project.strip():
-        data = _jira_request(cfg, "GET", "/rest/api/2/user/assignable/search",
-                             params={"project": project.strip(),
-                                     "username": query.strip(), "maxResults": 15})
-    else:
-        data = _jira_request(cfg, "GET", "/rest/api/2/user/search",
-                             params={"username": query.strip(), "maxResults": 15})
-    return {"users": [
-        {"name": u.get("name", ""), "display": u.get("displayName", ""),
-         "email": u.get("emailAddress", "")}
-        for u in (data if isinstance(data, list) else [])
-    ]}
+    def _fetch(jql: str) -> list[dict]:
+        epics, start, total = [], 0, 1
+        while start < total and start < 1000:
+            data = _jira_request(cfg, "GET", "/rest/api/2/search", params={
+                "jql": jql, "fields": "summary,status",
+                "maxResults": 100, "startAt": start,
+            })
+            total = int(data.get("total", 0))
+            for i in data.get("issues", []):
+                epics.append({
+                    "key": i.get("key", ""),
+                    "summary": i.get("fields", {}).get("summary", ""),
+                    "status": (i.get("fields", {}).get("status") or {}).get("name", ""),
+                })
+            start += 100
+        return epics
+
+    try:
+        epics = _fetch(jql_active)
+    except HTTPException:
+        # в проекте может не быть статусов «Отменён/Сделан» — тогда без фильтра
+        epics = _fetch(jql_all)
+
+    _epics_cache[cache_key] = (now, epics)
+    return {"epics": epics}
+
 
 
 # ── Routes: создание дефекта ─────────────────────────────────────────────────
@@ -485,10 +478,24 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if body.labels:
         # Jira не принимает пробелы в лейблах
         fields["labels"] = [l.strip().replace(" ", "_") for l in body.labels if l.strip()]
-    if body.component.strip():
-        fields["components"] = [{"name": body.component.strip()}]
+
+    components = [c.strip() for c in body.components if c.strip()]
+    if components:
+        fields["components"] = [{"name": c} for c in components]
     if body.assignee.strip():
         fields["assignee"] = {"name": body.assignee.strip()}
+
+    # ── SBER911: компонент → КЭ + дефолты справочных полей ──
+    from backend.api import jira_constants as JC
+    is_sber911 = body.project.strip().upper() == JC.PROJECT_KEY
+    if is_sber911:
+        ke_objects = [JC.COMPONENT_KE[c] for c in components if c in JC.COMPONENT_KE]
+        if ke_objects:
+            ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
+            # один КЭ — объект, несколько (МП + второй компонент) — массив
+            fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
+        for fid, value in JC.DEFAULT_FIELDS.items():
+            fields.setdefault(fid, value)
 
     warnings: list[str] = []
 
@@ -506,9 +513,12 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if body.epic_key.strip():
         if "epic_link" in resolved:
             fields[resolved["epic_link"]["id"]] = body.epic_key.strip()
+        elif is_sber911:
+            fields[JC.FIELD_EPIC_LINK] = body.epic_key.strip()
         else:
             warnings.append("«Эпик» не установлен — поле Epic Link не найдено в проекте")
-    _set_custom("ke", body.ke, "КЭ")
+    if body.ke.strip() and not (is_sber911 and components):
+        _set_custom("ke", body.ke, "КЭ")
     _set_custom("environment", body.environment, "Среда обнаружения")
     _set_custom("stand", body.stand, "Стенд")
 

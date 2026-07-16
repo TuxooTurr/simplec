@@ -2,20 +2,25 @@
 
 /**
  * Панель «Зарегистрировать в Jira» — под готовым баг-репортом.
- * Проект/критичность/лейблы/эпик(автопоиск)/компонент/исполнитель/КЭ/среда/стенд.
+ * Проект фиксирован (SBER911). Критичность/лейблы/эпик(выгрузка)/компонент/стенд —
+ * всё из справочников Jira. КЭ подставляется автоматически по компоненту,
+ * среда обнаружения всегда «СТ» — оба поля на фронте не показываются.
+ * Исполнитель не задаётся из инструмента — назначается в Jira вручную.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Loader2, Plus, X, ExternalLink, Send, AlertTriangle, CheckCircle2, Settings2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Select } from "@/components/ui";
 import {
-  getJiraSettings, saveJiraSettings, getJiraMeta, searchJiraEpics, searchJiraUsers,
-  createJiraDefect, getJiraProjects,
-  type JiraProjectMeta, type JiraEpic, type JiraUser, type JiraSettings, type JiraProject,
+  getJiraSettings, saveJiraSettings, getJiraMeta, loadJiraEpics,
+  createJiraDefect,
+  type JiraProjectMeta, type JiraEpic, type JiraSettings,
 } from "@/lib/jiraApi";
+
+const PROJECT = "SBER911";
 
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main " +
@@ -23,21 +28,13 @@ const INPUT_CLS =
 
 const LBL = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5";
 
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return v;
-}
-
-/* Приоритет от ИИ (рус.) → варианты названий в Jira (рус./англ.) */
+/* Приоритет от ИИ (рус.) → варианты названий в Jira (рус./англ.).
+   Основы слов: в SBER911 приоритет называется «Критичный», ИИ пишет «Критический». */
 const PRIORITY_SYNONYMS: Record<string, string[]> = {
-  "критический": ["критический", "critical", "blocker", "блокирующий"],
-  "высокий":     ["высокий", "high", "major"],
-  "средний":     ["средний", "medium", "normal"],
-  "низкий":      ["низкий", "low", "minor", "trivial"],
+  "критический": ["критичн", "критическ", "critical", "блокирующ", "blocker"],
+  "высокий":     ["высок", "high", "major"],
+  "средний":     ["средн", "medium", "normal"],
+  "низкий":      ["низк", "low", "minor", "trivial"],
 };
 
 function matchPriority(hint: string, jiraPriorities: string[]): string {
@@ -45,8 +42,13 @@ function matchPriority(hint: string, jiraPriorities: string[]): string {
   if (!h) return "";
   const exact = jiraPriorities.find(p => p.toLowerCase() === h);
   if (exact) return exact;
+  // порядок синонимов = приоритет совпадения («критичн» раньше запасного «блокирующ»)
   const syns = PRIORITY_SYNONYMS[h] ?? [h];
-  return jiraPriorities.find(p => syns.some(s => p.toLowerCase().includes(s))) ?? "";
+  for (const s of syns) {
+    const hit = jiraPriorities.find(p => p.toLowerCase().includes(s));
+    if (hit) return hit;
+  }
+  return "";
 }
 
 export default function JiraRegisterPanel({
@@ -57,11 +59,6 @@ export default function JiraRegisterPanel({
   const [settings, setSettings] = useState<JiraSettings | null>(null);
   const [settingsErr, setSettingsErr] = useState("");
 
-  const [project, setProject] = useState(() => {
-    try { return localStorage.getItem("st_jira_project") ?? ""; } catch { return ""; }
-  });
-  const [projects, setProjects] = useState<JiraProject[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
   const [meta, setMeta] = useState<JiraProjectMeta | null>(null);
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaErr, setMetaErr] = useState("");
@@ -70,24 +67,14 @@ export default function JiraRegisterPanel({
   const [priority, setPriority] = useState("");
   const [labels, setLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState("");
-  const [component, setComponent] = useState("");
-  const [ke, setKe] = useState("");
-  const [environment, setEnvironment] = useState("");
+  const [components, setComponents] = useState<string[]>([]);
   const [stand, setStand] = useState("");
 
-  // Эпик: автопоиск по части названия
-  const [epicQuery, setEpicQuery] = useState("");
+  // Эпик: кнопка «Выгрузить» → полный список активных эпиков → Select с поиском
   const [epicKey, setEpicKey] = useState("");
   const [epics, setEpics] = useState<JiraEpic[]>([]);
-  const [epicOpen, setEpicOpen] = useState(false);
-  const debEpic = useDebounced(epicQuery, 400);
-
-  // Исполнитель: автопоиск
-  const [assigneeQuery, setAssigneeQuery] = useState("");
-  const [assignee, setAssignee] = useState("");
-  const [users, setUsers] = useState<JiraUser[]>([]);
-  const [userOpen, setUserOpen] = useState(false);
-  const debUser = useDebounced(assigneeQuery, 400);
+  const [epicsLoading, setEpicsLoading] = useState(false);
+  const [epicsErr, setEpicsErr] = useState("");
 
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<{ key: string; url: string; warnings?: string[] } | null>(null);
@@ -109,54 +96,42 @@ export default function JiraRegisterPanel({
 
   const tokenConfigured = Boolean(settings && (settings.token || settings.token_path));
 
-  /* ── Мета проекта (приоритеты, компоненты, поля) ─────────────────── */
-  const loadMeta = useCallback(async (proj: string) => {
-    if (!proj.trim() || !tokenConfigured) return;
-    setMetaLoading(true); setMetaErr(""); setMeta(null);
-    try {
-      const m = await getJiraMeta(proj.trim());
-      setMeta(m);
-      // приоритет из ИИ-отчёта → соответствующий приоритет Jira
-      setPriority(prev => prev || matchPriority(priorityHint, m.priorities));
-      try { localStorage.setItem("st_jira_project", proj.trim()); } catch { /* ignore */ }
-    } catch (e) { setMetaErr(String(e)); }
-    setMetaLoading(false);
-  }, [tokenConfigured, priorityHint]);
-
-  // Список всех доступных проектов — один раз при появлении токена
+  /* ── Мета проекта (приоритеты, компоненты, поля) — проект фиксирован ─── */
   useEffect(() => {
     if (!tokenConfigured) return;
-    setProjectsLoading(true);
-    getJiraProjects()
-      .then(r => setProjects(r.projects))
+    setMetaLoading(true); setMetaErr("");
+    getJiraMeta(PROJECT)
+      .then(m => {
+        setMeta(m);
+        setPriority(prev => prev || matchPriority(priorityHint, m.priorities));
+      })
       .catch(e => setMetaErr(String(e)))
-      .finally(() => setProjectsLoading(false));
-  }, [tokenConfigured]);
-
-  useEffect(() => {
-    if (project && tokenConfigured) loadMeta(project);
+      .finally(() => setMetaLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenConfigured]);
 
-  /* ── Автопоиск эпиков ────────────────────────────────────────────── */
-  useEffect(() => {
-    if (!debEpic.trim() || !project.trim() || !tokenConfigured) { setEpics([]); return; }
-    let alive = true;
-    searchJiraEpics(project.trim(), debEpic.trim())
-      .then(r => { if (alive) { setEpics(r.epics); setEpicOpen(true); } })
-      .catch(() => { if (alive) setEpics([]); });
-    return () => { alive = false; };
-  }, [debEpic, project, tokenConfigured]);
+  /* ── Выгрузка эпиков по кнопке ───────────────────────────────────── */
+  const handleLoadEpics = async () => {
+    setEpicsLoading(true); setEpicsErr("");
+    try {
+      const r = await loadJiraEpics(PROJECT);
+      setEpics(r.epics);
+      if (r.epics.length === 0) setEpicsErr("Активных эпиков не найдено");
+    } catch (e) { setEpicsErr(String(e)); }
+    setEpicsLoading(false);
+  };
 
-  /* ── Автопоиск исполнителя — среди участников выбранного проекта ── */
-  useEffect(() => {
-    if (debUser.trim().length < 2 || !tokenConfigured) { setUsers([]); return; }
-    let alive = true;
-    searchJiraUsers(debUser.trim(), project.trim())
-      .then(r => { if (alive) { setUsers(r.users); setUserOpen(true); } })
-      .catch(() => { if (alive) setUsers([]); });
-    return () => { alive = false; };
-  }, [debUser, project, tokenConfigured]);
+  /* ── Компоненты: до 2, второй — только если выбран мобильный ────── */
+  const toggleComponent = (c: string) => {
+    setComponents(prev => {
+      if (prev.includes(c)) return prev.filter(x => x !== c);
+      if (prev.length === 0) return [c];
+      const mobiles = new Set(meta?.mobile_components ?? []);
+      const anyMobile = prev.some(x => mobiles.has(x)) || mobiles.has(c);
+      if (prev.length === 1 && anyMobile) return [...prev, c]; // МП + второй
+      return [c]; // иначе заменяем выбор
+    });
+  };
 
   /* ── Лейблы ──────────────────────────────────────────────────────── */
   const labelPresets = meta?.labels_presets ?? settings?.labels ?? [];
@@ -181,16 +156,16 @@ export default function JiraRegisterPanel({
     setCreating(true); setCreateErr(""); setCreated(null);
     try {
       const res = await createJiraDefect({
-        project: project.trim(),
+        project: PROJECT,
         summary: issueSummary.trim(),
         description,
         priority,
         labels,
         epic_key: epicKey,
-        component,
-        assignee,
-        ke,
-        environment,
+        components,
+        assignee: "",     // исполнитель назначается в Jira вручную
+        ke: "",           // КЭ подставляется бэкендом из компонентов
+        environment: "", // Среда обнаружения — всегда СТ (дефолт справочника)
         stand,
       });
       setCreated({ key: res.key, url: res.url, warnings: res.warnings });
@@ -221,39 +196,26 @@ export default function JiraRegisterPanel({
   if (settingsErr) return null;
   if (!settings) return null;
 
-  const envField = meta?.fields?.environment;
   const standField = meta?.fields?.stand;
 
   return (
     <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
-      <h3 className="text-sm font-semibold text-text-main mb-4 flex items-center gap-2">
-        <Send className="w-4 h-4 text-primary" /> Регистрация в Jira
-      </h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-text-main flex items-center gap-2">
+          <Send className="w-4 h-4 text-primary" /> Регистрация в Jira
+        </h3>
+        <span className="text-xs text-text-muted">
+          Проект: <span className="font-mono text-text-main">{PROJECT}</span>
+          {metaLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1.5" />}
+          {meta && !metaLoading && <span className="text-green-600 ml-1.5">· {meta.issuetype}</span>}
+        </span>
+      </div>
+      {metaErr && <p className="text-xs text-red-500 mb-3">{metaErr}</p>}
+      {meta && meta.warnings.length > 0 && (
+        <p className="text-xs text-amber-600 mb-3">{meta.warnings.join(" · ")}</p>
+      )}
 
-      {/* Проект */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-        <div>
-          <label className={LBL}>
-            Проект * {projectsLoading && <Loader2 className="inline w-3 h-3 animate-spin ml-1" />}
-          </label>
-          <Select
-            value={project}
-            onChange={(v) => { setProject(v); if (v) loadMeta(v); }}
-            placeholder={projectsLoading ? "Загружаю проекты…" : "— выберите проект —"}
-            searchable
-            searchPlaceholder="Поиск по ключу или названию…"
-          >
-            <option value="">— выберите проект —</option>
-            {projects.map(p => <option key={p.key} value={p.key}>{`${p.key} — ${p.name}`}</option>)}
-          </Select>
-          {metaErr && <p className="text-xs text-red-500 mt-1">{metaErr}</p>}
-          {meta && !metaLoading && <p className="text-xs text-green-600 mt-1">Тип задачи: {meta.issuetype}</p>}
-          {metaLoading && <p className="text-xs text-text-muted mt-1">Загружаю справочники проекта…</p>}
-          {meta && meta.warnings.length > 0 && (
-            <p className="text-xs text-amber-600 mt-1">{meta.warnings.join(" · ")}</p>
-          )}
-        </div>
-
         {/* Критичность */}
         <div>
           <label className={LBL}>Критичность</label>
@@ -264,7 +226,7 @@ export default function JiraRegisterPanel({
         </div>
 
         {/* Название */}
-        <div className="sm:col-span-2">
+        <div>
           <label className={LBL}>Название дефекта *</label>
           <input value={issueSummary} onChange={e => setIssueSummary(e.target.value)}
             placeholder="Краткое название дефекта" className={INPUT_CLS} />
@@ -303,91 +265,56 @@ export default function JiraRegisterPanel({
           </div>
         </div>
 
-        {/* Эпик — автопоиск */}
-        <div className="relative">
+        {/* Эпик: кнопка «Выгрузить» + выпадающий список с поиском */}
+        <div>
           <label className={LBL}>Эпик</label>
-          <input
-            value={epicKey ? `${epicKey} — ${epicQuery}` : epicQuery}
-            onChange={e => { setEpicKey(""); setEpicQuery(e.target.value); }}
-            onFocus={() => epics.length > 0 && setEpicOpen(true)}
-            onBlur={() => setTimeout(() => setEpicOpen(false), 200)}
-            placeholder="Начните вводить название эпика…"
-            className={INPUT_CLS}
-          />
-          {epicOpen && epics.length > 0 && !epicKey && (
-            <div className="absolute z-20 mt-1 w-full max-h-52 overflow-auto rounded-lg border border-border-main bg-bg-card shadow-lg">
-              {epics.map(ep => (
-                <button key={ep.key} type="button"
-                  onMouseDown={() => { setEpicKey(ep.key); setEpicQuery(ep.summary); setEpicOpen(false); }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-bg-subtle">
-                  <span className="font-mono text-xs text-primary mr-2">{ep.key}</span>
-                  <span className="text-text-main">{ep.summary}</span>
-                </button>
-              ))}
+          <div className="flex gap-2">
+            <div className="min-w-0 flex-1">
+              <Select value={epicKey} onChange={setEpicKey}
+                placeholder={epics.length ? "— выберите эпик —" : "сначала выгрузите эпики"}
+                disabled={epics.length === 0}
+                searchable searchPlaceholder="Поиск эпика по названию…">
+                <option value="">— без эпика —</option>
+                {epics.map(ep => <option key={ep.key} value={ep.key}>{`${ep.key} — ${ep.summary}`}</option>)}
+              </Select>
             </div>
-          )}
-          {epicKey && (
-            <button onClick={() => { setEpicKey(""); setEpicQuery(""); }}
-              className="absolute right-2 top-8 p-1 text-text-muted hover:text-red-500">
-              <X className="w-3.5 h-3.5" />
+            <button onClick={handleLoadEpics} disabled={epicsLoading}
+              className="px-3 py-2 border border-border-main rounded-lg text-xs font-semibold text-text-muted hover:bg-bg-subtle disabled:opacity-40 whitespace-nowrap flex-shrink-0">
+              {epicsLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Выгрузить"}
             </button>
-          )}
+          </div>
+          {epicsErr && <p className="text-xs text-red-500 mt-1">{epicsErr}</p>}
+          {epics.length > 0 && <p className="text-xs text-text-muted mt-1">Активных эпиков: {epics.length}</p>}
         </div>
 
-        {/* Компонент */}
+        {/* Компоненты: до 2 (второй — при выборе мобильного), КЭ подставляется сам */}
         <div>
           <label className={LBL}>Компонент</label>
-          <Select value={component} onChange={setComponent} placeholder="— компонент —" searchable>
-            <option value="">— компонент —</option>
-            {(meta?.components ?? []).map(c => <option key={c} value={c}>{c}</option>)}
-          </Select>
-        </div>
-
-        {/* Исполнитель — автопоиск */}
-        <div className="relative">
-          <label className={LBL}>Исполнитель</label>
-          <input
-            value={assignee || assigneeQuery}
-            onChange={e => { setAssignee(""); setAssigneeQuery(e.target.value); }}
-            onFocus={() => users.length > 0 && setUserOpen(true)}
-            onBlur={() => setTimeout(() => setUserOpen(false), 200)}
-            placeholder="Логин или ФИО…"
-            className={INPUT_CLS}
-          />
-          {userOpen && users.length > 0 && !assignee && (
-            <div className="absolute z-20 mt-1 w-full max-h-52 overflow-auto rounded-lg border border-border-main bg-bg-card shadow-lg">
-              {users.map(u => (
-                <button key={u.name} type="button"
-                  onMouseDown={() => { setAssignee(u.name); setUserOpen(false); }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-bg-subtle">
-                  <span className="text-text-main">{u.display}</span>
-                  <span className="font-mono text-xs text-text-muted ml-2">{u.name}</span>
-                </button>
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(meta?.components ?? []).map(c => (
+              <button key={c} type="button" onClick={() => toggleComponent(c)}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  components.includes(c)
+                    ? "border-primary/50 bg-[var(--color-active-bg)] text-primary"
+                    : "border-border-main text-text-muted hover:text-text-main"
+                }`}>
+                {c}
+              </button>
+            ))}
+            {(meta?.components ?? []).length === 0 && (
+              <span className="text-xs text-text-muted py-1">
+                {metaLoading ? "загрузка…" : "нет доступных компонентов"}
+              </span>
+            )}
+          </div>
+          {components.length === 2 && (
+            <p className="text-xs text-text-muted mt-1">Передаются 2 компонента и 2 КЭ</p>
           )}
         </div>
 
-        {/* КЭ */}
-        <div>
-          <label className={LBL}>КЭ {meta?.fields?.ke ? `(${meta.fields.ke.name})` : ""}</label>
-          <input value={ke} onChange={e => setKe(e.target.value)}
-            placeholder="CI02264516" className={`${INPUT_CLS} font-mono`} />
-        </div>
-
-        {/* Среда обнаружения */}
-        <div>
-          <label className={LBL}>Среда обнаружения</label>
-          {envField && envField.allowed.length > 0 ? (
-            <Select value={environment} onChange={setEnvironment} placeholder="— среда —">
-              <option value="">— среда —</option>
-              {envField.allowed.map(v => <option key={v} value={v}>{v}</option>)}
-            </Select>
-          ) : (
-            <input value={environment} onChange={e => setEnvironment(e.target.value)}
-              placeholder="ИФТ / ПСИ / ПРОМ" className={INPUT_CLS} />
-          )}
-        </div>
+        {/* Исполнитель, КЭ и Среда обнаружения на фронте не задаются:
+            исполнитель назначается в Jira вручную, КЭ — автоматом из компонента,
+            среда — всегда СТ (дефолты справочника на бэкенде) */}
 
         {/* Стенд */}
         <div>
@@ -427,7 +354,7 @@ export default function JiraRegisterPanel({
       )}
       <div className="mt-4 flex justify-end">
         <button onClick={handleCreate}
-          disabled={creating || !project.trim() || !issueSummary.trim() || Boolean(created)}
+          disabled={creating || !issueSummary.trim() || Boolean(created)}
           className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-primary-dark disabled:opacity-40 transition-all">
           {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
           {creating ? "Создаю…" : created ? "Создано" : "Зарегистрировать в Jira"}

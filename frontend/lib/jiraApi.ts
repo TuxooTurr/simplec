@@ -37,16 +37,11 @@ export interface JiraProjectMeta {
   fields: Record<string, { name: string; allowed: string[] }>;
   labels_presets: string[];
   warnings: string[];
+  ke_by_component: Record<string, string>;
+  mobile_components: string[];
 }
 
-export interface JiraProject { key: string; name: string }
-
-export function getJiraProjects(): Promise<{ projects: JiraProject[] }> {
-  return fetchJson("/api/jira/projects");
-}
-
-export interface JiraEpic { key: string; summary: string }
-export interface JiraUser { name: string; display: string; email: string }
+export interface JiraEpic { key: string; summary: string; status?: string }
 
 export function getJiraSettings(): Promise<JiraSettings> {
   return fetchJson("/api/jira/settings");
@@ -76,12 +71,8 @@ export function getJiraMeta(project: string): Promise<JiraProjectMeta> {
   return fetchJson(`/api/jira/meta?project=${encodeURIComponent(project)}`);
 }
 
-export function searchJiraEpics(project: string, query: string): Promise<{ epics: JiraEpic[] }> {
-  return fetchJson(`/api/jira/epics?project=${encodeURIComponent(project)}&query=${encodeURIComponent(query)}`);
-}
-
-export function searchJiraUsers(query: string, project = ""): Promise<{ users: JiraUser[] }> {
-  return fetchJson(`/api/jira/users?query=${encodeURIComponent(query)}&project=${encodeURIComponent(project)}`);
+export function loadJiraEpics(project: string): Promise<{ epics: JiraEpic[] }> {
+  return fetchJson(`/api/jira/epics?project=${encodeURIComponent(project)}`);
 }
 
 export interface CreateJiraDefect {
@@ -91,7 +82,7 @@ export interface CreateJiraDefect {
   priority: string;
   labels: string[];
   epic_key: string;
-  component: string;
+  components: string[];
   assignee: string;
   ke: string;
   environment: string;

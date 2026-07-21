@@ -5,11 +5,15 @@
 """
 
 import json
+import logging
 import os
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SESSIONS_FILE = _ROOT / "data" / "model_bench_sessions.json"
@@ -22,8 +26,22 @@ class ModelBenchStore:
     def _load() -> list[dict]:
         if not _SESSIONS_FILE.exists():
             return []
-        with open(_SESSIONS_FILE, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(_SESSIONS_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            # Файл битый (например, от обрыва записи до того, как _save() стала
+            # атомарной) — без этого КАЖДЫЙ запрос к любому эндпоинту model-bench
+            # падал бы необработанным исключением (500), пока кто-то не удалит
+            # файл руками. Откладываем битую копию рядом и продолжаем с пустого
+            # места — историю сессий этой машины теряем, но панель снова работает.
+            backup = _SESSIONS_FILE.with_suffix(f".json.corrupted-{int(datetime.now().timestamp())}")
+            try:
+                shutil.move(str(_SESSIONS_FILE), str(backup))
+                logger.warning("model_bench_sessions.json битый, перемещён в %s", backup)
+            except OSError:
+                logger.warning("model_bench_sessions.json битый и не удалось сохранить копию")
+            return []
 
     @staticmethod
     def _save(sessions: list[dict]) -> None:
@@ -89,11 +107,11 @@ class ModelBenchStore:
             if s.get("id") != session_id:
                 continue
             targets = s.setdefault("targets", [])
-            target = next((t for t in targets if t["provider"] == provider and t["model"] == model), None)
+            target = next((t for t in targets if t.get("provider") == provider and t.get("model") == model), None)
             if target is None:
                 target = {"provider": provider, "model": model, "results": []}
                 targets.append(target)
-            base = len(target["results"])
+            base = len(target.setdefault("results", []))
             for r in results:
                 r = dict(r)
                 r["run"] = base + r["run"]

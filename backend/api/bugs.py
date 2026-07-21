@@ -78,10 +78,17 @@ def _format_bug_sync(platform: str, feature: str, description: str, provider: st
 
 Приоритет: <одно слово: Критический / Высокий / Средний / Низкий>"""
 
-    response = llm.chat(
+    # Обрыв по лимиту токенов до строки "Приоритет: X" (последней в шаблоне) означал
+    # бы, что _parse_report() не находит приоритет — chat_continued сам догенерирует
+    # хвост отчёта, не показывая пользователю обрыв на полуслове.
+    response = llm.chat_continued(
         [Message(role="user", content=prompt)],
         temperature=0.2,
         max_tokens=4000,
+        continuation_instruction=(
+            "Продолжи отчёт о дефекте точно с того места, где текст оборвался. "
+            "НЕ повторяй уже написанное. Не забудь завершить строкой «Приоритет: X»."
+        ),
     )
     return response.content.strip()
 

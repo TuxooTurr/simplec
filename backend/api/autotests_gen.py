@@ -139,10 +139,16 @@ def _generate_sync(cases: str, provider: str, test_type: str,
         prompt = prompt.replace("\nВХОДНЫЕ ТЕСТ-КЕЙСЫ:", project_block + "\n\nВХОДНЫЕ ТЕСТ-КЕЙСЫ:")
 
     llm = LLMClient(provider=provider)
-    resp = llm.chat(
+    # Обрыв по лимиту токенов особенно вреден для кода — незакрытые скобки/методы
+    # не скомпилируются. chat_continued сам догенерирует хвост файла.
+    resp = llm.chat_continued(
         [Message(role="user", content=prompt)],
         temperature=0.2,
         max_tokens=4000,
+        continuation_instruction=(
+            "Продолжи Java-код точно с того места, где он оборвался. "
+            "НЕ повторяй уже написанное, не начинай класс заново — только продолжение кода."
+        ),
     )
     return resp.content.strip()
 

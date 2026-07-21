@@ -125,9 +125,18 @@ class LayeredGenerator:
         # 4000 токенов не хватало на большие документы: промпт просит таблицы модели
         # данных, несколько диаграмм PlantUML, полное описание API/Jobs/интеграций
         # и чек-лист до 40 пунктов — на объёмной документации ответ упирался в потолок
-        # и файл обрывался посередине без какого-либо сигнала об этом.
-        response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.7, max_tokens=8000)
+        # и файл обрывался посередине. Теперь при обрыве по лимиту chat_continued сам
+        # догенерирует продолжение (до 3 раз) — пользователь видит цельный документ,
+        # а не обрыв на полуслове. truncated=True остаётся, только если обрыв не
+        # удалось закрыть даже за 3 продолжения (документ экстремального объёма).
+        response = self.llm.chat_continued(
+            [Message(role="user", content=prompt)],
+            temperature=0.7, max_tokens=8000,
+            continuation_instruction=(
+                "Продолжи документ точно с того места, где текст оборвался. "
+                "НЕ повторяй уже написанное, не начинай заново — только продолжение."
+            ),
+        )
         return response.content.strip(), response.finish_reason == "length"
 
     # ========================================================
@@ -177,9 +186,19 @@ class LayeredGenerator:
             "Верни ТОЛЬКО JSON массив. Никакого текста до или после."
         )
 
-        # Токенов: ~140 на кейс, ориентир до ~40 кейсов + запас
-        response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.5, max_tokens=8000)
+        # Токенов: ~140 на кейс, ориентир до ~40 кейсов + запас. При обрыве по лимиту
+        # (много кейсов на объёмной документации) chat_continued сам догенерирует
+        # оставшиеся элементы массива — репарный парсинг ниже (шаг 3) остаётся как
+        # подстраховка на случай, если продолжение всё равно не закрыло JSON целиком.
+        response = self.llm.chat_continued(
+            [Message(role="user", content=prompt)],
+            temperature=0.5, max_tokens=8000,
+            continuation_instruction=(
+                "Ты остановился посередине JSON-массива. Продолжи ТОЧНО со следующего элемента "
+                "массива — не повторяй уже перечисленные, не открывай новый '[', не закрывай ']', "
+                "просто следующие объекты через запятую в том же формате."
+            ),
+        )
 
         text = response.content.strip()
 
@@ -301,57 +320,29 @@ class LayeredGenerator:
             "Только Markdown. Без вводных слов и пояснений."
         )
 
-        response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.7, max_tokens=3000)
+        cont_instr = (
+            "Продолжи написание тест-кейса точно с того места, где текст оборвался. "
+            "НЕ повторяй уже написанное — только продолжение."
+        )
+        response = self.llm.chat_continued(
+            [Message(role="user", content=prompt)],
+            temperature=0.7, max_tokens=3000, continuation_instruction=cont_instr,
+        )
         text = response.content
 
-        # Пустой ответ — не обрезка (для неё есть цикл ниже), а деградация модели.
+        # Пустой ответ — не обрыв по лимиту (для него уже позаботился chat_continued
+        # выше), а отдельная деградация модели: она "ответила", но кейса в ответе нет.
         # Раньше это тихо доходило до _parse_markdown и превращалось в шаг
         # "Требует уточнения" с "Не требуется" во всех полях — неотличимо от
         # настоящего кейса. Одна свежая попытка (не продолжение) обычно чинит это.
         if not text.strip():
-            response = self.llm.chat([Message(role="user", content=prompt)],
-                                      temperature=0.7, max_tokens=3000)
+            response = self.llm.chat_continued(
+                [Message(role="user", content=prompt)],
+                temperature=0.7, max_tokens=3000, continuation_instruction=cont_instr,
+            )
             text = response.content
 
-        # Продолжение если LLM обрезал ответ по лимиту токенов (до 3 раз)
-        for _ in range(3):
-            if not self._is_truncated(text, response):
-                break
-            cont_prompt = (
-                "Продолжи написание тест-кейса точно с того места, где текст оборвался.\n"
-                "НЕ повторяй уже написанное — только продолжение.\n\n"
-                "Уже написано:\n" + text + "\n\nПродолжай:"
-            )
-            response = self.llm.chat(
-                [Message(role="user", content=cont_prompt)],
-                temperature=0.7, max_tokens=2000,
-            )
-            if not response.content.strip():
-                break
-            text = text + "\n" + response.content
-
         return self._parse_markdown(text, case_info)
-
-    def _is_truncated(self, text: str, response) -> bool:
-        """True если ответ LLM обрезан по лимиту токенов."""
-        import re
-        # Точный сигнал от GigaChat
-        if getattr(response, "finish_reason", "stop") == "length":
-            return True
-        stripped = text.rstrip()
-        if len(stripped) < 300:
-            return False
-        last_line = stripped.split("\n")[-1].strip()
-        if not last_line:
-            return False
-        # Считаем завершённым, если последняя строка — структурированное поле или конец предложения
-        clean = (
-            last_line.endswith((".", "!", "?", "–", "—")) or
-            re.match(r"^-\s*(UI|API|БД|Тестовые данные|Данные)\s*:", last_line, re.IGNORECASE) or
-            re.match(r"^-\s*(Изменений|Запросов|Визуальных|Не требуются)", last_line, re.IGNORECASE)
-        )
-        return not clean
 
     def _parse_markdown(self, text, case_info):
         import re
@@ -607,8 +598,14 @@ class LayeredGenerator:
             "Верни ТОЛЬКО эти три блока. Без пояснений, без markdown-обёртки."
         )
 
-        response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.3, max_tokens=3500)
+        response = self.llm.chat_continued(
+            [Message(role="user", content=prompt)],
+            temperature=0.3, max_tokens=3500,
+            continuation_instruction=(
+                "Продолжи XML точно с того места, где он оборвался. "
+                "НЕ повторяй уже написанное, не открывай теги заново — только продолжение."
+            ),
+        )
         raw = response.content.strip()
         if raw.startswith("```"):
             raw = re.sub(r"^```\w*\n?", "", raw)

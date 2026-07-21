@@ -122,7 +122,13 @@ def _judge_single_target(judge_provider: str, prompt: str, transcript: str, targ
         "в транскрибации), стабильность формата/длины между прогонами. Без вводных фраз, сразу к делу."
     )
     client = LLMClient(provider=judge_provider)
-    resp = client.chat([Message(role="user", content=judge_prompt)], temperature=0.3, max_tokens=1200)
+    resp = client.chat_continued(
+        [Message(role="user", content=judge_prompt)], temperature=0.3, max_tokens=1200,
+        continuation_instruction=(
+            "Продолжи оценку точно с того места, где текст оборвался. "
+            "НЕ повторяй уже написанное — только продолжение."
+        ),
+    )
     return resp.content.strip()
 
 
@@ -179,7 +185,15 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
     )
 
     client = LLMClient(provider=judge_provider)
-    resp = client.chat([Message(role="user", content=final_prompt)], temperature=0.3, max_tokens=3000)
+    # Обрыв перед строкой ЛУЧШАЯ_МОДЕЛЬ означал бы, что подсветка победителя тихо
+    # пропадает — chat_continued гарантирует, что судья дойдёт до конца отчёта.
+    resp = client.chat_continued(
+        [Message(role="user", content=final_prompt)], temperature=0.3, max_tokens=3000,
+        continuation_instruction=(
+            "Продолжи отчёт точно с того места, где текст оборвался. НЕ повторяй уже "
+            "написанное. Не забудь завершить строкой «ЛУЧШАЯ_МОДЕЛЬ: provider::model»."
+        ),
+    )
     report = resp.content.strip()
 
     best = None

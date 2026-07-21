@@ -199,10 +199,15 @@ def _analyze_batch(llm, batch: list[dict]) -> list[dict]:
 
     try:
         from agents.llm_client import Message
-        response = llm.chat(
+        response = llm.chat_continued(
             [Message(role="user", content=prompt)],
             temperature=0.15,
             max_tokens=4000,
+            continuation_instruction=(
+                "Ты остановился посередине JSON-массива. Продолжи ТОЧНО со следующего "
+                "объекта — не повторяй уже перечисленные, не открывай новый '[', "
+                "не закрывай ']', просто следующие объекты через запятую."
+            ),
         )
         raw = response.content.strip()
 
@@ -449,7 +454,13 @@ async def upload_analyze(
     def _run() -> str:
         from agents.llm_client import LLMClient, Message
         llm = LLMClient(provider=provider)
-        resp = llm.chat([Message(role="user", content=prompt)], temperature=0.2, max_tokens=4000)
+        resp = llm.chat_continued(
+            [Message(role="user", content=prompt)], temperature=0.2, max_tokens=4000,
+            continuation_instruction=(
+                "Продолжи анализ точно с того места, где текст оборвался. "
+                "НЕ повторяй уже написанное — только продолжение."
+            ),
+        )
         return resp.content.strip()
 
     try:
@@ -491,7 +502,13 @@ async def chat_about_logs(body: LogChatRequest) -> dict:
         for m in body.messages[-12:]:
             role = m.role if m.role in ("user", "assistant") else "user"
             msgs.append(Message(role=role, content=m.content[:8000]))
-        resp = llm.chat(msgs, temperature=0.2, max_tokens=2500)
+        resp = llm.chat_continued(
+            msgs, temperature=0.2, max_tokens=2500,
+            continuation_instruction=(
+                "Продолжи ответ точно с того места, где текст оборвался. "
+                "НЕ повторяй уже написанное — только продолжение."
+            ),
+        )
         return resp.content.strip()
 
     try:

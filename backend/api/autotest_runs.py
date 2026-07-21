@@ -561,7 +561,16 @@ def _analyze_tree_sync(provider: str) -> dict:
         + json.dumps(items, ensure_ascii=False)
     )
     llm = LLMClient(provider=provider)
-    resp = llm.chat([Message(role="user", content=prompt)], temperature=0.2, max_tokens=2000)
+    # До 300 элементов — на больших деревьях тестов ответ реально мог упираться
+    # в лимит токенов (незакрытый JSON-объект падал с ValueError без объяснения).
+    resp = llm.chat_continued(
+        [Message(role="user", content=prompt)], temperature=0.2, max_tokens=2000,
+        continuation_instruction=(
+            "Ты остановился посередине JSON-объекта. Продолжи ТОЧНО со следующей пары "
+            "\"id\": \"название\" — не повторяй уже перечисленные, не открывай новый '{', "
+            "не закрывай '}', просто следующие пары через запятую."
+        ),
+    )
     raw = (resp.content or "").strip()
 
     match = re.search(r"\{.*\}", raw, re.DOTALL)

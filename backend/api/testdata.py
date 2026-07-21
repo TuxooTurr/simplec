@@ -168,7 +168,13 @@ def _generate_sql_via_llm(
 
 SQL:"""
 
-    response = llm.chat([Message(role="user", content=prompt)])
+    response = llm.chat_continued(
+        [Message(role="user", content=prompt)],
+        continuation_instruction=(
+            "Продолжи SQL-запрос точно с того места, где он оборвался. "
+            "НЕ повторяй уже написанное — только продолжение."
+        ),
+    )
     # Очищаем от markdown code blocks
     sql = (response.content or "").strip()
     sql = re.sub(r'^```(?:sql)?\s*', '', sql)
@@ -210,7 +216,15 @@ def _suggest_insert_script(
 
 SQL:"""
 
-    response = llm.chat([Message(role="user", content=prompt)])
+    # Многотабличный INSERT-скрипт легко упирается в лимит — обрыв здесь особенно
+    # вреден: незакрытый оператор, если бы кто-то запустил его не глядя.
+    response = llm.chat_continued(
+        [Message(role="user", content=prompt)],
+        continuation_instruction=(
+            "Продолжи SQL-скрипт точно с того места, где он оборвался. "
+            "НЕ повторяй уже написанное — только продолжение."
+        ),
+    )
     sql = (response.content or "").strip()
     sql = re.sub(r'^```(?:sql)?\s*', '', sql)
     sql = re.sub(r'\s*```$', '', sql)

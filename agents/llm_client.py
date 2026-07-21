@@ -478,6 +478,55 @@ class LLMClient:
             return self._chat_gigachat(messages, temperature, max_tokens, model)
         return self._chat_custom(messages, temperature, max_tokens, model)
 
+    def chat_continued(
+        self,
+        messages: List[Message],
+        *,
+        temperature: float = 0.7,
+        max_tokens: int = 4000,
+        max_continuations: int = 3,
+        continuation_instruction: str = (
+            "Продолжи точно с того места, где текст оборвался. "
+            "НЕ повторяй уже написанное — только продолжение."
+        ),
+        model: str = "",
+    ) -> LLMResponse:
+        """chat() с автоматическим бесшовным продолжением при обрыве по лимиту токенов.
+
+        Раньше в разных генераторах обрыв ответа либо был не виден пользователю
+        (текст просто заканчивался на середине), либо чинился вручную и по-разному
+        в каждом месте. Здесь — один общий, переиспользуемый механизм:
+        - finish_reason == "length" (обрыв по лимиту) → продолжаем диалог обычным
+          ходом (ответ модели как assistant-реплика + новая user-реплика с просьбой
+          продолжить), склеиваем текст. До max_continuations раз.
+        - Пустой ответ при finish_reason != "length" — это не обрыв, а деградация
+          модели (см. run_model_batch/generate_case_markdown) — там нужен СВЕЖИЙ
+          повтор, а не продолжение; это чинится в местах, где уже есть своя
+          обработка, здесь не трогаем, чтобы не путать два разных случая.
+
+        Не годится там, где сырое поведение модели — сам измеряемый результат
+        (например, тестовые прогоны в model_bench) — там обрыв должен быть виден.
+        """
+        response = self.chat(messages, temperature=temperature, max_tokens=max_tokens, model=model)
+        text = response.content
+        last = response
+        history = list(messages)
+        for _ in range(max_continuations):
+            if last.finish_reason != "length":
+                break
+            history = history + [
+                Message(role="assistant", content=last.content),
+                Message(role="user", content=continuation_instruction),
+            ]
+            cont = self.chat(history, temperature=temperature, max_tokens=max_tokens, model=model)
+            if not cont.content.strip():
+                # Пустое продолжение — деградация, а не обрыв; дальше не гонимся,
+                # last остаётся прежним (ещё truncated) — это увидит вызывающий код.
+                break
+            text = text + cont.content
+            last = cont
+        return LLMResponse(content=text, model=last.model, usage=last.usage, finish_reason=last.finish_reason)
+
     def _chat_gigachat(self, messages, temperature, max_tokens, model_override: str = ""):
         model = model_override or self.model
         # Certificate (mTLS): прямой POST /chat/completions по httpx (как curl), без SDK/OAuth.

@@ -34,7 +34,7 @@ const NAV: {
   { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2,   superuserOnly: true },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
   { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen,    superuserOnly: true },
-  { id: "model_bench", href: "/model-bench", label: "Сравнение моделей",       Icon: SplitSquareHorizontal, ai: true },
+  { id: "model_bench", href: "/model-bench", label: "Тестирование моделей LLM", Icon: SplitSquareHorizontal, ai: true },
 ];
 
 const ORDER_KEY = "st_nav_order";

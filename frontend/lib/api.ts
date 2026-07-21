@@ -956,7 +956,8 @@ export interface ModelBenchSession {
   targets: ModelBenchTarget[];
   report: string;
   report_provider: string;
-  report_model: string;
+  best_provider: string;
+  best_model: string;
 }
 
 export interface ModelBenchSessionSummary {
@@ -1001,7 +1002,7 @@ export async function runModelBenchTarget(
 
 export async function analyzeModelBenchSession(
   sessionId: string,
-  params: { provider: string; model: string },
+  params: { provider: string },
 ): Promise<ModelBenchSession> {
   return fetchJson(`/api/model-bench/sessions/${sessionId}/analyze`, {
     method: "POST",

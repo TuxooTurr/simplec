@@ -70,8 +70,10 @@ async def run_target(session_id: str, req: RunRequest) -> dict:
 
 
 class AnalyzeRequest(BaseModel):
+    # Судья — модель, выбранная пользователем для всей платформы (глобальный
+    # провайдер из шапки), без выбора конкретной модели: chat() берёт дефолт
+    # провайдера сам. Судья намеренно не выбирается в этой панели отдельно.
     provider: str = Field(..., min_length=1)
-    model: str = Field(default="")
 
 
 @router.post("/api/model-bench/sessions/{session_id}/analyze")
@@ -84,10 +86,10 @@ async def analyze_session(session_id: str, req: AnalyzeRequest) -> dict:
 
     from agents.model_bench import analyze_report
     try:
-        report = await asyncio.to_thread(
-            analyze_report, req.provider, req.model, session["prompt"], session["transcript"], session["targets"],
+        report, best = await asyncio.to_thread(
+            analyze_report, req.provider, session["prompt"], session["transcript"], session["targets"],
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Не удалось получить отчёт: {str(e)[:300]}")
 
-    return ModelBenchStore.set_report(session_id, report, req.provider, req.model)
+    return ModelBenchStore.set_report(session_id, report, req.provider, best)

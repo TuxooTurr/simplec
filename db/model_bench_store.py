@@ -64,7 +64,8 @@ class ModelBenchStore:
             "targets": [],
             "report": "",
             "report_provider": "",
-            "report_model": "",
+            "best_provider": "",
+            "best_model": "",
         }
         sessions = cls._load()
         sessions.insert(0, session)
@@ -96,13 +97,14 @@ class ModelBenchStore:
         return None
 
     @classmethod
-    def set_report(cls, session_id: str, report: str, provider: str, model: str) -> Optional[dict]:
+    def set_report(cls, session_id: str, report: str, provider: str, best: Optional[dict]) -> Optional[dict]:
         sessions = cls._load()
         for s in sessions:
             if s.get("id") == session_id:
                 s["report"] = report
                 s["report_provider"] = provider
-                s["report_model"] = model
+                s["best_provider"] = (best or {}).get("provider", "")
+                s["best_model"] = (best or {}).get("model", "")
                 s["updated_at"] = datetime.now(timezone.utc).isoformat()
                 cls._save(sessions)
                 return s

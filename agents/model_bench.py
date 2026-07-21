@@ -7,9 +7,12 @@
 сравнительный отчёт по качеству саммари, опираясь на реально измеренные
 (не придуманные ей) технические метрики.
 """
+import re
 import time
 
 from agents.llm_client import LLMClient, Message
+
+_BEST_MARKER_RE = re.compile(r"^ЛУЧШАЯ_МОДЕЛЬ:\s*(\S+)::(.*)$", re.MULTILINE)
 
 
 def run_model_batch(provider: str, model: str, prompt: str, transcript: str, runs: int) -> list[dict]:
@@ -69,12 +72,20 @@ def _target_stats(target: dict) -> dict:
     }
 
 
-def analyze_report(judge_provider: str, judge_model: str, prompt: str, transcript: str, targets: list[dict]) -> str:
+def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: list[dict]) -> tuple[str, dict | None]:
     """Сравнительный отчёт по всем накопленным моделям/прогонам.
 
     Технические метрики (латентность, ток/сек) считаем в коде и просто
     передаём судье как факт — судья оценивает только КАЧЕСТВО саммари
-    (полнота, точность, галлюцинации), не пересчитывает то, что уже измерено."""
+    (полнота, точность, галлюцинации), не пересчитывает то, что уже измерено.
+
+    Судья — модель, выбранная пользователем для всей платформы (глобальный
+    провайдер), НЕ одна из тестируемых моделей и без переопределения модели —
+    поэтому вызывается без model-override, чат берёт дефолтную модель провайдера.
+
+    Возвращает (текст_отчёта, лучшая_модель | None), где лучшая_модель —
+    {"provider": ..., "model": ...}, если судья её явно назвала и она
+    действительно есть среди протестированных (не выдумана)."""
     stats = [_target_stats(t) for t in targets]
 
     stats_table = "\n".join(
@@ -108,12 +119,27 @@ def analyze_report(judge_provider: str, judge_model: str, prompt: str, transcrip
         "в транскрибации), стабильность формата/длины между прогонами.\n"
         "3. Итоговая рекомендация: какая модель лучше подходит для саммаризации звонков "
         "с учётом и качества, и скорости из таблицы метрик выше.\n"
-        "Пиши по делу, без вводных фраз."
+        "Пиши по делу, без вводных фраз.\n\n"
+        "ПОСЛЕДНЕЙ СТРОКОЙ ОБЯЗАТЕЛЬНО укажи победителя в точности таком формате "
+        "(без пояснений после неё):\n"
+        "ЛУЧШАЯ_МОДЕЛЬ: provider::model\n"
+        "Где provider и model — ровно как в разделе \"ТЕХНИЧЕСКИЕ МЕТРИКИ\" выше "
+        "(например: custom_groq::llama-3.3-70b-versatile)."
     )
 
     client = LLMClient(provider=judge_provider)
     resp = client.chat(
         [Message(role="user", content=judge_prompt)],
-        temperature=0.3, max_tokens=8000, model=judge_model,
+        temperature=0.3, max_tokens=8000,
     )
-    return resp.content.strip()
+    report = resp.content.strip()
+
+    best = None
+    m = _BEST_MARKER_RE.search(report)
+    if m:
+        cand_provider, cand_model = m.group(1).strip(), m.group(2).strip()
+        if any(t.get("provider") == cand_provider and t.get("model") == cand_model for t in targets):
+            best = {"provider": cand_provider, "model": cand_model}
+        report = report[:m.start()].rstrip()
+
+    return report, best

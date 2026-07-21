@@ -44,6 +44,7 @@ def run_model_batch(provider: str, model: str, prompt: str, transcript: str, run
                 "error": None,
             })
         except Exception as e:
+            _, friendly = LLMClient.classify_error(e)
             results.append({
                 "run": i + 1,
                 "output_text": "",
@@ -52,7 +53,7 @@ def run_model_batch(provider: str, model: str, prompt: str, transcript: str, run
                 "tokens_out": 0,
                 "tokens_per_sec": 0,
                 "finish_reason": "",
-                "error": str(e)[:300],
+                "error": friendly[:300],
             })
     return results
 

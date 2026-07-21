@@ -57,13 +57,15 @@ async def run_target(session_id: str, req: RunRequest) -> dict:
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
 
+    from agents.llm_client import LLMClient
     from agents.model_bench import run_model_batch
     try:
         results = await asyncio.to_thread(
             run_model_batch, req.provider, req.model, session["prompt"], session["transcript"], req.runs,
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Не удалось запустить модель: {str(e)[:300]}")
+        _, friendly = LLMClient.classify_error(e)
+        raise HTTPException(status_code=400, detail=f"Не удалось запустить модель: {friendly}")
 
     updated = ModelBenchStore.add_target_results(session_id, req.provider, req.model, results)
     return updated
@@ -84,12 +86,14 @@ async def analyze_session(session_id: str, req: AnalyzeRequest) -> dict:
     if not session.get("targets"):
         raise HTTPException(status_code=400, detail="Нет ни одного прогона — сначала запустите хотя бы одну модель")
 
+    from agents.llm_client import LLMClient
     from agents.model_bench import analyze_report
     try:
         report, best = await asyncio.to_thread(
             analyze_report, req.provider, session["prompt"], session["transcript"], session["targets"],
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Не удалось получить отчёт: {str(e)[:300]}")
+        _, friendly = LLMClient.classify_error(e)
+        raise HTTPException(status_code=400, detail=f"Не удалось получить отчёт: {friendly}")
 
     return ModelBenchStore.set_report(session_id, report, req.provider, best)

@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,9 +27,15 @@ class ModelBenchStore:
 
     @staticmethod
     def _save(sessions: list[dict]) -> None:
+        """Пишем во временный файл и атомарно переименовываем — если процесс
+        упадёт или запрос оборвётся посреди записи, основной файл не
+        останется наполовину записанным (битый JSON положил бы все
+        последующие запросы к этому хранилищу)."""
         _SESSIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SESSIONS_FILE, "w", encoding="utf-8") as f:
+        tmp_path = _SESSIONS_FILE.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(sessions, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _SESSIONS_FILE)
 
     @classmethod
     def list_sessions(cls, limit: int = 50) -> list[dict]:

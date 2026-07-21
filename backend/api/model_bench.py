@@ -68,6 +68,8 @@ async def run_target(session_id: str, req: RunRequest) -> dict:
         raise HTTPException(status_code=400, detail=f"Не удалось запустить модель: {friendly}")
 
     updated = ModelBenchStore.add_target_results(session_id, req.provider, req.model, results)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Сессия исчезла во время выполнения — начните заново")
     return updated
 
 
@@ -96,4 +98,7 @@ async def analyze_session(session_id: str, req: AnalyzeRequest) -> dict:
         _, friendly = LLMClient.classify_error(e)
         raise HTTPException(status_code=400, detail=f"Не удалось получить отчёт: {friendly}")
 
-    return ModelBenchStore.set_report(session_id, report, req.provider, best)
+    updated = ModelBenchStore.set_report(session_id, report, req.provider, best)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Сессия исчезла во время выполнения — начните заново")
+    return updated

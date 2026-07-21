@@ -669,7 +669,13 @@ function UnifiedLlmProviders({
                   )}
                 </div>
                 <StatusBadge result={tr ?? null} loading={testing === p.id} />
-                <TestButton onClick={() => handleTest(p.id)} loading={testing === p.id} />
+                {/* Пока панель подключения этого провайдера раскрыта — тест только
+                    там (по живым параметрам формы, «Тест чата» для сертификата);
+                    строчная «Тест» дублировала бы его — показываем только когда
+                    панель свёрнута (быстрая проверка сохранённой конфигурации). */}
+                {editingId !== p.id && (
+                  <TestButton onClick={() => handleTest(p.id)} loading={testing === p.id} />
+                )}
                 <button
                   onClick={() => openEdit(p)}
                   className="px-2 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-subtle"

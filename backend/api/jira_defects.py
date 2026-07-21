@@ -165,7 +165,12 @@ def _jira_request(cfg: dict, method: str, path: str,
 # ── Резолв кастомных полей по имени (кэш на процесс) ─────────────────────────
 
 _fields_cache: dict[str, tuple[float, dict]] = {}
-_FIELDS_TTL = 600  # 10 минут
+_FIELDS_TTL = 600        # 10 минут — успешный резолв (схема проекта меняется редко)
+_FIELDS_ERROR_TTL = 20   # провал резолва — почти не кешируем, иначе одна временная
+                         # сетевая заминка "отравляет" кэш на 10 минут: все дефекты в
+                         # этом окне уйдут со старым (неверным) форматом полей и тем же
+                         # набором ошибок ("должно быть строкой" / "приоритет неверен"),
+                         # хотя createmeta уже мог снова заработать через пару секунд.
 
 
 def _pick_issuetype(issuetypes: list[dict], wanted: str) -> Optional[dict]:
@@ -263,7 +268,8 @@ def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
     if resolved is None:
         resolved = {"_issuetype": issuetype, "_available": [], "_error": "; ".join(errors)[:400]}
 
-    _fields_cache[cache_key] = (now, resolved)
+    ttl_start = now if not resolved.get("_error") else now - _FIELDS_TTL + _FIELDS_ERROR_TTL
+    _fields_cache[cache_key] = (ttl_start, resolved)
     return resolved
 
 
@@ -520,24 +526,25 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         if ke_objects:
             ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
             ke_schema = _field_schema_type(resolved, ke_field)
-            if ke_schema == "string":
-                # Поле оказалось текстовым (не object/Insight) — шлём человекочитаемое
-                # значение строкой. Формат подтверждён реальной ошибкой Jira на SBER911:
-                # "Значение операции должно быть строкой".
-                fields[ke_field] = "; ".join(o["value"] for o in ke_objects)
-            elif ke_schema == "array":
+            if ke_schema == "array":
                 fields[ke_field] = [o["value"] for o in ke_objects]
-            else:
-                # схема неизвестна (createmeta недоступен) — прежнее поведение (объект/Insight)
+            elif ke_schema and ke_schema != "string":
                 fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
+            else:
+                # ke_schema == "string", либо схема неизвестна (createmeta недоступен на
+                # этот раз) — строка как дефолт для неизвестной схемы: оба раза, когда
+                # реальная Jira присылала ошибку по этому полю на SBER911, оно требовало
+                # именно строку, а не объект/Insight ("Значение операции должно быть строкой").
+                fields[ke_field] = "; ".join(o["value"] for o in ke_objects)
 
         it_service_schema = _field_schema_type(resolved, "customfield_22400")
-        if it_service_schema == "string":
-            it_service_value: Any = JC.IT_SERVICE["value"]
-        elif it_service_schema == "array":
-            it_service_value = [JC.IT_SERVICE["value"]]
-        else:
+        if it_service_schema == "array":
+            it_service_value: Any = [JC.IT_SERVICE["value"]]
+        elif it_service_schema and it_service_schema != "string":
             it_service_value = [{"id": JC.IT_SERVICE["id"]}]
+        else:
+            # см. комментарий выше про КЭ — тот же принцип для ИТ-услуги
+            it_service_value = JC.IT_SERVICE["value"]
         fields.setdefault("customfield_22400", it_service_value)
 
         for fid, value in JC.DEFAULT_FIELDS.items():

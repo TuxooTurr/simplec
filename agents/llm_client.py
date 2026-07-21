@@ -584,6 +584,9 @@ class LLMClient:
             return True, "Ой! Ошибка авторизации LLM-провайдера. Проверьте API-ключ или смените провайдера в настройках."
         if "429" in msg or "rate limit" in msg or "too many requests" in msg or "ratelimit" in msg:
             return True, "Ой! Превышен лимит запросов к LLM-провайдеру. Подождите немного или смените провайдера."
+        if any(x in msg for x in ("context_length_exceeded", "maximum context length", "context length",
+                                   "too many tokens", "превышена максимальная длина", "превышен лимит токенов")):
+            return True, "Ой! Промпт + транскрибация не помещаются в контекст модели. Сократите текст или смените модель на другую с большим контекстом."
         if ("ssl" in msg or "certificate" in msg or "certificate_verify_failed" in msg
                 or "unexpected_eof" in msg or "eof occurred" in msg):
             return True, (

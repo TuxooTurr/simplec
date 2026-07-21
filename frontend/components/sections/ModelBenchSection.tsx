@@ -84,7 +84,7 @@ function TargetCard({ target, providers, isBest }: { target: ModelBenchTarget; p
       <div className="px-4 pb-3 flex flex-wrap gap-4 text-xs text-text-muted border-t border-border-main pt-3">
         <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> ~{avg(okRuns.map((r) => r.latency_sec))}с</span>
         <span className="flex items-center gap-1"><Zap className="w-3.5 h-3.5" /> ~{avg(okRuns.map((r) => r.tokens_per_sec))} ток/сек</span>
-        <span>~{avg(okRuns.map((r) => r.tokens_out))} токенов на ответ</span>
+        <span>токены: ~{avg(okRuns.map((r) => r.tokens_in))} контекст → ~{avg(okRuns.map((r) => r.tokens_out))} ответ</span>
       </div>
 
       {expanded && (
@@ -98,7 +98,7 @@ function TargetCard({ target, providers, isBest }: { target: ModelBenchTarget; p
                 ) : (
                   <>
                     <span>{r.latency_sec}с</span>
-                    <span>{r.tokens_in}→{r.tokens_out} токенов</span>
+                    <span>контекст {r.tokens_in} → ответ {r.tokens_out} токенов</span>
                     <span>{r.tokens_per_sec} ток/сек</span>
                     {r.finish_reason === "length" && (
                       <span className="text-amber-600">обрезан лимитом</span>

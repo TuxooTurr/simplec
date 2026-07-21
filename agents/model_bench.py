@@ -30,9 +30,27 @@ def run_model_batch(provider: str, model: str, prompt: str, transcript: str, run
         started = time.time()
         try:
             resp = client.chat(messages, temperature=0.3, max_tokens=2000, model=model)
+            # Пустой ответ при finish_reason="stop" — не ошибка API (исключения не было),
+            # а деградация модели: она "ответила", но саммари в этом ответе нет. Раньше это
+            # тихо сохранялось как успешный прогон с пустым output_text — неотличимо от
+            # настоящего пустого саммари. Одна свежая попытка (не продолжение) обычно чинит это.
+            if not resp.content.strip():
+                resp = client.chat(messages, temperature=0.3, max_tokens=2000, model=model)
             elapsed = time.time() - started
             usage = resp.usage or {}
             tokens_out = usage.get("completion_tokens", 0)
+            if not resp.content.strip():
+                results.append({
+                    "run": i + 1,
+                    "output_text": "",
+                    "latency_sec": round(elapsed, 2),
+                    "tokens_in": usage.get("prompt_tokens", 0),
+                    "tokens_out": tokens_out,
+                    "tokens_per_sec": 0,
+                    "finish_reason": resp.finish_reason,
+                    "error": "Модель вернула пустой ответ (после повторной попытки)",
+                })
+                continue
             results.append({
                 "run": i + 1,
                 "output_text": resp.content,

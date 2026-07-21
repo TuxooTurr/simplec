@@ -89,7 +89,7 @@
       {
         "id": "cell-1783513603332-a5vj",
         "type": "init",
-        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_TOKEN)),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
+        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
       },
       {
         "id": "cell-1783513612322-xl4u",
@@ -172,7 +172,7 @@
       {
         "id": "cell-1783515149160-gwlk",
         "type": "init",
-        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_TOKEN)),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
+        "source": "# SECRET = \"SBER911_SECRET_KEY\"\n# ALG = \"HS256\"\n# AUTH_PAYLOAD = {\n#     \"iss\": \"https://sber911.sberbank.ru/\",\n#     \"sub\": \"Тех. пользователь Sber911\",\n#     \"upn\": \"CI02000001IFTsber911\",\n#     \"exp\": \"1759102365673\",\n#     \"iat\": \"1755092365673\",\n#     \"pid\": \"CI02000001IFTsber911\",\n#     \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n# }\n# AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n# # decoded_payload = jwt.decode(token, SECRET, algorithms=[ALG])\n# # print(decoded_payload)\n\n# MESSAGE_PAYLOAD = {\n#     \"senderAgentName\": SENDER,\n#     \"recipientAgentName\": RECIPIENT,\n#     \"senderIdAEF\": \"CI00213821\",\n#     \"recipientIdAEF\": \"CI00293210\",\n#     \"systemCi\": SERVICE_PROXY_TEST_CI,\n#     \"agentModelVersion\": \"PRO 2.0\",\n#     \"a2aSessionId\": \"none\",\n#     \"gigaChatSessionId\": \"none\"\n# }\n\n# MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n# # MESSAGE_TOKEN_B64 = base64.b64encode(json.dumps(MESSAGE_TOKEN).encode('utf-8')).decode('utf-8')\n# # base64_decoded = base64.b64decode(MESSAGE_TOKEN_B64)\n# # print(base64_decoded.decode('utf-8'))\n\n# HEADERS = [\n#     (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n#     (\"MessageToken\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n#     (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n#     (\"SystemCi\", get_byte_string(SERVICE_PROXY_TEST_CI)),\n#     (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n# ]\n# HEADERS"
       },
       {
         "id": "cell-1783515158775-e76j",
@@ -531,22 +531,6 @@
     "created_at": "2026-07-13T12:57:28.629600+00:00"
   },
   {
-    "id": "b34ef231",
-    "name": "Проверка",
-    "topic": "",
-    "notebook": [
-      {
-        "id": "cell-1783849726898-swfz",
-        "type": "loop",
-        "source": "import socket\n\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\ndef check_connectivity(brokers):\n    for b in brokers:\n        host, port = b.split(\":\")\n        # проверка DNS\n        try:\n            ip = socket.gethostbyname(host)\n            print(f\"🔎 {host} -> {ip}\")\n        except Exception as e:\n            print(f\"❌ DNS не резолвится для {host}: {e}\")\n            continue\n        # проверка порта\n        try:\n            with socket.create_connection((host, int(port)), timeout=5):\n                print(f\"✅ {b} — порт доступен\")\n        except Exception as e:\n            print(f\"❌ {b} — порт недоступен: {e}\")\n\ncheck_connectivity(BROKERS)"
-      }
-    ],
-    "dynamic_params": [],
-    "visible_to_monitoring": false,
-    "folder_id": null,
-    "created_at": "2026-07-12T09:50:18.948763+00:00"
-  },
-  {
     "id": "226fa223",
     "name": "AH-EVENT-ESD-upd",
     "topic": "",
@@ -581,25 +565,6 @@
     "visible_to_monitoring": false,
     "folder_id": "fld-44fb9946",
     "created_at": "2026-07-13T12:28:21.358779+00:00"
-  },
-  {
-    "id": "27ca74ba",
-    "name": "Время",
-    "topic": "",
-    "notebook": [],
-    "dynamic_params": [
-      {
-        "id": "param-1780478082845-vme",
-        "label": "Время",
-        "code_key": "",
-        "placeholder": "",
-        "field_type": "datetime",
-        "options": []
-      }
-    ],
-    "visible_to_monitoring": false,
-    "folder_id": "fld-1dff74db",
-    "created_at": "2026-06-04T08:42:18.595926+00:00"
   },
   {
     "id": "54604fad",
@@ -695,5 +660,122 @@
     "visible_to_monitoring": false,
     "folder_id": "fld-681eeeee",
     "created_at": "2026-07-14T16:15:56.875986+00:00"
+  },
+  {
+    "id": "01cfebe9",
+    "name": "WorkGroup",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1784542775783-d6d5",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1784542777599-yrtx",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nWG_TOPIC = \"REPL.PKAP1173.911_WORK_GROUP\"\n\n# ⚠️ Тестовый префикс — НЕ ПЕРЕСЕКАЕТСЯ с реальными РГ от ПКАП\nWG_TEST_PREFIX = \"УРБ Тест РГ (УРБ90000000000\"\n\n# Локальный реестр отправленных тестовых РГ\nWG_REGISTRY_PATH = os.path.abspath(\"./work_group_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef make_test_wg_name(suffix: int) -> str:\n    \"\"\"Тестовый name (уникальный ID РГ), например: 'УРБ Тест РГ (УРБ900000000000007)'.\"\"\"\n    return f\"{WG_TEST_PREFIX}{suffix:04d})\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(WG_REGISTRY_PATH):\n        return {}\n    try:\n        with open(WG_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(WG_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"name\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(name: str) -> dict | None:\n    return _load_registry().get(name)\n\n\ndef registry_list(prefix: str = WG_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [n for n in reg.keys() if n.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:        {BROKERS}\")\nprint(f\"   Топик РГ:       {WG_TOPIC}\")\nprint(f\"   Префикс тест.:  {WG_TEST_PREFIX}\")\nprint(f\"   Реестр:         {WG_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1784542783403-e3v1",
+        "type": "init",
+        "source": "def make_wg_record(\n    name: str,\n    members: list,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    hpc_status: str = \"Действующая\",\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись рабочей группы для таблицы datamart.assignmentm1_911.\n    members — список табельных номеров (str), например ['2214813', '164789', ...].\"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"name\": name,                                  # ID РГ (УНИК.)\n        \"group_id\": str(uuid.uuid4()),                 # ESM id рабочей группы\n        # ─── Наименования / иерархия ──────────────────────────────────\n        \"hpc_name_name\": \"УРБ Сопровождение СПООБК\",   # Наименование РГ\n        \"hpc_parent_name\": \"ЦТП Уральского банка\",     # Родитель\n        \"hpc_parent\": \"УРБ Центр технической поддержки (УРБ281541556570439)\",  # Родитель ID\n        # ─── Признаки ─────────────────────────────────────────────────\n        \"sb_is_reliability_experts\": \"f\",              # Группа Экспертов надёжности t/f/null\n        \"sb_helpdesk\": \"СРБ СКСО Диспетчеры (СРБ2828522333387848)\",  # Диспетчерская\n        \"hpc_source_id\": \"ЦТП\",                        # Идентификатор\n        \"hpc_information\": \"УРБ ВСП\",                   # Информация\n        # ─── Аудит ────────────────────────────────────────────────────\n        \"hpc_modified_by_name\": \"Ерыпалов А.О. (609173)\",\n        \"hpc_created_by_name\": \"Гущин А.А. (164789)\",\n        \"hpc_update_time\": now_str(),\n        \"hpc_created_time\": now_str(),\n        # ─── Лидеры / координаторы ────────────────────────────────────\n        \"sb_leader_of_ts_claster\": \"\",\n        \"sb_leader_of_ts_claster_id\": \"\",\n        \"sb_rc_local_coordinator_name\": \"\",\n        \"sb_rc_local_coordinator\": \"\",\n        \"sb_rsk_local_coordinator_name\": \"\",\n        \"sb_rsk_local_coordinator\": \"\",\n        # ─── Прочие атрибуты ──────────────────────────────────────────\n        \"hpc_k2\": \"f\",                                 # Нельзя назначать К-2 t/f/null\n        \"sb_direction\": \"\",\n        \"sb_relexp_stream\": \"\",\n        \"hpc_coordinator_name\": \"Ступин Я.В. (424136)\",   # Руководитель РГ\n        \"hpc_coordinator\": \"Ступин Я.В. (00275374)\",      # Руководитель РГ ID\n        \"hpc_status\": hpc_status,                          # Статус\n        \"sb_terbank\": \"Московский банк\",                  # Тербанк\n        \"hpc_email\": \"\",                                  # E-mail ДС\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,\n        \"ctl_validfrom\": ctl_validfrom or now_str(),\n        # ─── Участники РГ ─────────────────────────────────────────────\n        \"members\": [{\"sb_sap_identification\": str(tab)} for tab in members],\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_wg_message(records: list) -> dict:\n    return {\n        \"table_name\": \"assignmentm1_911\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон рабочей группы загружен\")"
+      },
+      {
+        "id": "cell-1784542791759-pz0w",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1784542811673-y8et",
+        "type": "loop",
+        "source": "# ══════════════════════════════════════════════════════════════════════\n# БЛОК 1. ДАННЫЕ — меняй под свой тест-кейс\n# ══════════════════════════════════════════════════════════════════════\n\n# 4 участника рабочей группы (табельные номера)\nMEMBERS = [\n    \"01653680\",\n    \"00394299\",\n    \"06121003\",\n]\n\n# Атрибуты РГ — переопредели по необходимости\nOVERRIDES = {\n    \"hpc_name_name\": \"Группа по SberESM\",\n    \"hpc_status\": \"Действующая\",\n    \"sb_terbank\": \"Московский банк\",\n    \"sb_is_reliability_experts\": \"f\",\n    \"hpc_k2\": \"f\",\n    # \"hpc_parent_name\": \"ЦТП Уральского банка\",\n}\n\nCTL_ACTION = \"I\"   # I / U / D / null\n\n# ══════════════════════════════════════════════════════════════════════\n# БЛОК 2. ФОРМИРОВАНИЕ И ОТПРАВКА СООБЩЕНИЯ\n# ══════════════════════════════════════════════════════════════════════\n\nname = make_test_wg_name(suffix=random.randint(1, 9999))\n\nrec = make_wg_record(\n    name=name,\n    members=MEMBERS,\n    ctl_action=CTL_ACTION,\n    ctl_validfrom=now_str(),\n    **OVERRIDES,\n)\nmsg = make_wg_message([rec])\n\nprint(f\"🆕 {CTL_ACTION} work_group name = {name}\")\nprint(f\"👥 Участников: {len(MEMBERS)} → {MEMBERS}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(WG_TOPIC, msg, key=name)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {name}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1784542841061-u9c",
+        "label": "Имя ДС",
+        "code_key": "hpc_name_name",
+        "placeholder": "Группа по SberESM",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-20T10:27:07.733437+00:00"
+  },
+  {
+    "id": "4a700277",
+    "name": "Contact",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1784635101098-owfx",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1784635103507-ayby",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nCONTACTS_TOPIC = \"REPL.PKAP1173.911_CONTACTS\"\n\n# ⚠️ Тестовый суффикс табельного номера — НЕ ПЕРЕСЕКАЕТСЯ с реальными данными ПКАП\nCONTACTS_TEST_PREFIX = \"Тест \"          # префикс для contact_name\nCONTACTS_TEST_SAP_PREFIX = \"90000000\"   # префикс тестового табельного (sb_sap_identification)\n\n# Локальный реестр отправленных тестовых контактов (общий для INSERT/UPDATE/DELETE-ноутбуков)\nCONTACTS_REGISTRY_PATH = os.path.abspath(\"./contacts_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef now_ctl():\n    \"\"\"Время для ctl_validfrom в формате ISO 'YYYY-MM-DDTHH:MM:SS'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%dT%H:%M:%S\")\n\n\ndef make_test_sap(suffix: int) -> str:\n    \"\"\"Тестовый sb_sap_identification (табельный), например: 9000000042.\"\"\"\n    return f\"{CONTACTS_TEST_SAP_PREFIX}{suffix:02d}\"\n\n\ndef make_test_contact_name(suffix: int) -> str:\n    \"\"\"Тестовый contact_name (уникальный идентификатор), например: 'Тест Иванов И. И. (9000000042)'.\"\"\"\n    sap = make_test_sap(suffix)\n    return f\"{CONTACTS_TEST_PREFIX}Иванов И. И. ({sap})\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(CONTACTS_REGISTRY_PATH):\n        return {}\n    try:\n        with open(CONTACTS_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(CONTACTS_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"contact_name\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(contact_name: str) -> dict | None:\n    return _load_registry().get(contact_name)\n\n\ndef registry_list(prefix: str = CONTACTS_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    names = [n for n in reg.keys() if n.startswith(prefix)]\n    names.sort(reverse=True)\n    return names[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:           {BROKERS}\")\nprint(f\"   Топик CONTACTS:    {CONTACTS_TOPIC}\")\nprint(f\"   Тест. SAP-префикс: {CONTACTS_TEST_SAP_PREFIX}\")\nprint(f\"   Реестр:            {CONTACTS_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1784635113746-fr62",
+        "type": "init",
+        "source": "def make_contact_record(\n    contact_name: str,\n    sb_sap_identification: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    full_name: str = None,\n    id_bhb: str = None,\n    **overrides,\n) -> dict:\n    \"\"\"\n    Формирует ОДНУ запись контакта для таблицы datamart.contctsm1_911.\n    Уникальный идентификатор — contact_name.\n    contact_id в БД проставляется сервисом по sb_sap_identification -> address_book_employee.employee_number.\n    \"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"contact_name\": contact_name,                 # УНИК. ID пользователя\n        \"id_bhb\": id_bhb or str(uuid.uuid4()),         # ID пользователя БХБ (uuid)\n        \"full_name\": full_name or contact_name,        # Полное имя ID\n        # ─── SAP / табельный ──────────────────────────────────────────\n        \"sb_sap_identification\": sb_sap_identification, # Табельный номер -> personnel_number\n        # ─── Доп. атрибуты (полный состав) ────────────────────────────\n        \"contact_phone\": \"79000000000\",\n        \"dept\": \"ЦА (00000118)\",\n        \"first_name\": \"Иван\",\n        \"home_phone\": \"8-00000000\",\n        \"hpc_created_by\": \"Технологический пользователь JIRA (939952)\",\n        \"hpc_created_by_name\": \"Технологический пользователь JIRA\",\n        \"hpc_dept_id\": \"00099118\",\n        \"hpc_dept_name\": \"ЦА\",\n        \"hpc_modified_by\": \"ФОНОВЫЙ ПРОЦЕСС\",\n        \"hpc_modified_by_name\": \"Фоновый процесс\",\n        \"hpc_tpl_id\": \"10990010\",\n        \"hpc_update_time\": \"2024-09-30T21:00:32\",\n        \"last_name\": \"Иванов\",\n        \"location_code\": \"ТЕСТ-ЛОКАЦИЯ\",\n        \"location_full_name\": \"ТЕСТ-ЛОКАЦИЯ\",\n        \"location\": \"Россия г Москва пр-кт Кутузовский, 32к1\",\n        \"portable_phone\": \"79000000001\",\n        \"sb_dept\": \"ЦА (00000118)\",\n        \"sb_emaildeliveryon\": None,\n        \"sb_smsdelivery\": \"t\",\n        \"sb_smsdeliveryon\": \"t\",\n        \"sb_staffsys_id\": \"SAP\",\n        \"sb_terbank\": \"Московский банк\",\n        \"sb_vsp\": \"Группа сопровождения (00220749)\",\n        \"sb_work_type_desc\": \"на территории Работодателя\",\n        \"sb_work_type_start\": \"2024-08-26T21:00:00\",\n        \"sb_extwork_end\": \"1926-11-12T02:00:00\",\n        \"sb_extwork_start\": \"1926-11-12T02:00:00\",\n        \"time_zone\": \"GMT+04:00\",\n        \"tps_ext_email\": \"test-ivanov@sberbank.ru\",\n        \"email\": \"test-ivanov@mail.ca.sbrf.ru\",\n        \"title\": \"ТЕСТ: Старший эксперт по технологиям\",\n        \"tps_create_time\": \"2016-05-10T10:27:47\",\n        \"tps_dept1_name\": \"ПАО Сбербанк (ЦА)\",\n        \"tps_dept2_name\": \"Блок 'Технологии'\",\n        \"tps_dept3_name\": \"ТЕСТ Департамент ИТ\",\n        \"tps_employee_id\": sb_sap_identification,\n        \"tps_midname\": \"Иванович\",\n        \"tps_name\": \"Иванов\",\n        \"tps_primary_email\": \"test-ivanov@mail.ca.sbrf.ru\",\n        \"tps_status\": \"Действует\",\n        \"user_type\": \"Сотрудник ЦА\",\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,                      # I / U / D / null\n        \"ctl_validfrom\": ctl_validfrom or now_ctl(),\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_contacts_message(records: list) -> dict:\n    return {\n        \"table_name\": \"contctsm1_911\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон CONTACTS загружен\")"
+      },
+      {
+        "id": "cell-1784635124329-bklr",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1784635270574-ofnb",
+        "type": "loop",
+        "source": "# ── INSERT: создание нового тестового контакта ────────────────────────────\n# ⚠️ Чтобы contact_id заполнился, укажи sb_sap_identification, реально существующий\n#    в conference.address_book_employee.employee_number.\n#    Если использовать тестовый префикс — contact_id останется NULL (это тоже валидный кейс).\n\nsuffix = random.randint(1, 99)\nsap = make_test_sap(suffix)                    # напр. 9000000042 (тест, contact_id -> NULL)\n# sap = \"1937071\"                              # РАСКОММЕНТИРУЙ для проверки маппинга contact_id\ncontact_name = make_test_contact_name(suffix)\n\nOVERRIDES = {\n    \"title\": \"ТЕСТ: Кастомная должность\",\n    \"email\": \"test-insert@mail.ca.sbrf.ru\",\n    # \"full_name\": \"Иванов И. И. (9000000042)\",\n}\n\nrec = make_contact_record(\n    contact_name=contact_name,\n    sb_sap_identification=sap,\n    ctl_action=\"I\",\n    ctl_validfrom=now_ctl(),\n    **OVERRIDES,\n)\nmsg = make_contacts_message([rec])\n\nprint(f\"🆕 INSERT contact_name = {contact_name}  (sap={sap})\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(CONTACTS_TOPIC, msg, key=contact_name)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {contact_name}\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-07-21T12:01:30.911877+00:00"
+  },
+  {
+    "id": "aa504d15",
+    "name": "Contact (U)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1784635383213-gxh8",
+        "type": "init",
+        "source": "# Запускается ОДИН РАЗ при первом старте окружения\n%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1784635385442-9jcn",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени брокеры на нужный стенд (ИФТ/ПСИ/ПРОМ ПКАП)\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nCONTACTS_TOPIC = \"REPL.PKAP1173.911_CONTACTS\"\n\n# ⚠️ Тестовый суффикс табельного номера — НЕ ПЕРЕСЕКАЕТСЯ с реальными данными ПКАП\nCONTACTS_TEST_PREFIX = \"Тест \"          # префикс для contact_name\nCONTACTS_TEST_SAP_PREFIX = \"90000000\"   # префикс тестового табельного (sb_sap_identification)\n\n# Локальный реестр отправленных тестовых контактов (общий для INSERT/UPDATE/DELETE-ноутбуков)\nCONTACTS_REGISTRY_PATH = os.path.abspath(\"./contacts_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    if isinstance(obj, list): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_str():\n    \"\"\"UTC-время в формате 'YYYY-MM-DD HH:MM:SS.mmm'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%d %H:%M:%S.%f\")[:-3]\n\n\ndef now_ctl():\n    \"\"\"Время для ctl_validfrom в формате ISO 'YYYY-MM-DDTHH:MM:SS'.\"\"\"\n    return datetime.now(timezone.utc).strftime(\"%Y-%m-%dT%H:%M:%S\")\n\n\ndef make_test_sap(suffix: int) -> str:\n    \"\"\"Тестовый sb_sap_identification (табельный), например: 9000000042.\"\"\"\n    return f\"{CONTACTS_TEST_SAP_PREFIX}{suffix:02d}\"\n\n\ndef make_test_contact_name(suffix: int) -> str:\n    \"\"\"Тестовый contact_name (уникальный идентификатор), например: 'Тест Иванов И. И. (9000000042)'.\"\"\"\n    sap = make_test_sap(suffix)\n    return f\"{CONTACTS_TEST_PREFIX}Иванов И. И. ({sap})\"\n\n\n# ── Реестр ──────────────────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(CONTACTS_REGISTRY_PATH):\n        return {}\n    try:\n        with open(CONTACTS_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(CONTACTS_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"contact_name\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(contact_name: str) -> dict | None:\n    return _load_registry().get(contact_name)\n\n\ndef registry_list(prefix: str = CONTACTS_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    names = [n for n in reg.keys() if n.startswith(prefix)]\n    names.sort(reverse=True)\n    return names[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:           {BROKERS}\")\nprint(f\"   Топик CONTACTS:    {CONTACTS_TOPIC}\")\nprint(f\"   Тест. SAP-префикс: {CONTACTS_TEST_SAP_PREFIX}\")\nprint(f\"   Реестр:            {CONTACTS_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1784635391428-kky2",
+        "type": "init",
+        "source": "def make_contact_record(\n    contact_name: str,\n    sb_sap_identification: str,\n    ctl_action: str = \"I\",\n    ctl_validfrom: str = None,\n    full_name: str = None,\n    id_bhb: str = None,\n    **overrides,\n) -> dict:\n    \"\"\"\n    Формирует ОДНУ запись контакта для таблицы datamart.contctsm1_911.\n    Уникальный идентификатор — contact_name.\n    contact_id в БД проставляется сервисом по sb_sap_identification -> address_book_employee.employee_number.\n    \"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"contact_name\": contact_name,                 # УНИК. ID пользователя\n        \"id_bhb\": id_bhb or str(uuid.uuid4()),         # ID пользователя БХБ (uuid)\n        \"full_name\": full_name or contact_name,        # Полное имя ID\n        # ─── SAP / табельный ──────────────────────────────────────────\n        \"sb_sap_identification\": sb_sap_identification, # Табельный номер -> personnel_number\n        # ─── Доп. атрибуты (полный состав) ────────────────────────────\n        \"contact_phone\": \"79000000000\",\n        \"dept\": \"ЦА (00000118)\",\n        \"first_name\": \"Иван\",\n        \"home_phone\": \"8-00000000\",\n        \"hpc_created_by\": \"Технологический пользователь JIRA (939952)\",\n        \"hpc_created_by_name\": \"Технологический пользователь JIRA\",\n        \"hpc_dept_id\": \"00099118\",\n        \"hpc_dept_name\": \"ЦА\",\n        \"hpc_modified_by\": \"ФОНОВЫЙ ПРОЦЕСС\",\n        \"hpc_modified_by_name\": \"Фоновый процесс\",\n        \"hpc_tpl_id\": \"10990010\",\n        \"hpc_update_time\": \"2024-09-30T21:00:32\",\n        \"last_name\": \"Иванов\",\n        \"location_code\": \"ТЕСТ-ЛОКАЦИЯ\",\n        \"location_full_name\": \"ТЕСТ-ЛОКАЦИЯ\",\n        \"location\": \"Россия г Москва пр-кт Кутузовский, 32к1\",\n        \"portable_phone\": \"79000000001\",\n        \"sb_dept\": \"ЦА (00000118)\",\n        \"sb_emaildeliveryon\": None,\n        \"sb_smsdelivery\": \"t\",\n        \"sb_smsdeliveryon\": \"t\",\n        \"sb_staffsys_id\": \"SAP\",\n        \"sb_terbank\": \"Московский банк\",\n        \"sb_vsp\": \"Группа сопровождения (00220749)\",\n        \"sb_work_type_desc\": \"на территории Работодателя\",\n        \"sb_work_type_start\": \"2024-08-26T21:00:00\",\n        \"sb_extwork_end\": \"1926-11-12T02:00:00\",\n        \"sb_extwork_start\": \"1926-11-12T02:00:00\",\n        \"time_zone\": \"GMT+04:00\",\n        \"tps_ext_email\": \"test-ivanov@sberbank.ru\",\n        \"email\": \"test-ivanov@mail.ca.sbrf.ru\",\n        \"title\": \"ТЕСТ: Старший эксперт по технологиям\",\n        \"tps_create_time\": \"2016-05-10T10:27:47\",\n        \"tps_dept1_name\": \"ПАО Сбербанк (ЦА)\",\n        \"tps_dept2_name\": \"Блок 'Технологии'\",\n        \"tps_dept3_name\": \"ТЕСТ Департамент ИТ\",\n        \"tps_employee_id\": sb_sap_identification,\n        \"tps_midname\": \"Иванович\",\n        \"tps_name\": \"Иванов\",\n        \"tps_primary_email\": \"test-ivanov@mail.ca.sbrf.ru\",\n        \"tps_status\": \"Действует\",\n        \"user_type\": \"Сотрудник ЦА\",\n        # ─── CTL ──────────────────────────────────────────────────────\n        \"ctl_action\": ctl_action,                      # I / U / D / null\n        \"ctl_validfrom\": ctl_validfrom or now_ctl(),\n    }\n    rec.update(overrides)\n    return rec\n\n\ndef make_contacts_message(records: list) -> dict:\n    return {\n        \"table_name\": \"contctsm1_911\",\n        \"table_schema\": \"datamart\",\n        \"data\": records,\n    }\n\n\nprint(\"✅ Шаблон CONTACTS загружен\")"
+      },
+      {
+        "id": "cell-1784635401448-n983",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset} \"\n          f\"records={len(message.get('data', []))}\")"
+      },
+      {
+        "id": "cell-1784635420827-agrt",
+        "type": "loop",
+        "source": "# ── UPDATE: обновление существующего контакта ─────────────────────────────\n# Берём последний из реестра или задаём вручную.\nnames = registry_list()\nassert names, \"Реестр пуст — сначала выполни INSERT (#5)\"\ncontact_name = names[0]                        # или задай явно: contact_name = \"Тест Иванов И. И. (9000000042)\"\n\nbase = registry_get(contact_name)\nsap = base[\"sb_sap_identification\"]\n\nOVERRIDES = {\n    \"title\": \"ТЕСТ: ОБНОВЛЁННАЯ должность\",\n    \"email\": \"test-update@mail.ca.sbrf.ru\",\n    \"tps_status\": \"Действует (обновлено)\",\n}\n\nrec = make_contact_record(\n    contact_name=contact_name,\n    sb_sap_identification=sap,\n    ctl_action=\"U\",\n    ctl_validfrom=now_ctl(),                   # свежая дата -> изменение применится\n    **OVERRIDES,\n)\nmsg = make_contacts_message([rec])\n\nprint(f\"✏️ UPDATE contact_name = {contact_name}\")\nprint(json.dumps(msg, indent=2, ensure_ascii=False))\nprint()\nsend_to_kafka(CONTACTS_TOPIC, msg, key=contact_name)\n\nregistry_put(rec)\nprint(f\"💾 Обновлено в реестре: {contact_name}\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-62f453f0",
+    "created_at": "2026-07-21T12:03:56.863240+00:00"
   }
 ]

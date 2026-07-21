@@ -927,3 +927,85 @@ export async function chatLogs(params: {
     body:    JSON.stringify(params),
   });
 }
+
+// ─── Сравнение LLM-моделей (саммаризация транскрибаций) ───────────────────────
+
+export interface ModelBenchRun {
+  run: number;
+  output_text: string;
+  latency_sec: number;
+  tokens_in: number;
+  tokens_out: number;
+  tokens_per_sec: number;
+  finish_reason: string;
+  error: string | null;
+}
+
+export interface ModelBenchTarget {
+  provider: string;
+  model: string;
+  results: ModelBenchRun[];
+}
+
+export interface ModelBenchSession {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  prompt: string;
+  transcript: string;
+  targets: ModelBenchTarget[];
+  report: string;
+  report_provider: string;
+  report_model: string;
+}
+
+export interface ModelBenchSessionSummary {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  prompt: string;
+  targets_count: number;
+  has_report: boolean;
+}
+
+export async function createModelBenchSession(prompt: string, transcript: string): Promise<ModelBenchSession> {
+  return fetchJson("/api/model-bench/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, transcript }),
+  });
+}
+
+export async function listModelBenchSessions(): Promise<ModelBenchSessionSummary[]> {
+  return fetchJson("/api/model-bench/sessions");
+}
+
+export async function getModelBenchSession(id: string): Promise<ModelBenchSession> {
+  return fetchJson(`/api/model-bench/sessions/${id}`);
+}
+
+export async function deleteModelBenchSession(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/model-bench/sessions/${id}`, { method: "DELETE" });
+}
+
+export async function runModelBenchTarget(
+  sessionId: string,
+  params: { provider: string; model: string; runs: number },
+): Promise<ModelBenchSession> {
+  return fetchJson(`/api/model-bench/sessions/${sessionId}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}
+
+export async function analyzeModelBenchSession(
+  sessionId: string,
+  params: { provider: string; model: string },
+): Promise<ModelBenchSession> {
+  return fetchJson(`/api/model-bench/sessions/${sessionId}/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+}

@@ -14,6 +14,7 @@ export type SectionId =
   | "metrics"
   | "revisor"
   | "etalons"
+  | "model_bench"
   | "settings";
 
 export interface BugPrefill {

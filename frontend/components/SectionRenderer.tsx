@@ -13,6 +13,7 @@ import TestDataSection from "./sections/TestDataSection";
 import SettingsSection from "./sections/SettingsSection";
 import JobsSection from "./sections/JobsSection";
 import KafkaSection from "./sections/KafkaSection";
+import ModelBenchSection from "./sections/ModelBenchSection";
 
 export default function SectionRenderer() {
   const { rightSection, dragging } = useWorkspace();
@@ -57,6 +58,7 @@ export default function SectionRenderer() {
     metrics:    <MetricsSection />,
     revisor:    <RevisorSection />,
     settings:   <SettingsSection />,
+    model_bench: <ModelBenchSection />,
   };
 
   return <>{sections[rightSection] ?? null}</>;

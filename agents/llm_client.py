@@ -472,16 +472,18 @@ class LLMClient:
 
     def chat(self, messages: List[Message],
              temperature: float = 0.7,
-             max_tokens: int = 4000) -> LLMResponse:
+             max_tokens: int = 4000,
+             model: str = "") -> LLMResponse:
         if self.provider == "gigachat":
-            return self._chat_gigachat(messages, temperature, max_tokens)
-        return self._chat_custom(messages, temperature, max_tokens)
+            return self._chat_gigachat(messages, temperature, max_tokens, model)
+        return self._chat_custom(messages, temperature, max_tokens, model)
 
-    def _chat_gigachat(self, messages, temperature, max_tokens):
+    def _chat_gigachat(self, messages, temperature, max_tokens, model_override: str = ""):
+        model = model_override or self.model
         # Certificate (mTLS): прямой POST /chat/completions по httpx (как curl), без SDK/OAuth.
         if self.auth_type == "certificate":
             payload = {
-                "model": self.model,
+                "model": model,
                 "messages": [{"role": m.role, "content": m.content} for m in messages],
             }
             if temperature is not None:
@@ -498,7 +500,7 @@ class LLMClient:
             choice = data["choices"][0]
             return LLMResponse(
                 content=choice["message"]["content"],
-                model=data.get("model", self.model),
+                model=data.get("model", model),
                 usage=data.get("usage", {}),
                 finish_reason=str(choice.get("finish_reason") or "stop"),
             )
@@ -506,7 +508,7 @@ class LLMClient:
         import time
         from gigachat.models import Chat, Messages
         chat = Chat(
-            model=self.model,
+            model=model,
             messages=[Messages(role=m.role, content=m.content) for m in messages],
             temperature=temperature,
             max_tokens=max_tokens
@@ -518,10 +520,15 @@ class LLMClient:
         for attempt in range(3):
             try:
                 response = self.client.chat(chat)
+                usage = response.usage
                 return LLMResponse(
                     content=response.choices[0].message.content,
                     model=response.model,
-                    usage={},
+                    usage={
+                        "prompt_tokens": usage.prompt_tokens,
+                        "completion_tokens": usage.completion_tokens,
+                        "total_tokens": usage.total_tokens,
+                    } if usage else {},
                     finish_reason=str(response.choices[0].finish_reason or "stop"),
                 )
             except Exception as e:
@@ -540,9 +547,9 @@ class LLMClient:
             headers["Authorization"] = "Bearer " + self.api_key
         return headers
 
-    def _chat_custom(self, messages, temperature, max_tokens):
+    def _chat_custom(self, messages, temperature, max_tokens, model_override: str = ""):
         payload = {
-            "model": self.model,
+            "model": model_override or self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -559,7 +566,7 @@ class LLMClient:
         content = choice.get("message", {}).get("content") or choice.get("text", "")
         return LLMResponse(
             content=content,
-            model=data.get("model", self.model),
+            model=data.get("model", model_override or self.model),
             usage=data.get("usage", {}),
             finish_reason=str(choice.get("finish_reason") or "stop"),
         )

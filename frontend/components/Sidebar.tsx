@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Database, Settings,
   LogOut, User, Play, ScrollText, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
@@ -34,6 +34,7 @@ const NAV: {
   { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2,   superuserOnly: true },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
   { id: "etalons",     href: "/etalons",     label: "Эталоны",                 Icon: BookOpen,    superuserOnly: true },
+  { id: "model_bench", href: "/model-bench", label: "Сравнение моделей",       Icon: SplitSquareHorizontal, ai: true },
 ];
 
 const ORDER_KEY = "st_nav_order";

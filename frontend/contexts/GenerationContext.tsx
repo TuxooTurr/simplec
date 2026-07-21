@@ -79,6 +79,7 @@ interface GenerationCtx {
   progress: Progress | null;
   cases: Case[];
   qaDoc: string;
+  qaDocTruncated: boolean;
   exportResult: ExportResult | null;
   exporting: boolean;
   sessionId: string | null;
@@ -115,6 +116,7 @@ const GenerationContext = createContext<GenerationCtx>({
   progress: null,
   cases: [],
   qaDoc: "",
+  qaDocTruncated: false,
   exportResult: null,
   exporting: false,
   sessionId: null,
@@ -135,6 +137,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [cases, setCases] = useState<Case[]>([]);
   const [qaDoc, setQaDoc] = useState("");
+  const [qaDocTruncated, setQaDocTruncated] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exporting, setExporting] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -160,6 +163,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
   const restoreFromSession = useCallback((session: GenSession) => {
     setSessionId(session.id);
     if (session.qa_doc) setQaDoc(session.qa_doc);
+    setQaDocTruncated(!!session.qa_doc_truncated);
     if (session.cases?.length) setCases(session.cases as Case[]);
     if (session.export_result) setExportResult(session.export_result as ExportResult);
 
@@ -195,6 +199,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
       try {
         const session = await getGenSession(sid);
         if (session.qa_doc) setQaDoc(session.qa_doc);
+        setQaDocTruncated(!!session.qa_doc_truncated);
         if (session.cases?.length) setCases(session.cases as Case[]);
 
         if (session.layer3_progress) {
@@ -237,6 +242,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
       case "session_state": {
         const status = msg.status as string;
         if (msg.qa_doc) setQaDoc(msg.qa_doc as string);
+        setQaDocTruncated(!!msg.qa_doc_truncated);
         if ((msg.cases as unknown[])?.length) setCases(msg.cases as Case[]);
         if (msg.export_result) setExportResult(msg.export_result as ExportResult);
 
@@ -277,7 +283,9 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
           count: (msg.data as Record<string, unknown>)?.count as number | undefined,
         }]);
         if (msg.layer === 1 && (msg.data as Record<string, unknown>)?.qa_doc) {
-          setQaDoc((msg.data as Record<string, unknown>).qa_doc as string);
+          const data = msg.data as Record<string, unknown>;
+          setQaDoc(data.qa_doc as string);
+          setQaDocTruncated(!!data.qa_doc_truncated);
         }
         break;
 
@@ -297,6 +305,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
         setState("done");
         setProgress(null);
         if (msg.qa_doc) setQaDoc(msg.qa_doc as string);
+        setQaDocTruncated(!!msg.qa_doc_truncated);
         if (msg.session_id) setSessionId(msg.session_id as string);
         break;
 
@@ -399,6 +408,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
       setProgress(null);
       setCases([]);
       setQaDoc("");
+      setQaDocTruncated(false);
       setExportResult(null);
       setSessionId(null);
       stopPolling();
@@ -564,7 +574,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
   return (
     <GenerationContext.Provider
       value={{
-        state, events, progress, cases, qaDoc, exportResult, exporting,
+        state, events, progress, cases, qaDoc, qaDocTruncated, exportResult, exporting,
         sessionId, wsConnected, start, resume, exportCases, cancel, reset, attachToSession,
       }}
     >

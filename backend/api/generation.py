@@ -187,6 +187,7 @@ async def _run_generation(session_id: str):
             pass
 
         qa_doc = session.get("qa_doc") or ""
+        qa_doc_truncated = session.get("qa_doc_truncated", False)
         case_list = session.get("case_list") or []
         existing_cases = session.get("cases") or []
 
@@ -195,15 +196,15 @@ async def _run_generation(session_id: str):
             await _notify(session_id, {"type": "layer_start", "layer": 1, "name": "QA документация"})
             store.update_session(session_id, current_layer=1, status="generating")
 
-            qa_doc = await asyncio.to_thread(
+            qa_doc, qa_doc_truncated = await asyncio.to_thread(
                 gen.generate_qa_doc, requirement, feature, context_docs_text
             )
             t1 = round(time.time() - t_start)
 
-            store.update_session(session_id, qa_doc=qa_doc)
+            store.update_session(session_id, qa_doc=qa_doc, qa_doc_truncated=qa_doc_truncated)
             await _notify(session_id, {
                 "type": "layer_done", "layer": 1, "elapsed": t1,
-                "data": {"qa_doc": qa_doc},
+                "data": {"qa_doc": qa_doc, "qa_doc_truncated": qa_doc_truncated},
             })
 
         # ── Layer 2: Case list ──────────────────────────────────────
@@ -253,6 +254,7 @@ async def _run_generation(session_id: str):
             elapsed=elapsed,
             cases=all_cases,
             qa_doc=qa_doc,
+            qa_doc_truncated=qa_doc_truncated,
             current_layer=3,
             layer3_progress=None,
             error=None,
@@ -262,6 +264,7 @@ async def _run_generation(session_id: str):
             "type": "generation_done",
             "elapsed": elapsed,
             "qa_doc": qa_doc,
+            "qa_doc_truncated": qa_doc_truncated,
             "cases": all_cases,
             "session_id": session_id,
         })
@@ -387,6 +390,7 @@ async def _handle_ws_attach(ws: WebSocket, data: dict):
         "session_id": sid,
         "status": session["status"],
         "qa_doc": session.get("qa_doc", ""),
+        "qa_doc_truncated": session.get("qa_doc_truncated", False),
         "cases": session.get("cases", []),
         "case_list": session.get("case_list", []),
         "current_layer": session.get("current_layer", 0),

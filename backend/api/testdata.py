@@ -434,9 +434,17 @@ async def generate_query(req: GenerateQueryRequest) -> dict:
             schemas_text,
             db_type,
         )
-        return {"sql": sql, "db_type": db_type}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка генерации SQL: {str(e)[:300]}")
+    if not sql.strip():
+        # Раньше пустой sql молча уходил дальше в /api/testdata/query, которая
+        # требует min_length=1 — пользователь видел голый pydantic 422 вместо
+        # понятной причины (LLM вернул пустой ответ).
+        raise HTTPException(
+            status_code=502,
+            detail="LLM вернул пустой SQL-запрос. Переформулируйте требование или смените провайдера.",
+        )
+    return {"sql": sql, "db_type": db_type}
 
 
 # ── LLM: Suggest insert script ───────────────────────────────────────────────

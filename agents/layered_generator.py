@@ -50,7 +50,10 @@ class LayeredGenerator:
     # ========================================================
     # LAYER 1: QA Documentation
     # ========================================================
-    def generate_qa_doc(self, requirement, feature="", context_docs=""):
+    def generate_qa_doc(self, requirement, feature="", context_docs="") -> tuple[str, bool]:
+        """Возвращает (текст, truncated). truncated=True — ответ обрезан лимитом
+        модели (finish_reason == "length"), а не потому что документация закончилась
+        естественно. Раньше это было неотличимо от «модель сама решила закончить»."""
         from agents.llm_client import Message
         from agents.prompt_templates import PromptTemplateManager
 
@@ -119,9 +122,13 @@ class LayeredGenerator:
             "- Только Markdown"
         )
 
+        # 4000 токенов не хватало на большие документы: промпт просит таблицы модели
+        # данных, несколько диаграмм PlantUML, полное описание API/Jobs/интеграций
+        # и чек-лист до 40 пунктов — на объёмной документации ответ упирался в потолок
+        # и файл обрывался посередине без какого-либо сигнала об этом.
         response = self.llm.chat([Message(role="user", content=prompt)],
-                                  temperature=0.7, max_tokens=4000)
-        return response.content.strip()
+                                  temperature=0.7, max_tokens=8000)
+        return response.content.strip(), response.finish_reason == "length"
 
     # ========================================================
     # LAYER 2: Case list (максимальное покрытие, клиентские пути)
@@ -298,6 +305,15 @@ class LayeredGenerator:
                                   temperature=0.7, max_tokens=3000)
         text = response.content
 
+        # Пустой ответ — не обрезка (для неё есть цикл ниже), а деградация модели.
+        # Раньше это тихо доходило до _parse_markdown и превращалось в шаг
+        # "Требует уточнения" с "Не требуется" во всех полях — неотличимо от
+        # настоящего кейса. Одна свежая попытка (не продолжение) обычно чинит это.
+        if not text.strip():
+            response = self.llm.chat([Message(role="user", content=prompt)],
+                                      temperature=0.7, max_tokens=3000)
+            text = response.content
+
         # Продолжение если LLM обрезал ответ по лимиту токенов (до 3 раз)
         for _ in range(3):
             if not self._is_truncated(text, response):
@@ -416,7 +432,11 @@ class LayeredGenerator:
                 (l.strip() for l in text.split('\n') if l.strip() and not l.startswith('#')),
                 text[:200].strip()
             )
-            steps = [{"action": first_meaningful or "Требует уточнения",
+            # Пустой текст — это не "требует уточнения" (звучит как валидная QA-заметка),
+            # а сбой генерации: модель вернула пустой/нераспарсиваемый ответ. Помечаем
+            # явно, чтобы не выдавать сбой за настоящий шаг кейса.
+            action = first_meaningful or "⚠️ Не удалось сгенерировать шаги — пустой ответ модели, перегенерируйте кейс"
+            steps = [{"action": action,
                        "test_data": "Не требуются",
                        "ui": "Визуальных изменений нет",
                        "api": "Запросов к API нет",

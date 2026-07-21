@@ -286,7 +286,7 @@ export default function GenerationSection() {
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   // ── End history ────────────────────────────────────────────────
 
-  const { state, events, progress, cases, qaDoc, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected } =
+  const { state, events, progress, cases, qaDoc, qaDocTruncated, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected } =
     useGeneration();
 
   // Когда экспорт завершён — обновляем has_export в локальном списке сессий
@@ -661,6 +661,15 @@ export default function GenerationSection() {
               </button>
               {liveQaExpanded && (
                 <div className="border-t border-border-main animate-fade-in">
+                  {qaDocTruncated && (
+                    <div className="mx-4 mt-3 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                      <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                      <span>
+                        Документ обрезан лимитом модели — конец текста мог не поместиться.
+                        Попробуйте сократить требование или сменить провайдера.
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-end px-4 pt-3">
                     <button
                       onClick={async () => {
@@ -856,6 +865,15 @@ export default function GenerationSection() {
                 </button>
                 {qaExpanded && (
                   <div className="border-t border-border-main animate-fade-in">
+                    {qaDocTruncated && (
+                      <div className="mx-4 mt-3 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                        <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>
+                          Документ обрезан лимитом модели — конец текста мог не поместиться.
+                          Попробуйте сократить требование или сменить провайдера.
+                        </span>
+                      </div>
+                    )}
                     <div className="flex justify-end px-4 pt-3">
                       <button
                         onClick={async () => {
@@ -1253,6 +1271,15 @@ export default function GenerationSection() {
                       </button>
                       {qaExpanded && (
                         <div className="border-t border-border-main animate-fade-in">
+                          {histView.qa_doc_truncated && (
+                            <div className="mx-4 mt-3 flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                              <span>
+                                Документ обрезан лимитом модели — конец текста мог не поместиться.
+                                Попробуйте сократить требование или сменить провайдера.
+                              </span>
+                            </div>
+                          )}
                           <div className="flex justify-end px-4 pt-3">
                             <button
                               onClick={async () => {

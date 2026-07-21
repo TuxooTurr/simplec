@@ -69,6 +69,7 @@ class GenSessionsStore:
             "provider": params.get("provider", ""),
             "platform": params.get("platform", "Web"),
             "qa_doc": "",
+            "qa_doc_truncated": False,
             "case_list": [],
             "cases": [],
             "elapsed": 0,

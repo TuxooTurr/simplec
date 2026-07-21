@@ -177,22 +177,34 @@ def _pick_issuetype(issuetypes: list[dict], wanted: str) -> Optional[dict]:
 
 
 def _match_fields(field_items: list[tuple[str, dict]], issuetype_name: str) -> dict:
-    """field_items: [(field_id, {name, allowedValues}), ...] → маппинг логических полей."""
-    resolved: dict[str, Any] = {"_issuetype": issuetype_name, "_available": []}
+    """field_items: [(field_id, {name, schema, allowedValues}), ...] → маппинг логических полей."""
+    resolved: dict[str, Any] = {"_issuetype": issuetype_name, "_available": [], "_by_id": {}}
     for fid, fdef in field_items:
         fname = str(fdef.get("name", "")).strip()
         resolved["_available"].append(fname)
+        allowed = [
+            v.get("value") or v.get("name") or ""
+            for v in fdef.get("allowedValues", []) or []
+        ]
+        allowed = [a for a in allowed if a]
+        # Полный справочник по id — нужен, чтобы узнать реальный wire-формат (schema.type)
+        # для полей, которые резолвим не по имени, а по захардкоженному id (КЭ, ИТ-услуга и т.п.):
+        # Jira возвращает разный тип под одним и тем же customfield_ в разных инстансах
+        # (объект vs просто строка), и отправка неверного формата даёт ошибку "Значение
+        # операции должно быть строкой" — эту ошибку словили на реальном SBER911.
+        resolved["_by_id"][fid] = {"name": fname, "schema": fdef.get("schema") or {}, "allowed": allowed}
         low = fname.lower()
         for logical, hints in _FIELD_NAME_HINTS.items():
             if logical in resolved:
                 continue
             if any(h in low for h in hints):
-                allowed = [
-                    v.get("value") or v.get("name") or ""
-                    for v in fdef.get("allowedValues", []) or []
-                ]
-                resolved[logical] = {"id": fid, "name": fname, "allowed": [a for a in allowed if a]}
+                resolved[logical] = {"id": fid, "name": fname, "allowed": allowed}
     return resolved
+
+
+def _field_schema_type(resolved: dict, field_id: str) -> str:
+    """schema.type поля по его id из createmeta ('string'/'array'/'option'/...), либо '' если неизвестно."""
+    return (resolved.get("_by_id", {}).get(field_id, {}) or {}).get("schema", {}).get("type", "")
 
 
 def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
@@ -374,11 +386,6 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
     warnings: list[str] = []
 
     try:
-        priorities = [p.get("name", "") for p in _jira_request(cfg, "GET", "/rest/api/2/priority")]
-    except HTTPException as e:
-        priorities, _ = [], warnings.append(f"приоритеты: {e.detail}")
-
-    try:
         components = [c.get("name", "") for c in
                       _jira_request(cfg, "GET", f"/rest/api/2/project/{project}/components")]
     except HTTPException as e:
@@ -387,6 +394,20 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
     fields = _resolve_fields(cfg, project, cfg["issuetype"])
     if fields.get("_error"):
         warnings.append(f"поля (КЭ/среда/стенд/эпик): {fields['_error']}")
+
+    # Приоритет: список из createmeta (allowedValues поля "priority") — он реально
+    # ограничен priority-схемой проекта/типа задачи. Список из /rest/api/2/priority
+    # глобальный для всей Jira и может включать значения, недопустимые для этого
+    # проекта — Jira тогда отвечает "Имя приоритета 'X' неверно" (поймано на SBER911).
+    priority_field = fields.get("_by_id", {}).get("priority", {})
+    priorities = priority_field.get("allowed", [])
+    if not priorities:
+        try:
+            priorities = [p.get("name", "") for p in _jira_request(cfg, "GET", "/rest/api/2/priority")]
+            warnings.append("приоритеты не удалось получить из createmeta — показан общий список Jira, "
+                             "часть значений может быть недоступна в этом проекте")
+        except HTTPException as e:
+            priorities, _ = [], warnings.append(f"приоритеты: {e.detail}")
 
     from backend.api import jira_constants as JC
     is_sber911 = project.strip().upper() == JC.PROJECT_KEY
@@ -498,8 +519,27 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         ke_objects = [JC.COMPONENT_KE[c] for c in components if c in JC.COMPONENT_KE]
         if ke_objects:
             ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
-            # один КЭ — объект, несколько (МП + второй компонент) — массив
-            fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
+            ke_schema = _field_schema_type(resolved, ke_field)
+            if ke_schema == "string":
+                # Поле оказалось текстовым (не object/Insight) — шлём человекочитаемое
+                # значение строкой. Формат подтверждён реальной ошибкой Jira на SBER911:
+                # "Значение операции должно быть строкой".
+                fields[ke_field] = "; ".join(o["value"] for o in ke_objects)
+            elif ke_schema == "array":
+                fields[ke_field] = [o["value"] for o in ke_objects]
+            else:
+                # схема неизвестна (createmeta недоступен) — прежнее поведение (объект/Insight)
+                fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
+
+        it_service_schema = _field_schema_type(resolved, "customfield_22400")
+        if it_service_schema == "string":
+            it_service_value: Any = JC.IT_SERVICE["value"]
+        elif it_service_schema == "array":
+            it_service_value = [JC.IT_SERVICE["value"]]
+        else:
+            it_service_value = [{"id": JC.IT_SERVICE["id"]}]
+        fields.setdefault("customfield_22400", it_service_value)
+
         for fid, value in JC.DEFAULT_FIELDS.items():
             fields.setdefault(fid, value)
         # Тип стенда — видимый выбор пользователя; если не выбрал, берём дефолт справочника

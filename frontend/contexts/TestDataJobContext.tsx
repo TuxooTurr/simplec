@@ -169,6 +169,12 @@ export function TestDataJobProvider({ children }: { children: ReactNode }) {
           ctrl.signal,
         );
         if (ctrl.signal.aborted) return;
+        if (!gen.sql.trim()) {
+          // Бэкенд теперь сам не пропускает пустой SQL (502), но не полагаемся
+          // только на это — иначе пользователь снова увидит голый pydantic 422.
+          finish(p, "natural", "", p.requirement, null, "LLM вернул пустой SQL-запрос — переформулируйте требование");
+          return;
+        }
         setJob((j) => ({ ...j, phase: "executing", sql: gen.sql }));
         const res = await executeTestDataQuery({ connection_ids: p.connIds, sql: gen.sql }, ctrl.signal);
         if (ctrl.signal.aborted) return;

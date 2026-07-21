@@ -171,6 +171,7 @@ export default function AutoModelSection() {
 
   const [histEntries, setHistEntries] = useState<AutoHistEntry[]>(() => loadHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   // Project binding — персистируется в localStorage, не сбрасывается при навигации
   const [projectOpen,    setProjectOpen]    = useState(false);
@@ -256,13 +257,13 @@ export default function AutoModelSection() {
         return next;
       });
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch {
+    } catch (e) {
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setTimeout(() => setEtalonStatus(prev => {
-        const next = { ...prev };
-        delete next[entry.id];
-        return next;
-      }), 3000);
+      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
+      setTimeout(() => {
+        setEtalonStatus(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
+        setEtalonErrorMsg(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
+      }, 8000);
     }
   }, []);
 
@@ -467,7 +468,7 @@ export default function AutoModelSection() {
                             </span>
                           );
                           if (st === "error") return (
-                            <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
+                            <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
                               <XCircle className="w-3.5 h-3.5" />
                             </span>
                           );
@@ -810,14 +811,20 @@ export default function AutoModelSection() {
                     transition-all duration-150 active:scale-[0.97]
                     ${histEntries[0]?.loadedAsEtalon
                       ? "bg-green-50 border-green-200 text-green-700"
-                      : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
-                  title="Загрузить в эталон автотестов"
+                      : etalonStatus[histEntries[0]?.id] === "error"
+                        ? "bg-red-50 border-red-200 text-red-600"
+                        : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
+                  title={etalonStatus[histEntries[0]?.id] === "error"
+                    ? etalonErrorMsg[histEntries[0]?.id] || "Ошибка"
+                    : "Загрузить в эталон автотестов"}
                 >
                   {histEntries[0]?.loadedAsEtalon
                     ? <><CheckCircle2 className="w-3.5 h-3.5" /> В эталонах</>
                     : etalonStatus[histEntries[0]?.id] === "loading"
                       ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
-                      : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                      : etalonStatus[histEntries[0]?.id] === "error"
+                        ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
+                        : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
                 </button>
                 <button
                   onClick={handleCopy}

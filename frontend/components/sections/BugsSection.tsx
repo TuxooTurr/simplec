@@ -144,6 +144,7 @@ export default function BugsSection() {
 
   const [histEntries, setHistEntries] = useState<BugHistEntry[]>(() => loadBugHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   /* ── Pre-fill от анализатора логов ─────────────────────────────────── */
   useEffect(() => {
@@ -195,13 +196,13 @@ export default function BugsSection() {
         return next;
       });
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch {
+    } catch (e) {
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setTimeout(() => setEtalonStatus(prev => {
-        const next = { ...prev };
-        delete next[entry.id];
-        return next;
-      }), 3000);
+      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
+      setTimeout(() => {
+        setEtalonStatus(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
+        setEtalonErrorMsg(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
+      }, 8000);
     }
   }, []);
 
@@ -340,7 +341,7 @@ export default function BugsSection() {
                             </span>
                           );
                           if (st === "error") return (
-                            <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
+                            <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
                               <XCircle className="w-3.5 h-3.5" />
                             </span>
                           );

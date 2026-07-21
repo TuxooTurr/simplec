@@ -246,6 +246,7 @@ export default function GenerationSection() {
   }, []);
 
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   /** Загрузить полную сессию и отправить в эталон */
   const handleLoadAsEtalon = useCallback(async (entry: GenSessionSummary, e: React.MouseEvent) => {
@@ -261,9 +262,13 @@ export default function GenerationSection() {
         feature: full.feature,
       });
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch {
+    } catch (e) {
       setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; }), 2500);
+      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
+      setTimeout(() => {
+        setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; });
+        setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[entry.id]; return n; });
+      }, 8000);
     }
   }, []);
 
@@ -791,11 +796,16 @@ export default function GenerationSection() {
                               name: genMetaRef.current.feature || "Генерация",
                             });
                             setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
-                          } catch {
+                          } catch (e) {
                             setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
-                            setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; }), 2500);
+                            setEtalonErrorMsg(prev => ({ ...prev, [eid]: e instanceof Error ? e.message : String(e) }));
+                            setTimeout(() => {
+                              setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; });
+                              setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[eid]; return n; });
+                            }, 8000);
                           }
                         }}
+                        title={st === "error" ? (etalonErrorMsg[eid] || "Ошибка") : undefined}
                         className={`flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-xs transition-all duration-150 whitespace-nowrap flex-shrink-0
                           ${st === "error"
                             ? "border-red-200 text-red-500"
@@ -1060,7 +1070,7 @@ export default function GenerationSection() {
                                 </span>
                               );
                               if (st === "error") return (
-                                <span className="flex-shrink-0 p-0.5 text-red-500" title="Ошибка">
+                                <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
                                   <XCircle className="w-3.5 h-3.5" />
                                 </span>
                               );
@@ -1154,11 +1164,16 @@ export default function GenerationSection() {
                                     name: histView.feature || "Генерация",
                                   });
                                   setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
-                                } catch {
+                                } catch (e) {
                                   setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
-                                  setTimeout(() => setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; }), 2500);
+                                  setEtalonErrorMsg(prev => ({ ...prev, [eid]: e instanceof Error ? e.message : String(e) }));
+                                  setTimeout(() => {
+                                    setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; });
+                                    setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[eid]; return n; });
+                                  }, 8000);
                                 }
                               }}
+                              title={st === "error" ? (etalonErrorMsg[eid] || "Ошибка") : undefined}
                               className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-lg text-sm transition-all duration-150
                                 ${st === "error"
                                   ? "border-red-200 text-red-500"

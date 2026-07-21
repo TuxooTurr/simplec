@@ -15,7 +15,18 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+    // FastAPI отдаёт ошибку как {"detail": "человекочитаемое объяснение"} — раньше
+    // сюда шёл сырой JSON целиком ("500: {\"detail\":\"...\"}"), и часть мест в UI
+    // вообще не показывала message из catch (только "Ошибка"), так что осмысленный
+    // текст от бэкенда (например, про недоступность huggingface.co в закрытой сети)
+    // терялся полностью.
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string | { message?: string } };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+      else if (parsed.detail && typeof parsed.detail === "object" && parsed.detail.message) detail = parsed.detail.message;
+    } catch { /* не JSON — оставляем как есть */ }
+    throw new Error(detail);
   }
   return res.json() as Promise<T>;
 }

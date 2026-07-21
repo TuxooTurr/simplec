@@ -57,7 +57,6 @@ _FIELD_NAME_HINTS: dict[str, list[str]] = {
     "epic_link":   ["epic link", "epic-link", "эпик"],
     "ke":          ["кэ", "конфигурационная единица", "configuration item"],
     "environment": ["среда обнаружения", "среда выявления"],
-    "stand":       ["стенд", "тестовый стенд"],
 }
 
 
@@ -318,7 +317,6 @@ class CreateDefectBody(BaseModel):
     assignee: str = ""         # username
     ke: str = ""               # КЭ текстом — для проектов без маппинга компонент→КЭ
     environment: str = ""      # среда обнаружения — для проектов без дефолта в справочнике
-    stand: str = ""            # стенд
     stand_type: str = ""       # тип стенда (Major-Check / Major-GO) — если пусто, берём дефолт справочника
     description_is_markdown: bool = True
 
@@ -388,35 +386,45 @@ def test_connection(db: Session = Depends(get_db)) -> dict:
 @router.get("/api/jira/meta")
 def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> dict:
     """Справочники проекта. Ошибка одного справочника не валит остальные."""
+    from backend.api import jira_constants as JC
     cfg = _load_cfg(db)
     warnings: list[str] = []
+    is_sber911 = project.strip().upper() == JC.PROJECT_KEY
 
     try:
         components = [c.get("name", "") for c in
                       _jira_request(cfg, "GET", f"/rest/api/2/project/{project}/components")]
     except HTTPException as e:
         components, _ = [], warnings.append(f"компоненты: {e.detail}")
+    if is_sber911:
+        # Полный список компонентов проекта гораздо длиннее — оставляем только
+        # реально используемые (см. jira_constants.COMPONENT_KEYWORDS).
+        components = JC.filter_components(components)
 
     fields = _resolve_fields(cfg, project, cfg["issuetype"])
     if fields.get("_error"):
-        warnings.append(f"поля (КЭ/среда/стенд/эпик): {fields['_error']}")
+        warnings.append(f"поля (КЭ/эпик): {fields['_error']}")
 
-    # Приоритет: список из createmeta (allowedValues поля "priority") — он реально
-    # ограничен priority-схемой проекта/типа задачи. Список из /rest/api/2/priority
-    # глобальный для всей Jira и может включать значения, недопустимые для этого
-    # проекта — Jira тогда отвечает "Имя приоритета 'X' неверно" (поймано на SBER911).
-    priority_field = fields.get("_by_id", {}).get("priority", {})
-    priorities = priority_field.get("allowed", [])
-    if not priorities:
-        try:
-            priorities = [p.get("name", "") for p in _jira_request(cfg, "GET", "/rest/api/2/priority")]
-            warnings.append("приоритеты не удалось получить из createmeta — показан общий список Jira, "
-                             "часть значений может быть недоступна в этом проекте")
-        except HTTPException as e:
-            priorities, _ = [], warnings.append(f"приоритеты: {e.detail}")
+    if is_sber911:
+        # Приоритеты SBER911 — свой справочник по id (см. jira_constants.PRIORITY):
+        # и createmeta, и глобальный список Jira по имени уже давали
+        # "Имя приоритета 'X' неверно" на реально валидных значениях — id надёжнее.
+        priorities = list(JC.PRIORITY.keys())
+    else:
+        # Приоритет: список из createmeta (allowedValues поля "priority") — он реально
+        # ограничен priority-схемой проекта/типа задачи. Список из /rest/api/2/priority
+        # глобальный для всей Jira и может включать значения, недопустимые для этого
+        # проекта — Jira тогда отвечает "Имя приоритета 'X' неверно".
+        priority_field = fields.get("_by_id", {}).get("priority", {})
+        priorities = priority_field.get("allowed", [])
+        if not priorities:
+            try:
+                priorities = [p.get("name", "") for p in _jira_request(cfg, "GET", "/rest/api/2/priority")]
+                warnings.append("приоритеты не удалось получить из createmeta — показан общий список Jira, "
+                                 "часть значений может быть недоступна в этом проекте")
+            except HTTPException as e:
+                priorities, _ = [], warnings.append(f"приоритеты: {e.detail}")
 
-    from backend.api import jira_constants as JC
-    is_sber911 = project.strip().upper() == JC.PROJECT_KEY
     return {
         "priorities": priorities,
         "components": components,
@@ -430,8 +438,6 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
         # компонент → КЭ (для автоподстановки и отображения), мобильные компоненты
         "ke_by_component": {k: v["value"] for k, v in JC.COMPONENT_KE.items()} if is_sber911 else {},
         "mobile_components": sorted(JC.MOBILE_COMPONENTS) if is_sber911 else [],
-        # стенды — свой справочник (Jira отдаёт поле свободным текстом, без allowedValues)
-        "stands": JC.STANDS if is_sber911 else [],
         # тип стенда (customfield_17500) — Major-Check / Major-GO, видимый выбор
         "stand_types": sorted(JC.STAND_TYPE.keys()) if is_sber911 else [],
         "default_stand_type": JC.DEFAULT_STAND_TYPE if is_sber911 else "",
@@ -493,6 +499,9 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if not body.summary.strip():
         raise HTTPException(400, "Укажите название дефекта (summary)")
 
+    from backend.api import jira_constants as JC
+    is_sber911 = body.project.strip().upper() == JC.PROJECT_KEY
+
     cfg = _load_cfg(db)
     resolved = _resolve_fields(cfg, body.project.strip(), cfg["issuetype"])
 
@@ -506,8 +515,13 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         "summary":     body.summary.strip()[:250],
         "description": description,
     }
-    if body.priority.strip():
-        fields["priority"] = {"name": body.priority.strip()}
+    priority_name = body.priority.strip()
+    if priority_name:
+        if is_sber911 and priority_name in JC.PRIORITY:
+            # id надёжнее имени — см. комментарий у jira_constants.PRIORITY
+            fields["priority"] = {"id": JC.PRIORITY[priority_name]}
+        else:
+            fields["priority"] = {"name": priority_name}
     if body.labels:
         # Jira не принимает пробелы в лейблах
         fields["labels"] = [l.strip().replace(" ", "_") for l in body.labels if l.strip()]
@@ -519,8 +533,6 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         fields["assignee"] = {"name": body.assignee.strip()}
 
     # ── SBER911: компонент → КЭ + дефолты справочных полей ──
-    from backend.api import jira_constants as JC
-    is_sber911 = body.project.strip().upper() == JC.PROJECT_KEY
     if is_sber911:
         ke_objects = [JC.COMPONENT_KE[c] for c in components if c in JC.COMPONENT_KE]
         if ke_objects:
@@ -577,7 +589,6 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if body.ke.strip() and not (is_sber911 and components):
         _set_custom("ke", body.ke, "КЭ")
     _set_custom("environment", body.environment, "Среда обнаружения")
-    _set_custom("stand", body.stand, "Стенд")
 
     created = _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": fields})
     key = created.get("key", "")

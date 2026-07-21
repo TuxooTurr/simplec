@@ -2,7 +2,7 @@
 
 /**
  * Панель «Зарегистрировать в Jira» — под готовым баг-репортом.
- * Проект фиксирован (SBER911). Критичность/лейблы/эпик(выгрузка)/компонент/стенд —
+ * Проект фиксирован (SBER911). Критичность/лейблы/эпик(выгрузка)/компонент/тип стенда —
  * всё из справочников Jira. КЭ подставляется автоматически по компоненту,
  * среда обнаружения всегда «СТ» — оба поля на фронте не показываются.
  * Исполнитель не задаётся из инструмента — назначается в Jira вручную.
@@ -68,7 +68,6 @@ export default function JiraRegisterPanel({
   const [labels, setLabels] = useState<string[]>([]);
   const [newLabel, setNewLabel] = useState("");
   const [components, setComponents] = useState<string[]>([]);
-  const [stand, setStand] = useState("");
   const [standType, setStandType] = useState("");
 
   // Эпик: кнопка «Выгрузить» → полный список активных эпиков → Select с поиском
@@ -168,7 +167,6 @@ export default function JiraRegisterPanel({
         assignee: "",     // исполнитель назначается в Jira вручную
         ke: "",           // КЭ подставляется бэкендом из компонентов
         environment: "", // Среда обнаружения — всегда СТ (дефолт справочника)
-        stand,
         stand_type: standType,
       });
       setCreated({ key: res.key, url: res.url, warnings: res.warnings });
@@ -198,8 +196,6 @@ export default function JiraRegisterPanel({
 
   if (settingsErr) return null;
   if (!settings) return null;
-
-  const standField = meta?.fields?.stand;
 
   return (
     <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
@@ -315,30 +311,9 @@ export default function JiraRegisterPanel({
           )}
         </div>
 
-        {/* Исполнитель, КЭ и Среда обнаружения на фронте не задаются:
+        {/* Исполнитель, КЭ, Среда обнаружения и Стенд на фронте не задаются:
             исполнитель назначается в Jira вручную, КЭ — автоматом из компонента,
-            среда — всегда СТ (дефолты справочника на бэкенде) */}
-
-        {/* Стенд — свой справочник (meta.stands), т.к. в Jira это свободный текст
-            без allowedValues; на дин. поле Jira и на ручной ввод падаем только
-            если справочник ещё не заполнен */}
-        <div>
-          <label className={LBL}>Стенд</label>
-          {meta && meta.stands.length > 0 ? (
-            <Select value={stand} onChange={setStand} placeholder="— стенд —" searchable searchPlaceholder="Поиск стенда…">
-              <option value="">— стенд —</option>
-              {meta.stands.map(v => <option key={v} value={v}>{v}</option>)}
-            </Select>
-          ) : standField && standField.allowed.length > 0 ? (
-            <Select value={stand} onChange={setStand} placeholder="— стенд —">
-              <option value="">— стенд —</option>
-              {standField.allowed.map(v => <option key={v} value={v}>{v}</option>)}
-            </Select>
-          ) : (
-            <input value={stand} onChange={e => setStand(e.target.value)}
-              placeholder="Название стенда" className={INPUT_CLS} />
-          )}
-        </div>
+            среда — всегда СТ, стенд — не используется, нужен только тип стенда ниже */}
 
         {/* Тип стенда (Major-Check / Major-GO) — видимый выбор, не тихий дефолт */}
         {(meta?.stand_types.length ?? 0) > 0 && (

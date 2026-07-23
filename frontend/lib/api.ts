@@ -1111,6 +1111,8 @@ export interface Requirement {
   name: string;
   feature: string;
   text: string;
+  qa_doc: string;
+  qa_doc_truncated: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -1120,7 +1122,9 @@ export async function listRequirements(feature?: string): Promise<Requirement[]>
   return fetchJson(`/api/requirements${q}`);
 }
 
-export async function addRequirement(data: { name: string; feature?: string; text: string }): Promise<Requirement> {
+export async function addRequirement(data: {
+  name: string; feature?: string; text: string; qa_doc?: string; qa_doc_truncated?: boolean;
+}): Promise<Requirement> {
   return fetchJson("/api/requirements", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1130,4 +1134,12 @@ export async function addRequirement(data: { name: string; feature?: string; tex
 
 export async function deleteRequirement(id: string): Promise<{ status: string }> {
   return fetchJson(`/api/requirements/${id}`, { method: "DELETE" });
+}
+
+export async function generateRequirementDoc(id: string, provider: string): Promise<Requirement> {
+  return fetchJson(`/api/requirements/${id}/generate-doc`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider }),
+  });
 }

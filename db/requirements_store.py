@@ -71,13 +71,21 @@ class RequirementsStore:
         return None
 
     @classmethod
-    def add_requirement(cls, name: str, feature: str, text: str) -> dict:
+    def add_requirement(cls, name: str, feature: str, text: str,
+                         qa_doc: str = "", qa_doc_truncated: bool = False) -> dict:
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "id": uuid.uuid4().hex[:12],
             "name": name.strip(),
             "feature": feature.strip(),
             "text": text,
+            # Переработанный документ (Layer 1 QA-документации) — либо генерируется
+            # отдельно по требованию (POST /api/requirements/{id}/generate-doc), либо
+            # приходит уже готовым (например, из "Ручного тестирования" — там QA-doc
+            # уже посчитан генерацией кейсов, повторный вызов LLM не нужен). Хранится
+            # вместе с исходником в этой же записи: исходник и результат всегда рядом.
+            "qa_doc": qa_doc,
+            "qa_doc_truncated": qa_doc_truncated,
             "created_at": now,
             "updated_at": now,
         }
@@ -86,6 +94,17 @@ class RequirementsStore:
         items = items[:_MAX_ITEMS]
         cls._save(items)
         return item
+
+    @classmethod
+    def update_requirement(cls, req_id: str, **fields) -> Optional[dict]:
+        items = cls._load()
+        for i in items:
+            if i.get("id") == req_id:
+                i.update(fields)
+                i["updated_at"] = datetime.now(timezone.utc).isoformat()
+                cls._save(items)
+                return i
+        return None
 
     @classmethod
     def delete_requirement(cls, req_id: str) -> bool:

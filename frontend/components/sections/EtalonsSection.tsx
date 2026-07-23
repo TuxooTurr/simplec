@@ -4,15 +4,18 @@ import { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Plus, RefreshCw, Trash2, ChevronDown,
   Loader2, Smartphone, Tag, X, Save, Paperclip, FileText,
-  Code2, Bug, FolderOpen, Upload,
+  Code2, Bug, FolderOpen, Upload, ClipboardList, Sparkles, AlertTriangle,
 } from "lucide-react";
 import { Select } from "@/components/ui";
+import NotionRenderer from "@/components/NotionRenderer";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
   listAutotests, addAutotest, deleteAutotest,
   listDefects, addDefect, deleteDefect,
   listContextDocs, addContextDoc, deleteContextDoc,
-  type Etalon, type Autotest, type Defect, type ContextDoc,
+  listRequirements, addRequirement, deleteRequirement, generateRequirementDoc,
+  type Etalon, type Autotest, type Defect, type ContextDoc, type Requirement,
 } from "@/lib/api";
 
 const INPUT_CLS =
@@ -20,7 +23,11 @@ const INPUT_CLS =
 
 const LABEL_CLS = "text-xs font-semibold text-text-muted uppercase tracking-wide";
 
-type Tab = "testcases" | "autotests" | "defects" | "docs";
+const BTN_SECONDARY =
+  "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-border-main rounded-lg " +
+  "text-text-main hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 transition-all";
+
+type Tab = "testcases" | "autotests" | "defects" | "docs" | "requirements";
 
 const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
 
@@ -1139,17 +1146,300 @@ function ContextDocsTab() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Требования — исходник + сгенерированная QA-документация, локально, без Chroma
+// ══════════════════════════════════════════════════════════════════════════════
+
+function RequirementsTab() {
+  const { provider } = useWorkspace();
+
+  const [items, setItems]               = useState<Requirement[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [filterFeature, setFilterFeature] = useState("");
+  const [expanded, setExpanded]         = useState<string | null>(null);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [showAdd, setShowAdd]           = useState(false);
+
+  const [addName, setAddName]           = useState("");
+  const [addFeature, setAddFeature]     = useState("");
+  const [addText, setAddText]           = useState("");
+  const [fileLoading, setFileLoading]   = useState(false);
+  const [fileName, setFileName]         = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [addLoading, setAddLoading]     = useState(false);
+
+  const [genLoadingId, setGenLoadingId] = useState<string | null>(null);
+  const [genError, setGenError]         = useState<Record<string, string>>({});
+
+  const load = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    try {
+      setItems(await listRequirements(filterFeature));
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileLoading(true);
+    setFileName(file.name);
+    try {
+      const r = await parseFile(file);
+      setAddText(r.text);
+    } catch (err) {
+      alert("Ошибка: " + String(err));
+      setFileName("");
+    } finally {
+      setFileLoading(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!addName.trim() || !addText.trim()) return;
+    setAddLoading(true);
+    try {
+      await addRequirement({ name: addName, feature: addFeature, text: addText });
+      setAddName(""); setAddFeature(""); setAddText(""); setFileName("");
+      setShowAdd(false);
+      await load();
+    } catch (err) { alert("Ошибка: " + String(err)); }
+    finally { setAddLoading(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Удалить требование?")) return;
+    try {
+      await deleteRequirement(id);
+      setItems((prev) => prev.filter((i) => i.id !== id));
+    } catch (err) { alert("Ошибка: " + String(err)); }
+  };
+
+  const handleGenerateDoc = async (id: string) => {
+    if (!provider) { alert("Выберите LLM-провайдер в шапке"); return; }
+    setGenLoadingId(id);
+    setGenError((prev) => { const next = { ...prev }; delete next[id]; return next; });
+    try {
+      const updated = await generateRequirementDoc(id, provider);
+      setItems((prev) => prev.map((i) => (i.id === id ? updated : i)));
+    } catch (err) {
+      setGenError((prev) => ({ ...prev, [id]: err instanceof Error ? err.message : String(err) }));
+    } finally {
+      setGenLoadingId(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3 mb-4 text-xs text-emerald-700">
+        <span className="font-semibold">Требования</span> — отдай исходный текст (ТЗ, спецификацию, конфлюенс-страницу),
+        ИИ переработает его в структурированную QA-документацию (Layer 1, тот же генератор, что и при создании тест-кейсов).
+        Исходник и переработанный документ хранятся вместе, локально в проекте — без ChromaDB и эмбеддингов.
+      </div>
+
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-text-muted">{items.length} требований</p>
+        <button
+          onClick={() => setShowAdd(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+            hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md"
+        >
+          <Plus className="w-4 h-4" /> Добавить требование
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <div className="relative flex-1 min-w-[140px]">
+          <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
+          <input value={filterFeature} onChange={(e) => setFilterFeature(e.target.value)}
+            placeholder="Фича..." className={`${INPUT_CLS} pl-8`} />
+        </div>
+        <button onClick={() => load(true)} disabled={refreshing}
+          className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
+            text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          Обновить
+        </button>
+      </div>
+
+      {/* Add form */}
+      {showAdd && (
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4 animate-slide-up">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-text-main">Новое требование</h3>
+            <button onClick={() => setShowAdd(false)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-text-muted hover:bg-bg-subtle transition-colors">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Название</label>
+              <input value={addName} onChange={(e) => setAddName(e.target.value)}
+                className={INPUT_CLS} placeholder="Например: Оплата картой" />
+            </div>
+            <div>
+              <label className={`block ${LABEL_CLS} mb-1.5`}>Фича</label>
+              <input value={addFeature} onChange={(e) => setAddFeature(e.target.value)}
+                className={INPUT_CLS} placeholder="Оплата, каталог..." />
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className={`block ${LABEL_CLS} mb-1.5`}>
+              Текст требования (исходник) <span className="text-red-400 normal-case font-normal">*</span>
+            </label>
+            <input ref={fileRef} type="file" accept={ACCEPT_FILES} className="hidden"
+              onChange={handleFileChange} />
+            <textarea value={addText} onChange={(e) => setAddText(e.target.value)}
+              className={`${INPUT_CLS} resize-none min-h-[200px]`}
+              placeholder="Вставьте текст требования, ТЗ, спецификации..." />
+            <FileAttachRow loading={fileLoading} fileName={fileName}
+              onPick={() => fileRef.current?.click()}
+              onClear={() => { setAddText(""); setFileName(""); }} />
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => setShowAdd(false)}
+              className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm text-text-muted hover:bg-bg-subtle transition-colors">
+              <X className="w-3.5 h-3.5" /> Отмена
+            </button>
+            <button onClick={handleAdd} disabled={addLoading || !addName.trim() || !addText.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-sm font-semibold
+                hover:bg-primary-dark transition-all duration-150 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98]">
+              {addLoading
+                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
+                : <><Save className="w-3.5 h-3.5" /> Сохранить</>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {loading ? (
+        <div className="flex items-center gap-2 py-8 text-text-muted text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-primary" /> Загрузка...
+        </div>
+      ) : items.length === 0 ? (
+        <div className="bg-bg-card border border-border-main rounded-xl p-10 text-center animate-fade-in">
+          <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center mx-auto mb-3">
+            <ClipboardList className="w-6 h-6 text-emerald-500" />
+          </div>
+          <p className="text-sm font-medium text-text-main mb-1">Требований нет</p>
+          <p className="text-xs text-text-muted">Добавьте требование, чтобы переработать его в QA-документацию</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item, idx) => (
+            <div key={item.id}
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+              style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
+              <div className="flex items-center gap-3 px-4 py-3">
+                <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                  className="flex-1 text-left min-w-0">
+                  <p className="text-sm font-medium text-text-main truncate">{item.name}</p>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    {item.feature && (
+                      <span className="flex items-center gap-1 text-xs text-text-muted flex-shrink-0">
+                        <Tag className="w-3 h-3" />{item.feature}
+                      </span>
+                    )}
+                    <span className="text-xs text-text-muted/60">
+                      {item.text.length > 1000
+                        ? `${Math.round(item.text.length / 1000)}K символов`
+                        : `${item.text.length} символов`}
+                    </span>
+                    {item.qa_doc ? (
+                      <span className="flex items-center gap-1 text-xs text-emerald-500 flex-shrink-0">
+                        <FileText className="w-3 h-3" /> документация готова
+                      </span>
+                    ) : (
+                      <span className="text-xs text-text-muted/60">документация не сгенерирована</span>
+                    )}
+                  </div>
+                </button>
+                <button onClick={() => handleDelete(item.id)}
+                  className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 hover:bg-red-50
+                    rounded-lg px-2.5 py-1.5 transition-all duration-150 flex-shrink-0">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+                <ChevronDown
+                  className={`w-4 h-4 text-text-muted flex-shrink-0 transition-transform duration-200 cursor-pointer
+                    ${expanded === item.id ? "rotate-180" : ""}`}
+                  onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                />
+              </div>
+
+              {expanded === item.id && (
+                <div className="border-t border-border-main px-4 py-3 animate-fade-in space-y-4">
+                  <div>
+                    <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide mb-2">Исходник</p>
+                    <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-y-auto">
+                      {item.text}
+                    </pre>
+                  </div>
+
+                  <div className="border-t border-border-main pt-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide">
+                        QA-документация {item.qa_doc_truncated && "(обрезана лимитом модели)"}
+                      </p>
+                      <button
+                        onClick={() => handleGenerateDoc(item.id)}
+                        disabled={genLoadingId === item.id}
+                        className={BTN_SECONDARY}
+                      >
+                        {genLoadingId === item.id
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Генерирую...</>
+                          : <><Sparkles className="w-3.5 h-3.5" /> {item.qa_doc ? "Обновить" : "Сгенерировать"}</>}
+                      </button>
+                    </div>
+                    {genError[item.id] && (
+                      <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                        <span>{genError[item.id]}</span>
+                      </div>
+                    )}
+                    {item.qa_doc ? (
+                      <div className="max-h-[500px] overflow-y-auto">
+                        <NotionRenderer text={item.qa_doc} />
+                      </div>
+                    ) : (
+                      <p className="text-xs text-text-muted">Документация ещё не сгенерирована.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Корневой компонент с вкладками
 // ══════════════════════════════════════════════════════════════════════════════
 
 export default function EtalonsSection() {
-  const [tab, setTab] = useState<Tab>("testcases");
+  const [tab, setTab] = useState<Tab>("requirements");
 
+  // Вкладки эталонов ручных кейсов/автотестов/дефектов скрыты с фронта — их
+  // пары по-прежнему пишутся кнопками "В эталон" в других разделах (Ручное
+  // тестирование, Автотестирование, Дефекты), просто больше не просматриваются
+  // здесь напрямую. Компоненты (TestCasesTab/AutotestsTab/DefectsTab) оставлены
+  // как есть — это скрытие, не удаление, восстановить можно вернув строки сюда.
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: "testcases", label: "Тест-кейсы",  icon: <BookOpen   className="w-4 h-4" /> },
-    { id: "autotests", label: "Автотесты",   icon: <Code2      className="w-4 h-4" /> },
-    { id: "defects",   label: "Дефекты",     icon: <Bug        className="w-4 h-4" /> },
-    { id: "docs",      label: "Документы",   icon: <FolderOpen className="w-4 h-4" /> },
+    { id: "requirements", label: "Требования",   icon: <ClipboardList className="w-4 h-4" /> },
+    { id: "docs",         label: "Документы",    icon: <FolderOpen    className="w-4 h-4" /> },
   ];
 
   return (
@@ -1157,8 +1447,8 @@ export default function EtalonsSection() {
       <div className="max-w-5xl mx-auto">
         {/* Заголовок */}
         <div className="mb-5">
-          <h1 className="text-xl font-bold text-text-main mb-1">Эталоны</h1>
-          <p className="text-sm text-text-muted">База знаний для RAG: примеры тест-кейсов, повышающие качество генерации.</p>
+          <h1 className="text-xl font-bold text-text-main mb-1">Данные</h1>
+          <p className="text-sm text-text-muted">База знаний для RAG (эталоны, документы) и локальная библиотека требований.</p>
         </div>
 
         {/* Вкладки */}
@@ -1179,10 +1469,11 @@ export default function EtalonsSection() {
         </div>
 
         {/* Контент */}
-        {tab === "testcases" && <TestCasesTab />}
-        {tab === "autotests" && <AutotestsTab />}
-        {tab === "defects"   && <DefectsTab />}
-        {tab === "docs"      && <ContextDocsTab />}
+        {tab === "testcases"    && <TestCasesTab />}
+        {tab === "autotests"    && <AutotestsTab />}
+        {tab === "defects"      && <DefectsTab />}
+        {tab === "docs"         && <ContextDocsTab />}
+        {tab === "requirements" && <RequirementsTab />}
       </div>
     </div>
   );

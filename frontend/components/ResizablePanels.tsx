@@ -8,7 +8,7 @@ import type { SectionId } from "@/contexts/WorkspaceContext";
 
 const SECTION_LABELS: Record<string, string> = {
   generation: "Генерация",
-  etalons: "Эталоны",
+  etalons: "Данные",
   bugs: "Дефекты",
   alerts: "Алерты",
   metrics: "Метрики",

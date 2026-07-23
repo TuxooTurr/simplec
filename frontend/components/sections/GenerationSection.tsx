@@ -258,6 +258,33 @@ export default function GenerationSection() {
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
   const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
+  // Пара исходник+документация в требования — доступно уже во время генерации
+  // (сразу после layer 1), без ожидания кейсов: чистое локальное сохранение,
+  // генерацию (websocket) не трогает и не прерывает.
+  const [reqDocStatus, setReqDocStatus] = useState<Record<string, "loading" | "done" | "error">>({});
+  const [reqDocErrorMsg, setReqDocErrorMsg] = useState<Record<string, string>>({});
+
+  const handleSaveDocAsRequirement = useCallback(async (eid: string, qaDocText: string, qaDocWasTruncated: boolean) => {
+    setReqDocStatus((prev) => ({ ...prev, [eid]: "loading" }));
+    try {
+      await addRequirement({
+        name: genMetaRef.current.feature || "Без названия",
+        feature: genMetaRef.current.feature,
+        text: genMetaRef.current.requirement,
+        qa_doc: qaDocText,
+        qa_doc_truncated: qaDocWasTruncated,
+      });
+      setReqDocStatus((prev) => ({ ...prev, [eid]: "done" }));
+    } catch (e) {
+      setReqDocStatus((prev) => ({ ...prev, [eid]: "error" }));
+      setReqDocErrorMsg((prev) => ({ ...prev, [eid]: e instanceof Error ? e.message : String(e) }));
+      setTimeout(() => {
+        setReqDocStatus((prev) => { const n = { ...prev }; delete n[eid]; return n; });
+        setReqDocErrorMsg((prev) => { const n = { ...prev }; delete n[eid]; return n; });
+      }, 8000);
+    }
+  }, []);
+
   /** Загрузить полную сессию и отправить в эталон */
   const handleLoadAsEtalon = useCallback(async (entry: GenSessionSummary, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -794,7 +821,33 @@ export default function GenerationSection() {
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-end px-4 pt-3">
+                  <div className="flex justify-end items-center gap-2 px-4 pt-3">
+                    {(() => {
+                      const eid = sessionId ?? "current";
+                      const st = reqDocStatus[eid];
+                      if (st === "done") return (
+                        <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-green-200 bg-green-50 rounded-lg text-green-700">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> В эталоне
+                        </span>
+                      );
+                      return (
+                        <button
+                          disabled={st === "loading"}
+                          onClick={() => handleSaveDocAsRequirement(eid, qaDoc, qaDocTruncated)}
+                          title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в эталон — не прерывает генерацию"}
+                          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
+                            ${st === "error"
+                              ? "border-red-200 text-red-500"
+                              : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
+                        >
+                          {st === "loading"
+                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
+                            : st === "error"
+                              ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
+                              : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={async () => {
                         await navigator.clipboard.writeText(qaDoc);
@@ -1003,7 +1056,33 @@ export default function GenerationSection() {
                         </span>
                       </div>
                     )}
-                    <div className="flex justify-end px-4 pt-3">
+                    <div className="flex justify-end items-center gap-2 px-4 pt-3">
+                      {(() => {
+                        const eid = sessionId ?? "current";
+                        const st = reqDocStatus[eid];
+                        if (st === "done") return (
+                          <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-green-200 bg-green-50 rounded-lg text-green-700">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> В эталоне
+                          </span>
+                        );
+                        return (
+                          <button
+                            disabled={st === "loading"}
+                            onClick={() => handleSaveDocAsRequirement(eid, qaDoc, qaDocTruncated)}
+                            title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в эталон"}
+                            className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
+                              ${st === "error"
+                                ? "border-red-200 text-red-500"
+                                : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
+                          >
+                            {st === "loading"
+                              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
+                              : st === "error"
+                                ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
+                                : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                          </button>
+                        );
+                      })()}
                       <button
                         onClick={async () => {
                           await navigator.clipboard.writeText(qaDoc);

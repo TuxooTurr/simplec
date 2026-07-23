@@ -14,13 +14,20 @@ from agents.llm_client import LLMClient, Message
 
 _BEST_MARKER_RE = re.compile(r"^ЛУЧШАЯ_МОДЕЛЬ:\s*(\S+)::(.*)$", re.MULTILINE)
 
+# Таймаут HTTP-клиента при тестировании моделей — заметно выше обычного чата
+# (GigaChat 120с / custom-провайдеры 180с по умолчанию, см. LLMClient). Локальные
+# и однопоточные модели (Ollama/LM Studio и т.п.) во время замера иногда заняты
+# чужим запросом и отвечают дольше обычного — 3 минуты дают им шанс, а не рвут
+# соединение на середине.
+_BENCH_TIMEOUT_SEC = 180.0
+
 
 def run_model_batch(provider: str, model: str, prompt: str, transcript: str, runs: int) -> list[dict]:
     """N независимых вызовов одной модели с одним и тем же промптом+транскрибацией.
 
     Ошибка в одном прогоне не должна убивать остальные — фиксируем её в самом
     прогоне (`error`), а не бросаем исключение наружу."""
-    client = LLMClient(provider=provider)
+    client = LLMClient(provider=provider, timeout=_BENCH_TIMEOUT_SEC)
     messages = [
         Message(role="system", content=prompt),
         Message(role="user", content=transcript),
@@ -76,19 +83,46 @@ def run_model_batch(provider: str, model: str, prompt: str, transcript: str, run
     return results
 
 
-def _target_stats(target: dict) -> dict:
-    ok_runs = [r for r in target.get("results", []) if not r.get("error")]
+def target_stats(target: dict) -> dict:
+    """Технические метрики по одной модели — считаются в коде из измеренных
+    прогонов (не LLM), поэтому гарантированно точны и годятся и для отчёта
+    в UI, и для PPTX-экспорта, и как факт для судьи."""
+    all_runs = target.get("results", [])
+    ok_runs = [r for r in all_runs if not r.get("error")]
     n = len(ok_runs)
     avg = lambda key: round(sum(r[key] for r in ok_runs) / n, 2) if n else 0
+
+    latencies = sorted(r["latency_sec"] for r in ok_runs)
+
+    def _median(vals: list[float]) -> float:
+        if not vals:
+            return 0
+        mid = len(vals) // 2
+        if len(vals) % 2:
+            return round(vals[mid], 2)
+        return round((vals[mid - 1] + vals[mid]) / 2, 2)
+
     return {
         "provider": target.get("provider", ""),
         "model": target.get("model", ""),
-        "runs_total": len(target.get("results", [])),
+        "runs_total": len(all_runs),
         "runs_ok": n,
+        "success_rate": round(100 * n / len(all_runs), 1) if all_runs else 0,
         "avg_latency_sec": avg("latency_sec"),
+        "min_latency_sec": round(latencies[0], 2) if latencies else 0,
+        "max_latency_sec": round(latencies[-1], 2) if latencies else 0,
+        "median_latency_sec": _median(latencies),
+        "avg_tokens_in": avg("tokens_in"),
         "avg_tokens_out": avg("tokens_out"),
         "avg_tokens_per_sec": avg("tokens_per_sec"),
+        "errors": [r["error"] for r in all_runs if r.get("error")],
     }
+
+
+def compute_stats(targets: list[dict]) -> list[dict]:
+    """Метрики по всем моделям сессии — используется и отчётом судьи, и API
+    (для отображения в UI без ожидания судьи), и PPTX-экспортом."""
+    return [target_stats(t) for t in targets]
 
 
 def _target_outputs_text(target: dict) -> str:
@@ -121,7 +155,7 @@ def _judge_single_target(judge_provider: str, prompt: str, transcript: str, targ
         "полноту (не потеряны ли важные детали), галлюцинации (придуманные факты, которых не было "
         "в транскрибации), стабильность формата/длины между прогонами. Без вводных фраз, сразу к делу."
     )
-    client = LLMClient(provider=judge_provider)
+    client = LLMClient(provider=judge_provider, timeout=_BENCH_TIMEOUT_SEC)
     resp = client.chat_continued(
         [Message(role="user", content=judge_prompt)], temperature=0.3, max_tokens=1200,
         continuation_instruction=(
@@ -153,7 +187,7 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
     Возвращает (текст_отчёта, лучшая_модель | None), где лучшая_модель —
     {"provider": ..., "model": ...}, если судья её явно назвала и она
     действительно есть среди протестированных (не выдумана)."""
-    stats = [_target_stats(t) for t in targets]
+    stats = compute_stats(targets)
 
     assessments = [
         _judge_single_target(judge_provider, prompt, transcript, t, s)
@@ -162,8 +196,11 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
 
     summary_block = "\n\n".join(
         f"### {s['provider']}/{s['model']}\n"
-        f"Метрики: среднее время {s['avg_latency_sec']}с, ~{s['avg_tokens_per_sec']} ток/сек, "
-        f"{s['runs_ok']}/{s['runs_total']} успешных прогонов.\n"
+        f"Метрики: среднее время {s['avg_latency_sec']}с (мин {s['min_latency_sec']}с / "
+        f"медиана {s['median_latency_sec']}с / макс {s['max_latency_sec']}с), "
+        f"~{s['avg_tokens_per_sec']} ток/сек, контекст ~{s['avg_tokens_in']} → ответ ~{s['avg_tokens_out']} токенов, "
+        f"успешность {s['success_rate']}% ({s['runs_ok']}/{s['runs_total']} прогонов)"
+        + (f", ошибки: {'; '.join(s['errors'][:3])}" if s["errors"] else "") + ".\n"
         f"Оценка качества саммари: {assessment}"
         for s, assessment in zip(stats, assessments)
     )
@@ -172,10 +209,14 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
         "Ниже — оценки качества саммаризации по нескольким LLM-моделям, полученные отдельно для "
         "каждой модели, плюс их технические метрики (не пересчитывай, используй как факт).\n\n"
         + summary_block + "\n\n"
-        "На основе этого напиши сравнительный отчёт в Markdown:\n"
-        "1. Таблица: Модель | Сильные стороны | Слабые стороны | Стабильность между прогонами\n"
-        "2. Итоговая рекомендация: какая модель лучше подходит для саммаризации звонков "
-        "с учётом и качества, и скорости из метрик выше.\n"
+        "На основе этого напиши ДЕТАЛЬНЫЙ сравнительный отчёт в Markdown:\n"
+        "1. Таблица: Модель | Сильные стороны | Слабые стороны | Стабильность между прогонами (разброс "
+        "времени мин/медиана/макс, успешность)\n"
+        "2. По каждой модели отдельным подразделом: риски применения в проде (галлюцинации, обрывы "
+        "по лимиту токенов, нестабильность, ошибки) — только если они реально были видны в оценке или метриках, "
+        "не выдумывай.\n"
+        "3. Итоговая рекомендация: какая модель лучше подходит для саммаризации звонков "
+        "с учётом и качества, и скорости, и стабильности из метрик выше.\n"
         "Пиши по делу, без вводных фраз.\n\n"
         "ПОСЛЕДНЕЙ СТРОКОЙ ОБЯЗАТЕЛЬНО укажи победителя в точности таком формате "
         "(без пояснений после неё):\n"
@@ -184,7 +225,7 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
         "(например: custom_groq::llama-3.3-70b-versatile)."
     )
 
-    client = LLMClient(provider=judge_provider)
+    client = LLMClient(provider=judge_provider, timeout=_BENCH_TIMEOUT_SEC)
     # Обрыв перед строкой ЛУЧШАЯ_МОДЕЛЬ означал бы, что подсветка победителя тихо
     # пропадает — chat_continued гарантирует, что судья дойдёт до конца отчёта.
     resp = client.chat_continued(

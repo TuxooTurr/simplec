@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SplitSquareHorizontal, Play, Loader2, Paperclip, Trophy,
   ChevronDown, Trash2, History, Sparkles, Clock, Zap, AlertTriangle, RefreshCw, Plus, Minus,
+  Save, FileDown, BarChart3,
 } from "lucide-react";
 import NotionRenderer from "@/components/NotionRenderer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -12,7 +13,10 @@ import {
   getProviders, getGigachatModels, parseFile, type ProviderStatus,
   createModelBenchSession, runModelBenchTarget, analyzeModelBenchSession,
   listModelBenchSessions, getModelBenchSession, deleteModelBenchSession,
+  listModelBenchScenarios, createModelBenchScenario, deleteModelBenchScenario,
+  getModelBenchStats, downloadModelBenchPptx,
   type ModelBenchSession, type ModelBenchSessionSummary, type ModelBenchTarget,
+  type ModelBenchScenario, type ModelBenchStats,
 } from "@/lib/api";
 
 /* ── Style constants (локальные — как в остальных секциях) ─────────── */
@@ -31,8 +35,6 @@ const BTN_PRIMARY =
 const BTN_SECONDARY =
   "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border border-border-main rounded-lg " +
   "text-text-main hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 transition-all";
-
-const SCENARIOS = [{ value: "transcript_summary", label: "Транскрибация" }];
 
 const MAX_MODELS = 6;
 
@@ -124,10 +126,17 @@ function TargetCard({ target, providers, isBest }: { target: ModelBenchTarget; p
 export default function ModelBenchSection() {
   const { provider: judgeProvider } = useWorkspace(); // судья = платформенная модель, здесь не выбирается
 
-  const [scenario, setScenario] = useState(SCENARIOS[0].value);
+  const [scenarios, setScenarios] = useState<ModelBenchScenario[]>([]);
+  const [scenarioId, setScenarioId] = useState("");
+  const [savingScenario, setSavingScenario] = useState(false);
+  const [scenarioNameDraft, setScenarioNameDraft] = useState("");
+  const [showSaveScenario, setShowSaveScenario] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [transcript, setTranscript] = useState("");
   const [session, setSession] = useState<ModelBenchSession | null>(null);
+
+  const [stats, setStats] = useState<ModelBenchStats[]>([]);
+  const [exportingPptx, setExportingPptx] = useState(false);
 
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomLlmProvider[]>([]);
@@ -148,12 +157,47 @@ export default function ModelBenchSection() {
   const transcriptFileRef = useRef<HTMLInputElement>(null);
   const [fileLoading, setFileLoading] = useState(false);
 
+  const refreshScenarios = useCallback(() => {
+    listModelBenchScenarios().then(setScenarios).catch(() => {});
+  }, []);
+
   useEffect(() => {
     getProviders().then(setProviders).catch(() => {});
     getCustomLlmProviders().then(setCustomProviders).catch(() => {});
     getGigachatModels({}).then((r) => setGigachatModels(r.models)).catch(() => {});
     listModelBenchSessions().then(setHistory).catch(() => {});
-  }, []);
+    refreshScenarios();
+  }, [refreshScenarios]);
+
+  const handlePickScenario = useCallback((id: string) => {
+    setScenarioId(id);
+    const s = scenarios.find((x) => x.id === id);
+    if (s) {
+      setPrompt(s.prompt);
+      setTranscript(s.transcript);
+    }
+  }, [scenarios]);
+
+  const handleSaveScenario = useCallback(async () => {
+    if (!scenarioNameDraft.trim() || !prompt.trim()) return;
+    setSavingScenario(true);
+    try {
+      await createModelBenchScenario({ name: scenarioNameDraft.trim(), prompt, transcript });
+      setScenarioNameDraft("");
+      setShowSaveScenario(false);
+      refreshScenarios();
+    } finally {
+      setSavingScenario(false);
+    }
+  }, [scenarioNameDraft, prompt, transcript, refreshScenarios]);
+
+  const handleDeleteScenario = useCallback(async (id: string) => {
+    try {
+      await deleteModelBenchScenario(id);
+      if (scenarioId === id) setScenarioId("");
+      refreshScenarios();
+    } catch { /* игнорируем — просто не обновится список */ }
+  }, [scenarioId, refreshScenarios]);
 
   const defaultModelFor = useCallback((providerId: string) => {
     if (providerId === "gigachat") return gigachatModels[0] ?? "";
@@ -183,6 +227,15 @@ export default function ModelBenchSection() {
   const refreshHistory = useCallback(() => {
     listModelBenchSessions().then(setHistory).catch(() => {});
   }, []);
+
+  // Технические метрики считаются в коде из уже сохранённых прогонов — не ждут
+  // отчёта судьи, поэтому обновляются на каждое изменение числа прогонов сессии.
+  const runsSignature = session?.targets.map((t) => `${t.provider}:${t.model}:${t.results.length}`).join("|") ?? "";
+  useEffect(() => {
+    if (!session || !runsSignature) { setStats([]); return; }
+    getModelBenchStats(session.id).then(setStats).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.id, runsSignature]);
 
   const updateRow = useCallback((i: number, patch: Partial<TargetRow>) => {
     setTargetRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
@@ -242,7 +295,22 @@ export default function ModelBenchSection() {
     setTranscript("");
     setError("");
     setProgress({});
+    setScenarioId("");
+    setStats([]);
   }, []);
+
+  const handleExportPptx = useCallback(async () => {
+    if (!session) return;
+    setExportingPptx(true);
+    setError("");
+    try {
+      await downloadModelBenchPptx(session.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExportingPptx(false);
+    }
+  }, [session]);
 
   const handleLoadHistory = useCallback(async (id: string) => {
     try {
@@ -250,6 +318,7 @@ export default function ModelBenchSection() {
       setSession(s);
       setPrompt(s.prompt);
       setTranscript(s.transcript);
+      setScenarioId("");
       setShowHistory(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -313,11 +382,60 @@ export default function ModelBenchSection() {
           </div>
         )}
 
-        <div className="max-w-xs">
+        <div className="max-w-xl">
           <label className={LABEL_CLS}>Сценарий</label>
-          <select value={scenario} onChange={(e) => setScenario(e.target.value)} className={INPUT_CLS} disabled={locked}>
-            {SCENARIOS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={scenarioId}
+              onChange={(e) => handlePickScenario(e.target.value)}
+              className={`${INPUT_CLS} flex-1`}
+              disabled={locked}
+            >
+              <option value="">— свободный ввод —</option>
+              {scenarios.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+            {scenarioId && !locked && (
+              <button
+                type="button"
+                onClick={() => handleDeleteScenario(scenarioId)}
+                title="Удалить сценарий"
+                className="p-2 text-text-muted hover:text-red-500 border border-border-main rounded-lg transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {!locked && !showSaveScenario && (
+              <button type="button" onClick={() => setShowSaveScenario(true)} className={BTN_SECONDARY}>
+                <Save className="w-3.5 h-3.5" /> Сохранить как сценарий
+              </button>
+            )}
+          </div>
+          {!locked && showSaveScenario && (
+            <div className="flex items-center gap-2 mt-2 animate-fade-in">
+              <input
+                value={scenarioNameDraft}
+                onChange={(e) => setScenarioNameDraft(e.target.value)}
+                placeholder="Название сценария..."
+                className={`${INPUT_CLS} flex-1`}
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={handleSaveScenario}
+                disabled={savingScenario || !scenarioNameDraft.trim() || !prompt.trim()}
+                className={BTN_PRIMARY}
+              >
+                {savingScenario ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Сохранить
+              </button>
+              <button type="button" onClick={() => { setShowSaveScenario(false); setScenarioNameDraft(""); }} className={BTN_SECONDARY}>
+                Отмена
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-text-muted mt-1.5">
+            Промпт и транскрибация сценария подставляются в поля ниже по умолчанию — их можно заменить перед запуском.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -479,6 +597,40 @@ export default function ModelBenchSection() {
           </div>
         )}
 
+        {stats.length > 1 && (
+          <div className="bg-bg-card border border-border-main rounded-xl p-5 max-w-3xl overflow-x-auto">
+            <label className={`${LABEL_CLS} flex items-center gap-1.5`}>
+              <BarChart3 className="w-3.5 h-3.5" /> Технические метрики
+            </label>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-text-muted border-b border-border-main">
+                  <th className="text-left font-medium py-1.5 pr-3">Модель</th>
+                  <th className="text-right font-medium py-1.5 px-3">Успешность</th>
+                  <th className="text-right font-medium py-1.5 px-3">Ср. время</th>
+                  <th className="text-right font-medium py-1.5 px-3">Мин/Медиана/Макс</th>
+                  <th className="text-right font-medium py-1.5 px-3">Ток/сек</th>
+                  <th className="text-right font-medium py-1.5 pl-3">Токены вх→вых</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.map((s) => (
+                  <tr key={targetKey(s.provider, s.model)} className="border-b border-border-main/50 last:border-0">
+                    <td className="py-1.5 pr-3 text-text-main">{targetLabel(s.provider, s.model, providers)}</td>
+                    <td className="text-right py-1.5 px-3 tabular-nums">{s.success_rate}%</td>
+                    <td className="text-right py-1.5 px-3 tabular-nums">{s.avg_latency_sec}с</td>
+                    <td className="text-right py-1.5 px-3 tabular-nums text-text-muted">
+                      {s.min_latency_sec}/{s.median_latency_sec}/{s.max_latency_sec}с
+                    </td>
+                    <td className="text-right py-1.5 px-3 tabular-nums">{s.avg_tokens_per_sec}</td>
+                    <td className="text-right py-1.5 pl-3 tabular-nums text-text-muted">{s.avg_tokens_in}→{s.avg_tokens_out}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {session && session.targets.length > 0 && (
           <div className="bg-bg-card border border-border-main rounded-xl p-5 max-w-3xl">
             <label className={LABEL_CLS}>Сравнительный отчёт</label>
@@ -486,6 +638,10 @@ export default function ModelBenchSection() {
               <span className="text-xs text-text-muted">Судья: <span className="text-text-main font-medium">{judgeName}</span> (модель платформы)</span>
               <button onClick={handleAnalyze} disabled={analyzing} className={BTN_PRIMARY}>
                 {analyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Анализирую...</> : <><Sparkles className="w-4 h-4" /> {session.report ? "Обновить отчёт" : "Получить отчёт"}</>}
+              </button>
+              <button onClick={handleExportPptx} disabled={exportingPptx} className={BTN_SECONDARY}>
+                {exportingPptx ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+                Выгрузить в PPTX
               </button>
             </div>
             {session.report && (

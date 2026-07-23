@@ -373,9 +373,14 @@ class LLMClient:
     BUILTIN_PROVIDERS = ["gigachat"]
     SUPPORTED_PROVIDERS = BUILTIN_PROVIDERS
 
-    def __init__(self, provider: str = "gigachat"):
+    def __init__(self, provider: str = "gigachat", timeout: float | None = None):
+        """timeout — переопределение HTTP-таймаута клиента (сек). По умолчанию — старые
+        значения per-provider (120с GigaChat / 180с custom). Используется, например,
+        в model-bench: локальные/однопоточные модели могут быть заняты чужим запросом
+        и отвечать заметно дольше обычного чата."""
         self.provider = provider.lower()
         self.custom_config = None
+        self._timeout_override = timeout
         if self.provider not in self.BUILTIN_PROVIDERS:
             self.custom_config = _get_custom_provider(self.provider)
             if not self.custom_config:
@@ -418,7 +423,7 @@ class LLMClient:
                 "GigaChat init (certificate): base_url=%s model=%s no_verify=%s ca=%s",
                 self.base_url, self.model, no_verify, bool(ca),
             )
-            self._giga_http = httpx.Client(timeout=120.0, verify=verify, cert=cert)
+            self._giga_http = httpx.Client(timeout=self._timeout_override or 120.0, verify=verify, cert=cert)
             self.client = None
             return
 
@@ -430,7 +435,7 @@ class LLMClient:
         client_kwargs = {
             "scope": _env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
             "model": self.model,
-            "timeout": 120.0,
+            "timeout": self._timeout_override or 120.0,
             "credentials": credentials,
             **_gigachat_tls_kwargs(),
         }
@@ -468,7 +473,7 @@ class LLMClient:
         if self.auth_type == "certificate" and not client_cert:
             raise ValueError("Custom LLM client certificate path is empty")
         cert = (client_cert, client_key) if client_cert and client_key else (client_cert or None)
-        self.client = httpx.Client(timeout=180.0, verify=verify, cert=cert)
+        self.client = httpx.Client(timeout=self._timeout_override or 180.0, verify=verify, cert=cert)
 
     def chat(self, messages: List[Message],
              temperature: float = 0.7,

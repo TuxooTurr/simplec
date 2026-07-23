@@ -8,9 +8,11 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from db.model_bench_store import ModelBenchStore
+from db.model_bench_scenarios_store import ModelBenchScenariosStore
 
 router = APIRouter()
 
@@ -102,3 +104,60 @@ async def analyze_session(session_id: str, req: AnalyzeRequest) -> dict:
     if not updated:
         raise HTTPException(status_code=404, detail="Сессия исчезла во время выполнения — начните заново")
     return updated
+
+
+@router.get("/api/model-bench/sessions/{session_id}/stats")
+def get_session_stats(session_id: str) -> list[dict]:
+    """Технические метрики по накопленным прогонам — доступны сразу после
+    запуска моделей, без ожидания отчёта судьи (латентность/токены не требуют LLM)."""
+    session = ModelBenchStore.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    from agents.model_bench import compute_stats
+    return compute_stats(session.get("targets", []))
+
+
+@router.get("/api/model-bench/sessions/{session_id}/report.pptx")
+def get_session_pptx(session_id: str) -> Response:
+    session = ModelBenchStore.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    if not session.get("targets"):
+        raise HTTPException(status_code=400, detail="Нет ни одного прогона — нечего экспортировать")
+
+    from agents.model_bench_export import build_pptx
+    try:
+        data = build_pptx(session)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f'attachment; filename="model-bench-{session_id}.pptx"'},
+    )
+
+
+# ── Сценарии — сохранённые дефолты для промпта/транскрибации ──────────────────
+
+class ScenarioBody(BaseModel):
+    name: str = Field(..., min_length=1)
+    prompt: str = Field(default="")
+    transcript: str = Field(default="")
+
+
+@router.get("/api/model-bench/scenarios")
+def list_scenarios() -> list[dict]:
+    return ModelBenchScenariosStore.list_scenarios()
+
+
+@router.post("/api/model-bench/scenarios")
+def create_scenario(body: ScenarioBody) -> dict:
+    return ModelBenchScenariosStore.add_scenario(body.name, body.prompt, body.transcript)
+
+
+@router.delete("/api/model-bench/scenarios/{scenario_id}")
+def delete_scenario(scenario_id: str) -> dict:
+    if not ModelBenchScenariosStore.delete_scenario(scenario_id):
+        raise HTTPException(status_code=404, detail="Сценарий не найден")
+    return {"status": "deleted"}

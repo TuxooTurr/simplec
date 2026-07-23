@@ -1028,6 +1028,78 @@ export async function analyzeModelBenchSession(
   });
 }
 
+export interface ModelBenchStats {
+  provider: string;
+  model: string;
+  runs_total: number;
+  runs_ok: number;
+  success_rate: number;
+  avg_latency_sec: number;
+  min_latency_sec: number;
+  max_latency_sec: number;
+  median_latency_sec: number;
+  avg_tokens_in: number;
+  avg_tokens_out: number;
+  avg_tokens_per_sec: number;
+  errors: string[];
+}
+
+export async function getModelBenchStats(sessionId: string): Promise<ModelBenchStats[]> {
+  return fetchJson(`/api/model-bench/sessions/${sessionId}/stats`);
+}
+
+// Бинарный файл, не JSON — не через fetchJson. Триггерит скачивание в браузере,
+// как downloadBlob в ExportPanel.tsx, но содержимое приходит готовым с бэкенда.
+export async function downloadModelBenchPptx(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/model-bench/sessions/${sessionId}/report.pptx`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    let detail = text;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+    } catch { /* не JSON */ }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `model-bench-${sessionId}.pptx`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Сценарии сравнения LLM (дефолты промпта/транскрибации) ───────────────────
+
+export interface ModelBenchScenario {
+  id: string;
+  name: string;
+  prompt: string;
+  transcript: string;
+  created_at: string;
+}
+
+export async function listModelBenchScenarios(): Promise<ModelBenchScenario[]> {
+  return fetchJson("/api/model-bench/scenarios");
+}
+
+export async function createModelBenchScenario(data: {
+  name: string; prompt: string; transcript: string;
+}): Promise<ModelBenchScenario> {
+  return fetchJson("/api/model-bench/scenarios", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteModelBenchScenario(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/model-bench/scenarios/${id}`, { method: "DELETE" });
+}
+
 // ─── Требования — локальная библиотека (без эмбеддингов) ──────────────────────
 
 export interface Requirement {

@@ -17,6 +17,7 @@ data/users.json
 data/gen_sessions.json
 data/model_bench_sessions.json
 data/requirements.json
+data/model_bench_scenarios.json
 data/testdata_connections.json
 data/jdbc_drivers.json
 data/jdbc_drivers/

@@ -1154,7 +1154,7 @@ export default function EtalonsSection() {
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="w-full">
+      <div className="max-w-5xl mx-auto">
         {/* Заголовок */}
         <div className="mb-5">
           <h1 className="text-xl font-bold text-text-main mb-1">Эталоны</h1>

@@ -355,7 +355,8 @@ export default function ModelBenchSection() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-5 space-y-4">
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-5">
+      <div className="max-w-5xl mx-auto space-y-4">
         {showHistory && (
           <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-1.5 animate-fade-in max-w-3xl">
             {history.length === 0 && <p className="text-xs text-text-muted px-2 py-1">Пока пусто</p>}
@@ -651,6 +652,7 @@ export default function ModelBenchSection() {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );

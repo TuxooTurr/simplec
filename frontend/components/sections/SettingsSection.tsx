@@ -1557,7 +1557,7 @@ export default function SettingsSection() {
   );
 
   return (
-    <div className="p-6 space-y-4 overflow-y-auto scrollbar-thin">
+    <div className="max-w-5xl mx-auto p-6 space-y-4 overflow-y-auto scrollbar-thin">
       {/* Header */}
       <div className="mb-2">
         <div className="flex items-center gap-2 mb-1">

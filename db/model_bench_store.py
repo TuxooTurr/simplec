@@ -78,7 +78,7 @@ class ModelBenchStore:
         return None
 
     @classmethod
-    def create_session(cls, prompt: str, transcript: str) -> dict:
+    def create_session(cls, prompt: str, transcript: str, judge_instructions: str = "") -> dict:
         now = datetime.now(timezone.utc).isoformat()
         session = {
             "id": uuid.uuid4().hex[:12],
@@ -86,6 +86,10 @@ class ModelBenchStore:
             "updated_at": now,
             "prompt": prompt,
             "transcript": transcript,
+            # Доп. рекомендации судье из выбранного при создании сценария (если был) —
+            # путешествуют вместе с сессией, чтобы re-анализ отчёта не требовал заново
+            # выбирать сценарий и помнить, какие критерии оценки использовались.
+            "judge_instructions": judge_instructions,
             "targets": [],
             "report": "",
             "report_provider": "",

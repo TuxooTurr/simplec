@@ -970,6 +970,7 @@ export interface ModelBenchSession {
   updated_at: string;
   prompt: string;
   transcript: string;
+  judge_instructions: string;
   targets: ModelBenchTarget[];
   report: string;
   report_provider: string;
@@ -986,11 +987,13 @@ export interface ModelBenchSessionSummary {
   has_report: boolean;
 }
 
-export async function createModelBenchSession(prompt: string, transcript: string): Promise<ModelBenchSession> {
+export async function createModelBenchSession(
+  prompt: string, transcript: string, judgeInstructions?: string,
+): Promise<ModelBenchSession> {
   return fetchJson("/api/model-bench/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, transcript }),
+    body: JSON.stringify({ prompt, transcript, judge_instructions: judgeInstructions ?? "" }),
   });
 }
 
@@ -1079,6 +1082,7 @@ export interface ModelBenchScenario {
   name: string;
   prompt: string;
   transcript: string;
+  judge_instructions: string;
   created_at: string;
 }
 
@@ -1087,7 +1091,7 @@ export async function listModelBenchScenarios(): Promise<ModelBenchScenario[]> {
 }
 
 export async function createModelBenchScenario(data: {
-  name: string; prompt: string; transcript: string;
+  name: string; prompt: string; transcript: string; judge_instructions?: string;
 }): Promise<ModelBenchScenario> {
   return fetchJson("/api/model-bench/scenarios", {
     method: "POST",

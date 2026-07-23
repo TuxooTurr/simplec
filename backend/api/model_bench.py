@@ -20,11 +20,14 @@ router = APIRouter()
 class CreateSessionRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     transcript: str = Field(..., min_length=1)
+    # Доп. рекомендации судье из выбранного при создании сценария — сохраняются
+    # на сессии, чтобы (пере)анализ отчёта не требовал заново помнить/выбирать сценарий.
+    judge_instructions: str = Field(default="")
 
 
 @router.post("/api/model-bench/sessions")
 def create_session(req: CreateSessionRequest) -> dict:
-    return ModelBenchStore.create_session(req.prompt, req.transcript)
+    return ModelBenchStore.create_session(req.prompt, req.transcript, req.judge_instructions)
 
 
 @router.get("/api/model-bench/sessions")
@@ -95,6 +98,7 @@ async def analyze_session(session_id: str, req: AnalyzeRequest) -> dict:
     try:
         report, best = await asyncio.to_thread(
             analyze_report, req.provider, session["prompt"], session["transcript"], session["targets"],
+            session.get("judge_instructions", ""),
         )
     except Exception as e:
         _, friendly = LLMClient.classify_error(e)
@@ -144,6 +148,7 @@ class ScenarioBody(BaseModel):
     name: str = Field(..., min_length=1)
     prompt: str = Field(default="")
     transcript: str = Field(default="")
+    judge_instructions: str = Field(default="")
 
 
 @router.get("/api/model-bench/scenarios")
@@ -153,7 +158,7 @@ def list_scenarios() -> list[dict]:
 
 @router.post("/api/model-bench/scenarios")
 def create_scenario(body: ScenarioBody) -> dict:
-    return ModelBenchScenariosStore.add_scenario(body.name, body.prompt, body.transcript)
+    return ModelBenchScenariosStore.add_scenario(body.name, body.prompt, body.transcript, body.judge_instructions)
 
 
 @router.delete("/api/model-bench/scenarios/{scenario_id}")

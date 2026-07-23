@@ -135,14 +135,21 @@ def _target_outputs_text(target: dict) -> str:
     return "\n\n".join(lines)
 
 
-def _judge_single_target(judge_provider: str, prompt: str, transcript: str, target: dict, stats: dict) -> str:
+def _judge_single_target(judge_provider: str, prompt: str, transcript: str, target: dict, stats: dict,
+                          judge_instructions: str = "") -> str:
     """Оценка качества ОДНОЙ модели — отдельным независимым запросом.
 
     Раньше все модели и все прогоны склеивались в один гигантский промпт
     судье, и на 3+ моделях с несколькими прогонами это упиралось в лимит
     токенов контекста. Теперь каждая модель оценивается своим отдельным
     запросом ("с нуля", без накопленного контекста прошлых моделей) — размер
-    промпта больше не растёт с числом тестируемых моделей."""
+    промпта больше не растёт с числом тестируемых моделей.
+
+    judge_instructions — доп. критерии оценки из выбранного сценария (см.
+    db/model_bench_scenarios_store.py) — конкретика, что именно важно для
+    ЭТОГО типа задачи (например, для саммаризации инцидентов: хронология,
+    сохранность технических деталей и т.п.), поверх общих вопросов ниже."""
+    extra_block = f"\n\nДОПОЛНИТЕЛЬНЫЕ КРИТЕРИИ ОЦЕНКИ (из сценария):\n{judge_instructions}\n" if judge_instructions.strip() else ""
     judge_prompt = (
         "Ты Senior QA-инженер, оцениваешь качество саммаризации транскрибации одной LLM-моделью.\n\n"
         "ИСХОДНЫЙ ПРОМПТ ДЛЯ САММАРИЗАЦИИ (что просили у модели):\n" + prompt + "\n\n"
@@ -154,6 +161,7 @@ def _judge_single_target(judge_provider: str, prompt: str, transcript: str, targ
         "Кратко (5-8 предложений) оцени: точность (нет ли искажений фактов из транскрибации), "
         "полноту (не потеряны ли важные детали), галлюцинации (придуманные факты, которых не было "
         "в транскрибации), стабильность формата/длины между прогонами. Без вводных фраз, сразу к делу."
+        + extra_block
     )
     client = LLMClient(provider=judge_provider, timeout=_BENCH_TIMEOUT_SEC)
     resp = client.chat_continued(
@@ -166,7 +174,8 @@ def _judge_single_target(judge_provider: str, prompt: str, transcript: str, targ
     return resp.content.strip()
 
 
-def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: list[dict]) -> tuple[str, dict | None]:
+def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: list[dict],
+                    judge_instructions: str = "") -> tuple[str, dict | None]:
     """Сравнительный отчёт по всем накопленным моделям/прогонам.
 
     Двухфазная схема специально ради лимита токенов:
@@ -190,7 +199,7 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
     stats = compute_stats(targets)
 
     assessments = [
-        _judge_single_target(judge_provider, prompt, transcript, t, s)
+        _judge_single_target(judge_provider, prompt, transcript, t, s, judge_instructions)
         for t, s in zip(targets, stats)
     ]
 
@@ -205,9 +214,11 @@ def analyze_report(judge_provider: str, prompt: str, transcript: str, targets: l
         for s, assessment in zip(stats, assessments)
     )
 
+    judge_extra = f"\n\nДОПОЛНИТЕЛЬНЫЕ КРИТЕРИИ ОЦЕНКИ (из сценария, учти их при сравнении):\n{judge_instructions}\n" if judge_instructions.strip() else ""
     final_prompt = (
         "Ниже — оценки качества саммаризации по нескольким LLM-моделям, полученные отдельно для "
-        "каждой модели, плюс их технические метрики (не пересчитывай, используй как факт).\n\n"
+        "каждой модели, плюс их технические метрики (не пересчитывай, используй как факт)."
+        + judge_extra + "\n\n"
         + summary_block + "\n\n"
         "На основе этого напиши ДЕТАЛЬНЫЙ сравнительный отчёт в Markdown:\n"
         "1. Таблица: Модель | Сильные стороны | Слабые стороны | Стабильность между прогонами (разброс "

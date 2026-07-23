@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SplitSquareHorizontal, Play, Loader2, Paperclip, Trophy,
   ChevronDown, Trash2, History, Sparkles, Clock, Zap, AlertTriangle, RefreshCw, Plus, Minus,
-  Save, FileDown, BarChart3,
+  Save, FileDown, BarChart3, SlidersHorizontal, X,
 } from "lucide-react";
 import NotionRenderer from "@/components/NotionRenderer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -128,9 +128,13 @@ export default function ModelBenchSection() {
 
   const [scenarios, setScenarios] = useState<ModelBenchScenario[]>([]);
   const [scenarioId, setScenarioId] = useState("");
+  const [judgeInstructions, setJudgeInstructions] = useState("");
+  const [showScenarioModal, setShowScenarioModal] = useState(false);
+  const [formName, setFormName] = useState("");
+  const [formPrompt, setFormPrompt] = useState("");
+  const [formTranscript, setFormTranscript] = useState("");
+  const [formJudgeInstructions, setFormJudgeInstructions] = useState("");
   const [savingScenario, setSavingScenario] = useState(false);
-  const [scenarioNameDraft, setScenarioNameDraft] = useState("");
-  const [showSaveScenario, setShowSaveScenario] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [transcript, setTranscript] = useState("");
   const [session, setSession] = useState<ModelBenchSession | null>(null);
@@ -175,26 +179,39 @@ export default function ModelBenchSection() {
     if (s) {
       setPrompt(s.prompt);
       setTranscript(s.transcript);
+      setJudgeInstructions(s.judge_instructions);
+    } else {
+      setJudgeInstructions("");
     }
   }, [scenarios]);
 
-  const handleSaveScenario = useCallback(async () => {
-    if (!scenarioNameDraft.trim() || !prompt.trim()) return;
+  const openScenarioModal = useCallback(() => {
+    setFormName("");
+    setFormPrompt(prompt);
+    setFormTranscript(transcript);
+    setFormJudgeInstructions("");
+    setShowScenarioModal(true);
+  }, [prompt, transcript]);
+
+  const handleAddScenario = useCallback(async () => {
+    if (!formName.trim() || !formPrompt.trim()) return;
     setSavingScenario(true);
     try {
-      await createModelBenchScenario({ name: scenarioNameDraft.trim(), prompt, transcript });
-      setScenarioNameDraft("");
-      setShowSaveScenario(false);
+      await createModelBenchScenario({
+        name: formName.trim(), prompt: formPrompt, transcript: formTranscript,
+        judge_instructions: formJudgeInstructions,
+      });
+      setFormName(""); setFormPrompt(""); setFormTranscript(""); setFormJudgeInstructions("");
       refreshScenarios();
     } finally {
       setSavingScenario(false);
     }
-  }, [scenarioNameDraft, prompt, transcript, refreshScenarios]);
+  }, [formName, formPrompt, formTranscript, formJudgeInstructions, refreshScenarios]);
 
   const handleDeleteScenario = useCallback(async (id: string) => {
     try {
       await deleteModelBenchScenario(id);
-      if (scenarioId === id) setScenarioId("");
+      if (scenarioId === id) { setScenarioId(""); setJudgeInstructions(""); }
       refreshScenarios();
     } catch { /* игнорируем — просто не обновится список */ }
   }, [scenarioId, refreshScenarios]);
@@ -252,7 +269,7 @@ export default function ModelBenchSection() {
     try {
       let s = session;
       if (!s) {
-        s = await createModelBenchSession(prompt, transcript);
+        s = await createModelBenchSession(prompt, transcript, judgeInstructions);
         setSession(s);
       }
       for (const row of targetRows) {
@@ -272,7 +289,7 @@ export default function ModelBenchSection() {
     } finally {
       setRunning(false);
     }
-  }, [prompt, transcript, rowsValid, targetRows, runsCount, session, refreshHistory]);
+  }, [prompt, transcript, judgeInstructions, rowsValid, targetRows, runsCount, session, refreshHistory]);
 
   const handleAnalyze = useCallback(async () => {
     if (!session || !judgeProvider) return;
@@ -296,6 +313,7 @@ export default function ModelBenchSection() {
     setError("");
     setProgress({});
     setScenarioId("");
+    setJudgeInstructions("");
     setStats([]);
   }, []);
 
@@ -319,6 +337,7 @@ export default function ModelBenchSection() {
       setPrompt(s.prompt);
       setTranscript(s.transcript);
       setScenarioId("");
+      setJudgeInstructions(s.judge_instructions ?? "");
       setShowHistory(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -395,49 +414,120 @@ export default function ModelBenchSection() {
               <option value="">— свободный ввод —</option>
               {scenarios.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            {scenarioId && !locked && (
-              <button
-                type="button"
-                onClick={() => handleDeleteScenario(scenarioId)}
-                title="Удалить сценарий"
-                className="p-2 text-text-muted hover:text-red-500 border border-border-main rounded-lg transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!locked && !showSaveScenario && (
-              <button type="button" onClick={() => setShowSaveScenario(true)} className={BTN_SECONDARY}>
-                <Save className="w-3.5 h-3.5" /> Сохранить как сценарий
+            {!locked && (
+              <button type="button" onClick={openScenarioModal} className={BTN_SECONDARY}>
+                <SlidersHorizontal className="w-3.5 h-3.5" /> Настройки сценариев
               </button>
             )}
           </div>
-          {!locked && showSaveScenario && (
-            <div className="flex items-center gap-2 mt-2 animate-fade-in">
-              <input
-                value={scenarioNameDraft}
-                onChange={(e) => setScenarioNameDraft(e.target.value)}
-                placeholder="Название сценария..."
-                className={`${INPUT_CLS} flex-1`}
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={handleSaveScenario}
-                disabled={savingScenario || !scenarioNameDraft.trim() || !prompt.trim()}
-                className={BTN_PRIMARY}
-              >
-                {savingScenario ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                Сохранить
-              </button>
-              <button type="button" onClick={() => { setShowSaveScenario(false); setScenarioNameDraft(""); }} className={BTN_SECONDARY}>
-                Отмена
-              </button>
-            </div>
-          )}
           <p className="text-xs text-text-muted mt-1.5">
             Промпт и транскрибация сценария подставляются в поля ниже по умолчанию — их можно заменить перед запуском.
+            {judgeInstructions.trim() && " Для судьи заданы дополнительные критерии оценки."}
           </p>
         </div>
+
+        {showScenarioModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto"
+            onClick={() => setShowScenarioModal(false)}
+          >
+            <div
+              className="bg-bg-main rounded-2xl border border-border-main w-full max-w-2xl my-8 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
+                <h3 className="text-sm font-semibold text-text-main">Настройки сценариев</h3>
+                <button
+                  onClick={() => setShowScenarioModal(false)}
+                  className="p-1.5 text-text-muted hover:text-text-main rounded-lg hover:bg-bg-subtle"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
+                <div>
+                  <p className={LABEL_CLS}>Сохранённые сценарии</p>
+                  {scenarios.length === 0 ? (
+                    <p className="text-xs text-text-muted mt-1">Пока нет ни одного сценария.</p>
+                  ) : (
+                    <div className="space-y-1.5 mt-2">
+                      {scenarios.map((s) => (
+                        <div
+                          key={s.id}
+                          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border-main bg-bg-card text-sm"
+                        >
+                          <span className="flex-1 truncate text-text-main">{s.name}</span>
+                          {s.judge_instructions.trim() && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary flex-shrink-0">
+                              есть критерии судье
+                            </span>
+                          )}
+                          <button
+                            onClick={() => handleDeleteScenario(s.id)}
+                            className="text-text-muted hover:text-red-500 flex-shrink-0"
+                            title="Удалить сценарий"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="border-t border-border-main pt-4 space-y-3">
+                  <p className={LABEL_CLS}>Новый сценарий</p>
+                  <input
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    placeholder="Название сценария..."
+                    className={INPUT_CLS}
+                  />
+                  <div>
+                    <label className="block text-xs text-text-muted mb-1">Промпт, на котором тестируется LLM</label>
+                    <textarea
+                      value={formPrompt}
+                      onChange={(e) => setFormPrompt(e.target.value)}
+                      rows={6}
+                      placeholder="Системный промпт для тестируемых моделей..."
+                      className={`${INPUT_CLS} font-mono resize-none`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-muted mb-1">Транскрибация по умолчанию (необязательно)</label>
+                    <textarea
+                      value={formTranscript}
+                      onChange={(e) => setFormTranscript(e.target.value)}
+                      rows={3}
+                      placeholder="Пример текста для тестирования..."
+                      className={`${INPUT_CLS} resize-none`}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-text-muted mb-1">Доп. рекомендации для судьи (необязательно)</label>
+                    <textarea
+                      value={formJudgeInstructions}
+                      onChange={(e) => setFormJudgeInstructions(e.target.value)}
+                      rows={4}
+                      placeholder="Что именно важно проверить при оценке качества (технические/логические критерии)..."
+                      className={`${INPUT_CLS} resize-none`}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddScenario}
+                    disabled={savingScenario || !formName.trim() || !formPrompt.trim()}
+                    className={BTN_PRIMARY}
+                  >
+                    {savingScenario ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                    Сохранить сценарий
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div className="bg-bg-card border border-border-main rounded-xl p-5">

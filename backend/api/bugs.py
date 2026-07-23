@@ -18,19 +18,20 @@ router = APIRouter()
 _PRIORITIES = ("Критический", "Высокий", "Средний", "Низкий")
 
 
-def _format_bug_sync(platform: str, feature: str, description: str, provider: str) -> str:
+def _format_bug_sync(platform: str, feature: str, description: str, provider: str, requirements_context: str = "") -> str:
     from agents.llm_client import LLMClient, Message
 
     llm = LLMClient(provider=provider)
 
     feature_hint = f"\nФИЧА / МОДУЛЬ (подсказка): {feature.strip()}" if feature.strip() else ""
+    requirements_block = f"\n\n═══════════════════════════════════════════════════\nКОНТЕКСТ ИЗ ТРЕБОВАНИЙ (для справки — реальные поля БД, методы API, бизнес-правила; используй, чтобы точнее и конкретнее описать дефект, но не выдумывай то, чего нет во входных данных)\n═══════════════════════════════════════════════════\n{requirements_context}" if requirements_context.strip() else ""
 
     prompt = f"""Ты — опытный QA-инженер. Ты превращаешь краткие, неформальные описания проблем (часто с ошибками, без структуры, с фрагментами JSON, логов, скринов) в чёткий структурированный дефект для Jira.
 
 КОМПОНЕНТ/СЛОЙ (выбран пользователем, не меняй): {platform}{feature_hint}
 
 ВХОДНЫЕ ДАННЫЕ (могут быть неполными, с ошибками; вложения приложены ниже текстом):
-{description}
+{description}{requirements_block}
 
 ═══════════════════════════════════════════════════
 ПРИНЦИПЫ РАБОТЫ
@@ -128,8 +129,10 @@ async def format_bug(
     description: str = Form(...),
     provider: str = Form(...),
     attachments: List[UploadFile] = File(default=[]),
+    requirement_ids: List[str] = Form(default=[]),
 ):
     from agents.file_parser import parse_file
+    from db.requirements_store import RequirementsStore
 
     # Парсим вложения и добавляем их текст к описанию
     attachment_texts = []
@@ -146,6 +149,13 @@ async def format_bug(
     if attachment_texts:
         full_description += "\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)
 
+    # Требования, выбранные как контекст (фича/API/поля БД — для точности дефекта)
+    requirements_context = ""
+    if requirement_ids:
+        reqs = [RequirementsStore.get_requirement(rid) for rid in requirement_ids]
+        blocks = [f"### {r['name']}\n{r['text']}" for r in reqs if r]
+        requirements_context = "\n\n".join(blocks)
+
     provider = provider.strip()
     if not provider:
         raise HTTPException(
@@ -156,7 +166,7 @@ async def format_bug(
     try:
         report = await asyncio.to_thread(
             _format_bug_sync,
-            platform, feature, full_description, provider
+            platform, feature, full_description, provider, requirements_context,
         )
         return {"report": report, **_parse_report(report)}
     except Exception as e:

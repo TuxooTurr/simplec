@@ -5,17 +5,19 @@ import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
   StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
-  Copy, CheckCheck, RefreshCw, AlertCircle,
+  Copy, CheckCheck, RefreshCw, AlertCircle, PenLine, ListChecks, Save,
 } from "lucide-react";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
 import NotionRenderer from "@/components/NotionRenderer";
+import { Select } from "@/components/ui/Select";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import {
   parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession,
   listTestDataConnections, getTestDataSchemasText,
-  type GenSessionSummary, type GenSession, type TestDataConnection,
+  listRequirements, addRequirement,
+  type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -163,6 +165,14 @@ export default function GenerationSection() {
   const [featureName, setFeatureName] = useState("");
   const [featureTouched, setFeatureTouched] = useState(false);
 
+  // Источник требования: свободный текст или выбор из сохранённой библиотеки требований
+  const [reqSource, setReqSource] = useState<"free" | "list">("free");
+  const [requirementsList, setRequirementsList] = useState<Requirement[]>([]);
+  const [reqListLoading, setReqListLoading] = useState(false);
+  const [selectedReqId, setSelectedReqId] = useState("");
+  const [reqSaving, setReqSaving] = useState(false);
+  const [reqSaved, setReqSaved] = useState(false);
+
   const [stage, setStage]             = useState<Stage>("input");
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
@@ -291,6 +301,46 @@ export default function GenerationSection() {
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   // ── End history ────────────────────────────────────────────────
 
+  // ── Библиотека требований (переключаемый источник) ────────────────
+  const refreshRequirements = useCallback(async () => {
+    setReqListLoading(true);
+    try {
+      setRequirementsList(await listRequirements());
+    } catch {
+      // тихо — список требований не критичен для генерации
+    } finally {
+      setReqListLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { if (reqSource === "list") refreshRequirements(); }, [reqSource, refreshRequirements]);
+
+  function handlePickRequirement(id: string) {
+    setSelectedReqId(id);
+    const item = requirementsList.find((r) => r.id === id);
+    if (item) setRequirement(item.text);
+  }
+
+  async function handleSaveAsRequirement() {
+    if (!requirement.trim()) return;
+    setReqSaving(true);
+    try {
+      await addRequirement({
+        name: featureName.trim() || "Без названия",
+        feature: featureName.trim(),
+        text: requirement,
+      });
+      setReqSaved(true);
+      setTimeout(() => setReqSaved(false), 2000);
+      if (reqSource === "list") refreshRequirements();
+    } catch (err) {
+      alert("Не удалось сохранить требование: " + String(err));
+    } finally {
+      setReqSaving(false);
+    }
+  }
+  // ── End требования ─────────────────────────────────────────────
+
   const { state, events, progress, cases, qaDoc, qaDocTruncated, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected } =
     useGeneration();
 
@@ -407,6 +457,10 @@ export default function GenerationSection() {
             Вставьте требование или загрузите файлы — AI изучит все источники и создаст тест-кейсы для Zephyr Scale.
           </p>
 
+          {/* Форма ввода — ровно половина ширины рабочей зоны (без учёта бокового меню):
+              достаточно места для комфортного чтения/редактирования, но не растянуто на
+              весь широкий экран, как было раньше (текст занимает жалкую долю такой ширины). */}
+          <div className="w-1/2 min-w-[420px]">
           {/* Название фичи — для имён кейсов: [Фича] Группа проверок. Наименование проверки */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
             <label className={LABEL_CLS}>
@@ -433,7 +487,52 @@ export default function GenerationSection() {
 
           {/* Requirement input */}
           <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
-            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-3">Требование</label>
+            <div className="flex items-center justify-between mb-3">
+              <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide">Требование</label>
+              <div className="flex items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setReqSource("free")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    reqSource === "free" ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"
+                  }`}
+                >
+                  <PenLine className="w-3 h-3" /> Свободный ввод
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReqSource("list")}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    reqSource === "list" ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"
+                  }`}
+                >
+                  <ListChecks className="w-3 h-3" /> Из списка требований
+                </button>
+              </div>
+            </div>
+
+            {reqSource === "list" && (
+              <div className="mb-3">
+                <Select
+                  value={selectedReqId}
+                  onChange={handlePickRequirement}
+                  placeholder={reqListLoading ? "Загрузка…" : requirementsList.length === 0 ? "Список пуст — сохраните требование ниже" : "Выберите требование…"}
+                  searchable
+                  searchPlaceholder="Поиск по названию или фиче…"
+                  disabled={reqListLoading || requirementsList.length === 0}
+                >
+                  {requirementsList.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.feature ? `[${r.feature}] ${r.name}` : r.name}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-text-muted mt-1.5">
+                  Требование подставится в поле ниже — его можно доредактировать перед генерацией.
+                </p>
+              </div>
+            )}
+
             <textarea
               value={requirement}
               onChange={(e) => setRequirement(e.target.value)}
@@ -480,6 +579,20 @@ export default function GenerationSection() {
                   {fileLoading
                     ? <><Loader2 className="w-3 h-3 animate-spin" /> Загружаю...</>
                     : <><Paperclip className="w-3 h-3" /> Загрузить из файла</>}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAsRequirement}
+                  disabled={reqSaving || !requirement.trim()}
+                  title="Сохранить текущий текст в библиотеку требований — потом можно будет выбрать его из списка здесь и приложить как контекст при регистрации дефекта"
+                  className="flex items-center gap-1.5 px-2.5 py-1 border border-dashed border-border-main rounded-lg
+                    text-xs text-text-muted hover:border-primary/50 hover:text-primary disabled:opacity-50 transition-all duration-150"
+                >
+                  {reqSaving
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Сохраняю...</>
+                    : reqSaved
+                      ? <><CheckCircle2 className="w-3 h-3 text-emerald-500" /> Сохранено</>
+                      : <><Save className="w-3 h-3" /> Сохранить как требование</>}
                 </button>
                 {fileAttachments.length > 0 && !fileLoading && fileAttachments.map((file, index) => (
                   <span
@@ -610,44 +723,48 @@ export default function GenerationSection() {
               Генерировать тест-кейсы
             </button>
           </div>
+          </div>
         </div>
       )}
 
       {/* ── GENERATING ── */}
       {stage === "generating" && (
         <div className="p-6 animate-fade-in">
-          <div className="flex items-center justify-between mb-4 max-w-2xl">
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
-              {genMetaRef.current.feature && (
-                <span className="text-sm text-text-muted flex items-center gap-1">
-                  <FlaskConical className="w-3.5 h-3.5" />
-                  {genMetaRef.current.feature}
-                </span>
-              )}
+          {/* Пока идёт генерация, показывать нечего, кроме прогресса — узкая колонка
+              (1/4 ширины). QA-документация и кейсы ниже, по мере готовности, наоборот
+              разворачиваются на всю ширину — там уже есть что читать. */}
+          <div className="w-1/4 min-w-[320px]">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
+                {genMetaRef.current.feature && (
+                  <span className="text-sm text-text-muted flex items-center gap-1">
+                    <FlaskConical className="w-3.5 h-3.5" />
+                    {genMetaRef.current.feature}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={cancel}
+                className="flex items-center gap-1.5 px-3.5 py-2 border border-red-200 rounded-lg text-sm
+                  text-red-500 hover:bg-red-50 hover:border-red-300 transition-all duration-150 group"
+              >
+                <StopCircle className="w-3.5 h-3.5 transition-transform group-hover:scale-110 duration-200" />
+                Отменить
+              </button>
             </div>
-            <button
-              onClick={cancel}
-              className="flex items-center gap-1.5 px-3.5 py-2 border border-red-200 rounded-lg text-sm
-                text-red-500 hover:bg-red-50 hover:border-red-300 transition-all duration-150 group"
-            >
-              <StopCircle className="w-3.5 h-3.5 transition-transform group-hover:scale-110 duration-200" />
-              Отменить
-            </button>
-          </div>
-          {!wsConnected && sessionId && (
-            <div className="max-w-2xl mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-              <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
-              Соединение потеряно — генерация продолжается на сервере. Переподключение...
-            </div>
-          )}
-          <div className="max-w-2xl">
+            {!wsConnected && sessionId && (
+              <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
+                <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+                Соединение потеряно — генерация продолжается на сервере. Переподключение...
+              </div>
+            )}
             <StatusPanel events={events} progress={progress} />
           </div>
 
           {/* QA документация доступна сразу после слоя 1 — читаем, пока собираются кейсы */}
           {qaDoc && (
-            <div className="max-w-2xl mt-4 bg-bg-card border border-border-main rounded-xl overflow-hidden animate-fade-in">
+            <div className="mt-4 bg-bg-card border border-border-main rounded-xl overflow-hidden animate-fade-in">
               <button
                 onClick={() => setLiveQaExpanded((v) => !v)}
                 className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium
@@ -700,11 +817,11 @@ export default function GenerationSection() {
 
           {/* Готовые кейсы появляются по мере генерации */}
           {cases.length > 0 && (
-            <div className="max-w-2xl mt-4 animate-fade-in">
+            <div className="mt-4 animate-fade-in">
               <p className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-2">
                 Готовые кейсы ({cases.length})
               </p>
-              <div className="space-y-1.5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
                 {cases.map((c, i) => (
                   <div key={i} className="flex items-center gap-2 px-3 py-2 bg-bg-card border border-border-main rounded-lg text-sm">
                     <CheckCheck className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
@@ -721,7 +838,7 @@ export default function GenerationSection() {
       {/* ── REVIEW ── */}
       {stage === "review" && (
         <div className="p-6 animate-slide-up">
-          <div className="flex items-center justify-between mb-4 max-w-3xl">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-xl font-bold text-text-main">
                 {state === "error"
@@ -852,9 +969,9 @@ export default function GenerationSection() {
             </div>
           </div>
 
-          <div className="max-w-3xl">
+          <div>
             {events.length > 0 && (
-              <div className="mb-4">
+              <div className="mb-4 max-w-2xl">
                 <StatusPanel events={events} progress={null} done={state === "done"} error={state === "error"} elapsed={elapsedFinal} />
               </div>
             )}
@@ -1111,7 +1228,7 @@ export default function GenerationSection() {
             const hvTitle = sessionTitle(histView);
             return (
               <>
-                <div className="flex items-start justify-between mb-4 max-w-3xl gap-4">
+                <div className="flex items-start justify-between mb-4 gap-4">
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       onClick={() => { setStage("history"); setHistView(null); }}
@@ -1220,7 +1337,7 @@ export default function GenerationSection() {
                   </div>
                 </div>
 
-                <div className="max-w-3xl">
+                <div>
                   {/* Meta badges */}
                   <div className="flex items-center gap-2 flex-wrap mb-4">
                     <span className="text-xs bg-[var(--color-active-bg)] text-primary border border-indigo-100 px-2 py-1 rounded-md font-medium">

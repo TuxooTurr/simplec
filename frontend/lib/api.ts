@@ -357,6 +357,7 @@ export async function formatBug(params: {
   description: string;
   provider: string;
   files?: File[];
+  requirementIds?: string[];
 }): Promise<{ report: string; title: string; description: string; priority: string }> {
   const body = new FormData();
   body.append("platform", params.platform);
@@ -366,6 +367,11 @@ export async function formatBug(params: {
   if (params.files) {
     for (const f of params.files) {
       body.append("attachments", f);
+    }
+  }
+  if (params.requirementIds) {
+    for (const id of params.requirementIds) {
+      body.append("requirement_ids", id);
     }
   }
   return fetchJson("/api/bugs/format", { method: "POST", body });
@@ -1020,4 +1026,32 @@ export async function analyzeModelBenchSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
+}
+
+// ─── Требования — локальная библиотека (без эмбеддингов) ──────────────────────
+
+export interface Requirement {
+  id: string;
+  name: string;
+  feature: string;
+  text: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function listRequirements(feature?: string): Promise<Requirement[]> {
+  const q = feature ? `?feature=${encodeURIComponent(feature)}` : "";
+  return fetchJson(`/api/requirements${q}`);
+}
+
+export async function addRequirement(data: { name: string; feature?: string; text: string }): Promise<Requirement> {
+  return fetchJson("/api/requirements", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function deleteRequirement(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/requirements/${id}`, { method: "DELETE" });
 }

@@ -5,9 +5,9 @@ import {
   Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone,
   BarChart2, Palette, GitBranch, PlugZap,
   History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle, Trash2,
-  Paperclip, Image as ImageIcon, FileText, File as FileIcon,
+  Paperclip, Image as ImageIcon, FileText, File as FileIcon, ListChecks, X,
 } from "lucide-react";
-import { formatBug, addDefect } from "@/lib/api";
+import { formatBug, addDefect, listRequirements, type Requirement } from "@/lib/api";
 import NotionRenderer from "@/components/NotionRenderer";
 import JiraRegisterPanel from "@/components/JiraRegisterPanel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -142,6 +142,16 @@ export default function BugsSection() {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Требования, приложенные как контекст — чтобы ИИ точнее описывал дефект,
+  // зная реальные поля БД, методы API и бизнес-правила фичи
+  const [requirementsList, setRequirementsList] = useState<Requirement[]>([]);
+  const [selectedReqIds, setSelectedReqIds] = useState<string[]>([]);
+  const [reqPickerOpen, setReqPickerOpen] = useState(false);
+
+  useEffect(() => {
+    listRequirements().then(setRequirementsList).catch(() => {});
+  }, []);
+
   const [histEntries, setHistEntries] = useState<BugHistEntry[]>(() => loadBugHistory());
   const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
   const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
@@ -214,7 +224,7 @@ export default function BugsSection() {
     setReport("");
     setBugError(null);
     try {
-      const res = await formatBug({ platform, feature, description, provider, files: attachedFiles });
+      const res = await formatBug({ platform, feature, description, provider, files: attachedFiles, requirementIds: selectedReqIds });
       setReport(res.report);
       setParsed({ title: res.title, description: res.description, priority: res.priority });
       setAttachedFiles([]);
@@ -482,6 +492,76 @@ export default function BugsSection() {
             {attachedFiles.length > 0 && (
               <p className="text-[11px] text-text-muted mt-1.5">
                 {attachedFiles.length} файл{attachedFiles.length === 1 ? "" : attachedFiles.length < 5 ? "а" : "ов"} · текст будет извлечён и добавлен в контекст
+              </p>
+            )}
+          </div>
+
+          {/* Требования как контекст — ИИ точнее опишет дефект, зная поля БД / методы API / бизнес-правила фичи */}
+          <div className="mt-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setReqPickerOpen((o) => !o)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 border border-dashed rounded-lg text-xs transition-all duration-150
+                  ${reqPickerOpen ? "border-primary/50 text-primary" : "border-border-main text-text-muted hover:border-primary/50 hover:text-primary"}`}
+              >
+                <ListChecks className="w-3.5 h-3.5" />
+                Приложить требования{selectedReqIds.length > 0 ? ` (${selectedReqIds.length})` : ""}
+              </button>
+              {selectedReqIds.map((id) => {
+                const r = requirementsList.find((x) => x.id === id);
+                if (!r) return null;
+                return (
+                  <span
+                    key={id}
+                    className="flex items-center gap-1 max-w-[220px] pl-2 pr-1 py-1 bg-bg-subtle border border-border-main rounded-lg text-xs text-text-muted"
+                  >
+                    <span className="truncate">{r.feature ? `[${r.feature}] ${r.name}` : r.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedReqIds((prev) => prev.filter((i) => i !== id))}
+                      className="ml-0.5 hover:text-red-500 transition-colors flex-shrink-0"
+                      aria-label={`Убрать требование ${r.name}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+
+            {reqPickerOpen && (
+              <div className="mt-2 border border-border-main rounded-lg bg-bg-card max-h-48 overflow-auto p-1">
+                {requirementsList.length === 0 ? (
+                  <p className="text-xs text-text-muted px-2 py-1.5">
+                    Список требований пуст — сохраните их кнопкой «Сохранить как требование» в разделе «Ручное тестирование».
+                  </p>
+                ) : (
+                  requirementsList.map((r) => (
+                    <label
+                      key={r.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-bg-subtle cursor-pointer text-sm text-text-main"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedReqIds.includes(r.id)}
+                        onChange={() =>
+                          setSelectedReqIds((prev) =>
+                            prev.includes(r.id) ? prev.filter((i) => i !== r.id) : [...prev, r.id]
+                          )
+                        }
+                        className="accent-primary"
+                      />
+                      <span className="truncate">{r.feature ? `[${r.feature}] ` : ""}{r.name}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
+
+            {selectedReqIds.length > 0 && (
+              <p className="text-[11px] text-text-muted mt-1.5">
+                Текст выбранных требований попадёт в контекст для ИИ — точнее опишет дефект, зная реальные поля БД и методы API
               </p>
             )}
           </div>

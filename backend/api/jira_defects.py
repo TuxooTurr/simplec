@@ -127,6 +127,10 @@ def _jira_request(cfg: dict, method: str, path: str,
     if auth is None:
         headers["Authorization"] = "Bearer " + _resolve_token(cfg)
 
+    # Тело запроса не содержит секретов (пароль идёт через auth=, не через json_body) —
+    # логируем как есть, это и есть детализация ошибки, которую видно только в терминале.
+    logger.info("Jira → %s %s params=%s body=%s", method, url, params, json_body)
+
     try:
         resp = requests.request(
             method, url,
@@ -134,10 +138,27 @@ def _jira_request(cfg: dict, method: str, path: str,
             auth=auth, verify=cfg["ssl_verify"], timeout=timeout,
         )
     except requests.exceptions.SSLError as e:
+        logger.error("Jira SSL-ошибка %s %s: %s", method, url, e)
         raise HTTPException(502, f"SSL-ошибка при подключении к Jira: {str(e)[:200]}. "
                                  "Отключите проверку сертификата в настройках Jira (корп. BIG IP).")
     except requests.exceptions.RequestException as e:
+        logger.error("Jira недоступна %s %s: %s", method, url, e)
         raise HTTPException(502, f"Jira недоступна ({url}): {str(e)[:200]}")
+
+    logger.info("Jira ← %s %s -> %s", method, url, resp.status_code)
+
+    if resp.status_code >= 400:
+        # Полное тело + заголовки — на уровне ERROR, чтобы «Не удается создать проблему
+        # прямо сейчас» и подобные общие сообщения Jira было чем расшифровывать: часто
+        # реальная причина видна только в сыром теле ответа или в заголовке-корреляторе,
+        # по которому администратор Jira найдёт запись в серверном логе (Jira DC пишет
+        # X-AREQUESTID в каждый ответ).
+        request_id = (resp.headers.get("X-AREQUESTID") or resp.headers.get("X-Request-Id")
+                      or resp.headers.get("X-Correlation-Id") or "")
+        logger.error(
+            "Jira ошибка %s %s -> %s\nrequest_id=%s\nheaders=%s\nbody=%s",
+            method, url, resp.status_code, request_id, dict(resp.headers), resp.text[:4000],
+        )
 
     if resp.status_code == 401:
         raise HTTPException(401, "Jira: токен недействителен или истёк — обновите его в настройках")
@@ -154,6 +175,8 @@ def _jira_request(cfg: dict, method: str, path: str,
                 detail = "; ".join(parts)[:500]
         except Exception:
             pass
+        if request_id:
+            detail += f" [ID запроса для админа Jira: {request_id}]"
         raise HTTPException(resp.status_code, f"Jira: {detail}")
 
     if resp.status_code == 204 or not resp.content:
@@ -266,6 +289,18 @@ def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
 
     if resolved is None:
         resolved = {"_issuetype": issuetype, "_available": [], "_error": "; ".join(errors)[:400]}
+        logger.warning(
+            "Jira createmeta недоступен для project=%s issuetype=%s: %s — "
+            "поля КЭ/эпик/среда берутся из захардкоженных id в jira_constants.py "
+            "(могут не совпасть с реальной схемой этого инстанса Jira)",
+            project, issuetype, resolved["_error"],
+        )
+    else:
+        logical_ids = {k: v.get("id") for k, v in resolved.items() if k in _FIELD_NAME_HINTS}
+        logger.info(
+            "Jira createmeta OK для project=%s issuetype=%s: %d полей на экране, распознаны по имени: %s",
+            project, issuetype, len(resolved.get("_available", [])), logical_ids,
+        )
 
     ttl_start = now if not resolved.get("_error") else now - _FIELDS_TTL + _FIELDS_ERROR_TTL
     _fields_cache[cache_key] = (ttl_start, resolved)
@@ -590,7 +625,35 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         _set_custom("ke", body.ke, "КЭ")
     _set_custom("environment", body.environment, "Среда обнаружения")
 
+    if resolved.get("_error"):
+        logger.warning(
+            "Jira create: createmeta недоступен (%s) — КЭ/эпик/среда для project=%s "
+            "уходят по захардкоженным customfield id без проверки реальной схемы поля",
+            resolved["_error"], body.project,
+        )
+    logger.info("Jira create: project=%s issuetype=%s итоговые fields=%s",
+                body.project, fields.get("issuetype"), fields)
+
     created = _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": fields})
     key = created.get("key", "")
+    logger.info("Jira create: создан %s", key)
+
+    # Дефект создаётся от имени сервисного PAT-токена — это не гарантирует, что
+    # у пользователя есть право переводить его статус (Security Level, роль в
+    # проекте и т.п.). Проверяем сразу и явно предупреждаем, а не оставляем
+    # пользователя один на один с «дефект создан, но кнопок перехода нет».
+    try:
+        trans = _jira_request(cfg, "GET", f"/rest/api/2/issue/{key}/transitions")
+        available = [t.get("name", "") for t in trans.get("transitions", [])]
+        logger.info("Jira create: %s доступные переходы статуса: %s", key, available)
+        if not available:
+            warnings.append(
+                f"Для {key} сразу после создания нет доступных переходов статуса — "
+                "вероятно, ограничение по уровню доступа (Security Level) или роли в "
+                "проекте у токена/пользователя. Проверьте у администратора Jira."
+            )
+    except HTTPException as e:
+        logger.warning("Jira create: %s не удалось получить переходы статуса: %s", key, e.detail)
+
     return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}",
             "warnings": warnings}

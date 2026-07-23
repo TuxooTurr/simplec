@@ -8,6 +8,7 @@ FastAPI точка входа.
     uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 1
 """
 
+import logging
 import sys
 import warnings
 from contextlib import asynccontextmanager
@@ -17,6 +18,15 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+# uvicorn настраивает только свои логгеры (uvicorn/uvicorn.access/uvicorn.error) —
+# логгеры наших модулей (logging.getLogger(__name__)) без явного basicConfig молчат
+# при вызове logger.info(...), т.к. root-логгер по умолчанию на уровне WARNING.
+# Без этого трейсы вроде backend/api/jira_defects.py не попадают в терминал.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
@@ -41,7 +51,7 @@ from backend.api import (
     auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
-    testdata, jobs, logs, kafka_explorer, jira_defects, model_bench,
+    testdata, jobs, logs, kafka_explorer, jira_defects, model_bench, requirements,
 )
 from db.postgres import init_db
 
@@ -165,6 +175,7 @@ app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(kafka_explorer.router)
 app.include_router(model_bench.router)
+app.include_router(requirements.router)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

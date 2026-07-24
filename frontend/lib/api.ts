@@ -1053,8 +1053,8 @@ export async function getModelBenchStats(sessionId: string): Promise<ModelBenchS
 
 // Бинарный файл, не JSON — не через fetchJson. Триггерит скачивание в браузере,
 // как downloadBlob в ExportPanel.tsx, но содержимое приходит готовым с бэкенда.
-export async function downloadModelBenchPptx(sessionId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/model-bench/sessions/${sessionId}/report.pptx`, {
+export async function downloadModelBenchDocx(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/model-bench/sessions/${sessionId}/report.docx`, {
     headers: authHeaders(),
   });
   if (!res.ok) {
@@ -1070,7 +1070,7 @@ export async function downloadModelBenchPptx(sessionId: string): Promise<void> {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `model-bench-${sessionId}.pptx`;
+  a.download = `model-bench-${sessionId}.docx`;
   a.click();
   URL.revokeObjectURL(url);
 }

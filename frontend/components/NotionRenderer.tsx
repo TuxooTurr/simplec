@@ -203,6 +203,18 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
       i++; continue;
     }
 
+    // ── H4-H6 (не различаем визуально дальше H3 — падать в абзац с "####"
+    // как текстом было хуже, чем чуть менее выраженный подзаголовок) ──
+    if (/^#{4,6} /.test(raw)) {
+      const level = raw.match(/^#+/)![0].length;
+      nodes.push(
+        <h4 key={k++} className="text-sm font-semibold text-text-muted mt-3 mb-1 first:mt-0">
+          {renderInline(raw.slice(level + 1))}
+        </h4>
+      );
+      i++; continue;
+    }
+
     // ── Bullet list (collect consecutive lines) ──────────────────────
     if (/^[*\-+] /.test(raw)) {
       const items: string[] = [];

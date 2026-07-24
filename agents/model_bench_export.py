@@ -1,14 +1,11 @@
 """
-Экспорт отчёта сравнения LLM-моделей в PPTX.
+Экспорт отчёта сравнения LLM-моделей в DOCX.
 
-Технические метрики (латентность, токены, успешность) берутся из посчитанных
-в коде agents/model_bench.py::compute_stats — те же цифры, что видны в UI,
-а не пересчитываются заново и не идут от LLM (значит, точны).
-
-Текст отчёта судьи (Markdown) грубо разбивается на слайды по заголовкам/абзацам:
-полноценный Markdown→PPTX рендер (вложенные списки, форматирование) не нужен —
-отчёт короткий и линейный, а надёжное разбиение "абзац за слайдом" не теряет
-контент вместо хрупкого парсинга разметки.
+Раньше был PPTX — презентация принудительно режется на слайды, из-за чего
+таблицы и абзацы обрывались посередине без веской причины (плохая вёрстка).
+Word не ограничен слайдами: рендерим Markdown отчёта судьи как обычный
+структурированный документ — настоящие заголовки, таблицы, списки, без
+искусственного разбиения на страницы.
 """
 from __future__ import annotations
 
@@ -19,160 +16,161 @@ from typing import Any
 
 from agents.model_bench import compute_stats
 
-_MAX_SLIDE_CHARS = 900
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 
-def _strip_md_inline(text: str) -> str:
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    return text
+def _strip_inline_code(text: str) -> str:
+    return re.sub(r"`([^`]+)`", r"\1", text)
 
 
-def _md_table_to_lines(block: str) -> list[str]:
-    """Простая markdown-таблица -> строки вида 'ячейка — ячейка — ячейка'
-    (строка-разделитель ---|--- отбрасывается)."""
-    lines = []
-    for row in block.splitlines():
-        row = row.strip()
-        if not row.startswith("|"):
-            continue
-        cells = [c.strip() for c in row.strip("|").split("|")]
-        if all(re.fullmatch(r":?-+:?", c) for c in cells if c):
-            continue
-        text = " — ".join(_strip_md_inline(c) for c in cells if c)
-        if text:
-            lines.append(text)
-    return lines
+def _add_runs(paragraph, text: str) -> None:
+    """**bold** — жирными runs, остальное обычным текстом (один paragraph)."""
+    pos = 0
+    for m in _BOLD_RE.finditer(text):
+        if m.start() > pos:
+            paragraph.add_run(text[pos:m.start()])
+        paragraph.add_run(m.group(1)).bold = True
+        pos = m.end()
+    if pos < len(text):
+        paragraph.add_run(text[pos:])
 
 
-def _report_to_slides(report: str) -> list[tuple[str, list[str]]]:
-    """Markdown отчёта судьи -> [(заголовок_слайда, [строки_буллетов]), ...].
+def _split_table_row(line: str) -> list[str]:
+    trimmed = line.strip().strip("|")
+    return [c.strip() for c in trimmed.split("|")]
 
-    Построчно, а не по абзацам (split на "\\n\\n"): заголовок вида "### Модель",
-    за которым СРАЗУ (без пустой строки) идёт текст — обычный паттерн в ответах
-    LLM — раньше не распознавался как заголовок (regex требовал, чтобы весь
-    абзац состоял ровно из одной строки), и "### " утекал в текст буллета."""
-    if not report.strip():
-        return []
-    slides: list[tuple[str, list[str]]] = []
-    title = "Отчёт судьи"
-    bullets: list[str] = []
-    chars = 0
-    table_buf: list[str] = []
 
-    def flush_table():
-        nonlocal chars
-        if table_buf:
-            new_lines = _md_table_to_lines("\n".join(table_buf))
-            bullets.extend(new_lines)
-            chars += sum(len(ln) for ln in new_lines)
-            table_buf.clear()
+def _is_table_separator(cells: list[str]) -> bool:
+    return len(cells) > 1 and all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c)
 
-    def flush_slide():
-        nonlocal bullets, chars
-        flush_table()
-        if bullets:
-            slides.append((title, list(bullets)))
-        bullets.clear()
-        chars = 0
 
-    for raw in report.strip().splitlines():
+def _add_markdown(doc, text: str) -> None:
+    """Дописывает Markdown-текст (отчёт судьи) в документ как настоящие
+    заголовки/таблицы/списки/абзацы — построчный разбор того же класса,
+    что и NotionRenderer на фронте, только на выходе docx-элементы вместо React."""
+    from docx.shared import Pt
+
+    lines = text.strip("\n").splitlines()
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
         line = raw.strip()
+
         if not line:
-            flush_table()
+            i += 1
             continue
-        header_m = re.match(r"^#{1,4}\s+(.+)$", line)
+
+        # Таблица: строка с | и следующая строка-разделитель ---|---
+        if i + 1 < len(lines) and "|" in line:
+            cells = _split_table_row(line)
+            sep_cells = _split_table_row(lines[i + 1])
+            if len(cells) > 1 and _is_table_separator(sep_cells):
+                headers = [_strip_inline_code(c) for c in cells]
+                rows: list[list[str]] = []
+                j = i + 2
+                while j < len(lines) and "|" in lines[j].strip():
+                    rows.append([_strip_inline_code(c) for c in _split_table_row(lines[j])])
+                    j += 1
+                table = doc.add_table(rows=1, cols=len(headers))
+                table.style = "Light Grid Accent 1"
+                for idx, h in enumerate(headers):
+                    table.rows[0].cells[idx].paragraphs[0].add_run(h).bold = True
+                for row_cells in rows:
+                    out_cells = table.add_row().cells
+                    for idx in range(len(headers)):
+                        out_cells[idx].text = row_cells[idx] if idx < len(row_cells) else ""
+                for row in table.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            for run in p.runs:
+                                run.font.size = Pt(10)
+                doc.add_paragraph()
+                i = j
+                continue
+
+        header_m = re.match(r"^(#{1,6})\s+(.+)$", line)
         if header_m:
-            flush_slide()
-            title = _strip_md_inline(header_m.group(1).strip())
+            level = min(len(header_m.group(1)), 4)
+            doc.add_heading(_strip_inline_code(header_m.group(2)), level=level)
+            i += 1
             continue
-        if line.startswith("|"):
-            table_buf.append(line)
+
+        if re.match(r"^[-*]\s+", line):
+            p = doc.add_paragraph(style="List Bullet")
+            _add_runs(p, _strip_inline_code(re.sub(r"^[-*]\s+", "", line)))
+            i += 1
             continue
-        flush_table()
-        text = _strip_md_inline(re.sub(r"^[-*]\s+|^\d+\.\s+", "", line))
-        if chars + len(text) > _MAX_SLIDE_CHARS and bullets:
-            flush_slide()
-            title = title + " (продолжение)"
-        bullets.append(text)
-        chars += len(text)
 
-    flush_slide()
-    return slides
+        if re.match(r"^\d+\.\s+", line):
+            p = doc.add_paragraph(style="List Number")
+            _add_runs(p, _strip_inline_code(re.sub(r"^\d+\.\s+", "", line)))
+            i += 1
+            continue
+
+        if re.fullmatch(r"-{3,}", line) or re.fullmatch(r"={3,}", line):
+            i += 1
+            continue
+
+        p = doc.add_paragraph()
+        _add_runs(p, _strip_inline_code(line))
+        i += 1
 
 
-def build_pptx(session: dict[str, Any]) -> bytes:
+def build_docx(session: dict[str, Any]) -> bytes:
     try:
-        from pptx import Presentation
-        from pptx.util import Inches, Pt
+        from docx import Document
+        from docx.shared import Pt
     except ImportError:
-        raise ValueError("PPTX не сформирован: на сервере не установлен python-pptx")
+        raise ValueError("DOCX не сформирован: на сервере не установлен python-docx")
 
     stats = compute_stats(session.get("targets", []))
 
-    prs = Presentation()
+    doc = Document()
 
-    # ── Титульный слайд ──
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = "Сравнение LLM-моделей"
+    doc.add_heading("Сравнение LLM-моделей", level=0)
     best_p, best_m = session.get("best_provider", ""), session.get("best_model", "")
     created = str(session.get("created_at", ""))[:10]
-    subtitle_lines = [f"Сформировано: {datetime.now().strftime('%d.%m.%Y')}"]
+    meta_lines = [f"Сформировано: {datetime.now().strftime('%d.%m.%Y')}"]
     if created:
-        subtitle_lines.append(f"Сессия от {created}")
+        meta_lines.append(f"Сессия от {created}")
     if best_p:
-        subtitle_lines.append(f"Лучшая модель: {best_p}/{best_m}")
-    slide.placeholders[1].text = "\n".join(subtitle_lines)
+        meta_lines.append(f"Лучшая модель: {best_p}/{best_m}")
+    doc.add_paragraph(" · ".join(meta_lines)).runs[0].italic = True
 
-    # ── Условия замера ──
-    slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "Условия замера"
-    tf = slide.placeholders[1].text_frame
-    tf.word_wrap = True
-    tf.text = f"Промпт (первые 300 симв.): {session.get('prompt', '')[:300]}"
-    p = tf.add_paragraph()
-    p.text = f"Транскрибация: {len(session.get('transcript', ''))} символов"
-    p = tf.add_paragraph()
-    p.text = f"Моделей протестировано: {len(stats)}"
+    doc.add_heading("Условия замера", level=1)
+    doc.add_paragraph(f"Промпт (первые 300 симв.): {session.get('prompt', '')[:300]}")
+    doc.add_paragraph(f"Транскрибация: {len(session.get('transcript', ''))} символов")
+    doc.add_paragraph(f"Моделей протестировано: {len(stats)}")
 
-    # ── Технические метрики (таблица) ──
     if stats:
-        slide = prs.slides.add_slide(prs.slide_layouts[5])
-        slide.shapes.title.text = "Технические метрики"
+        doc.add_heading("Технические метрики", level=1)
         headers = ["Модель", "Успешность", "Ср. время, с", "Мин/Медиана/Макс, с",
                    "Ток/сек", "Токены вх→вых", "Прогоны"]
-        rows, cols = len(stats) + 1, len(headers)
-        table = slide.shapes.add_table(
-            rows, cols, Inches(0.4), Inches(1.4), Inches(9.2), Inches(0.4 + 0.35 * rows)
-        ).table
-        for i, h in enumerate(headers):
-            table.cell(0, i).text = h
-        for r, s in enumerate(stats, start=1):
-            table.cell(r, 0).text = f"{s['provider']}/{s['model']}"
-            table.cell(r, 1).text = f"{s['success_rate']}%"
-            table.cell(r, 2).text = str(s["avg_latency_sec"])
-            table.cell(r, 3).text = f"{s['min_latency_sec']}/{s['median_latency_sec']}/{s['max_latency_sec']}"
-            table.cell(r, 4).text = str(s["avg_tokens_per_sec"])
-            table.cell(r, 5).text = f"{s['avg_tokens_in']}→{s['avg_tokens_out']}"
-            table.cell(r, 6).text = f"{s['runs_ok']}/{s['runs_total']}"
+        table = doc.add_table(rows=1, cols=len(headers))
+        table.style = "Light Grid Accent 1"
+        for idx, h in enumerate(headers):
+            table.rows[0].cells[idx].paragraphs[0].add_run(h).bold = True
+        for s in stats:
+            row = table.add_row().cells
+            row[0].text = f"{s['provider']}/{s['model']}"
+            row[1].text = f"{s['success_rate']}%"
+            row[2].text = str(s["avg_latency_sec"])
+            row[3].text = f"{s['min_latency_sec']}/{s['median_latency_sec']}/{s['max_latency_sec']}"
+            row[4].text = str(s["avg_tokens_per_sec"])
+            row[5].text = f"{s['avg_tokens_in']}→{s['avg_tokens_out']}"
+            row[6].text = f"{s['runs_ok']}/{s['runs_total']}"
         for row in table.rows:
             for cell in row.cells:
-                for para in cell.text_frame.paragraphs:
-                    for run in para.runs:
-                        run.font.size = Pt(11)
+                for p in cell.paragraphs:
+                    for run in p.runs:
+                        run.font.size = Pt(10)
+        doc.add_paragraph()
 
-    # ── Отчёт судьи, порезанный на слайды ──
-    for title, bullets in _report_to_slides(session.get("report", "")):
-        slide = prs.slides.add_slide(prs.slide_layouts[1])
-        slide.shapes.title.text = title[:100]
-        tf = slide.placeholders[1].text_frame
-        tf.word_wrap = True
-        if bullets:
-            tf.text = bullets[0][:500]
-            for b in bullets[1:]:
-                p = tf.add_paragraph()
-                p.text = b[:500]
+    report = session.get("report", "")
+    if report.strip():
+        doc.add_heading("Отчёт судьи", level=1)
+        _add_markdown(doc, report)
 
     buf = io.BytesIO()
-    prs.save(buf)
+    doc.save(buf)
     return buf.getvalue()

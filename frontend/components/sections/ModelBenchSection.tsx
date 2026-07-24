@@ -14,7 +14,7 @@ import {
   createModelBenchSession, runModelBenchTarget, analyzeModelBenchSession,
   listModelBenchSessions, getModelBenchSession, deleteModelBenchSession,
   listModelBenchScenarios, createModelBenchScenario, deleteModelBenchScenario,
-  getModelBenchStats, downloadModelBenchPptx,
+  getModelBenchStats, downloadModelBenchDocx,
   type ModelBenchSession, type ModelBenchSessionSummary, type ModelBenchTarget,
   type ModelBenchScenario, type ModelBenchStats,
 } from "@/lib/api";
@@ -140,7 +140,7 @@ export default function ModelBenchSection() {
   const [session, setSession] = useState<ModelBenchSession | null>(null);
 
   const [stats, setStats] = useState<ModelBenchStats[]>([]);
-  const [exportingPptx, setExportingPptx] = useState(false);
+  const [exportingDocx, setExportingDocx] = useState(false);
 
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomLlmProvider[]>([]);
@@ -299,6 +299,12 @@ export default function ModelBenchSection() {
       const updated = await analyzeModelBenchSession(session.id, { provider: judgeProvider });
       setSession(updated);
       refreshHistory();
+      // Судья мог вернуть пустой ответ без исключения (не ошибка API, а деградация
+      // модели) — раньше это тихо не показывало вообще ничего, выглядело как
+      // "кнопка нажата, результата нет". Явно говорим, что пошло не так.
+      if (!updated.report.trim()) {
+        setError("Судья вернул пустой отчёт — попробуйте другого провайдера или повторите ещё раз.");
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -317,16 +323,16 @@ export default function ModelBenchSection() {
     setStats([]);
   }, []);
 
-  const handleExportPptx = useCallback(async () => {
+  const handleExportDocx = useCallback(async () => {
     if (!session) return;
-    setExportingPptx(true);
+    setExportingDocx(true);
     setError("");
     try {
-      await downloadModelBenchPptx(session.id);
+      await downloadModelBenchDocx(session.id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setExportingPptx(false);
+      setExportingDocx(false);
     }
   }, [session]);
 
@@ -730,10 +736,14 @@ export default function ModelBenchSection() {
               <button onClick={handleAnalyze} disabled={analyzing} className={BTN_PRIMARY}>
                 {analyzing ? <><Loader2 className="w-4 h-4 animate-spin" /> Анализирую...</> : <><Sparkles className="w-4 h-4" /> {session.report ? "Обновить отчёт" : "Получить отчёт"}</>}
               </button>
-              <button onClick={handleExportPptx} disabled={exportingPptx} className={BTN_SECONDARY}>
-                {exportingPptx ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
-                Выгрузить в PPTX
-              </button>
+              {/* Скачать доступно только после того, как отчёт реально появился на
+                  экране — до этого скачивать нечего, кнопка ничего не подтверждает. */}
+              {session.report && (
+                <button onClick={handleExportDocx} disabled={exportingDocx} className={BTN_SECONDARY}>
+                  {exportingDocx ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+                  Скачать .docx
+                </button>
+              )}
             </div>
             {session.report && (
               <div className="mt-4 pt-4 border-t border-border-main">

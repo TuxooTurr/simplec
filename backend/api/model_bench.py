@@ -121,24 +121,24 @@ def get_session_stats(session_id: str) -> list[dict]:
     return compute_stats(session.get("targets", []))
 
 
-@router.get("/api/model-bench/sessions/{session_id}/report.pptx")
-def get_session_pptx(session_id: str) -> Response:
+@router.get("/api/model-bench/sessions/{session_id}/report.docx")
+def get_session_docx(session_id: str) -> Response:
     session = ModelBenchStore.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Сессия не найдена")
-    if not session.get("targets"):
-        raise HTTPException(status_code=400, detail="Нет ни одного прогона — нечего экспортировать")
+    if not session.get("report", "").strip():
+        raise HTTPException(status_code=400, detail="Отчёт ещё не сформирован — сначала получите отчёт")
 
-    from agents.model_bench_export import build_pptx
+    from agents.model_bench_export import build_docx
     try:
-        data = build_pptx(session)
+        data = build_docx(session)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return Response(
         content=data,
-        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        headers={"Content-Disposition": f'attachment; filename="model-bench-{session_id}.pptx"'},
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="model-bench-{session_id}.docx"'},
     )
 
 

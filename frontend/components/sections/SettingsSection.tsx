@@ -26,6 +26,7 @@ import {
   listJdbcDrivers, createJdbcDriver, updateJdbcDriver, deleteJdbcDriver,
   uploadJdbcDriverLibrary, setJdbcDriverLibraryPath, removeJdbcDriverLibrary, testJdbcDriver,
   getGigachatModels, testGigachatChat, uploadGigachatCert,
+  getSystemConfig,
   type TestDataConnection, type TestDataConnectionCreate, type JdbcDriver, type JdbcDriverSettings,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -343,10 +344,11 @@ function SaveBar({ status, errMsg, onSave, saving }: {
 // ── Unified LLM Providers ──────────────────────────────────────────────────
 
 function UnifiedLlmProviders({
-  builtinValues, customProviders, onSaveBuiltin, onSaveBuiltinBatch, onSaveCustom, onDeleteCustom, onRefresh,
+  builtinValues, customProviders, gigachatOnly, onSaveBuiltin, onSaveBuiltinBatch, onSaveCustom, onDeleteCustom, onRefresh,
 }: {
   builtinValues: Record<string, string>;
   customProviders: CustomLlmProvider[];
+  gigachatOnly: boolean;
   onSaveBuiltin: (key: string, value: string) => Promise<void>;
   onSaveBuiltinBatch: (values: Record<string, string>) => Promise<void>;
   onSaveCustom: (p: CustomLlmProvider) => Promise<void>;
@@ -785,7 +787,15 @@ function UnifiedLlmProviders({
         })}
       </div>
 
-      {/* Add new provider */}
+      {/* Add new provider — скрыто на контурах с ограничением GIGACHAT_ONLY */}
+      {gigachatOnly ? (
+        <div className="bg-bg-subtle border border-border-main rounded-lg p-4 flex items-start gap-2.5">
+          <Shield className="w-4 h-4 text-text-muted shrink-0 mt-0.5" />
+          <p className="text-xs text-text-muted">
+            На этом контуре разрешён только GigaChat — подключение сторонних LLM-провайдеров отключено политикой безопасности.
+          </p>
+        </div>
+      ) : (
       <div className="bg-bg-subtle border border-border-main rounded-lg p-4 space-y-3">
         <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wide">Добавить провайдер</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -823,6 +833,7 @@ function UnifiedLlmProviders({
           </button>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -1450,6 +1461,7 @@ export default function SettingsSection() {
   const [values, setValues] = useState<Record<string, string>>({});
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
   const [customProviders, setCustomProviders] = useState<CustomLlmProvider[]>([]);
+  const [gigachatOnly, setGigachatOnly] = useState(false);
   const [revisorMethods, setRevisorMethods] = useState<RevisorMethodDef[]>(DEFAULT_REVISOR_METHODS);
   const [revisorStands, setRevisorStands] = useState<RevisorStandConfig[]>([]);
   const [tdConnections, setTdConnections] = useState<TestDataConnection[]>([]);
@@ -1480,17 +1492,19 @@ export default function SettingsSection() {
   const loadSettings = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [map, custom, revisor, tdConns, logsVps, drivers] = await Promise.all([
+      const [map, custom, revisor, tdConns, logsVps, drivers, config] = await Promise.all([
         getSettings(), getCustomLlmProviders(), getRevisorStands(),
         listTestDataConnections().catch(() => [] as TestDataConnection[]),
         getLogsVpsConnections().catch(() => ({ connections: [] as LogsVpsConnection[] })),
         listJdbcDrivers().catch(() => [] as JdbcDriver[]),
+        getSystemConfig().catch(() => ({ gigachat_only: false })),
       ]);
       const vals: Record<string, string> = {};
       const descs: Record<string, string> = {};
       for (const [k, v] of Object.entries(map)) { vals[k] = v.value; descs[k] = v.description; }
       setValues(vals); setDescriptions(descs);
       setCustomProviders(custom);
+      setGigachatOnly(config.gigachat_only);
       setRevisorMethods(revisor.methods); setRevisorStands(revisor.stands);
       setTdConnections(tdConns);
       setLogsVpsConns(logsVps.connections || []);
@@ -1578,6 +1592,7 @@ export default function SettingsSection() {
         <UnifiedLlmProviders
           builtinValues={values}
           customProviders={customProviders}
+          gigachatOnly={gigachatOnly}
           onSaveBuiltin={async (key, value) => {
             await saveSettings({ [key]: value });
             await loadSettings();

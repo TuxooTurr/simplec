@@ -107,8 +107,19 @@ def _get_verify():
     return ctx
 
 
+def gigachat_only() -> bool:
+    """True — контур ограничен только GigaChat (GIGACHAT_ONLY=1).
+
+    Для продакшн-деплоев в закрытой корпоративной сети, где по политике
+    безопасности запрещено подключение сторонних (некорпоративных) LLM —
+    см. категорию "LLM" в Руководстве по доступу к внешним ресурсам."""
+    return os.environ.get("GIGACHAT_ONLY", "").lower() in ("1", "true", "yes")
+
+
 def _load_custom_providers() -> list[dict]:
     """Custom LLM providers from CUSTOM_LLM_PROVIDERS JSON env."""
+    if gigachat_only():
+        return []
     raw = os.getenv("CUSTOM_LLM_PROVIDERS", "[]")
     try:
         data = json.loads(raw)

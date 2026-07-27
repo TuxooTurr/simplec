@@ -29,6 +29,12 @@ def get_providers():
     return result
 
 
+@router.get("/api/system/config")
+def get_config():
+    from agents.llm_client import gigachat_only
+    return {"gigachat_only": gigachat_only()}
+
+
 @router.get("/api/system/stats")
 def get_stats():
     try:

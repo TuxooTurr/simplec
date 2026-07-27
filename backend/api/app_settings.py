@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from db.postgres import get_db
 from db.metrics_models import MetricsSettings
+from agents.llm_client import gigachat_only
 
 router = APIRouter()
 
@@ -395,6 +396,8 @@ class CustomLlmProvider(BaseModel):
 
 @router.get("/api/settings/llm-providers")
 def list_custom_llm_providers(db: Session = Depends(get_db)) -> dict:
+    if gigachat_only():
+        return {"providers": []}
     _ensure_defaults(db)
     providers = [_mask_custom_provider(p) for p in _load_custom_llm_providers(db)]
     return {"providers": providers}
@@ -402,6 +405,8 @@ def list_custom_llm_providers(db: Session = Depends(get_db)) -> dict:
 
 @router.post("/api/settings/llm-providers")
 def upsert_custom_llm_provider(body: CustomLlmProvider, db: Session = Depends(get_db)) -> dict:
+    if gigachat_only():
+        raise HTTPException(403, "На этом контуре разрешён только GigaChat")
     _ensure_defaults(db)
     providers = _load_custom_llm_providers(db)
 

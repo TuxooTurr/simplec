@@ -48,6 +48,10 @@ export async function getStats(): Promise<Record<string, number>> {
   return fetchJson("/api/system/stats");
 }
 
+export async function getSystemConfig(): Promise<{ gigachat_only: boolean }> {
+  return fetchJson("/api/system/config");
+}
+
 // ─── Generation ────────────────────────────────────────────────────────────
 
 export async function parseFile(file: File): Promise<{ text: string; filename: string }> {

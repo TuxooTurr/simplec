@@ -278,6 +278,37 @@ html.theme-transition *::after {
   .dark .tone-info-text    { color: #60a5fa; }
 }
 
+/* ── Landing — aurora background (transitions.dev: ambient motion) ──
+   Pure transform/opacity animation (GPU-friendly, no layout cost).
+   Blobs drift on independent loops so the motion reads as organic,
+   not looped-in-sync. Disabled entirely for reduced-motion below. */
+.aurora-blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(clamp(60px, 8vw, 120px));
+  will-change: transform;
+  animation: auroraDrift var(--aurora-dur, 26s) var(--ease-smooth) infinite alternate;
+}
+
+@keyframes auroraDrift {
+  0%   { transform: translate(0, 0) scale(1); }
+  50%  { transform: translate(var(--aurora-x, 6%), var(--aurora-y, -8%)) scale(1.12); }
+  100% { transform: translate(calc(var(--aurora-x, 6%) * -0.6), calc(var(--aurora-y, -8%) * 0.8)) scale(0.96); }
+}
+
+.aurora-grain {
+  position: absolute;
+  inset: -10%;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.dark .aurora-grain { opacity: 0.06; }
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-blob { animation: none; }
+}
+
 /* ── Reduced motion — disable non-essential animation ── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

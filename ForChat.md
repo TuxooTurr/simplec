@@ -29,7 +29,8 @@
 | **Просмотр Kafka** | Именованные подключения (CLEARTEXT/SSL с сертификатом), снапшот последних N сообщений топика, поиск |
 | **Генератор метрик** | Эмуляция метрик в Kafka по спецификации (8 таблиц БД) |
 | **Ревизор** | Сравнение сборок/версий/статусов на стендах |
-| **Эталоны** | RAG — эталонные пары требование→тест-кейс в ChromaDB |
+| **Данные** (было «Эталоны») | Вкладка **Требования** — локальная библиотека (JSON, без ChromaDB): исходник + сгенерированная QA-документация в одной записи, используется как переключаемый источник в генерации и как контекст для дефектов. Вкладка **Документы** — RAG-контекст для генерации (ChromaDB). Вкладки Тест-кейсы/Автотесты/Дефекты (эталонные пары requirement→результат в ChromaDB) **скрыты с фронта**, но не удалены — данные по-прежнему пишутся кнопками «В эталон» в других разделах |
+| **Тестирование моделей LLM** | Сравнение LLM на саммаризации: прогоны с метриками (латентность/токены), сравнительный отчёт от судьи, сценарии (промпт+транскрибация+критерии судье), экспорт отчёта в DOCX |
 
 ### Технологический стек
 
@@ -277,8 +278,9 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | `auth.py` | 92 | Логин/логаут/me. **2 пользователя в коде** (`Sber911`, `SberMonitoring`, пароль `1234567`). Токены в `_sessions` (in-memory). Роли: `superuser`/`monitoring`. | `/api/auth/*` |
 | `system.py` | 39 | Статусы LLM-провайдеров, статистика | `/api/system/*` |
 | `generation.py` | 572 | **WS-стриминг генерации тест-кейсов** + REST сессий. Генерация = `asyncio.Task`, живёт даже при отключении WS. Сессии в `data/gen_sessions.json` | `/api/generation/*` |
-| `etalons.py` | 372 | CRUD эталонов (RAG), сохранение в ChromaDB | `/api/etalons/*` |
-| `bugs.py` | 122 | LLM-форматирование баг-репортов | `/api/bugs/*` |
+| `etalons.py` | 372 | CRUD эталонов (RAG-пары requirement→testcase/autotest/defect + документы), ChromaDB. Вкладки браузинга пар скрыты с фронта, эндпоинты живы — пишут кнопки «В эталон» из других разделов | `/api/etalons/*` |
+| `requirements.py` | ~70 | Локальная библиотека требований (JSON, `db/requirements_store.py`, без ChromaDB/эмбеддингов): исходник + `qa_doc` в одной записи. `POST /{id}/generate-doc` — генерирует QA-документацию тем же `LayeredGenerator.generate_qa_doc()`, что и Layer 1 генерации кейсов | `/api/requirements/*` |
+| `bugs.py` | 122 | LLM-форматирование баг-репортов. `format_bug` принимает `requirement_ids[]` — текст выбранных требований уходит в промпт как контекст (реальные поля БД/методы API) | `/api/bugs/*` |
 | `autotests_gen.py` | 311 | Генерация Java-автотестов | `/api/autotests/*` |
 | `autotest_runs.py` | ~830 | Запуск автотестов: общий путь фреймворка, **дерево тест-кейсов** (парсинг JUnit `@Test`/`@Tag`/`@DisplayName`), **LLM-понятные названия** (кэш `test_labels`), **генерация скрипта-сценария** в папку фреймворка, прогоны, монитор автозапуска по сборкам. См. §11 | `/api/autotest-runs/*` |
 | `alerts.py` | 215 | CRUD скриптов-алертов + папки | `/api/alerts/*` |
@@ -293,6 +295,8 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | `kafka_explorer.py` | ~140 | Просмотр Kafka: реестр подключений (SSL-тумблер, серт опционально), топики, снапшот сообщений | `/api/kafka/*` |
 | `jobs.py` | 263 | Jobs + папки + история (`data/jobs.json`, `data/job_folders.json`, `data/job_history.json`) | `/api/jobs/*` |
 | `logs.py` | 324 | Поиск/анализ логов на VPS. Клиенты в `log_clients/` | `/api/logs/*` |
+| `jira_defects.py` | ~600 | Регистрация дефектов напрямую в корп. Jira (Data Center) через REST API, PAT-токен. Подробные трейсы каждого запроса/ответа в лог (`logger.info/error`, requires `logging.basicConfig` в `main.py`), извлечение `X-AREQUESTID` для поиска в серверных логах Jira. После создания проверяет `GET .../transitions` — если пусто, явно предупреждает про возможное ограничение прав/Security Level | `/api/jira/*` |
+| `model_bench.py` | ~170 | Сравнение LLM-моделей на саммаризации: сессии (промпт+транскрибация+`judge_instructions`), прогоны с метриками, сравнительный отчёт от судьи (`agents/model_bench.py`), экспорт `GET /{id}/report.docx`, CRUD сценариев (`db/model_bench_scenarios_store.py`, авто-сеет встроенный сценарий «Транскрибация» при первом запуске) | `/api/model-bench/*` |
 
 **`backend/api/log_clients/`** — стратегии подключения к системам логов:
 `base.py` (абстракция), `graylog.py`, `elastic.py`, `loki.py`, `generic.py` (произвольный REST).
@@ -317,7 +321,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 - **`metrics_models.py`** — все SQLAlchemy-модели:
   - Метрики (8 таблиц): `TestSystem`, `TestMetric`, `TestMetricValuesConfig`, `TestMetricBaselineConfig`, `TestMetricThresholdsConfig`, `TestMetricThresholdRow`, `TestMetricHealthConfig`, `GenerationLog`, `MetricsSettings`
 - **`vector_store.py`** — ChromaDB для эталонов (RAG). Данные в `db/chroma_db/`, `db/chroma_data/`.
-- **JSON-сторы** (файловые, без БД): `alerts_store.py`, `jobs_store.py`, `gen_sessions_store.py`, `testdata_connections.py`, `jdbc_drivers_store.py` (реестр JDBC-драйверов + .jar в `data/jdbc_drivers/`), `kafka_explorer_store.py` (подключения Просмотра Kafka), `team_store.py`, `feedback_store.py`, `autotest_runs_store.py`, `secure_config.py`, `audit_log.py`.
+- **JSON-сторы** (файловые, без БД): `alerts_store.py`, `jobs_store.py`, `gen_sessions_store.py`, `testdata_connections.py`, `jdbc_drivers_store.py` (реестр JDBC-драйверов + .jar в `data/jdbc_drivers/`), `kafka_explorer_store.py` (подключения Просмотра Kafka), `team_store.py`, `feedback_store.py`, `autotest_runs_store.py`, `secure_config.py`, `audit_log.py`, **`requirements_store.py`** (`data/requirements.json` — библиотека требований: исходник+`qa_doc`), **`model_bench_store.py`** (`data/model_bench_sessions.json`), **`model_bench_scenarios_store.py`** (`data/model_bench_scenarios.json`, авто-сеет сценарий «Транскрибация» при первом запуске). Все — атомарная запись (tmp+`os.replace`) + восстановление при битом JSON (переименование в `.corrupted-<ts>`, продолжение с пустого состояния).
 
 ### 4.5. `backend/schemas.py` — Pydantic-схемы
 
@@ -347,7 +351,8 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | `alerts` | `/alerts` | Генератор алертов | все |
 | `metrics` | `/metrics` | Генератор метрик | **superuserOnly** |
 | `revisor` | `/revisor` | Ревизор | все |
-| `etalons` | `/etalons` | Эталоны | **superuserOnly** |
+| `etalons` | `/etalons` | Данные | **superuserOnly** |
+| `model_bench` | `/model-bench` | Тестирование моделей LLM | все |
 
 ### 5.2. Оболочка и навигация
 
@@ -361,7 +366,9 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 `GenerationSection.tsx` (самый большой, ~1000 строк), `AutoModelSection.tsx`,
 `TestDataSection.tsx`, `JobsSection.tsx`, `BugsSection.tsx`, `LogsSection.tsx`,
 `AlertsSection.tsx`, `MetricsSection.tsx`,
-`RevisorSection.tsx`, `EtalonsSection.tsx`, `SettingsSection.tsx` (~2000 строк — все настройки).
+`RevisorSection.tsx`, `EtalonsSection.tsx` (роут/id остались `etalons`, ярлык в UI — «Данные»;
+вкладки: Требования, Документы, + скрытые Тест-кейсы/Автотесты/Дефекты), `ModelBenchSection.tsx`
+(Тестирование моделей LLM), `SettingsSection.tsx` (~2000 строк — все настройки).
 
 ### 5.4. `components/ui/` — дизайн-система
 
@@ -441,10 +448,13 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 | Модели БД | `db/metrics_models.py`, `db/postgres.py` |
 | Авторизация | `backend/api/auth.py`, `frontend/contexts/AuthContext.tsx`, `frontend/lib/authApi.ts` |
 | Навигация / список секций | `frontend/components/Sidebar.tsx` |
-| Эталоны / RAG | `backend/api/etalons.py`, `db/vector_store.py` |
+| Эталоны / RAG (Документы) | `backend/api/etalons.py`, `db/vector_store.py` |
+| Требования (исходник + QA-документация) | `backend/api/requirements.py`, `db/requirements_store.py` |
+| Тестирование моделей LLM / сценарии / DOCX-экспорт | `backend/api/model_bench.py`, `agents/model_bench.py`, `agents/model_bench_export.py`, `db/model_bench_scenarios_store.py` |
 | Метрики в Kafka | `backend/api/metrics_*.py`, `agents/metrics_*.py` |
 | Логи на VPS | `backend/api/logs.py`, `backend/api/log_clients/` |
 | Тестовые данные / внешние БД | `backend/api/testdata.py`, `db/testdata_connections.py` |
+| Регистрация дефектов в Jira | `backend/api/jira_defects.py`, `frontend/components/JiraRegisterPanel.tsx` |
 
 ---
 
@@ -489,6 +499,68 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
+
+### 2026-07-25 — Требования (Данные), Тестирование моделей LLM (сценарии/DOCX), Jira-трейсы, центровка вкладок
+
+- **Эталоны → «Данные», новая библиотека Требований.** Route/id остались `etalons`/`/etalons`
+  (минимальный риск), в UI и заголовках — «Данные». Вкладки Тест-кейсы/Автотесты/Дефекты
+  (пары requirement→результат в ChromaDB) **скрыты с фронта** (не удалены — данные и дальше
+  пишутся кнопками «В эталон» в других разделах). Новая вкладка **Требования** — простой
+  локальный JSON-стор (`db/requirements_store.py`, `data/requirements.json`, БЕЗ ChromaDB/
+  эмбеддингов/huggingface.co — осознанный уход от прежней боли с недоступностью
+  huggingface в закрытой сети): исходник + `qa_doc` в одной записи. Кнопка «Сгенерировать»
+  вызывает тот же `LayeredGenerator.generate_qa_doc()`, что и Layer 1 обычной генерации кейсов.
+- **Требования — сквозной клиентский путь:**
+  1. Данные → Требования → вставил исходник → сгенерировал документ → требование доступно
+     как переключаемый источник («Из списка требований») в Ручном тестировании и как
+     мультивыбор-контекст («Приложить требования») в Дефектах (`bugs.py::format_bug`
+     принимает `requirement_ids[]`, текст уходит в промпт форматирования — ИИ точнее
+     описывает дефект, зная реальные поля БД/методы API).
+  2. Ручное тестирование → закинул требование в генерацию → сразу после появления QA-
+     документации (ещё во время генерации, layers 2-4 продолжают работу в фоне) — кнопка
+     «В эталон» сохраняет пару исходник+документация в Требования одним локальным вызовом,
+     без повторного обращения к LLM и без прерывания генерации.
+- **Тестирование моделей LLM — сценарии с критериями судьи + встроенный сценарий
+  «Транскрибация».** `db/model_bench_scenarios_store.py`: поле `judge_instructions`
+  (доп. критерии оценки, едут вместе с сессией от создания до анализа отчёта — см.
+  `agents/model_bench.py::analyze_report`). При первом запуске (файла ещё нет) авто-сеется
+  встроенный сценарий «Транскрибация» — реальный продакшен-промпт саммаризации инцидентов +
+  9-пунктовые критерии (техническая точность: галлюцинации/сохранность деталей/хронология/
+  полнота; логика: связность/дублирование/релевантность/лаконичность/стиль) — работает на
+  любом деплое, не только локально. Модал «Настройки сценариев» (список + форма добавления)
+  заменил инлайновое «Сохранить как сценарий».
+- **Детальный отчёт + таймаут.** `agents/model_bench.py::compute_stats` считает
+  мин/медиана/макс задержки и % успешности (не только среднее) — доступно сразу после
+  прогонов через `GET /sessions/{id}/stats`, без ожидания судьи. `LLMClient` получил
+  необязательный `timeout` (не ломает существующие вызовы — везде `provider=` как keyword);
+  в model-bench поднят до 180с — однопоточные/занятые локальные модели чаще успевают ответить.
+- **Экспорт отчёта: PPTX → DOCX.** Первая версия (PPTX, `python-pptx`) резала контент на
+  слайды принудительно — таблицы/абзацы рвались без причины (плохая вёрстка). Заменено на
+  DOCX (`agents/model_bench_export.py`, `python-docx`): обычный структурированный документ —
+  Heading 1-4, настоящие таблицы (техметрики + таблица сравнения из отчёта), списки, жирный
+  текст. `requirements.txt`: `python-pptx` → `python-docx` (был неучтён, хотя уже
+  использовался для парсинга загружаемых файлов в `file_parser.py`). Кнопка «Скачать .docx»
+  показывается только после того, как отчёт реально отобразился (`session.report`), а не
+  просто при наличии прогонов.
+- **Фикс бага «отчёт получен, но не виден».** Причина — `NotionRenderer.tsx` не распознавал
+  заголовки `####` (только `#`/`##`/`###`), строка вида `#### Итоговая рекомендация` падала в
+  обычный абзац с решётками как текстом. Добавлена поддержка H4-H6. Заодно: если судья вернул
+  пустой отчёт без исключения (деградация модели, не ошибка API) — теперь явная ошибка в UI
+  вместо молчания.
+- **Jira — подробные трейсы в терминал.** Логгер в `jira_defects.py` был объявлен, но не
+  использовался; в приложении не было `logging.basicConfig` — INFO-логи никуда не попадали.
+  Добавлен root-логгер в `main.py`. Каждый запрос к Jira: тело/статус в лог; при ошибке —
+  полный raw body + заголовки, извлечение `X-AREQUESTID` (по нему администратор Jira находит
+  запись в серверном логе; ID теперь и в тексте ошибки пользователю). После создания дефекта
+  — проверка `GET .../transitions`: если пусто, явное предупреждение о возможном ограничении
+  прав/Security Level вместо молчаливого «дефект создан, но кнопок перехода нет».
+- **UI — стартовые интерфейсы вкладок по центру.** Автотестирование/Дефекты/Данные/Настройки/
+  Тестирование моделей LLM растягивались на всю ширину рабочей зоны — приведены к единому
+  паттерну `max-w-5xl mx-auto` (эталон — `TestDataSection.tsx`). Ручное тестирование было
+  `w-1/2` без центрирования (прижато к левому краю) — добавлен `max-w-3xl mx-auto`. Jobs/
+  Kafka/Ревизор/Генератор метрик/алертов намеренно не тронуты — табличные/дашбордные
+  интерфейсы, где ширина работает на контент. `max-w-*` вместо фиксированной ширины —
+  корректно сжимается при drag-n-drop второй рабочей зоны (сплит-панели).
 
 ### 2026-07-07 — Горячая замена JDBC-драйверов, фиксы SSL/jaydebeapi, DeepSeek→custom, брендированные Select, персист Kafka/Тестовых данных
 

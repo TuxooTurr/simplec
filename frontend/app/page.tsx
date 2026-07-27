@@ -5,11 +5,10 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Zap, FlaskConical, Database, Bug, SplitSquareHorizontal, Scale, Bell, Network,
-  ArrowRight, Loader2, ShieldCheck,
+  ArrowRight, Loader2,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { ThemeToggle } from "@/components/ui";
 import AuroraBackground from "@/components/landing/AuroraBackground";
 
 const FEATURES: {
@@ -59,8 +58,6 @@ const FEATURES: {
   },
 ];
 
-const PROVIDERS = ["GigaChat", "DeepSeek", "OpenAI", "Claude", "Ollama", "LM Studio"];
-
 export default function LandingPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -81,32 +78,9 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-bg-main">
-      {/* ── Aurora hero zone (header + hero share one ambient backdrop) ── */}
+      {/* ── Aurora hero zone ── */}
       <div className="relative overflow-hidden">
         <AuroraBackground />
-
-        {/* ── Header ── */}
-        <header className="relative z-10 border-b border-border-main/60 backdrop-blur-sm">
-          <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-sm">
-                <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
-              </div>
-              <span className="text-[15px] font-bold text-text-main tracking-tight">SimpleTest</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <ThemeToggle />
-              <Link
-                href="/login"
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg
-                  text-sm font-semibold hover:bg-primary-dark transition-all shadow-sm
-                  focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-main"
-              >
-                Войти
-              </Link>
-            </div>
-          </div>
-        </header>
 
         {/* ── Hero ── */}
         <section className="relative z-10 max-w-5xl mx-auto px-6 pt-24 pb-20 text-center">
@@ -134,10 +108,6 @@ export default function LandingPage() {
               <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
             </Link>
           </div>
-          <p className="animate-slide-up-delay-3 mt-5 inline-flex items-center gap-1.5 text-xs text-text-muted/70">
-            <ShieldCheck className="w-3.5 h-3.5" />
-            Закрытая корпоративная сеть
-          </p>
         </section>
       </div>
 
@@ -161,30 +131,11 @@ export default function LandingPage() {
             ))}
           </div>
         </section>
-
-        {/* ── LLM providers strip ── */}
-        <section className="border-t border-border-main">
-          <div className="max-w-5xl mx-auto px-6 py-10 text-center">
-            <p className="text-xs font-semibold text-text-muted uppercase tracking-wide mb-4">
-              Работает с любой LLM
-            </p>
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {PROVIDERS.map((p) => (
-                <span
-                  key={p}
-                  className="px-3 py-1.5 rounded-full bg-bg-subtle border border-border-main text-xs font-medium text-text-muted"
-                >
-                  {p}
-                </span>
-              ))}
-            </div>
-          </div>
-        </section>
       </main>
 
       <footer className="border-t border-border-main">
         <div className="max-w-5xl mx-auto px-6 py-6 text-center text-xs text-text-muted/60">
-          SimpleTest — закрытая корпоративная сеть
+          SimpleTest
         </div>
       </footer>
     </div>

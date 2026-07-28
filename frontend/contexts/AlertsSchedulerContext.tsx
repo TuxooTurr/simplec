@@ -110,20 +110,57 @@ const Ctx = createContext<AlertsSchedulerCtx>({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Подставляет значения параметров в код скрипта.
+ *
+ * Замена атомарная — за ОДИН проход по строке. Раньше здесь был цикл
+ * `s = s.replaceAll(...)`, где каждая следующая замена работала уже по
+ * результату предыдущей: подставленное значение снова попадало под поиск.
+ * Так параметр со значением "911" мог быть переписан следующим параметром,
+ * а имя топика REPL.PKAP1173.911_ZNO — испорчено без единой ошибки.
+ *
+ * Образцы сортируются по длине убыв.: иначе короткий "LOW" съел бы кусок
+ * более длинного образца, начинающегося с тех же букв.
+ */
 function applyParams(source: string, params: DynamicParam[], values: Record<string, string>) {
-  let s = source;
-  for (const p of params) {
-    if (p.placeholder) s = s.replaceAll(p.placeholder, values[p.id] ?? p.placeholder);
-  }
-  return s;
+  const pairs = params
+    .filter(p => p.placeholder && (values[p.id] ?? "") !== "")
+    .map(p => [p.placeholder, values[p.id]] as const);
+  if (pairs.length === 0) return source;
+
+  const sorted = [...pairs].sort((a, b) => b[0].length - a[0].length);
+  // Дубли образцов — ошибка данных (её ловит валидатор в редакторе).
+  // Пока такие скрипты существуют, побеждает первый параметр по порядку в UI:
+  // sort стабилен, поэтому среди равных по длине исходный порядок сохранён.
+  const lookup = new Map<string, string>();
+  for (const [ph, val] of sorted) if (!lookup.has(ph)) lookup.set(ph, val);
+
+  const re = new RegExp([...lookup.keys()].map(escapeRegExp).join("|"), "g");
+  return source.replace(re, m => lookup.get(m) ?? m);
 }
 
 function cellIsInit(c: NotebookCell) { return c.type === "init" || c.type === "code"; }
 function cellIsLoop(c: NotebookCell) { return c.type === "loop"; }
 
+/** Параметры, которые пользователь ещё не заполнил.
+ *
+ * Раньше незаполненного состояния не существовало: значением по умолчанию
+ * был сам placeholder — образец из шаблона автора. Пользователь видел поле
+ * «уже заполненным» (например реальным CI00221084) и запускал скрипт по
+ * чужой конфигурационной единице, ничего не выбрав.
+ *
+ * Параметры с пустым placeholder в подстановке не участвуют — их не требуем.
+ */
+export function missingParams(params: DynamicParam[], values: Record<string, string>): DynamicParam[] {
+  return params.filter(p => p.placeholder && !(values[p.id] ?? "").trim());
+}
+
 function defaultValues(params: DynamicParam[]): Record<string, string> {
   const v: Record<string, string> = {};
-  for (const p of params) v[p.id] = p.placeholder;
+  for (const p of params) v[p.id] = "";
   return v;
 }
 
@@ -319,8 +356,20 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     const params = sel.dynamic_params;
     const cells  = sel.notebook ?? [];
 
+    // Пустое поле больше не подменяется образцом из шаблона — скрипт с
+    // незаполненным параметром не должен уходить в Kafka вообще.
+    const missing = missingParams(params, vals);
+    if (missing.length > 0) {
+      pushOutput(sid, "error",
+        `Не заполнены параметры: ${missing.map(p => p.label || p.code_key || "без названия").join(", ")}. ` +
+        `Запуск отменён.`);
+      patchSession(sid, { executing: false });
+      executingLocks.current.delete(sid);
+      return;
+    }
+
     const paramsChanged = !int.initDone ||
-      params.some(p => (vals[p.id] ?? p.placeholder) !== (int.prevValues[p.id] ?? p.placeholder));
+      params.some(p => (vals[p.id] ?? "") !== (int.prevValues[p.id] ?? ""));
 
     if (paramsChanged) {
       const initCells = cells.filter(cellIsInit);
@@ -343,7 +392,7 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
           }
         }
         const snap: Record<string, string> = {};
-        for (const p of params) snap[p.id] = vals[p.id] ?? p.placeholder;
+        for (const p of params) snap[p.id] = vals[p.id] ?? "";
         int.prevValues = snap;
       }
       int.initDone = true;

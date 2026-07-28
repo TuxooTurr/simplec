@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import {
   Bell, Plus, Trash2, Pencil, Loader2, X,
   Upload, Code, AlignLeft, ChevronDown, ChevronUp, GripVertical,
@@ -17,7 +17,7 @@ import {
   type AlertScript, type AlertFolder, type DynamicParam, type NotebookCell,
   type ParamFieldType, type KernelInfo, type KernelAuditEntry,
 } from "@/lib/api";
-import { useAlertsScheduler, type OutputLine } from "@/contexts/AlertsSchedulerContext";
+import { useAlertsScheduler, missingParams, type OutputLine } from "@/contexts/AlertsSchedulerContext";
 import { useAuth } from "@/contexts/AuthContext";
 
 // ── Styles ───────────────────────────────────────────────────────────────────
@@ -371,6 +371,47 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
   const updateParam = (id: string, field: string, val: unknown) =>
     setParams(ps => ps.map(p => p.id === id ? { ...p, [field]: val } : p));
 
+  // ── Проверка образцов подстановки ────────────────────────────────────────
+  // Подстановка ищет «Значение в коде» как обычную строку. Отсюда три способа
+  // молча сломать скрипт: образца нет в коде (параметр-пустышка), он встречается
+  // несколько раз (заменятся все), или два параметра делят один образец
+  // (сработает только первый). Раньше ничего из этого не проверялось.
+  const paramIssues = useMemo(() => {
+    const code = cells.map(c => c.source ?? "").join("\n");
+    const issues: { id: string; text: string; hard: boolean }[] = [];
+    const seen = new Map<string, string>();
+
+    for (const p of params) {
+      const ph = p.placeholder;
+      const who = p.label || p.code_key || "без названия";
+      if (!ph) continue;
+
+      const dup = seen.get(ph);
+      if (dup) {
+        issues.push({ id: p.id, hard: true,
+          text: `«${who}»: образец ${JSON.stringify(ph)} уже занят параметром «${dup}» — сработает только первый` });
+      } else {
+        seen.set(ph, who);
+      }
+
+      const cnt = code.split(ph).length - 1;
+      if (cnt === 0) {
+        issues.push({ id: p.id, hard: true,
+          text: `«${who}»: образец ${JSON.stringify(ph)} не найден в коде — значение никуда не подставится` });
+      } else if (cnt > 1) {
+        issues.push({ id: p.id, hard: false,
+          text: `«${who}»: образец ${JSON.stringify(ph)} встречается ${cnt} раз — заменятся все вхождения` });
+      }
+      if (ph.length < 8) {
+        issues.push({ id: p.id, hard: false,
+          text: `«${who}»: образец ${JSON.stringify(ph)} короткий (${ph.length} симв.) — может случайно совпасть внутри другого слова` });
+      }
+    }
+    return issues;
+  }, [cells, params]);
+
+  const hardIssues = paramIssues.filter(i => i.hard);
+
   const handleSave = async () => {
     if (!name.trim()) { setErr("Название обязательно"); return; }
     setSaving(true); setErr("");
@@ -466,6 +507,21 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
                 <Plus className="w-3.5 h-3.5" /> Добавить
               </button>
             </div>
+            {paramIssues.length > 0 && (
+              <div className={`rounded-lg px-3 py-2.5 mb-3 border text-xs space-y-1 ${
+                hardIssues.length > 0
+                  ? "tone-danger"
+                  : "tone-warning"}`}>
+                <p className="font-semibold">
+                  {hardIssues.length > 0
+                    ? "Подстановка не сработает как задумано:"
+                    : "Обратите внимание на подстановку:"}
+                </p>
+                {paramIssues.map((i, idx) => (
+                  <p key={`${i.id}-${idx}`} className="leading-relaxed">• {i.text}</p>
+                ))}
+              </div>
+            )}
             {params.length === 0 ? (
               <p className="text-xs text-text-muted bg-bg-subtle rounded-lg px-3 py-3">
                 Добавьте параметры — их значения будут подставляться в код перед выполнением
@@ -625,6 +681,10 @@ export default function AlertsSection() {
   };
 
   const selected = scripts.find(s => s.id === selectedId) ?? null;
+
+  // Незаполненные параметры блокируют запуск: пустое поле больше не подменяется
+  // образцом из шаблона, поэтому скрипт с пустым параметром просто не поедет.
+  const missing = selected ? missingParams(selected.dynamic_params, values) : [];
 
   // ── Ручной порядок скриптов в колонке (drag-and-drop, хранится локально) ──
   const [scriptOrder, setScriptOrder] = useState<string[]>([]);
@@ -1031,21 +1091,28 @@ export default function AlertsSection() {
                   )}
                 </div>
 
-                {/* Dynamic param inputs — typed */}
-                {selected.dynamic_params.map(p => (
-                  <div key={p.id}>
-                    <label className={LABEL_CLS}>
-                      {p.label || p.code_key || "Параметр"}
-                      {p.code_key && <span className="ml-1.5 normal-case font-mono font-normal text-text-muted/70">.{p.code_key}</span>}
-                      <span className="ml-1.5 normal-case font-normal text-text-muted/50">({FIELD_TYPE_LABELS[p.field_type || "text"]})</span>
-                    </label>
-                    <ParamInput
-                      param={p}
-                      value={values[p.id] ?? p.placeholder}
-                      onChange={v => setValues(prev => ({ ...prev, [p.id]: v }))}
-                    />
-                  </div>
-                ))}
+                {/* Dynamic param inputs — typed.
+                    Значение больше не подменяется образцом (p.placeholder): образец
+                    показывается серой подсказкой внутри поля, а пустое поле остаётся
+                    пустым и блокирует запуск. */}
+                {selected.dynamic_params.map(p => {
+                  const isMissing = !!p.placeholder && !(values[p.id] ?? "").trim();
+                  return (
+                    <div key={p.id}>
+                      <label className={LABEL_CLS}>
+                        {p.label || p.code_key || "Параметр"}
+                        {p.code_key && <span className="ml-1.5 normal-case font-mono font-normal text-text-muted/70">.{p.code_key}</span>}
+                        <span className="ml-1.5 normal-case font-normal text-text-muted/50">({FIELD_TYPE_LABELS[p.field_type || "text"]})</span>
+                        {isMissing && <span className="ml-1.5 normal-case font-normal text-amber-600 dark:text-amber-400">— не заполнено</span>}
+                      </label>
+                      <ParamInput
+                        param={p}
+                        value={values[p.id] ?? ""}
+                        onChange={v => setValues(prev => ({ ...prev, [p.id]: v }))}
+                      />
+                    </div>
+                  );
+                })}
 
               </div>
 
@@ -1144,6 +1211,12 @@ export default function AlertsSection() {
                     {!kernelAlive ? (
                       <button disabled className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-text-muted rounded-lg text-sm font-semibold cursor-not-allowed">
                         <Wifi className="w-4 h-4" /> Подключите ядро
+                      </button>
+                    ) : missing.length > 0 ? (
+                      <button disabled
+                        title={`Заполните: ${missing.map(p => p.label || p.code_key || "без названия").join(", ")}`}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 text-text-muted rounded-lg text-sm font-semibold cursor-not-allowed dark:bg-bg-muted">
+                        <Play className="w-4 h-4" /> Заполните параметры ({missing.length})
                       </button>
                     ) : schedMode === "once" ? (
                       <button onClick={() => doExecuteCore()} disabled={executing}

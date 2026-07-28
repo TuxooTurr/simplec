@@ -152,10 +152,14 @@ function cellIsLoop(c: NotebookCell) { return c.type === "loop"; }
  * «уже заполненным» (например реальным CI00221084) и запускал скрипт по
  * чужой конфигурационной единице, ничего не выбрав.
  *
- * Параметры с пустым placeholder в подстановке не участвуют — их не требуем.
+ * Не требуем заполнения:
+ *  - параметров с пустым placeholder — они в подстановке не участвуют;
+ *  - JSON-тел: это переопределение сгенерированного сообщения. Пустое поле
+ *    означает «оставить генерацию скрипта», и это штатный режим работы.
  */
 export function missingParams(params: DynamicParam[], values: Record<string, string>): DynamicParam[] {
-  return params.filter(p => p.placeholder && !(values[p.id] ?? "").trim());
+  return params.filter(p =>
+    p.placeholder && p.field_type !== "json" && !(values[p.id] ?? "").trim());
 }
 
 function defaultValues(params: DynamicParam[]): Record<string, string> {

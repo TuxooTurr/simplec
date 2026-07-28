@@ -1420,7 +1420,7 @@ export default function AlertsSection() {
                 {runFieldParams.length > 0 && runJsonParams.length > 0 && (
                   <div className="flex gap-1.5">
                     {([["fields", "Поля", runFieldParams], ["json", "JSON", runJsonParams]] as const).map(([id, label, list]) => {
-                      const unfilled = list.filter(p => !!p.placeholder && !(values[p.id] ?? "").trim()).length;
+                      const unfilled = missingParams(list, values).length;
                       return (
                         <button key={id} onClick={() => setParamTab(id)}
                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
@@ -1441,7 +1441,9 @@ export default function AlertsSection() {
                     показывается серой подсказкой внутри поля, а пустое поле остаётся
                     пустым и блокирует запуск. */}
                 {visibleRunParams.map(p => {
-                  const isMissing = !!p.placeholder && !(values[p.id] ?? "").trim();
+                  // JSON-тело необязательно: пустое поле = работает генерация скрипта,
+                  // поэтому пометку «не заполнено» на него не вешаем.
+                  const isMissing = !!p.placeholder && !isJsonParam(p) && !(values[p.id] ?? "").trim();
                   return (
                     <div key={p.id}>
                       <label className={LABEL_CLS}>

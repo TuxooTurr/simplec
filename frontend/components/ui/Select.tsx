@@ -61,7 +61,7 @@ export function Select({
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
-  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
   const [query, setQuery] = useState("");
   const btnRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -80,11 +80,35 @@ export function Select({
 
   const close = useCallback(() => { setOpen(false); setActive(-1); setQuery(""); }, []);
 
+  // Панель раскрывается вниз, но если снизу не помещается — переворачивается вверх.
+  // Раньше top всегда был r.bottom + 4: у селекта в самом низу длинного списка
+  // (например последний параметр алерта) список опций уходил за нижний край
+  // экрана, и прокрутить его было нельзя — панель fixed, страница под ней не
+  // скроллится. Высота панели теперь тоже ограничена доступным местом.
   const reposition = useCallback(() => {
     const el = btnRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    setCoords({ top: r.bottom + 4, left: r.left, width: r.width });
+    const margin = 8;
+    const gap = 4;
+    const desired = 288; // прежний max-h-72
+
+    const spaceBelow = window.innerHeight - r.bottom - gap - margin;
+    const spaceAbove = r.top - gap - margin;
+    // Вверх — только если снизу реально тесно, а сверху просторнее.
+    const flipUp = spaceBelow < Math.min(desired, 180) && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(desired, flipUp ? spaceAbove : spaceBelow));
+
+    // Не даём панели вылезти за правый край (актуально для bare-селектов,
+    // ширина которых не привязана к кнопке).
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - r.width - margin));
+
+    setCoords({
+      top: flipUp ? r.top - gap - maxHeight : r.bottom + gap,
+      left,
+      width: r.width,
+      maxHeight,
+    });
   }, []);
 
   // позиционируем панель под кнопкой; репозиция на скролл/resize пока открыто
@@ -181,8 +205,12 @@ export function Select({
         <div
           ref={listRef}
           role="listbox"
-          style={{ position: "fixed", top: coords.top, left: coords.left, width: bare ? undefined : coords.width, minWidth: bare ? coords.width : undefined }}
-          className="z-[9999] flex max-h-72 flex-col overflow-hidden rounded-lg border border-border-main bg-bg-card shadow-lg animate-fade-in"
+          style={{
+            position: "fixed", top: coords.top, left: coords.left,
+            width: bare ? undefined : coords.width, minWidth: bare ? coords.width : undefined,
+            maxHeight: coords.maxHeight,
+          }}
+          className="z-[9999] flex flex-col overflow-hidden rounded-lg border border-border-main bg-bg-card shadow-lg animate-fade-in"
         >
           {searchable && (
             <div className="relative shrink-0 border-b border-border-main p-1.5">

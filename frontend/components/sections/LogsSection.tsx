@@ -257,7 +257,12 @@ function LogErrorCard({
 
 /* ── Анализ файла логов (без VPS-подключения) ───────────────────────────── */
 
-function FileLogAnalysis({ provider, onBack }: { provider: string; onBack: () => void }) {
+function FileLogAnalysis({ provider, onOpenVps, vpsLabel }: {
+  provider:   string;
+  /** Переход к поиску по VPS (или в настройки, если подключений ещё нет). */
+  onOpenVps:  () => void;
+  vpsLabel:   string;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -317,15 +322,18 @@ function FileLogAnalysis({ provider, onBack }: { provider: string; onBack: () =>
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
+      {/* Загрузка файла — стартовый экран раздела. Подключение к VPS не пропало,
+          а переехало кнопкой в правый угол: файл нужен чаще, чем поиск по VPS. */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <button onClick={onBack}
-          className="flex items-center gap-1.5 text-sm text-text-muted hover:text-text-main transition-colors group">
-          <ChevronLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
-          Назад
-        </button>
-        <span className="text-text-muted/40">·</span>
         <FileText className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Анализ файла логов</h1>
+        <h1 className="text-lg font-bold text-text-main">Анализатор логов</h1>
+
+        <div className="flex-1" />
+
+        <button onClick={onOpenVps} className={BTN_GHOST} title={vpsLabel}>
+          <Server className="w-4 h-4" />
+          {vpsLabel}
+        </button>
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
@@ -350,12 +358,16 @@ function FileLogAnalysis({ provider, onBack }: { provider: string; onBack: () =>
               {file ? (
                 <div className="text-center">
                   <p className="text-sm font-medium text-text-main">{file.name}</p>
-                  <p className="text-xs text-text-muted">{(file.size / 1024).toFixed(1)} КБ</p>
+                  <p className="text-xs text-text-muted">
+                    {file.size >= 1024 * 1024
+                      ? `${(file.size / 1024 / 1024).toFixed(1)} МБ`
+                      : `${(file.size / 1024).toFixed(1)} КБ`}
+                  </p>
                 </div>
               ) : (
                 <div className="text-center">
                   <p className="text-sm font-medium text-text-main">Перетащите файл логов или нажмите для выбора</p>
-                  <p className="text-xs text-text-muted mt-0.5">.log, .txt, .out, .json — до 5 МБ</p>
+                  <p className="text-xs text-text-muted mt-0.5">.log, .txt, .out, .json — до 15 МБ</p>
                 </div>
               )}
             </label>
@@ -483,7 +495,9 @@ export default function LogsSection() {
   const [analyzingIds, setAnalyzingIds] = useState<Set<string>>(new Set());
 
   // История / анализ файла
-  const [stage, setStage] = useState<"search" | "history" | "file">("search");
+  // Стартуем с загрузки файла: она работает без подключений и нужна чаще.
+  // Поиск по VPS доступен кнопкой в углу.
+  const [stage, setStage] = useState<"search" | "history" | "file">("file");
   const [history, setHistory] = useState<SearchHistEntry[]>(() => loadSearchHistory());
 
   /* ── Загрузка подключений ────────────────────────────────────────────── */
@@ -734,7 +748,14 @@ export default function LogsSection() {
   /* ── Анализ загруженного файла (доступен без подключений) ────────────── */
 
   if (stage === "file") return (
-    <FileLogAnalysis provider={provider} onBack={() => setStage("search")} />
+    <FileLogAnalysis
+      provider={provider}
+      vpsLabel={connections.length > 0 ? "Поиск по VPS" : "Подключить VPS"}
+      onOpenVps={() => {
+        if (connections.length > 0) setStage("search");
+        else router.push("/settings");
+      }}
+    />
   );
 
   /* ── Пустое состояние: нет подключений ───────────────────────────────── */
@@ -798,6 +819,11 @@ export default function LogsSection() {
             </option>
           ))}
         </Select>
+
+        <button onClick={() => setStage("file")} className={BTN_GHOST} title="Анализ файла логов">
+          <Upload className="w-4 h-4" />
+          Файл
+        </button>
 
         <button onClick={() => setStage("history")} className={BTN_GHOST}>
           <History className="w-4 h-4" />

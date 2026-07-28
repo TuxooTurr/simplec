@@ -8,6 +8,7 @@ import {
   CircleCheck, CircleX, Wifi, WifiOff, RefreshCw, Eraser,
   RotateCcw, Eye, EyeOff, Clock, User, List,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
+  Maximize2, Minimize2,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import {
@@ -112,6 +113,12 @@ function NotebookEditor({ cells, onChange }: { cells: NotebookCell[]; onChange: 
   const [tab,       setTab]       = useState<"editor" | "upload">("editor");
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState("");
+  // Код ячейки в поле на 5 строк читать невозможно — любую ячейку можно
+  // развернуть на весь экран, оставаясь в той же форме.
+  const [fullscreenId, setFullscreenId] = useState<string | null>(null);
+  const [cellRows, setCellRows] = useState(8);
+
+  const fullscreenCell = fullscreenId ? cells.find(c => c.id === fullscreenId) ?? null : null;
 
   const addCell    = (type: EditableCellType) => onChange([...cells, newCell(type)]);
   const removeCell = (id: string) => onChange(cells.filter(c => c.id !== id));
@@ -151,7 +158,20 @@ function NotebookEditor({ cells, onChange }: { cells: NotebookCell[]; onChange: 
             {t === "editor" ? <><AlignLeft className="w-3.5 h-3.5" /> Редактор ячеек</> : <><Upload className="w-3.5 h-3.5" /> Загрузить .ipynb</>}
           </button>
         ))}
-        {cells.length > 0 && <span className="ml-auto mr-3 text-xs text-text-muted">{cells.length} яч.</span>}
+        {cells.length > 0 && (
+          <div className="ml-auto mr-3 flex items-center gap-2">
+            {/* Высота всех полей кода разом — быстрее, чем тянуть каждое за угол */}
+            <span className="text-[10px] text-text-muted/70 hidden sm:inline">Высота полей</span>
+            <input
+              type="range" min={5} max={30} step={1}
+              value={cellRows}
+              onChange={e => setCellRows(Number(e.target.value))}
+              title={`${cellRows} строк`}
+              className="w-20 accent-[var(--color-primary)] cursor-pointer"
+            />
+            <span className="text-xs text-text-muted">{cells.length} яч.</span>
+          </div>
+        )}
       </div>
 
       {tab === "editor" && (
@@ -174,6 +194,8 @@ function NotebookEditor({ cells, onChange }: { cells: NotebookCell[]; onChange: 
                   {t === "init" && <span className="text-[9px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">однократно</span>}
                   {t === "loop" && <span className="text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">циклично</span>}
                   <span className="text-[10px] text-text-muted/50 ml-auto">#{idx + 1}</span>
+                  <button onClick={() => setFullscreenId(cell.id)} title="Развернуть на весь экран"
+                    className="p-0.5 text-text-muted hover:text-primary transition-colors"><Maximize2 className="w-3 h-3" /></button>
                   <button onClick={() => moveCell(cell.id, -1)} disabled={idx === 0}
                     className="p-0.5 text-text-muted hover:text-text-main disabled:opacity-20"><ChevronUp className="w-3 h-3" /></button>
                   <button onClick={() => moveCell(cell.id, 1)} disabled={idx === cells.length - 1}
@@ -183,7 +205,7 @@ function NotebookEditor({ cells, onChange }: { cells: NotebookCell[]; onChange: 
                   </button>
                 </div>
                 <textarea value={cell.source} onChange={e => updateSrc(cell.id, e.target.value)}
-                  rows={t === "markdown" ? 3 : 5}
+                  rows={t === "markdown" ? Math.max(3, Math.round(cellRows / 2)) : cellRows}
                   placeholder={
                     t === "markdown" ? "# Заголовок\n\nТекст описания..." :
                     t === "init"     ? "# Инициализация (один раз)\nfrom kafka import KafkaProducer\nproducer = KafkaProducer(...)" :
@@ -229,6 +251,76 @@ function NotebookEditor({ cells, onChange }: { cells: NotebookCell[]; onChange: 
           )}
         </div>
       )}
+
+      {fullscreenCell && (
+        <CellFullscreen
+          cell={fullscreenCell}
+          index={cells.findIndex(c => c.id === fullscreenCell.id) + 1}
+          onChange={src => updateSrc(fullscreenCell.id, src)}
+          onClose={() => setFullscreenId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Одна ячейка на весь экран — поверх модалки редактора (z выше, чем у неё). */
+function CellFullscreen({ cell, index, onChange, onClose }: {
+  cell:     NotebookCell;
+  index:    number;
+  onChange: (source: string) => void;
+  onClose:  () => void;
+}) {
+  const t = normType(cell.type);
+  const cfg = CELL_TYPES[t];
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/60 p-4 sm:p-8 animate-fade-in flex">
+      <div className="bg-bg-card rounded-2xl shadow-2xl flex flex-col flex-1 min-h-0 overflow-hidden">
+        <div className={`flex items-center gap-2 px-4 py-2.5 border-b ${cfg.border} bg-bg-subtle flex-shrink-0`}>
+          <span className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold ${cfg.color}`}>
+            {t === "markdown" ? <AlignLeft className="w-2.5 h-2.5" /> : <Code className="w-2.5 h-2.5" />}
+            {cfg.label}
+          </span>
+          <span className="text-xs text-text-muted">Ячейка #{index}</span>
+          {t === "init" && <span className="text-[9px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded-full">однократно</span>}
+          {t === "loop" && <span className="text-[9px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full">циклично</span>}
+          <span className="ml-auto text-[10px] text-text-muted/60 hidden sm:inline">Esc — свернуть</span>
+          <button onClick={onClose} title="Свернуть"
+            className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-muted transition-colors">
+            <Minimize2 className="w-4 h-4" />
+          </button>
+        </div>
+        <textarea
+          value={cell.source}
+          onChange={e => onChange(e.target.value)}
+          autoFocus
+          spellCheck={false}
+          className="flex-1 min-h-0 w-full px-4 py-3 text-sm font-mono leading-relaxed resize-none
+            bg-bg-card text-text-main focus:outline-none scrollbar-thin"
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Вертикальный разделитель колонок — тонкая полоса, подсвечивается при наведении. */
+function ColumnResizer({ onDrag, title }: { onDrag: (e: React.MouseEvent) => void; title: string }) {
+  return (
+    <div
+      onMouseDown={onDrag}
+      title={title}
+      role="separator"
+      aria-orientation="vertical"
+      className="group relative w-2 flex-shrink-0 cursor-col-resize flex items-center justify-center"
+    >
+      <div className="h-10 w-1 rounded-full bg-border-main transition-colors group-hover:bg-primary/60" />
     </div>
   );
 }
@@ -365,6 +457,7 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
   const [visibleToMon, setVisibleToMon] = useState(initial?.visible_to_monitoring ?? false);
   const [saving, setSaving] = useState(false);
   const [err,    setErr]    = useState("");
+  const [wide,   setWide]   = useState(false);
 
   const addParam    = () => setParams(ps => [...ps, newParam()]);
   const removeParam = (id: string) => setParams(ps => ps.filter(p => p.id !== id));
@@ -431,10 +524,26 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-fade-in">
-      <div className="bg-bg-card rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col">
+      {/* Ширина переключается: обычная для правки названия/папки, широкая — когда
+          пишешь код. Базовая max-w-4xl вместо прежней 2xl: в 672px редактор ячеек
+          не помещался.
+          В развёрнутом режиме max-w-none, а не vw-значение: этот fixed-контейнер
+          позиционируется от рабочей области (выше по дереву есть transform,
+          создающий containing block), поэтому vw дал бы недостижимую ширину. */}
+      <div className={`bg-bg-card rounded-2xl shadow-2xl w-full flex flex-col transition-[max-width,max-height] duration-200 ${
+        wide ? "max-w-none max-h-[96vh]" : "max-w-4xl max-h-[92vh]"}`}>
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-main flex-shrink-0">
           <h2 className="text-base font-semibold">{editing ? "Редактировать алерт" : "Новый алерт"}</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-5 h-5" /></button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setWide(w => !w)} title={wide ? "Свернуть окно" : "Развернуть окно"}
+              className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
+              {wide ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+            <button onClick={onClose} title="Закрыть"
+              className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         <div className="overflow-y-auto scrollbar-thin p-6 space-y-5 flex-1">
@@ -680,6 +789,66 @@ export default function AlertsSection() {
     } catch (e) { alert(String(e)); }
   };
 
+  // ── Ширины колонок (тянутся мышью, запоминаются) ─────────────────────────
+  // Фиксированные w-56 и 50/50 обрезали длинные названия алертов и параметров.
+  const mainRowRef = useRef<HTMLDivElement>(null);
+  const [listW,    setListW]    = useState(224);  // прежний w-56
+  const [splitPct, setSplitPct] = useState(50);
+
+  useEffect(() => {
+    try {
+      const w = Number(localStorage.getItem("st_alerts_list_w"));
+      if (w >= 160 && w <= 560) setListW(w);
+      const p = Number(localStorage.getItem("st_alerts_split"));
+      if (p >= 20 && p <= 80) setSplitPct(p);
+    } catch { /* ignore */ }
+  }, []);
+
+  const beginDrag = (onMove: (e: MouseEvent) => void, persist: () => void) => {
+    const stop = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", stop);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      persist();
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", stop);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const dragList = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX, startW = listW;
+    // Верхний предел — доля от реальной ширины строки, иначе на узком экране
+    // список вытеснит рабочую область за край.
+    const rowW = mainRowRef.current?.getBoundingClientRect().width ?? 900;
+    const maxW = Math.max(200, Math.min(560, rowW * 0.4));
+    let latest = startW;
+    beginDrag(
+      ev => { latest = Math.max(160, Math.min(maxW, startW + ev.clientX - startX)); setListW(latest); },
+      () => { try { localStorage.setItem("st_alerts_list_w", String(Math.round(latest))); } catch { /* ignore */ } },
+    );
+  };
+
+  const dragSplit = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const row = mainRowRef.current;
+    if (!row) return;
+    let latest = splitPct;
+    beginDrag(
+      ev => {
+        const box = row.getBoundingClientRect();
+        const available = box.width - listW;           // область под две колонки
+        const x = ev.clientX - box.left - listW;
+        latest = Math.max(20, Math.min(80, (x / available) * 100));
+        setSplitPct(latest);
+      },
+      () => { try { localStorage.setItem("st_alerts_split", String(Math.round(latest))); } catch { /* ignore */ } },
+    );
+  };
+
   const selected = scripts.find(s => s.id === selectedId) ?? null;
 
   // Незаполненные параметры блокируют запуск: пустое поле больше не подменяется
@@ -840,10 +1009,11 @@ export default function AlertsSection() {
           <p className="text-sm">Нет алертов. {isSuperuser ? "Создайте первый." : "Суперюзер ещё не открыл вам доступ."}</p>
         </div>
       ) : (
-        <div className="flex gap-4 flex-1 min-h-0">
+        <div ref={mainRowRef} className="flex gap-1 flex-1 min-h-0 min-w-0">
 
-          {/* Alert list with folders */}
-          <div className="w-56 flex-shrink-0 bg-bg-card border border-border-main rounded-xl p-3 overflow-y-auto scrollbar-thin flex flex-col gap-1">
+          {/* Alert list with folders — ширина тянется за разделитель справа */}
+          <div style={{ width: listW }}
+            className="flex-shrink-0 bg-bg-card border border-border-main rounded-xl p-3 overflow-y-auto scrollbar-thin flex flex-col gap-1">
 
             {/* New folder button + inline input */}
             {isSuperuser && (
@@ -1054,12 +1224,17 @@ export default function AlertsSection() {
             })}
           </div>
 
-          {/* Main area */}
+          <ColumnResizer onDrag={dragList} title="Ширина списка алертов" />
+
+          {/* Main area — grid во fr, чтобы обе колонки сжимались вместе с окном:
+              на flex с процентной шириной и flex-shrink-0 правая колонка вылезала
+              за край, когда список алертов растягивали. */}
           {selected ? (
-            <div className="flex-1 min-w-0 grid grid-cols-2 gap-4">
+            <div className="flex-1 min-w-0 grid"
+              style={{ gridTemplateColumns: `minmax(0, ${splitPct}fr) auto minmax(0, ${100 - splitPct}fr)` }}>
 
               {/* Left: kernel + params + notebook preview */}
-              <div className="bg-bg-card border border-border-main rounded-xl p-5 overflow-y-auto scrollbar-thin flex flex-col gap-4">
+              <div className="min-w-0 bg-bg-card border border-border-main rounded-xl p-5 overflow-y-auto scrollbar-thin flex flex-col gap-4">
 
                 {/* Kernel status */}
                 <div className={`flex items-center gap-3 rounded-xl px-4 py-3 border ${
@@ -1116,8 +1291,10 @@ export default function AlertsSection() {
 
               </div>
 
+              <ColumnResizer onDrag={dragSplit} title="Соотношение колонок" />
+
               {/* Right: output console + scheduler */}
-              <div className="bg-bg-card border border-border-main rounded-xl p-5 flex flex-col gap-3 overflow-hidden">
+              <div className="min-w-0 bg-bg-card border border-border-main rounded-xl p-5 flex flex-col gap-3 overflow-hidden">
 
                 {/* Output header */}
                 <div className="flex items-center justify-between flex-shrink-0">

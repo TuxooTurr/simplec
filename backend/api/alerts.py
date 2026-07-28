@@ -37,7 +37,9 @@ class DynamicParam(BaseModel):
     label:       str
     code_key:    str = ""
     placeholder: str = ""
-    field_type:  Literal["text", "select", "multiselect", "dropdown", "dropdown_multi", "datetime"] = "text"
+    # json — тело сообщения целиком: в коде остаётся плейсхолдер, а значение
+    # пользователь вставляет при запуске (многострочный JSON).
+    field_type:  Literal["text", "select", "multiselect", "dropdown", "dropdown_multi", "datetime", "json"] = "text"
     options:     list[str] = Field(default_factory=list)
 
 

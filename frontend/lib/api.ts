@@ -240,7 +240,7 @@ export interface NotebookCell {
   source: string;
 }
 
-export type ParamFieldType = "text" | "select" | "multiselect" | "dropdown" | "dropdown_multi" | "datetime";
+export type ParamFieldType = "text" | "select" | "multiselect" | "dropdown" | "dropdown_multi" | "datetime" | "json";
 
 export interface DynamicParam {
   id:          string;

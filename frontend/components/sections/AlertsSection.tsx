@@ -56,7 +56,11 @@ const FIELD_TYPE_LABELS: Record<ParamFieldType, string> = {
   dropdown:       "Список (один)",
   dropdown_multi: "Список (несколько)",
   datetime:       "Дата и время",
+  json:           "JSON-тело",
 };
+
+/** JSON-параметры редактируются и показываются отдельно от обычных полей. */
+const isJsonParam = (p: DynamicParam) => p.field_type === "json";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -325,6 +329,103 @@ function ColumnResizer({ onDrag, title }: { onDrag: (e: React.MouseEvent) => voi
   );
 }
 
+/** Поле для JSON-тела: многострочный ввод с проверкой синтаксиса и форматированием.
+ *
+ * Значение подставляется в код как обычный параметр (текстовой заменой образца),
+ * поэтому в скрипте плейсхолдер должен стоять внутри кавычек — тогда сюда можно
+ * вставить любое тело, а скрипт разберёт его через json.loads. */
+function JsonParamInput({ value, onChange, placeholder }: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+}) {
+  const [rows, setRows] = useState(10);
+  const [full, setFull] = useState(false);
+
+  const trimmed = value.trim();
+  let error = "";
+  if (trimmed) {
+    try { JSON.parse(trimmed); } catch (e) { error = e instanceof Error ? e.message : String(e); }
+  }
+  const valid = !!trimmed && !error;
+
+  const format = () => {
+    try { onChange(JSON.stringify(JSON.parse(value), null, 2)); } catch { /* невалидный — не трогаем */ }
+  };
+
+  const field = (
+    <textarea
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      spellCheck={false}
+      placeholder={placeholder || '{\n  "table_name": "…",\n  "data": [ … ]\n}'}
+      rows={full ? undefined : rows}
+      className={`w-full px-3 py-2 text-xs font-mono leading-relaxed rounded-lg border bg-[var(--color-input-bg)]
+        text-text-main placeholder:text-text-muted/50 focus:outline-none focus:ring-2 transition
+        ${full ? "flex-1 min-h-0 resize-none" : "resize-y"}
+        ${error ? "border-red-300 focus:ring-red-300/40 dark:border-red-800"
+                : "border-border-main focus:ring-primary/30 focus:border-primary/40"}`}
+    />
+  );
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2">
+        {valid && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400">
+            <CircleCheck className="w-3 h-3" /> Валидный JSON
+          </span>
+        )}
+        {error && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-red-600 dark:text-red-400 truncate" title={error}>
+            <CircleX className="w-3 h-3 flex-shrink-0" /> {error}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={format} disabled={!valid} title="Форматировать"
+            className="px-2 py-0.5 rounded text-[11px] text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-40 transition-colors">
+            Форматировать
+          </button>
+          <button type="button" onClick={() => setFull(true)} title="Развернуть на весь экран"
+            className="p-1 rounded text-text-muted hover:text-primary hover:bg-bg-subtle transition-colors">
+            <Maximize2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {!full && field}
+      {!full && (
+        <input type="range" min={5} max={40} value={rows}
+          onChange={e => setRows(Number(e.target.value))}
+          title={`${rows} строк`}
+          className="w-full h-1 accent-[var(--color-primary)] cursor-pointer" />
+      )}
+
+      {full && (
+        <div className="fixed inset-0 z-[60] bg-black/60 p-4 sm:p-8 animate-fade-in flex">
+          <div className="bg-bg-card rounded-2xl shadow-2xl flex flex-col flex-1 min-h-0 overflow-hidden">
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border-main bg-bg-subtle flex-shrink-0">
+              <Code className="w-4 h-4 text-primary" />
+              <span className="text-sm font-semibold text-text-main">JSON-тело</span>
+              {valid && <span className="text-[11px] text-green-600 dark:text-green-400">валидный</span>}
+              {error && <span className="text-[11px] text-red-600 dark:text-red-400 truncate">{error}</span>}
+              <button type="button" onClick={format} disabled={!valid}
+                className="ml-auto px-2 py-1 rounded text-xs text-text-muted hover:text-text-main hover:bg-bg-muted disabled:opacity-40 transition-colors">
+                Форматировать
+              </button>
+              <button type="button" onClick={() => setFull(false)} title="Свернуть"
+                className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-muted transition-colors">
+                <Minimize2 className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 min-h-0 flex p-3">{field}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── ParamInput — renders the proper input based on field_type ──────────────────
 
 function ParamInput({ param, value, onChange }: {
@@ -334,6 +435,10 @@ function ParamInput({ param, value, onChange }: {
 }) {
   const ft = param.field_type || "text";
   const options = param.options ?? [];
+
+  if (ft === "json") {
+    return <JsonParamInput value={value} onChange={onChange} placeholder={param.placeholder} />;
+  }
 
   if (ft === "datetime") {
     return (
@@ -459,7 +564,13 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
   const [err,    setErr]    = useState("");
   const [wide,   setWide]   = useState(false);
 
-  const addParam    = () => setParams(ps => [...ps, newParam()]);
+  const [editTab, setEditTab] = useState<"fields" | "json">("fields");
+  const jsonParams  = params.filter(isJsonParam);
+  const fieldParams = params.filter(p => !isJsonParam(p));
+  const visibleParams = editTab === "json" ? jsonParams : fieldParams;
+
+  const addParam = (type: ParamFieldType = "text") =>
+    setParams(ps => [...ps, { ...newParam(), field_type: type }]);
   const removeParam = (id: string) => setParams(ps => ps.filter(p => p.id !== id));
   const updateParam = (id: string, field: string, val: unknown) =>
     setParams(ps => ps.map(p => p.id === id ? { ...p, [field]: val } : p));
@@ -612,10 +723,34 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
               <label className={`${LABEL_CLS} flex items-center gap-1.5`} style={{ marginBottom: 0 }}>
                 <Settings2 className="w-3.5 h-3.5" /> Динамические параметры{params.length > 0 ? ` (${params.length})` : ""}
               </label>
-              <button onClick={addParam} className="flex items-center gap-1 text-xs text-primary font-medium">
+              <button onClick={() => addParam(editTab === "json" ? "json" : "text")}
+                className="flex items-center gap-1 text-xs text-primary font-medium">
                 <Plus className="w-3.5 h-3.5" /> Добавить
               </button>
             </div>
+
+            {/* Кнопки / JSON — раздельные наборы параметров */}
+            <div className="flex gap-1.5 mb-3">
+              {([["fields", "Кнопки", fieldParams], ["json", "JSON", jsonParams]] as const).map(([id, label, list]) => (
+                <button key={id} onClick={() => setEditTab(id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                    editTab === id
+                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                      : "border-border-main text-text-muted hover:border-primary/40"}`}>
+                  {label}
+                  <span className="text-[10px] text-text-muted/70">{list.length}</span>
+                </button>
+              ))}
+            </div>
+
+            {editTab === "json" && (
+              <div className="rounded-lg px-3 py-2.5 mb-3 border border-border-main bg-bg-subtle text-xs text-text-muted space-y-1">
+                <p className="font-semibold text-text-main">Как подставить тело в код</p>
+                <p>В «Значение в коде» впишите плейсхолдер, который стоит в скрипте <b>внутри кавычек</b> — тогда вставленный JSON попадёт в переменную как строка:</p>
+                <pre className="bg-[var(--color-code-bg)] rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">{`JSON_BODY = """__JSON_BODY__"""`}</pre>
+                <p>Скрипт разберёт её сам: <code className="font-mono">json.loads(JSON_BODY)</code>. При запуске поле принимает любое тело — оно заменит плейсхолдер целиком.</p>
+              </div>
+            )}
             {paramIssues.length > 0 && (
               <div className={`rounded-lg px-3 py-2.5 mb-3 border text-xs space-y-1 ${
                 hardIssues.length > 0
@@ -631,13 +766,15 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
                 ))}
               </div>
             )}
-            {params.length === 0 ? (
+            {visibleParams.length === 0 ? (
               <p className="text-xs text-text-muted bg-bg-subtle rounded-lg px-3 py-3">
-                Добавьте параметры — их значения будут подставляться в код перед выполнением
+                {editTab === "json"
+                  ? "Добавьте JSON-параметр — при запуске в это поле можно будет вставить любое тело сообщения"
+                  : "Добавьте параметры — их значения будут подставляться в код перед выполнением"}
               </p>
             ) : (
               <div className="space-y-3">
-                {params.map(p => (
+                {visibleParams.map(p => (
                   <div key={p.id} className="bg-bg-subtle rounded-lg px-3 py-3 space-y-2">
                     <div className="grid grid-cols-[1fr_1fr_1fr_28px] gap-2 items-center">
                       <div>
@@ -850,6 +987,18 @@ export default function AlertsSection() {
   };
 
   const selected = scripts.find(s => s.id === selectedId) ?? null;
+
+  // Обычные поля и JSON-тела разведены по вкладкам: JSON-поле высокое и
+  // вытесняло бы остальные параметры за пределы экрана.
+  const [paramTab, setParamTab] = useState<"fields" | "json">("fields");
+  const runParams     = selected?.dynamic_params ?? [];
+  const runJsonParams = runParams.filter(isJsonParam);
+  const runFieldParams = runParams.filter(p => !isJsonParam(p));
+  // Если у скрипта только JSON-параметры — показываем их, вкладок не будет.
+  const visibleRunParams =
+    runFieldParams.length === 0 ? runJsonParams :
+    runJsonParams.length  === 0 ? runFieldParams :
+    paramTab === "json"          ? runJsonParams : runFieldParams;
 
   // Незаполненные параметры блокируют запуск: пустое поле больше не подменяется
   // образцом из шаблона, поэтому скрипт с пустым параметром просто не поедет.
@@ -1266,11 +1415,32 @@ export default function AlertsSection() {
                   )}
                 </div>
 
+                {/* Переключатель показывается только когда у скрипта есть оба вида
+                    параметров — иначе он был бы лишним элементом. */}
+                {runFieldParams.length > 0 && runJsonParams.length > 0 && (
+                  <div className="flex gap-1.5">
+                    {([["fields", "Поля", runFieldParams], ["json", "JSON", runJsonParams]] as const).map(([id, label, list]) => {
+                      const unfilled = list.filter(p => !!p.placeholder && !(values[p.id] ?? "").trim()).length;
+                      return (
+                        <button key={id} onClick={() => setParamTab(id)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                            paramTab === id
+                              ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                              : "border-border-main text-text-muted hover:border-primary/40"}`}>
+                          {label}
+                          <span className="text-[10px] text-text-muted/70">{list.length}</span>
+                          {unfilled > 0 && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" title={`${unfilled} не заполнено`} />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Dynamic param inputs — typed.
                     Значение больше не подменяется образцом (p.placeholder): образец
                     показывается серой подсказкой внутри поля, а пустое поле остаётся
                     пустым и блокирует запуск. */}
-                {selected.dynamic_params.map(p => {
+                {visibleRunParams.map(p => {
                   const isMissing = !!p.placeholder && !(values[p.id] ?? "").trim();
                   return (
                     <div key={p.id}>

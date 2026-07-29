@@ -501,8 +501,23 @@ export interface TestDataConnection {
   schema_name:       string;
   created_at:        string;
   updated_at:        string;
-  cached_schema:     Record<string, { name: string; type: string; nullable: boolean; default: string | null }[]> | null;
+  cached_schema:     Record<string, SchemaColumn[]> | null;
   schema_updated_at: string | null;
+}
+
+/** Колонка из интроспекции БД.
+ *  Первые четыре поля были всегда; остальные добавлены для генератора данных
+ *  и приходят из JDBC-метаданных — у старых кэшей схемы их может не быть. */
+export interface SchemaColumn {
+  name:           string;
+  type:           string;
+  nullable:       boolean;
+  default:        string | null;
+  pk?:            boolean;
+  autoincrement?: boolean;
+  unique?:        boolean;
+  /** Внешний ключ: на какую таблицу и колонку ссылается. */
+  fk?:            { table: string; column: string } | null;
 }
 
 export interface TestDataConnectionCreate {

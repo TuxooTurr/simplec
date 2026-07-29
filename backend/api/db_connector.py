@@ -169,10 +169,83 @@ def get_db_connection(conn_config: dict):
     return conn, driver
 
 
-def introspect_schema(conn) -> dict:
+def _safe_meta(fn, default):
+    """Необязательные метаданные: экзотический драйвер не должен ронять интроспекцию.
+
+    getPrimaryKeys/getImportedKeys/getIndexInfo объявлены в JDBC, но у части
+    драйверов бросают исключение или возвращают мусор. Отсутствие этих данных
+    ухудшает подсказки, но не должно лишать пользователя схемы целиком.
+    """
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def _primary_keys(meta, tschema, tname) -> set:
+    def _run():
+        out, rs = set(), meta.getPrimaryKeys(None, tschema, tname)
+        try:
+            while rs.next():
+                out.add(rs.getString("COLUMN_NAME"))
+        finally:
+            rs.close()
+        return out
+    return _safe_meta(_run, set())
+
+
+def _foreign_keys(meta, tschema, tname) -> dict:
+    """{колонка-источник: {"table": "схема.таблица", "column": "колонка"}}.
+
+    Это главный источник иерархии для генератора данных: связь
+    conference_members.conference_id → conference.id читается из самой БД,
+    а не описывается пользователем руками.
+    """
+    def _run():
+        out, rs = {}, meta.getImportedKeys(None, tschema, tname)
+        try:
+            while rs.next():
+                pk_schema = rs.getString("PKTABLE_SCHEM")
+                pk_table = rs.getString("PKTABLE_NAME")
+                out[rs.getString("FKCOLUMN_NAME")] = {
+                    "table": f"{pk_schema}.{pk_table}" if pk_schema else pk_table,
+                    "column": rs.getString("PKCOLUMN_NAME"),
+                }
+        finally:
+            rs.close()
+        return out
+    return _safe_meta(_run, {})
+
+
+def _unique_columns(meta, tschema, tname) -> set:
+    """Колонки под уникальным индексом — по одной на индекс (составные пропускаем:
+    для них правило заполнения задаётся вручную)."""
+    def _run():
+        by_index, rs = {}, meta.getIndexInfo(None, tschema, tname, True, True)
+        try:
+            while rs.next():
+                col = rs.getString("COLUMN_NAME")
+                idx = rs.getString("INDEX_NAME")
+                if col and idx:
+                    by_index.setdefault(idx, []).append(col)
+        finally:
+            rs.close()
+        return {cols[0] for cols in by_index.values() if len(cols) == 1}
+    return _safe_meta(_run, set())
+
+
+def introspect_schema(conn, max_tables: int = 200) -> dict:
     """
     Generic-интроспекция через стандартный java.sql.DatabaseMetaData — работает
     для любого JDBC-совместимого драйвера одинаково (PostgreSQL/MySQL/Oracle/свой).
+
+    Формат намеренно сохранён прежним — {"схема.таблица": [колонки]} — чтобы не
+    ломать кэш подключений, текстовое описание для LLM и типы на фронте. Каждая
+    колонка дополнена признаками, нужными генератору данных:
+      pk            — входит в первичный ключ
+      autoincrement — значение проставляет сама БД
+      unique        — под уникальным индексом
+      fk            — {"table", "column"} или None
     """
     jconn = conn.jconn
     meta = jconn.getMetaData()
@@ -186,17 +259,28 @@ def introspect_schema(conn) -> dict:
         tables_rs.close()
 
     schema: dict = {}
-    for tschema, tname in tables[:200]:
+    for tschema, tname in tables[:max_tables]:
         full_name = f"{tschema}.{tname}" if tschema else tname
+        pks = _primary_keys(meta, tschema, tname)
+        fks = _foreign_keys(meta, tschema, tname)
+        uniques = _unique_columns(meta, tschema, tname)
+
         cols_rs = meta.getColumns(None, tschema, tname, "%")
         columns = []
         try:
             while cols_rs.next():
+                name = cols_rs.getString("COLUMN_NAME")
+                # IS_AUTOINCREMENT появился в JDBC 4.0 — у старых драйверов колонки нет
+                auto = _safe_meta(lambda: cols_rs.getString("IS_AUTOINCREMENT"), "") or ""
                 columns.append({
-                    "name": cols_rs.getString("COLUMN_NAME"),
+                    "name": name,
                     "type": cols_rs.getString("TYPE_NAME"),
                     "nullable": cols_rs.getInt("NULLABLE") == 1,
                     "default": cols_rs.getString("COLUMN_DEF"),
+                    "pk": name in pks,
+                    "autoincrement": auto.upper() == "YES",
+                    "unique": name in uniques,
+                    "fk": fks.get(name),
                 })
         finally:
             cols_rs.close()

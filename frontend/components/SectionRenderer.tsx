@@ -7,6 +7,7 @@ import EtalonsSection from "./sections/EtalonsSection";
 import BugsSection from "./sections/BugsSection";
 import AlertsSection from "./sections/AlertsSection";
 import MetricsSection from "./sections/MetricsSection";
+import EventGeneratorsSection from "./sections/EventGeneratorsSection";
 import RevisorSection from "./sections/RevisorSection";
 import AutoModelSection from "./sections/AutoModelSection";
 import TestDataSection from "./sections/TestDataSection";
@@ -56,6 +57,7 @@ export default function SectionRenderer() {
     kafka:      <KafkaSection />,
     jobs:       <JobsSection />,
     metrics:    <MetricsSection />,
+    event_generators: <EventGeneratorsSection />,
     revisor:    <RevisorSection />,
     settings:   <SettingsSection />,
     model_bench: <ModelBenchSection />,

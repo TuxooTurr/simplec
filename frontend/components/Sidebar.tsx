@@ -31,7 +31,9 @@ const NAV: {
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText,  ai: true },
   { id: "alerts",      href: "/alerts",      label: "Генератор алертов",       Icon: Bell },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },
-  { id: "metrics",     href: "/metrics",     label: "Генератор метрик",        Icon: BarChart2,   superuserOnly: true },
+  // Генератор метрик переехал внутрь «Генераторов событий» как сценарий
+  // «Метрики ОД». Маршрут /metrics остался рабочим — старые ссылки не ломаем.
+  { id: "event_generators", href: "/event-generators", label: "Генераторы событий", Icon: BarChart2, superuserOnly: true },
   { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
   { id: "etalons",     href: "/etalons",     label: "Данные",                  Icon: BookOpen,    superuserOnly: true },
   { id: "model_bench", href: "/model-bench", label: "Тестирование моделей LLM", Icon: SplitSquareHorizontal, ai: true },

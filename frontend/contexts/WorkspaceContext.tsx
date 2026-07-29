@@ -12,6 +12,7 @@ export type SectionId =
   | "kafka"
   | "jobs"
   | "metrics"
+  | "event_generators"
   | "revisor"
   | "etalons"
   | "model_bench"

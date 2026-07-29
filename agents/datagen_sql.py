@@ -74,6 +74,102 @@ def build_select_by_marker(table: str, pk_column: str, marker_column: str,
     return sql if limit <= 0 else f"{sql} LIMIT {int(limit)}"
 
 
+def build_select_options(table: str, id_column: str, label_column: str,
+                         quote: str = '"', limit: int = 500) -> str:
+    """Список записей для выпадающего списка: id + подпись."""
+    return (f"SELECT {quote_ident(id_column, quote)}, {quote_ident(label_column, quote)} "
+            f"FROM {quote_ident(table, quote)} "
+            f"ORDER BY {quote_ident(id_column, quote)} DESC LIMIT {int(limit)}")
+
+
+def build_count_children(child_table: str, fk_column: str, quote: str = '"',
+                         marker_column: str = "") -> str:
+    """Сколько строк-детей уже привязано к родителю.
+
+    marker_column задан — считаем только помеченные тестовые: чужих участников
+    в чужой ТКС мы не считаем своими и не трогаем.
+    """
+    sql = (f"SELECT COUNT(*) FROM {quote_ident(child_table, quote)} "
+           f"WHERE {quote_ident(fk_column, quote)} = ?")
+    if marker_column:
+        sql += f" AND {quote_ident(marker_column, quote)} LIKE ?"
+    return sql
+
+
+def build_select_children_ids(child_table: str, id_column: str, fk_column: str,
+                              quote: str = '"', marker_column: str = "",
+                              limit: int = 500) -> str:
+    """Идентификаторы детей — чтобы удалять адресно, а не условием по таблице."""
+    sql = (f"SELECT {quote_ident(id_column, quote)} FROM {quote_ident(child_table, quote)} "
+           f"WHERE {quote_ident(fk_column, quote)} = ?")
+    if marker_column:
+        sql += f" AND {quote_ident(marker_column, quote)} LIKE ?"
+    return sql + f" ORDER BY {quote_ident(id_column, quote)} DESC LIMIT {int(limit)}"
+
+
+def build_update_column(table: str, column: str, key_column: str,
+                        quote: str = '"', allowed_columns: Optional[Iterable[str]] = None) -> str:
+    """UPDATE ровно одной колонки по первичному ключу.
+
+    Колонка обязана быть в allowed_columns: генератор правит существующие —
+    возможно боевые — записи, и менять он вправе только счётчик участников.
+    WHERE только по ключу: условие без ключа задело бы всю таблицу.
+    """
+    allowed = set(allowed_columns or [])
+    if not allowed:
+        raise SqlBuildError("Не задан список колонок, разрешённых к обновлению")
+    if column not in allowed:
+        raise SqlBuildError(f"Колонку {column!r} обновлять нельзя. Разрешены: {sorted(allowed)}")
+    sql = (f"UPDATE {quote_ident(table, quote)} SET {quote_ident(column, quote)} = ? "
+           f"WHERE {quote_ident(key_column, quote)} = ?")
+    assert_safe_update(sql)
+    return sql
+
+
+def build_delete_by_ids(table: str, id_column: str, ids: list, quote: str = '"') -> str:
+    """DELETE строго по перечню идентификаторов.
+
+    Никаких условий вида «по родителю» или «по метке» в самом DELETE: список id
+    заранее получен отдельным SELECT и проверен. Ошибка в условии здесь стоила бы
+    удалённых чужих строк.
+    """
+    if not ids:
+        raise SqlBuildError("Не указаны строки для удаления")
+    if len(ids) > MAX_ROWS_PER_ACTION:
+        raise SqlBuildError(f"За раз можно удалить не больше {MAX_ROWS_PER_ACTION} строк")
+    marks = ", ".join("?" for _ in ids)
+    sql = (f"DELETE FROM {quote_ident(table, quote)} "
+           f"WHERE {quote_ident(id_column, quote)} IN ({marks})")
+    assert_safe_delete(sql)
+    return sql
+
+
+def assert_safe_update(sql: str) -> None:
+    """UPDATE допустим только с WHERE и без вложенных выражений."""
+    cleaned = (sql or "").strip()
+    if not re.match(r"^\s*UPDATE\s+", cleaned, re.IGNORECASE):
+        raise SqlBuildError("Ожидался UPDATE")
+    if not re.search(r"\bWHERE\b", cleaned, re.IGNORECASE):
+        raise SqlBuildError("UPDATE без WHERE запрещён — задело бы всю таблицу")
+    if ";" in cleaned.rstrip(";"):
+        raise SqlBuildError("Несколько выражений в одном запросе запрещены")
+    if re.search(r"\b(DELETE|DROP|TRUNCATE|ALTER|CREATE|INSERT)\b", cleaned, re.IGNORECASE):
+        raise SqlBuildError("Посторонняя операция внутри UPDATE")
+
+
+def assert_safe_delete(sql: str) -> None:
+    """DELETE допустим только с WHERE ... IN (...) по идентификаторам."""
+    cleaned = (sql or "").strip()
+    if not re.match(r"^\s*DELETE\s+FROM\s+", cleaned, re.IGNORECASE):
+        raise SqlBuildError("Ожидался DELETE FROM")
+    if not re.search(r"\bWHERE\b.+\bIN\s*\(", cleaned, re.IGNORECASE):
+        raise SqlBuildError("DELETE разрешён только по перечню идентификаторов")
+    if ";" in cleaned.rstrip(";"):
+        raise SqlBuildError("Несколько выражений в одном запросе запрещены")
+    if re.search(r"\b(UPDATE|DROP|TRUNCATE|ALTER|CREATE|INSERT)\b", cleaned, re.IGNORECASE):
+        raise SqlBuildError("Посторонняя операция внутри DELETE")
+
+
 def assert_insert_only(sql: str) -> None:
     """Последний барьер перед отправкой в БД.
 

@@ -123,6 +123,27 @@ PRESET_TCS = {
     ],
 }
 
+# Конфигурация синхронизации участников: пользователь выбирает существующую ТКС
+# и говорит, сколько в ней должно быть участников.
+SYNC_TCS = {
+    "marker": TEST_MARKER,
+    # Писать разрешено только в эти таблицы.
+    "allowed_tables": ["tcs", "tcsmember"],
+
+    "parent_table": "tcs",
+    "parent_id_column": "id",
+    "parent_label_column": "nm",          # что видно в выпадающем списке
+    "parent_count_column": "cnt",         # счётчик участников
+    # В родительской строке — возможно боевой — правим ровно одну колонку.
+    "parent_updatable_columns": ["cnt"],
+
+    "child_table": "tcsmember",
+    "child_id_column": "id",
+    "child_fk_column": "tcs",             # связь на tcs.id
+    "child_marker_column": "name",        # по метке отличаем своих от чужих
+    "child_rules": tcsmember_rules(),
+}
+
 ALL_PRESETS = [PRESET_TCS]
 
 

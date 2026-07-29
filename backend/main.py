@@ -52,6 +52,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, kafka_explorer, jira_defects, model_bench, requirements,
+    datagen,
 )
 from db.postgres import init_db
 
@@ -175,6 +176,7 @@ app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(kafka_explorer.router)
 app.include_router(model_bench.router)
+app.include_router(datagen.router)
 app.include_router(requirements.router)
 
 # Раздача Next.js static build (если собран)

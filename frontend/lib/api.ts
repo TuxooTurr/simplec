@@ -1162,3 +1162,46 @@ export async function generateRequirementDoc(id: string, provider: string): Prom
     body: JSON.stringify({ provider }),
   });
 }
+
+// ─── Генератор данных: сценарий ТКС ────────────────────────────────────────
+
+export interface TcsParent {
+  id:    number;
+  label: string;
+}
+
+export interface TcsSyncPlan {
+  current:     number;
+  target:      number;
+  to_insert:   number;
+  to_delete:   number;
+  count_after: number;
+  summary:     string;
+}
+
+export interface TcsSyncResult {
+  inserted:      number;
+  deleted:       number;
+  count_updated: boolean;
+  sample:        Record<string, unknown>[];
+}
+
+export async function getTcsParents(connectionId: string): Promise<{ items: TcsParent[]; db_name: string }> {
+  return fetchJson(`/api/datagen/tcs/parents?connection_id=${encodeURIComponent(connectionId)}`);
+}
+
+export async function planTcsSync(body: { connection_id: string; parent_id: number; target: number }): Promise<TcsSyncPlan> {
+  return fetchJson("/api/datagen/tcs/plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function runTcsSync(body: { connection_id: string; parent_id: number; target: number }): Promise<TcsSyncResult> {
+  return fetchJson("/api/datagen/tcs/sync", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}

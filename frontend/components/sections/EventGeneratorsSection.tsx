@@ -5,6 +5,7 @@ import { BarChart2, ChevronLeft, Database, Users, Zap } from "lucide-react";
 import type { ComponentType } from "react";
 
 import MetricsSection from "./MetricsSection";
+import TcsGeneratorSection from "./TcsGeneratorSection";
 
 /* ── Реестр генераторов ───────────────────────────────────────────────────
    Раздел — общий вход: плашки сверху, переход внутрь раскрывает интерфейс
@@ -35,10 +36,10 @@ const GENERATORS: Generator[] = [
   {
     id: "tks",
     title: "ТКС",
-    subtitle: "Создание ТКС и участников в базе данных",
+    subtitle: "Участники выбранной ТКС: добавить, убавить, обновить счётчик",
     Icon: Users,
     accent: "from-emerald-500 to-teal-500",
-    soon: "Настраивается",
+    Component: TcsGeneratorSection,
   },
 ];
 

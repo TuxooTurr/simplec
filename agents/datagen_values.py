@@ -32,7 +32,7 @@ ALL_RULES = {
 # Метка, обязательная для отличия сгенерированных данных от боевых.
 DEFAULT_TEST_MARKER = "ТЕСТ"
 
-_PLACEHOLDER = re.compile(r"\{(n|rnd|uuid|marker)\}")
+_PLACEHOLDER = re.compile(r"\{(n|rnd|uuid|marker|col:[A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 class RuleError(ValueError):
@@ -65,12 +65,15 @@ def validate_rule(rule: dict) -> None:
 
 
 def generate(rule: dict, index: int = 0, parent_value: Any = None,
-             marker: str = DEFAULT_TEST_MARKER, rnd: Optional[random.Random] = None) -> Any:
+             marker: str = DEFAULT_TEST_MARKER, rnd: Optional[random.Random] = None,
+             row: Optional[dict[str, Any]] = None) -> Any:
     """Значение по правилу.
 
     index — номер строки (с 0) для {n} и sequence;
     parent_value — значение ключа родителя для from_parent;
-    rnd — источник случайности (передаётся ради воспроизводимости в тестах).
+    rnd — источник случайности (передаётся ради воспроизводимости в тестах);
+    row — уже заполненные колонки этой же строки: нужны для {col:имя}, когда
+          одно поле обязано повторять другое (в tcs номер продублирован в nm).
     """
     validate_rule(rule)
     kind = rule["rule"]
@@ -96,13 +99,25 @@ def generate(rule: dict, index: int = 0, parent_value: Any = None,
         days = r.randint(int(rule.get("days_min", 0)), int(rule.get("days_max", 0)))
         return (datetime.now(timezone.utc) + timedelta(days=days)).replace(microsecond=0).isoformat(sep=" ")
     if kind == PATTERN:
+        done = row or {}
+
         def sub(m):
             token = m.group(1)
             if token == "n":      return str(index + 1)
             if token == "rnd":    return str(r.randint(1000, 9999))
             if token == "uuid":   return str(uuid.uuid4())
             if token == "marker": return marker
+            if token.startswith("col:"):
+                col = token[4:]
+                if col not in done:
+                    raise RuleError(
+                        f"{{col:{col}}} ссылается на колонку {col!r}, которой ещё нет. "
+                        f"Объявите её выше в правилах"
+                    )
+                v = done[col]
+                return "" if v is None else str(v)
             return m.group(0)
+
         return _PLACEHOLDER.sub(sub, str(rule["value"]))
 
     raise RuleError(f"Правило не реализовано: {kind}")
@@ -119,9 +134,10 @@ def build_row(rules: dict[str, dict], index: int = 0,
     """
     parents = parent_values or {}
     row: dict[str, Any] = {}
+    # Порядок объявления важен: {col:имя} видит только колонки, заполненные выше.
     for column, rule in (rules or {}).items():
         row[column] = generate(rule, index=index, parent_value=parents.get(column),
-                               marker=marker, rnd=rnd)
+                               marker=marker, rnd=rnd, row=row)
     return row
 
 

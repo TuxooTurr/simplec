@@ -34,19 +34,20 @@ class PromptTemplateManager:
             ],
             system_additions="""
 СПЕЦИФИКА API-ТЕСТОВ:
-1. В testData ОБЯЗАТЕЛЬНО указывай:
-   - HTTP метод (GET/POST/PUT/DELETE)
-   - URL эндпоинта с параметрами
-   - Headers (Authorization, Content-Type)
-   - Request body (JSON/XML)
-   
-2. В expectedResult ОБЯЗАТЕЛЬНО проверяй:
-   - HTTP статус код (200, 201, 400, 401, 403, 404, 500)
-   - Структуру response body
-   - Конкретные значения полей
+1. Сам шаг — бизнес-действие («Создать перевод на 1 000 ₽»), без метода и эндпоинта.
+
+2. В зоне API ОБЯЗАТЕЛЬНО описывай и запрос, и ответ:
+   - HTTP метод (GET/POST/PUT/DELETE) и URL эндпоинта с параметрами
+   - Заголовки (Authorization, Content-Type)
+   - Тело запроса (JSON/XML) с конкретными значениями
+   - Код ответа (200, 201, 400, 401, 403, 404, 500)
+   - Структуру тела ответа и конкретные значения полей
    - Время ответа (если указано в требованиях)
 
-3. ОБЯЗАТЕЛЬНЫЕ НЕГАТИВНЫЕ КЕЙСЫ:
+3. В testData — только входные данные на языке предметной области
+   (сумма, счёт, тип заявки), без метода, URL и JSON.
+
+4. ОБЯЗАТЕЛЬНЫЕ НЕГАТИВНЫЕ КЕЙСЫ:
    - Невалидный токен → 401
    - Нет прав доступа → 403
    - Ресурс не найден → 404
@@ -54,27 +55,30 @@ class PromptTemplateManager:
    - Превышение лимитов → 429
 """,
             example_steps="""
-<step index="0">
-  <description><![CDATA[Подготовка тестовых данных]]></description>
-  <testData><![CDATA[
-endpoint: POST /api/v1/transactions
-headers: {"Authorization": "Bearer {token}", "Content-Type": "application/json"}
-body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "40817810000000000001"}
-  ]]></testData>
-  <expectedResult><![CDATA[Токен получен, данные подготовлены]]></expectedResult>
-</step>
-<step index="1">
-  <description><![CDATA[Отправить POST запрос на создание транзакции]]></description>
-  <testData><![CDATA[curl -X POST /api/v1/transactions -H "Authorization: Bearer {token}" -d '{"amount": 1000}']]></testData>
-  <expectedResult><![CDATA[<strong>API:</strong>
-<ul>
-<li>HTTP Status: 201 Created</li>
-<li>Response содержит transactionId</li>
-<li>Поле status = "PENDING"</li>
-</ul>
-<strong>БД:</strong>
-<ul><li>Запись создана в таблице transactions</li></ul>]]></expectedResult>
-</step>
+**Шаг 1:** Войти в систему под клиентом с активным счётом
+- Тестовые данные: логин client_test, счёт 40817810000000000001 с остатком 50 000 ₽
+- UI: Открыт личный кабинет, виден остаток по счёту
+- API: POST /api/v1/auth/login
+  Тело запроса: {"login": "client_test", "password": "***"}
+  Ответ: 200 OK, тело содержит access_token
+- БД: Изменений в БД нет
+
+**Шаг 2:** Создать перевод на 1 000 ₽ со счёта клиента
+- Тестовые данные: сумма 1000.00, валюта RUB, счёт списания 40817810000000000001
+- UI: Отображается сообщение «Перевод создан», операция появилась в истории
+- API: POST /api/v1/transactions
+  Заголовки: Authorization: Bearer {token}, Content-Type: application/json
+  Тело запроса: {"amount": 1000.00, "currency": "RUB", "accountFrom": "40817810000000000001"}
+  Ответ: 201 Created, тело содержит transactionId, поле status = "PENDING"
+- БД: таблица transactions — новая запись, amount = 1000.00, status = 'PENDING'
+
+**Шаг 3:** Повторить перевод с суммой, превышающей остаток
+- Тестовые данные: сумма 999 999.00 при остатке 49 000 ₽
+- UI: Отображается ошибка «Недостаточно средств», перевод не создан
+- API: POST /api/v1/transactions
+  Тело запроса: {"amount": 999999.00, "currency": "RUB", "accountFrom": "40817810000000000001"}
+  Ответ: 400 Bad Request, тело {"error": "INSUFFICIENT_FUNDS"}
+- БД: таблица transactions — новых записей нет
 """,
             coverage_rules="""
 - Все HTTP методы из требований
@@ -99,7 +103,7 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
             ],
             system_additions="""
 СПЕЦИФИКА UI-ТЕСТОВ:
-1. В description используй ДЕЙСТВИЯ пользователя:
+1. В шаге используй ДЕЙСТВИЯ пользователя:
    - "Нажать кнопку X"
    - "Ввести значение Y в поле Z"
    - "Выбрать пункт меню"
@@ -110,10 +114,10 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
    - Вводимые значения
    - Путь навигации
 
-3. В expectedResult РАЗДЕЛЯЙ проверки:
-   - Визуальные (что видит пользователь)
-   - Функциональные (что происходит)
-   - Данные (что сохраняется)
+3. РАЗДЕЛЯЙ проверки по зонам:
+   - UI — что видит пользователь
+   - API — какие запросы уходят и что возвращают (метод, тело, код, ответ)
+   - БД — что сохраняется: таблица, поля, значения
 
 4. ОБЯЗАТЕЛЬНЫЕ ПРОВЕРКИ:
    - Валидация форм (пустые поля, некорректные данные)
@@ -122,31 +126,25 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
    - Успешные уведомления
 """,
             example_steps="""
-<step index="0">
-  <description><![CDATA[Подготовка: открыть рабочий стенд приложения]]></description>
-  <testData><![CDATA[URL: https://example.ru/app]]></testData>
-  <expectedResult><![CDATA[Рабочая область приложения открыта]]></expectedResult>
-</step>
-<step index="1">
-  <description><![CDATA[Открыть форму создания платежа]]></description>
-  <testData><![CDATA[Меню → Платежи → Создать новый]]></testData>
-  <expectedResult><![CDATA[<strong>UI:</strong>
-<ul>
-<li>Форма "Новый платёж" отображается</li>
-<li>Поля: Получатель, Сумма, Назначение — пустые</li>
-<li>Кнопка "Отправить" неактивна</li>
-</ul>]]></expectedResult>
-</step>
-<step index="2">
-  <description><![CDATA[Заполнить обязательные поля]]></description>
-  <testData><![CDATA[Получатель: "ООО Тест", Сумма: 1000.00, Назначение: "Оплата услуг"]]></testData>
-  <expectedResult><![CDATA[<strong>UI:</strong>
-<ul>
-<li>Поля заполнены введёнными значениями</li>
-<li>Кнопка "Отправить" стала активной</li>
-<li>Ошибок валидации нет</li>
-</ul>]]></expectedResult>
-</step>
+**Шаг 1:** Открыть форму создания платежа
+- Тестовые данные: раздел «Платежи» → «Создать новый»
+- UI: Форма «Новый платёж» отображается; поля Получатель, Сумма, Назначение пустые; кнопка «Отправить» неактивна
+- API: Запросов к API нет
+- БД: Изменений в БД нет
+
+**Шаг 2:** Заполнить обязательные поля платежа
+- Тестовые данные: Получатель «ООО Тест», Сумма 1000.00, Назначение «Оплата услуг»
+- UI: Поля заполнены введёнными значениями, ошибок валидации нет, кнопка «Отправить» стала активной
+- API: Запросов к API нет
+- БД: Изменений в БД нет
+
+**Шаг 3:** Отправить платёж
+- Тестовые данные: Не требуются
+- UI: Отображается уведомление «Платёж отправлен», форма закрылась, платёж виден в списке
+- API: POST /api/v1/payments
+  Тело запроса: {"recipient": "ООО Тест", "amount": 1000.00, "purpose": "Оплата услуг"}
+  Ответ: 201 Created, тело {"paymentId": "PAY-001", "status": "NEW"}
+- БД: таблица payments — новая запись, amount = 1000.00, status = 'NEW'
 """,
             coverage_rules="""
 - Все элементы интерфейса из требований
@@ -173,16 +171,16 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
 СПЕЦИФИКА БИЗНЕС-ЛОГИКИ:
 1. КАЖДОЕ условие if/else = ОТДЕЛЬНЫЙ тест-кейс
 
-2. В testData указывай ВСЕ входные параметры:
+2. В testData указывай ВСЕ входные параметры на бизнес-языке:
    - Значения для расчётов
    - Статусы объектов
    - Роли пользователей
    - Даты и периоды
 
-3. В expectedResult ТОЧНЫЕ значения:
-   - Результаты расчётов с числами
-   - Итоговые статусы
-   - Изменения в данных
+3. В зонах ТОЧНЫЕ значения:
+   - UI — итог расчёта так, как его видит пользователь
+   - API — вызываемый метод, тело запроса и структура ответа с числами
+   - БД — таблица и поля, куда лёг результат расчёта
 
 4. МАТРИЦА ПОКРЫТИЯ:
    - Все ветвления логики
@@ -191,27 +189,27 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
    - Исключения из правил
 """,
             example_steps="""
-<step index="0">
-  <description><![CDATA[Подготовка данных для расчёта комиссии]]></description>
-  <testData><![CDATA[
-Тип клиента: "Premium"
-Сумма операции: 100 000.00 RUB
-Тариф: "Стандартный"
-Правило: если сумма > 50000 и клиент Premium → комиссия 0.5%
-  ]]></testData>
-  <expectedResult><![CDATA[Данные подготовлены для теста]]></expectedResult>
-</step>
-<step index="1">
-  <description><![CDATA[Выполнить расчёт комиссии]]></description>
-  <testData><![CDATA[Вызов: calculateCommission(amount=100000, clientType="Premium")]]></testData>
-  <expectedResult><![CDATA[<strong>Расчёт:</strong>
-<ul>
-<li>Комиссия = 100000 × 0.5% = 500.00 RUB</li>
-<li>Применено правило: "Premium клиент, сумма > 50000"</li>
-</ul>
-<strong>БД:</strong>
-<ul><li>Запись в commission_log с amount=500.00</li></ul>]]></expectedResult>
-</step>
+**Шаг 1:** Подготовить клиента с тарифом Premium
+- Тестовые данные: тип клиента Premium, тариф «Стандартный»
+- UI: В карточке клиента отображается тариф Premium
+- API: Запросов к API нет
+- БД: таблица clients — client_type = 'PREMIUM', tariff = 'STANDARD'
+
+**Шаг 2:** Провести операцию на 100 000 ₽ и проверить удержанную комиссию
+- Тестовые данные: сумма операции 100 000.00 RUB; правило — сумма > 50 000 и клиент Premium → комиссия 0.5%
+- UI: В деталях операции показана комиссия 500.00 ₽ и применённый тариф Premium
+- API: POST /api/v1/operations
+  Тело запроса: {"amount": 100000.00, "clientType": "PREMIUM"}
+  Ответ: 200 OK, тело {"commission": 500.00, "rule": "PREMIUM_OVER_50000"}
+- БД: таблица commission_log — новая запись, amount = 500.00, rule_code = 'PREMIUM_OVER_50000'
+
+**Шаг 3:** Повторить операцию на сумму ровно на границе правила
+- Тестовые данные: сумма 50 000.00 RUB (граница «больше 50 000» не превышена)
+- UI: Комиссия рассчитана по базовой ставке, льгота Premium не применена
+- API: POST /api/v1/operations
+  Тело запроса: {"amount": 50000.00, "clientType": "PREMIUM"}
+  Ответ: 200 OK, тело {"commission": 500.00, "rule": "BASE"}
+- БД: таблица commission_log — запись с rule_code = 'BASE'
 """,
             coverage_rules="""
 - Каждая ветка if/else/switch
@@ -239,7 +237,8 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
    - Получатель
    - Посредники (ESB, очереди)
 
-2. В testData:
+2. Сам шаг — бизнес-действие («Создать заказ и дождаться передачи во внешнюю
+   систему»). Технику описывай в зоне API:
    - Формат сообщения (JSON/XML/Protobuf)
    - Топик/очередь
    - Correlation ID
@@ -259,29 +258,28 @@ body: {"amount": 1000.00, "currency": "RUB", "accountFrom": "4081781000000000000
    - Транзакционность
 """,
             example_steps="""
-<step index="0">
-  <description><![CDATA[Подготовка: настроить мок внешней системы]]></description>
-  <testData><![CDATA[
-Mock URL: http://mock-service:8080/api/external
-Expected request: POST /process
-Response: {"status": "OK", "processId": "12345"}
-Delay: 100ms
-  ]]></testData>
-  <expectedResult><![CDATA[Мок сконфигурирован и доступен]]></expectedResult>
-</step>
-<step index="1">
-  <description><![CDATA[Инициировать отправку данных во внешнюю систему]]></description>
-  <testData><![CDATA[
-Сообщение в Kafka топик: "outbound-events"
-Payload: {"eventType": "ORDER_CREATED", "orderId": "ORD-001"}
-  ]]></testData>
-  <expectedResult><![CDATA[<strong>Kafka:</strong>
-<ul><li>Сообщение отправлено в топик</li></ul>
-<strong>Внешняя система:</strong>
-<ul><li>Получен POST запрос с корректным payload</li></ul>
-<strong>БД:</strong>
-<ul><li>Статус интеграции = "SENT"</li></ul>]]></expectedResult>
-</step>
+**Шаг 1:** Подготовить внешнюю систему-получатель к приёму заказов
+- Тестовые данные: заглушка внешнего сервиса отвечает успехом с задержкой 100 мс
+- UI: Визуальных изменений нет
+- API: Заглушка на POST http://mock-service:8080/api/external/process
+  Ответ: 200 OK, тело {"status": "OK", "processId": "12345"}, задержка 100 мс
+- БД: Изменений в БД нет
+
+**Шаг 2:** Создать заказ и дождаться его передачи во внешнюю систему
+- Тестовые данные: заказ ORD-001, товар «Ноутбук», количество 1
+- UI: Заказ создан, в карточке заказа статус интеграции «Отправлен»
+- API: Событие в топик Kafka outbound-events
+  Сообщение: {"eventType": "ORDER_CREATED", "orderId": "ORD-001"}
+  Внешняя система получила POST /process с тем же orderId
+  Ответ: 200 OK, тело {"status": "OK", "processId": "12345"}
+- БД: таблица integration_log — запись по ORD-001, status = 'SENT', retry_count = 0
+
+**Шаг 3:** Повторно отправить то же событие и проверить защиту от дублей
+- Тестовые данные: повторная публикация события по заказу ORD-001
+- UI: В карточке заказа по-прежнему одна отправка, дублей нет
+- API: Повторное сообщение в топик outbound-events с тем же orderId
+  Внешняя система повторный POST /process не получает — сообщение отброшено как дубль
+- БД: таблица integration_log — новых записей по ORD-001 не появилось
 """,
             coverage_rules="""
 - Успешный обмен данными
@@ -326,31 +324,27 @@ Payload: {"eventType": "ORDER_CREATED", "orderId": "ORD-001"}
    - Шифрование при передаче/хранении
 """,
             example_steps="""
-<step index="0">
-  <description><![CDATA[Подготовка: создать пользователей с разными ролями]]></description>
-  <testData><![CDATA[
-user_admin: role=ADMIN, token=token_admin
-user_manager: role=MANAGER, token=token_manager  
-user_viewer: role=VIEWER, token=token_viewer
-  ]]></testData>
-  <expectedResult><![CDATA[Пользователи созданы, токены получены]]></expectedResult>
-</step>
-<step index="1">
-  <description><![CDATA[Попытка удаления записи с ролью VIEWER]]></description>
-  <testData><![CDATA[
-DELETE /api/v1/records/123
-Authorization: Bearer {token_viewer}
-  ]]></testData>
-  <expectedResult><![CDATA[<strong>API:</strong>
-<ul>
-<li>HTTP Status: 403 Forbidden</li>
-<li>Response: {"error": "Access denied", "required_role": "ADMIN"}</li>
-</ul>
-<strong>БД:</strong>
-<ul><li>Запись НЕ удалена</li></ul>
-<strong>Логи:</strong>
-<ul><li>Зафиксирована попытка несанкционированного доступа</li></ul>]]></expectedResult>
-</step>
+**Шаг 1:** Подготовить пользователей с ролями «Администратор» и «Наблюдатель»
+- Тестовые данные: user_admin (Администратор), user_viewer (Наблюдатель), запись №123
+- UI: Оба пользователя заведены и активны
+- API: POST /api/v1/auth/login для каждого пользователя
+  Ответ: 200 OK, тело содержит access_token
+- БД: таблица users — две записи, роли ADMIN и VIEWER
+
+**Шаг 2:** Под наблюдателем попытаться удалить чужую запись
+- Тестовые данные: пользователь user_viewer, запись №123
+- UI: Кнопка удаления недоступна; при прямом переходе показано «Недостаточно прав»
+- API: DELETE /api/v1/records/123, заголовок Authorization: Bearer {token_viewer}
+  Ответ: 403 Forbidden, тело {"error": "Access denied", "required_role": "ADMIN"}
+- БД: таблица records — запись №123 на месте, deleted_at пустой;
+  таблица audit_log — зафиксирована попытка несанкционированного доступа
+
+**Шаг 3:** Под администратором удалить ту же запись
+- Тестовые данные: пользователь user_admin, запись №123
+- UI: Запись удалена, показано подтверждение, из списка исчезла
+- API: DELETE /api/v1/records/123, заголовок Authorization: Bearer {token_admin}
+  Ответ: 204 No Content
+- БД: таблица records — у записи №123 проставлен deleted_at
 """,
             coverage_rules="""
 - Все роли × все действия

@@ -8,12 +8,12 @@
  * Исполнитель не задаётся из инструмента — назначается в Jira вручную.
  */
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Loader2, Plus, X, ExternalLink, Send, AlertTriangle, CheckCircle2, Settings2,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { Select } from "@/components/ui";
+import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
   getJiraSettings, saveJiraSettings, getJiraMeta, loadJiraEpics,
   createJiraDefect,
@@ -54,9 +54,9 @@ function matchPriority(hint: string, jiraPriorities: string[]): string {
 export default function JiraRegisterPanel({
   summary, description, priorityHint = "",
 }: { summary: string; description: string; priorityHint?: string }) {
-  const router = useRouter();
 
   const [settings, setSettings] = useState<JiraSettings | null>(null);
+  const [jiraSettingsOpen, setJiraSettingsOpen] = useState(false);
   const [settingsErr, setSettingsErr] = useState("");
 
   const [meta, setMeta] = useState<JiraProjectMeta | null>(null);
@@ -90,9 +90,12 @@ export default function JiraRegisterPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priorityHint, meta]);
 
-  useEffect(() => {
+  // Перечитываем после правки настроек: панель должна сразу увидеть новый токен.
+  const reloadSettings = useCallback(() => {
     getJiraSettings().then(setSettings).catch(e => setSettingsErr(String(e)));
   }, []);
+
+  useEffect(() => { reloadSettings(); }, [reloadSettings]);
 
   const tokenConfigured = Boolean(settings && (settings.token || settings.token_path));
 
@@ -183,12 +186,13 @@ export default function JiraRegisterPanel({
           <p className="text-sm font-semibold text-text-main mb-1">Jira не подключена</p>
           <p className="text-sm text-text-muted mb-3">
             Чтобы регистрировать дефекты в Jira, получите токен по логину/паролю Сигмы
-            или укажите путь к файлу токена в настройках.
+            или укажите путь к файлу токена.
           </p>
-          <button onClick={() => router.push("/settings")}
+          <button onClick={() => setJiraSettingsOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-border-main rounded-lg text-xs font-semibold text-text-muted hover:bg-bg-subtle">
-            <Settings2 className="w-3.5 h-3.5" /> Открыть настройки
+            <Settings2 className="w-3.5 h-3.5" /> Настроить подключение
           </button>
+          <JiraSettingsModal open={jiraSettingsOpen} onClose={() => { setJiraSettingsOpen(false); reloadSettings(); }} />
         </div>
       </div>
     </div>

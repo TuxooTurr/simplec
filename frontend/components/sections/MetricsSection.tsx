@@ -19,7 +19,8 @@ import {
   type ThresholdsConfig, type ThresholdRow, type HealthConfig,
   type LogEntry, type SendNowResult, type PreviewResult,
 } from "@/lib/metricsApi";
-import { INPUT_CLS, INPUT_SM, LABEL_CLS, Select } from "@/components/ui";
+import { INPUT_CLS, INPUT_SM, LABEL_CLS, SectionSettingsButton, Select } from "@/components/ui";
+import KafkaMetricsSettingsModal from "@/components/settings/KafkaMetricsSettingsModal";
 
 // ── Styles (backward-compat aliases, use <Button> where possible) ────────────
 
@@ -1735,6 +1736,7 @@ export default function MetricsSection() {
   const [metricsLoading,   setMetricsLoading]   = useState(false);
   const [error,            setError]            = useState("");
   const [showAddSystem,    setShowAddSystem]     = useState(false);
+  const [kafkaSettingsOpen, setKafkaSettingsOpen] = useState(false);
   const [showBatchMetrics, setShowBatchMetrics]  = useState(false);
   const [globalBusy,       setGlobalBusy]       = useState(false);
   const [editingMetric,    setEditingMetric]     = useState<Metric | null>(null);
@@ -1922,7 +1924,17 @@ export default function MetricsSection() {
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Обновить
         </button>
 
+        <div className="flex-1" />
+
+        {/* Настройки раздела — всегда вверху справа */}
+        <SectionSettingsButton label="Kafka" title="Подключение к Kafka" onClick={() => setKafkaSettingsOpen(true)} />
       </div>
+
+      <KafkaMetricsSettingsModal
+        open={kafkaSettingsOpen}
+        onClose={() => setKafkaSettingsOpen(false)}
+        onSaved={() => loadSystems()}
+      />
 
       {/* ── Content ────────────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden">

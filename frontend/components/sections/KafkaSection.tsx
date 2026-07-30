@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Network, Search, X, Plus, Minus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck, Settings2,
+  Network, Search, X, Plus, Minus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck,
   ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
 } from "lucide-react";
-import { ConnectionsModal, ConnectionRow, Select } from "@/components/ui";
+import { ConnectionsModal, ConnectionRow, FilePathInput, SectionSettingsButton, Select } from "@/components/ui";
 import {
   listKafkaConnections, createKafkaConnection, updateKafkaConnection, deleteKafkaConnection,
   testKafkaConnection, getKafkaTopics, fetchKafkaMessages,
@@ -361,10 +361,6 @@ export default function KafkaSection() {
           <option value="">— подключение —</option>
           {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
-        <button type="button" onClick={() => setManageOpen(true)}
-          className="flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
-          <Settings2 className="h-3.5 w-3.5" /> Подключения
-        </button>
         {/* Кол-во рабочих зон для топиков: 2–4 */}
         <div className="flex items-center gap-1 rounded-lg border border-border-main px-1.5 py-1">
           <span className="px-1 text-[11px] text-text-muted">Топики</span>
@@ -410,6 +406,8 @@ export default function KafkaSection() {
             className="rounded-lg border border-border-main p-1.5 text-text-muted hover:bg-bg-subtle">
             <RefreshCw className="h-4 w-4" />
           </button>
+          {/* Настройки раздела — всегда крайняя правая кнопка шапки */}
+          <SectionSettingsButton label="Подключения" onClick={() => setManageOpen(true)} />
         </div>
       </div>
 
@@ -627,12 +625,28 @@ function KafkaConnectionsModal({
           <div className="space-y-2 rounded-lg border border-border-main/70 bg-bg-subtle/40 p-2.5">
             <SideSwitch label="Валидировать сертификат:" left="нет" right="да" on={form.ssl_verify !== false}
               onChange={(on) => setForm({ ...form, ssl_verify: on })} />
-            <input value={form.ssl_keyfile ?? ""} onChange={(e) => setForm({ ...form, ssl_keyfile: e.target.value })}
-              placeholder="Закрытый ключ — путь на компьютере (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
-            <input value={form.ssl_certfile ?? ""} onChange={(e) => setForm({ ...form, ssl_certfile: e.target.value })}
-              placeholder="Сертификат — путь на компьютере (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
-            <input value={form.ssl_cafile ?? ""} onChange={(e) => setForm({ ...form, ssl_cafile: e.target.value })}
-              placeholder="Сертификаты доверенных CA (опц.)" className={`${INPUT} font-mono`} spellCheck={false} />
+            {/* Тот же вид, что у сертификатов GigaChat: путь руками или выбор файла. */}
+            <FilePathInput
+              value={form.ssl_keyfile ?? ""}
+              onChange={(path) => setForm({ ...form, ssl_keyfile: path })}
+              purpose={`kafka_conn_key_${editingId || "new"}`}
+              placeholder="Закрытый ключ — путь или выберите файл (опц.)"
+              accept=".pem,.key,.txt"
+            />
+            <FilePathInput
+              value={form.ssl_certfile ?? ""}
+              onChange={(path) => setForm({ ...form, ssl_certfile: path })}
+              purpose={`kafka_conn_cert_${editingId || "new"}`}
+              placeholder="Сертификат — путь или выберите файл (опц.)"
+              accept=".pem,.crt,.cer,.txt"
+            />
+            <FilePathInput
+              value={form.ssl_cafile ?? ""}
+              onChange={(path) => setForm({ ...form, ssl_cafile: path })}
+              purpose={`kafka_conn_ca_${editingId || "new"}`}
+              placeholder="CA доверенных центров — путь или файл (опц.)"
+              accept=".pem,.crt,.cer,.txt"
+            />
           </div>
         )}
         <div className="flex justify-end gap-2 pt-1">

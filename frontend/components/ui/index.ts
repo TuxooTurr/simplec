@@ -18,3 +18,5 @@ export { ThemeToggle } from "./ThemeToggle";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Tabs, type TabsProps, type Tab } from "./Tabs";
 export { FilePathInput, type FilePathInputProps } from "./FilePathInput";
+export { PasswordInput, MASKED_PLACEHOLDER, type PasswordInputProps } from "./PasswordInput";
+export { SectionSettingsButton, type SectionSettingsButtonProps } from "./SectionSettingsButton";

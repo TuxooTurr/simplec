@@ -8,7 +8,8 @@ import {
   RefreshCw, Settings, XCircle, CheckCircle2, ChevronRight,
   History, ChevronLeft, Trash2, Upload, FileText, Send,
 } from "lucide-react";
-import { Select } from "@/components/ui";
+import { Select, SectionSettingsButton } from "@/components/ui";
+import LogsVpsSettingsModal from "@/components/settings/LogsVpsSettingsModal";
 import {
   searchLogs, analyzeLogs, getLogServices, uploadLogFile, chatLogs,
   type LogEntry, type LogGroup, type LogAnalysis, type LogSearchResult,
@@ -473,6 +474,7 @@ export default function LogsSection() {
   const [connections, setConnections] = useState<LogsVpsConnection[]>([]);
   const [selectedVps, setSelectedVps] = useState("");
   const [loadingConns, setLoadingConns] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Фильтры
   const [timePreset, setTimePreset] = useState(0); // индекс в TIME_PRESETS (1ч)
@@ -748,14 +750,21 @@ export default function LogsSection() {
   /* ── Анализ загруженного файла (доступен без подключений) ────────────── */
 
   if (stage === "file") return (
-    <FileLogAnalysis
-      provider={provider}
-      vpsLabel={connections.length > 0 ? "Поиск по VPS" : "Подключить VPS"}
-      onOpenVps={() => {
-        if (connections.length > 0) setStage("search");
-        else router.push("/settings");
-      }}
-    />
+    <>
+      <FileLogAnalysis
+        provider={provider}
+        vpsLabel={connections.length > 0 ? "Поиск по VPS" : "Подключить VPS"}
+        onOpenVps={() => {
+          if (connections.length > 0) setStage("search");
+          else setSettingsOpen(true);
+        }}
+      />
+      <LogsVpsSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={loadConnections}
+      />
+    </>
   );
 
   /* ── Пустое состояние: нет подключений ───────────────────────────────── */
@@ -767,16 +776,21 @@ export default function LogsSection() {
       </div>
       <h2 className="text-lg font-bold text-text-main mb-2">Нет подключений к VPS</h2>
       <p className="text-sm text-text-muted mb-6 max-w-md">
-        Подключите платформу агрегации логов (Graylog, Elasticsearch, Loki) в настройках,
+        Подключите платформу агрегации логов (Graylog, Elasticsearch, Loki),
         чтобы начать анализ ошибок микросервисов.
       </p>
+      <LogsVpsSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={loadConnections}
+      />
       <div className="flex items-center gap-3">
         <button
-          onClick={() => router.push("/settings")}
+          onClick={() => setSettingsOpen(true)}
           className={BTN_PRIMARY}
         >
           <Settings className="w-4 h-4" />
-          Открыть настройки
+          Добавить подключение
         </button>
         <button
           onClick={() => setStage("file")}
@@ -833,7 +847,16 @@ export default function LogsSection() {
         <button onClick={loadConnections} className={BTN_GHOST} title="Обновить подключения">
           <RefreshCw className={`w-4 h-4 ${loadingConns ? "animate-spin" : ""}`} />
         </button>
+
+        {/* Настройки раздела — всегда крайняя правая кнопка шапки */}
+        <SectionSettingsButton label="Подключения" onClick={() => setSettingsOpen(true)} />
       </div>
+
+      <LogsVpsSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={loadConnections}
+      />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         <div className="max-w-4xl mx-auto p-6 space-y-6">

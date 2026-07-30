@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
-import { Scale, Search, Settings, RefreshCw, X, AlertCircle } from "lucide-react";
+import { Scale, Search, RefreshCw, X, AlertCircle } from "lucide-react";
+import { SectionSettingsButton } from "@/components/ui";
+import RevisorSettingsModal from "@/components/settings/RevisorSettingsModal";
 import {
   getRevisorData, getStands,
   podStatus, rowMatchStatus,
@@ -122,11 +123,11 @@ const INTERVALS = [
    MAIN COMPONENT
 ═══════════════════════════════════════════════════════════════════ */
 export default function RevisorSection() {
-  const router = useRouter();
   const [data,         setData]         = useState<RevisorData | null>(null);
   const [stands,       setStands]       = useState<StandConfig[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
+  const [settingsOpen,  setSettingsOpen]  = useState(false);
   const [error,        setError]        = useState("");
   const [search,       setSearch]       = useState("");
   const [intervalSecs, setIntervalSecs] = useState(0);   // 0 = off
@@ -251,14 +252,6 @@ export default function RevisorSection() {
               ))}
             </div>
             <button
-              onClick={() => router.push("/settings")}
-              className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
-                text-sm text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              Общие настройки
-            </button>
-            <button
               onClick={() => { loadData(true); if (intervalSecs > 0) setCountdown(intervalSecs); }}
               disabled={refreshing}
               className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg
@@ -268,8 +261,21 @@ export default function RevisorSection() {
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
               Обновить
             </button>
+            {/* Настройки раздела — всегда крайняя правая кнопка шапки */}
+            <SectionSettingsButton
+              label="Стенды"
+              title="Подключения к стендам"
+              onClick={() => setSettingsOpen(true)}
+              className="px-3.5 py-2 text-sm"
+            />
           </div>
         </div>
+
+        <RevisorSettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          onChanged={() => loadData(true)}
+        />
 
         {/* ── Auto-refresh progress bar ─────────────────────────── */}
         {intervalSecs > 0 && (

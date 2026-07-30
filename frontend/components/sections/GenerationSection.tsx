@@ -7,6 +7,7 @@ import {
   StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
   Copy, CheckCheck, RefreshCw, AlertCircle, PenLine, ListChecks, Save,
 } from "lucide-react";
+import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
 import ExportPanel from "@/components/ExportPanel";
@@ -188,10 +189,11 @@ export default function GenerationSection() {
   const [tdConnections, setTdConnections] = useState<TestDataConnection[]>([]);
   const [selectedTdConns, setSelectedTdConns] = useState<Set<string>>(new Set());
   const [tdDropdownOpen, setTdDropdownOpen] = useState(false);
+  const [tdSettingsOpen, setTdSettingsOpen] = useState(false);
   const tdDropdownRef = useRef<HTMLDivElement>(null);
 
   // Load test data connections
-  useEffect(() => {
+  const loadTdConnections = useCallback(() => {
     listTestDataConnections()
       .then(conns => {
         setTdConnections(conns);
@@ -201,6 +203,8 @@ export default function GenerationSection() {
       })
       .catch(() => {});
   }, []);
+
+  useEffect(() => { loadTdConnections(); }, [loadTdConnections]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -650,12 +654,19 @@ export default function GenerationSection() {
           </div>
 
           {/* Test data from DB */}
+          <TestDataSettingsModal
+            open={tdSettingsOpen}
+            onClose={() => setTdSettingsOpen(false)}
+            onChanged={loadTdConnections}
+          />
           {tdConnections.length === 0 ? (
             <div className="bg-bg-card border border-dashed border-border-main rounded-xl p-4 mb-4">
               <span className="text-sm font-medium text-text-main">Искать тестовые данные в БД</span>
               <p className="text-xs text-text-muted mt-0.5">
-                Подключите базу данных в <a href="/settings" className="text-primary underline">Настройках → Тестовые данные</a> —
-                и здесь появится выбор БД: LLM получит реальную схему и подставит SQL-запросы в шаги кейсов.
+                <button type="button" onClick={() => setTdSettingsOpen(true)} className="text-primary underline">
+                  Подключите базу данных
+                </button> — и здесь появится выбор БД: LLM получит реальную схему и подставит
+                SQL-запросы в шаги кейсов.
               </p>
             </div>
           ) : (
@@ -732,7 +743,10 @@ export default function GenerationSection() {
 
                   {selectedTdConns.size > 0 && !tdConnections.some(c => selectedTdConns.has(c.id) && c.cached_schema) && (
                     <p className="text-[11px] text-yellow-600 mt-1.5">
-                      У выбранных БД нет схемы. Выполните introspect в <a href="/settings" className="underline">Настройках</a>.
+                      У выбранных БД нет схемы. Получите её в{" "}
+                      <button type="button" onClick={() => setTdSettingsOpen(true)} className="underline">
+                        настройках подключений
+                      </button>.
                     </p>
                   )}
                 </div>

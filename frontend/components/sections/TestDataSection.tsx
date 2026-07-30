@@ -6,6 +6,8 @@ import {
   Loader2, AlertTriangle, ChevronDown, FileCode, Download,
   RefreshCw, X, Table2, Server, Ban, History, Trash2, Clock,
 } from "lucide-react";
+import { SectionSettingsButton } from "@/components/ui";
+import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useTestDataJob, type TdArchiveEntry } from "@/contexts/TestDataJobContext";
 import {
@@ -140,6 +142,7 @@ export default function TestDataSection() {
   const [selectedConns, setSelectedConns] = useState<Set<string>>(new Set());
   const [connLoading, setConnLoading] = useState(true);
   const [connDropdownOpen, setConnDropdownOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const loadConnections = useCallback(async () => {
@@ -250,16 +253,24 @@ export default function TestDataSection() {
 
   return (
     <div className="max-w-5xl mx-auto py-8 px-6 space-y-6 animate-fade-in">
-      {/* Header */}
+      {/* Header — настройки раздела всегда вверху справа */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
           <Database className="w-5 h-5 text-white" />
         </div>
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-bold text-text-main">Тестовые данные</h1>
           <p className="text-sm text-text-muted">Поиск данных во внешних БД. Только SELECT-запросы.</p>
         </div>
+        <div className="flex-1" />
+        <SectionSettingsButton label="Подключения" onClick={() => setSettingsOpen(true)} />
       </div>
+
+      <TestDataSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onChanged={loadConnections}
+      />
 
       {/* Connection selector */}
       <div className="bg-bg-card rounded-xl border border-border-main p-4 space-y-3">
@@ -277,8 +288,10 @@ export default function TestDataSection() {
         ) : connections.length === 0 ? (
           <div className="text-sm text-text-muted py-4 text-center">
             <Server className="w-8 h-8 mx-auto mb-2 text-text-muted/40" />
-            Нет подключений. Добавьте базы данных в{" "}
-            <a href="/settings" className="text-primary hover:underline">Настройках</a>.
+            Нет подключений.{" "}
+            <button type="button" onClick={() => setSettingsOpen(true)} className="text-primary hover:underline">
+              Добавить базу данных
+            </button>.
           </div>
         ) : (
           <div className="relative" ref={dropdownRef}>

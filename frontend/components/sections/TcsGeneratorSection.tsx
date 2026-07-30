@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import {
   AlertTriangle, CheckCircle2, Database, Loader2, Minus, Play, Plus,
-  RefreshCw, Settings, Users,
+  RefreshCw, Users,
 } from "lucide-react";
 
-import { Select } from "@/components/ui";
+import { SectionSettingsButton, Select } from "@/components/ui";
+import TcsSettingsModal from "@/components/settings/TcsSettingsModal";
+import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import {
   getTcsParents, planTcsSync, runTcsSync,
   listTestDataConnections,
@@ -29,11 +30,11 @@ const MAX_TARGET = 500;
 type LogLine = { ts: string; kind: "ok" | "err" | "info"; text: string };
 
 export default function TcsGeneratorSection() {
-  const router = useRouter();
-
   const [connections, setConnections] = useState<TestDataConnection[]>([]);
   const [connId, setConnId] = useState("");
   const [loadingConns, setLoadingConns] = useState(true);
+  const [tcsSettingsOpen, setTcsSettingsOpen] = useState(false);
+  const [dbSettingsOpen, setDbSettingsOpen] = useState(false);
 
   const [parents, setParents] = useState<TcsParent[]>([]);
   const [parentId, setParentId] = useState("");
@@ -50,19 +51,21 @@ export default function TcsGeneratorSection() {
     setLog(l => [{ ts: new Date().toLocaleTimeString("ru-RU"), kind, text }, ...l].slice(0, 50));
 
   /* ── Подключения ── */
-  useEffect(() => {
-    (async () => {
-      try {
-        const list = await listTestDataConnections();
-        setConnections(list);
-        if (list.length) setConnId(list[0].id);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setLoadingConns(false);
-      }
-    })();
+  const loadConnections = useCallback(async () => {
+    try {
+      const list = await listTestDataConnections();
+      setConnections(list);
+      // Выбор не сбрасываем, если он ещё существует: после правки настроек
+      // раздел должен остаться на той же базе.
+      setConnId(prev => (list.some(c => c.id === prev) ? prev : (list[0]?.id ?? "")));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingConns(false);
+    }
   }, []);
+
+  useEffect(() => { loadConnections(); }, [loadConnections]);
 
   /* ── Список ТКС ── */
   const loadParents = useCallback(async (id: string) => {
@@ -151,15 +154,43 @@ export default function TcsGeneratorSection() {
         Генератор ТКС работает с таблицами <code className="font-mono">tcs</code> и{" "}
         <code className="font-mono">tcsmember</code>. Добавьте подключение к базе в настройках.
       </p>
-      <button onClick={() => router.push("/settings")} className={BTN_PRIMARY}>
-        <Settings className="w-4 h-4" /> Открыть настройки
+      <button onClick={() => setDbSettingsOpen(true)} className={BTN_PRIMARY}>
+        <Database className="w-4 h-4" /> Добавить подключение
       </button>
+      <TestDataSettingsModal
+        open={dbSettingsOpen}
+        onClose={() => setDbSettingsOpen(false)}
+        onChanged={loadConnections}
+      />
     </div>
   );
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
       <div className="max-w-3xl mx-auto space-y-4">
+
+        {/* Шапка раздела: настройки сценария всегда вверху справа */}
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-text-main">ТКС</h2>
+          <div className="flex-1" />
+          <SectionSettingsButton
+            label="Схема и таблицы"
+            title="Настройки сценария ТКС"
+            onClick={() => setTcsSettingsOpen(true)}
+          />
+          <SectionSettingsButton
+            label="Подключения"
+            title="Подключения к базам данных"
+            onClick={() => setDbSettingsOpen(true)}
+          />
+        </div>
+
+        <TcsSettingsModal open={tcsSettingsOpen} onClose={() => setTcsSettingsOpen(false)} />
+        <TestDataSettingsModal
+          open={dbSettingsOpen}
+          onClose={() => setDbSettingsOpen(false)}
+          onChanged={loadConnections}
+        />
 
         {/* Предупреждение: пишем в реальную базу */}
         <div className="tone-warning border rounded-xl px-4 py-3 text-xs flex items-start gap-2">

@@ -8,6 +8,8 @@ import {
   Paperclip, Image as ImageIcon, FileText, File as FileIcon, ListChecks, X,
 } from "lucide-react";
 import { formatBug, addDefect, listRequirements, type Requirement } from "@/lib/api";
+import { SectionSettingsButton } from "@/components/ui";
+import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import NotionRenderer from "@/components/NotionRenderer";
 import JiraRegisterPanel from "@/components/JiraRegisterPanel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -130,6 +132,7 @@ export default function BugsSection() {
   const { provider, bugPrefill, setBugPrefill } = useWorkspace();
 
   const [stage, setStage]             = useState<"input" | "history">("input");
+  const [jiraOpen, setJiraOpen]       = useState(false);
   const [platform, setPlatform]       = useState("Back");
   const [feature, setFeature]         = useState("");
   const [description, setDescription] = useState("");
@@ -397,16 +400,22 @@ export default function BugsSection() {
             <h1 className="text-xl font-bold text-text-main mb-1">Форматирование дефектов</h1>
             <p className="text-sm text-text-muted">Опишите баг — AI оформит его в виде страницы Notion.</p>
           </div>
-          {histEntries.length > 0 && (
-            <button
-              onClick={() => setStage("history")}
-              className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors flex-shrink-0 mt-1"
-            >
-              <History className="w-3.5 h-3.5" />
-              История ({histEntries.length})
-            </button>
-          )}
+          {/* Настройки раздела — всегда вверху справа */}
+          <div className="flex items-center gap-2 flex-shrink-0 mt-1">
+            {histEntries.length > 0 && (
+              <button
+                onClick={() => setStage("history")}
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors"
+              >
+                <History className="w-3.5 h-3.5" />
+                История ({histEntries.length})
+              </button>
+            )}
+            <SectionSettingsButton label="Jira" title="Подключение к Jira" onClick={() => setJiraOpen(true)} />
+          </div>
         </div>
+
+        <JiraSettingsModal open={jiraOpen} onClose={() => setJiraOpen(false)} />
 
         {/* Input card */}
         <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">

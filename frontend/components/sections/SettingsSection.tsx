@@ -5,10 +5,11 @@ import {
   Eye, EyeOff, Save, Settings, Plus, Trash2,
   Zap, Database, Radio, Server, Shield, ChevronDown, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Play, ScrollText, Pencil,
-  Check, Settings2, Upload, RefreshCw, Bug,
+  Check, Settings2, Upload, RefreshCw, Bug, Users,
 } from "lucide-react";
-import { ConnectionsModal, ConnectionRow, Tabs, Select } from "@/components/ui";
+import { ConnectionsModal, ConnectionRow, Tabs, Select, FilePathInput } from "@/components/ui";
 import JiraSettingsBlock from "@/components/JiraSettingsBlock";
+import TcsConfigPanel from "@/components/sections/TcsConfigPanel";
 import {
   getSettings, saveSettings,
   getCustomLlmProviders, saveCustomLlmProvider, deleteCustomLlmProvider,
@@ -57,8 +58,11 @@ const SECRET_KEYS = new Set([
 
 interface FieldDef {
   key: string; label: string;
-  type?: "text" | "password" | "select";
+  /** file — путь к файлу с кнопкой загрузки, как у сертификатов GigaChat. */
+  type?: "text" | "password" | "select" | "file";
   options?: string[];
+  /** Для type: "file" — что принимать в диалоге выбора. */
+  accept?: string;
 }
 
 const GIGACHAT_FIELDS: FieldDef[] = [
@@ -184,9 +188,9 @@ const METRICS_KAFKA_FIELDS: FieldDef[] = [
   { key: "kafka_sasl_mechanism", label: "SASL механизм", type: "select", options: ["", "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "GSSAPI"] },
   { key: "kafka_sasl_username", label: "SASL логин" },
   { key: "kafka_sasl_password", label: "SASL пароль", type: "password" },
-  { key: "kafka_ssl_cafile", label: "SSL CA файл" },
-  { key: "kafka_ssl_certfile", label: "SSL client cert" },
-  { key: "kafka_ssl_keyfile", label: "SSL client key" },
+  { key: "kafka_ssl_cafile", label: "SSL CA файл", type: "file", accept: ".pem,.crt,.cer,.txt" },
+  { key: "kafka_ssl_certfile", label: "SSL client cert", type: "file", accept: ".pem,.crt,.cer,.txt" },
+  { key: "kafka_ssl_keyfile", label: "SSL client key", type: "file", accept: ".pem,.key,.txt" },
   { key: "kafka_ssl_password", label: "SSL key password", type: "password" },
   { key: "kafka_topic_data", label: "Топик DATA" },
   { key: "kafka_topic_metadata", label: "Топик METADATA" },
@@ -269,7 +273,15 @@ function renderField(f: FieldDef, values: Record<string, string>, descriptions: 
         {f.label}
         {isSecret && <span className="ml-1 text-[10px] text-text-muted/60 font-normal">(секрет)</span>}
       </label>
-      {isSecret || f.type === "password" ? (
+      {f.type === "file" ? (
+        <FilePathInput
+          value={val}
+          onChange={(path) => onChange(f.key, path)}
+          purpose={f.key}
+          placeholder={desc || "Путь к файлу на сервере"}
+          accept={f.accept}
+        />
+      ) : isSecret || f.type === "password" ? (
         <PasswordInput fieldKey={f.key} value={val} onChange={onChange} placeholder={desc} />
       ) : f.type === "select" && f.options ? (
         <Select  value={val} onChange={(value) => onChange(f.key, value)}>
@@ -1064,8 +1076,10 @@ function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefre
       formTitle={form.id ? "Изменить" : "Новое подключение"}
       form={<>
         <input className={INPUT_CLS} value={form.display_name} onChange={e => setField("display_name", e.target.value)} placeholder="Название (напр. Продуктовая БД)" />
-        <div className="flex gap-2">
-          <Select className="flex-1" value={form.driver_id}
+        {/* min-w-0 на списке: без него flex-элемент не сжимается меньше своего
+            содержимого, и кнопка с длинной подписью вылезала за край формы. */}
+        <div className="flex gap-2 min-w-0">
+          <Select className="flex-1 min-w-0" value={form.driver_id}
             onChange={(value) => {
               const driverId = value;
               const drv = drivers.find(d => d.id === driverId);
@@ -1080,8 +1094,9 @@ function TestDataConnectionsModal({ open, onClose, connections, drivers, onRefre
             {drivers.map(d => <option key={d.id} value={d.id}>{d.name}{d.built_in ? "" : " (свой)"}</option>)}
           </Select>
           <button type="button" onClick={onManageDrivers} title="Настройка драйверов"
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-main px-2.5 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
-            <Settings2 className="h-3.5 w-3.5" /> Настройка драйверов
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-2 text-xs font-semibold text-text-muted hover:bg-bg-subtle">
+            <Settings2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline whitespace-nowrap">Настройка драйверов</span>
           </button>
         </div>
         {selectedDriver && !selectedDriver.jar_path && !selectedDriver.jar_filename && (
@@ -1293,27 +1308,29 @@ function DriverManagerModal({ open, onClose, drivers, onRefresh }: {
                   )}
                 </div>
 
-                {/* Способ 1 (рекомендуется): указать путь к .jar на машине */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-text-main">Путь к .jar на этом компьютере <span className="text-text-muted/70">(рекомендуется)</span></label>
-                  <div className="flex gap-2">
-                    <input className={`${INPUT_CLS} font-mono`} value={pathInput} spellCheck={false}
-                      onChange={e => setPathInput(e.target.value)}
-                      placeholder="/Users/you/drivers/postgresql-42.7.jar" />
-                    <button type="button" onClick={saveLibraryPath} disabled={busy || !pathInput.trim()}
-                      className="shrink-0 rounded-lg bg-primary px-3 py-2 text-sm font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
-                      Указать
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-text-muted/70">Файл не копируется — драйвер читается по пути. Заменить версию = положить новый .jar по тому же пути, перезапуск бэкенда не нужен.</p>
+                {/* Единый вид со всеми файловыми настройками: путь можно вписать
+                    руками или выбрать файл — он загрузится в приложение. */}
+                <FilePathInput
+                  label="Библиотека драйвера (.jar)"
+                  value={pathInput}
+                  onChange={setPathInput}
+                  uploader={async (file) => {
+                    // .jar уходит своим эндпоинтом: приложение хранит файл у себя,
+                    // поэтому путь в поле не подставляем — состояние обновит onRefresh.
+                    await uploadLibrary(file);
+                    return "";
+                  }}
+                  accept=".jar"
+                  placeholder="/Users/you/drivers/postgresql-42.7.jar"
+                  disabled={busy}
+                  hint="По пути файл не копируется — драйвер читается с диска. Заменить версию = положить новый .jar по тому же пути, перезапуск бэкенда не нужен."
+                />
+                <div className="flex justify-end">
+                  <button type="button" onClick={saveLibraryPath} disabled={busy || !pathInput.trim()}
+                    className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white hover:bg-primary-dark disabled:opacity-40">
+                    Указать путь
+                  </button>
                 </div>
-
-                {/* Способ 2: загрузить .jar в приложение */}
-                <label className="flex items-center gap-2 rounded-lg border border-dashed border-border-main px-3 py-2 text-sm text-text-muted cursor-pointer hover:bg-bg-subtle">
-                  <Upload className="h-4 w-4 shrink-0" />
-                  <span className="truncate">Или загрузить .jar в приложение…</span>
-                  <input type="file" accept=".jar" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) uploadLibrary(f); }} />
-                </label>
 
                 <div className="flex justify-end">
                   <button type="button" onClick={testDriver} disabled={testing || !hasLibrary(selected)}
@@ -1439,6 +1456,17 @@ function LogsVpsConnectionsModal({
             Активно
           </label>
         </div>
+        {/* CA-сертификат: поле есть в модели подключения, но в форме его не было —
+            задать корпоративный CA через интерфейс было нельзя. */}
+        <FilePathInput
+          label="CA-сертификат (для самоподписанных)"
+          value={form.ca_cert_path || ""}
+          onChange={(path) => setForm(f => ({ ...f, ca_cert_path: path }))}
+          purpose={`vps_ca_${form.id || "new"}`}
+          placeholder="Путь к CA bundle — или выберите файл"
+          accept=".pem,.crt,.cer,.txt"
+          hint="Нужен, когда SSL verify включён, а сертификат платформы подписан своим центром."
+        />
         <div className="flex justify-end gap-2 pt-1">
           {form.id && <button type="button" onClick={reset} className="rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:bg-bg-subtle">Отмена</button>}
           <button type="button" onClick={save} disabled={busy}
@@ -1675,6 +1703,15 @@ export default function SettingsSection() {
             ? "Подключений пока нет — добавьте внешнюю БД для генерации тестовых данных."
             : `Настроено подключений: ${tdConnections.length} — ${tdConnections.map(c => c.display_name).join(", ")}`}
         </p>
+      </SectionCard>
+
+      {/* ═══ Генератор ТКС ═══ */}
+      <SectionCard
+        icon={<Users className="w-4 h-4 text-emerald-500" />}
+        title="Генератор ТКС — схема и таблицы"
+        subtitle="Какие таблицы использовать для ТКС и участников. Раздел «Генераторы событий» → ТКС"
+      >
+        <TcsConfigPanel />
       </SectionCard>
 
       {/* ═══ Jira — регистрация дефектов ═══ */}

@@ -17,3 +17,4 @@ export { Card, PageHeader, type CardProps } from "./Card";
 export { ThemeToggle } from "./ThemeToggle";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Tabs, type TabsProps, type Tab } from "./Tabs";
+export { FilePathInput, type FilePathInputProps } from "./FilePathInput";

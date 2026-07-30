@@ -1205,3 +1205,65 @@ export async function runTcsSync(body: { connection_id: string; parent_id: numbe
     body: JSON.stringify(body),
   });
 }
+
+export interface TcsConfig {
+  connection_id:       string;
+  parent_table:        string;
+  parent_id_column:    string;
+  parent_label_column: string;
+  parent_count_column: string;
+  child_table:         string;
+  child_id_column:     string;
+  child_fk_column:     string;
+  child_marker_column: string;
+  marker:              string;
+}
+
+export interface DbSchemaColumn {
+  name: string;
+  type: string;
+  pk:   boolean;
+  fk:   { table: string; column: string } | null;
+}
+
+export interface DbSchemaTable {
+  full_name: string;
+  schema:    string;
+  table:     string;
+  columns:   DbSchemaColumn[];
+}
+
+export async function getTcsConfig(): Promise<TcsConfig> {
+  return fetchJson("/api/datagen/tcs/config");
+}
+
+export async function saveTcsConfig(body: Partial<TcsConfig>): Promise<TcsConfig> {
+  return fetchJson("/api/datagen/tcs/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function resetTcsConfig(): Promise<TcsConfig> {
+  return fetchJson("/api/datagen/tcs/config/reset", { method: "POST" });
+}
+
+export async function getDatagenSchema(
+  connectionId: string, refresh = false,
+): Promise<{ schemas: string[]; tables: DbSchemaTable[]; from_cache: boolean }> {
+  return fetchJson(
+    `/api/datagen/schema?connection_id=${encodeURIComponent(connectionId)}&refresh=${refresh}`,
+  );
+}
+
+/** Загрузка файла настройки (сертификат, ключ, CA) — путь возвращается наружу.
+ *  purpose задаёт имя файла на сервере, чтобы разные настройки не перетирали друг друга. */
+export async function uploadSettingsFile(purpose: string, file: File): Promise<{ path: string }> {
+  const fd = new FormData();
+  fd.append("file", file);
+  return fetchJson(`/api/settings/file-upload?purpose=${encodeURIComponent(purpose)}`, {
+    method: "POST",
+    body: fd,
+  });
+}

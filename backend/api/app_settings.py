@@ -774,6 +774,48 @@ async def gigachat_cert_upload(kind: str, file: UploadFile = File(...)) -> dict:
     return {"path": str(dest)}
 
 
+# Файлы прочих настроек (Kafka SSL, CA для VPS-подключений) — тот же приём,
+# что и для сертификатов GigaChat: файл кладётся в защищённую папку, наружу
+# возвращается путь, который подставляется в поле формы.
+_FILES_DIR = Path(__file__).resolve().parents[2] / "data" / "settings_files"
+_MAX_SETTINGS_FILE = 5 * 1024 * 1024   # 5 МБ хватает для сертификатов и ключей
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+@router.post("/api/settings/file-upload")
+async def settings_file_upload(purpose: str, file: UploadFile = File(...)) -> dict:
+    """Принять файл настройки и вернуть путь к сохранённой копии.
+
+    purpose задаёт имя файла, поэтому чистится от всего, кроме латиницы, цифр
+    и разделителей: значение приходит из формы и попадает в путь на диске.
+    """
+    safe_purpose = _SAFE_NAME.sub("_", (purpose or "file").strip())[:40] or "file"
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    if len(content) > _MAX_SETTINGS_FILE:
+        raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 5 МБ)")
+
+    _FILES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(_FILES_DIR, 0o700)
+    except OSError:
+        pass
+
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".pem", ".crt", ".cer", ".key", ".txt", ".jks", ".p12", ".pfx"):
+        ext = ".pem"
+    dest = _FILES_DIR / f"{safe_purpose}{ext}"
+
+    fd = os.open(str(dest), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(content)
+    os.chmod(dest, 0o600)
+
+    return {"path": str(dest)}
+
+
 @router.post("/api/settings/test/kafka-metrics")
 def test_kafka_metrics(db: Session = Depends(get_db)) -> dict:
     """Тест подключения к Kafka для метрик."""

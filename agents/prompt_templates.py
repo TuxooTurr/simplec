@@ -66,19 +66,21 @@ class PromptTemplateManager:
 **Шаг 2:** Создать перевод на 1 000 ₽ со счёта клиента
 - Тестовые данные: сумма 1000.00, валюта RUB, счёт списания 40817810000000000001
 - UI: Отображается сообщение «Перевод создан», операция появилась в истории
-- API: POST /api/v1/transactions
+- API: метод createTransaction (POST /api/v1/transactions)
   Заголовки: Authorization: Bearer {token}, Content-Type: application/json
-  Тело запроса: {"amount": 1000.00, "currency": "RUB", "accountFrom": "40817810000000000001"}
-  Ответ: 201 Created, тело содержит transactionId, поле status = "PENDING"
-- БД: таблица transactions — новая запись, amount = 1000.00, status = 'PENDING'
+  Параметры запроса: amount = 1000.00, currency = "RUB", accountFrom = "40817810000000000001"
+  Ответ: 201 Created; параметры ответа: transactionId = "TRX-001", status = "PENDING", amount = 1000.00
+- БД: схема public, таблица transactions — новая строка:
+  столбец amount = 1000.00, столбец currency = 'RUB', столбец status = 'PENDING',
+  столбец account_from = '40817810000000000001', столбец created_at заполнен текущим временем
 
 **Шаг 3:** Повторить перевод с суммой, превышающей остаток
 - Тестовые данные: сумма 999 999.00 при остатке 49 000 ₽
 - UI: Отображается ошибка «Недостаточно средств», перевод не создан
-- API: POST /api/v1/transactions
-  Тело запроса: {"amount": 999999.00, "currency": "RUB", "accountFrom": "40817810000000000001"}
-  Ответ: 400 Bad Request, тело {"error": "INSUFFICIENT_FUNDS"}
-- БД: таблица transactions — новых записей нет
+- API: метод createTransaction (POST /api/v1/transactions)
+  Параметры запроса: amount = 999999.00, currency = "RUB", accountFrom = "40817810000000000001"
+  Ответ: 400 Bad Request; параметры ответа: error = "INSUFFICIENT_FUNDS"
+- БД: таблица transactions — новых строк нет, столбец balance счёта не изменился
 """,
             coverage_rules="""
 - Все HTTP методы из требований
@@ -141,10 +143,11 @@ class PromptTemplateManager:
 **Шаг 3:** Отправить платёж
 - Тестовые данные: Не требуются
 - UI: Отображается уведомление «Платёж отправлен», форма закрылась, платёж виден в списке
-- API: POST /api/v1/payments
-  Тело запроса: {"recipient": "ООО Тест", "amount": 1000.00, "purpose": "Оплата услуг"}
-  Ответ: 201 Created, тело {"paymentId": "PAY-001", "status": "NEW"}
-- БД: таблица payments — новая запись, amount = 1000.00, status = 'NEW'
+- API: метод createPayment (POST /api/v1/payments)
+  Параметры запроса: recipient = "ООО Тест", amount = 1000.00, purpose = "Оплата услуг"
+  Ответ: 201 Created; параметры ответа: paymentId = "PAY-001", status = "NEW"
+- БД: схема public, таблица payments — новая строка:
+  столбец recipient = 'ООО Тест', столбец amount = 1000.00, столбец status = 'NEW'
 """,
             coverage_rules="""
 - Все элементы интерфейса из требований
@@ -198,10 +201,11 @@ class PromptTemplateManager:
 **Шаг 2:** Провести операцию на 100 000 ₽ и проверить удержанную комиссию
 - Тестовые данные: сумма операции 100 000.00 RUB; правило — сумма > 50 000 и клиент Premium → комиссия 0.5%
 - UI: В деталях операции показана комиссия 500.00 ₽ и применённый тариф Premium
-- API: POST /api/v1/operations
-  Тело запроса: {"amount": 100000.00, "clientType": "PREMIUM"}
-  Ответ: 200 OK, тело {"commission": 500.00, "rule": "PREMIUM_OVER_50000"}
-- БД: таблица commission_log — новая запись, amount = 500.00, rule_code = 'PREMIUM_OVER_50000'
+- API: метод calculateCommission (POST /api/v1/operations)
+  Параметры запроса: amount = 100000.00, clientType = "PREMIUM"
+  Ответ: 200 OK; параметры ответа: commission = 500.00, rule = "PREMIUM_OVER_50000"
+- БД: схема public, таблица commission_log — новая строка:
+  столбец amount = 500.00, столбец rule_code = 'PREMIUM_OVER_50000', столбец client_id = 42
 
 **Шаг 3:** Повторить операцию на сумму ровно на границе правила
 - Тестовые данные: сумма 50 000.00 RUB (граница «больше 50 000» не превышена)
@@ -334,10 +338,11 @@ class PromptTemplateManager:
 **Шаг 2:** Под наблюдателем попытаться удалить чужую запись
 - Тестовые данные: пользователь user_viewer, запись №123
 - UI: Кнопка удаления недоступна; при прямом переходе показано «Недостаточно прав»
-- API: DELETE /api/v1/records/123, заголовок Authorization: Bearer {token_viewer}
-  Ответ: 403 Forbidden, тело {"error": "Access denied", "required_role": "ADMIN"}
-- БД: таблица records — запись №123 на месте, deleted_at пустой;
-  таблица audit_log — зафиксирована попытка несанкционированного доступа
+- API: метод deleteRecord (DELETE /api/v1/records/123)
+  Параметры запроса: recordId = 123; заголовок Authorization: Bearer {token_viewer}
+  Ответ: 403 Forbidden; параметры ответа: error = "Access denied", required_role = "ADMIN"
+- БД: таблица records — строка id = 123 на месте, столбец deleted_at пустой;
+  таблица audit_log — новая строка: столбец action = 'DELETE_DENIED', столбец user_id = user_viewer
 
 **Шаг 3:** Под администратором удалить ту же запись
 - Тестовые данные: пользователь user_admin, запись №123

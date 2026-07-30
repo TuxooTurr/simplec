@@ -68,6 +68,28 @@ def test_образцы_показывают_детальный_запрос_и_
     assert "Ответ:" in example, f"{type_id}: в образце не показан ответ метода"
 
 
+@pytest.mark.parametrize("type_id", [t for t, _ in PromptTemplateManager.TEMPLATES.items()])
+def test_в_образцах_параметры_запроса_и_ответа_названы_поимённо(type_id):
+    """«Тело запроса: {...}» недостаточно: в поле «Результат» нужны имена
+    параметров и их значения — по ним тестировщик сверяет факт."""
+    example = PromptTemplateManager.TEMPLATES[type_id].example_steps
+    if "Параметры запроса" not in example and "Сообщение:" not in example:
+        pytest.fail(f"{type_id}: в образце нет параметров запроса поимённо")
+    assert re.search(r'параметры ответа|Ответ:', example), (
+        f"{type_id}: в образце не описан ответ"
+    )
+
+
+@pytest.mark.parametrize("type_id", [t for t, _ in PromptTemplateManager.TEMPLATES.items()])
+def test_в_образцах_бд_описана_до_столбцов(type_id):
+    """«Запись создана» не годится — нужно, в какой столбец что записалось."""
+    example = PromptTemplateManager.TEMPLATES[type_id].example_steps
+    assert "таблица" in example, f"{type_id}: в образце не названа таблица"
+    assert re.search(r'столбец|таблица \w+ —', example), (
+        f"{type_id}: в образце БД описана без столбцов"
+    )
+
+
 def test_разбор_шага_сохраняет_многострочные_детали_api():
     """Продолжения зоны молча терялись: из кейса пропадали тело запроса и ответ."""
     g = LayeredGenerator(llm_client=None)

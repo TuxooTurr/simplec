@@ -14,10 +14,16 @@ import type { Config } from "tailwindcss";
  * в globals.css он уже используется, так что поддержка и так предполагается.
  */
 function themeColor(variable: string): string {
-  const resolve = ({ opacityValue }: { opacityValue?: string }) =>
-    opacityValue === undefined
-      ? `var(${variable})`
-      : `color-mix(in srgb, var(${variable}) ${Number(opacityValue) * 100}%, transparent)`;
+  const resolve = ({ opacityValue }: { opacityValue?: string }) => {
+    // Для утилиты БЕЗ модификатора (bg-primary) Tailwind передаёт не число,
+    // а строку "var(--tw-bg-opacity)". Число из неё не получается, и наивный
+    // Number() давал NaN% — правило становилось невалидным, а цвет пропадал
+    // совсем. Поэтому всё, что не конечное число, отдаём сплошным цветом.
+    const alpha = Number(opacityValue);
+    return Number.isFinite(alpha)
+      ? `color-mix(in srgb, var(${variable}) ${alpha * 100}%, transparent)`
+      : `var(${variable})`;
+  };
   // Tailwind принимает функцию-резолвер в рантайме, но в его типах у цвета
   // объявлена только строка — отсюда приведение.
   return resolve as unknown as string;

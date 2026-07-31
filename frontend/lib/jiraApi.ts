@@ -37,7 +37,6 @@ export interface JiraProjectMeta {
   fields: Record<string, { name: string; allowed: string[] }>;
   labels_presets: string[];
   warnings: string[];
-  ke_by_component: Record<string, string>;
   mobile_components: string[];
   stand_types: string[];
   default_stand_type: string;

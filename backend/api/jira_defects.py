@@ -234,6 +234,27 @@ def _field_schema_type(resolved: dict, field_id: str) -> str:
     return (resolved.get("_by_id", {}).get(field_id, {}) or {}).get("schema", {}).get("type", "")
 
 
+def _reference_value(resolved: dict, field_id: str, item: dict) -> Any:
+    """Значение справочного поля (ИТ-услуга, КЭ) в форме, которую ждёт эта Jira.
+
+    Один и тот же customfield в разных инстансах объявлен по-разному, поэтому
+    форму берём из схемы поля в createmeta:
+      array  — список объектов, как в выгрузке реальных дефектов SBER911;
+      option — один объект;
+      string — просто значение.
+
+    Когда createmeta недоступен, схемы нет — отправляем строкой: оба раза, когда
+    реальная Jira на SBER911 ругалась на эти поля, она требовала именно строку
+    («Значение операции должно быть строкой»).
+    """
+    schema = _field_schema_type(resolved, field_id)
+    if schema == "array":
+        return [dict(item)]
+    if schema and schema != "string":
+        return dict(item)
+    return item["value"]
+
+
 def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
     """
     Маппинг логических полей (КЭ, среда, стенд, эпик) на customfield-id + allowedValues.
@@ -470,8 +491,8 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
         },
         "labels_presets": cfg["labels"],
         "warnings": warnings,
-        # компонент → КЭ (для автоподстановки и отображения), мобильные компоненты
-        "ke_by_component": {k: v["value"] for k, v in JC.COMPONENT_KE.items()} if is_sber911 else {},
+        # мобильные компоненты — при их выборе разрешён второй компонент.
+        # Списка «компонент → КЭ» больше нет: КЭ одна и та же всегда.
         "mobile_components": sorted(JC.MOBILE_COMPONENTS) if is_sber911 else [],
         # тип стенда (customfield_17500) — Major-Check / Major-GO, видимый выбор
         "stand_types": sorted(JC.STAND_TYPE.keys()) if is_sber911 else [],
@@ -567,32 +588,17 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     if body.assignee.strip():
         fields["assignee"] = {"name": body.assignee.strip()}
 
-    # ── SBER911: компонент → КЭ + дефолты справочных полей ──
+    # ── SBER911: ИТ-услуга и КЭ + дефолты справочных полей ──
     if is_sber911:
-        ke_objects = [JC.COMPONENT_KE[c] for c in components if c in JC.COMPONENT_KE]
-        if ke_objects:
-            ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
-            ke_schema = _field_schema_type(resolved, ke_field)
-            if ke_schema == "array":
-                fields[ke_field] = [o["value"] for o in ke_objects]
-            elif ke_schema and ke_schema != "string":
-                fields[ke_field] = ke_objects[0] if len(ke_objects) == 1 else ke_objects
-            else:
-                # ke_schema == "string", либо схема неизвестна (createmeta недоступен на
-                # этот раз) — строка как дефолт для неизвестной схемы: оба раза, когда
-                # реальная Jira присылала ошибку по этому полю на SBER911, оно требовало
-                # именно строку, а не объект/Insight ("Значение операции должно быть строкой").
-                fields[ke_field] = "; ".join(o["value"] for o in ke_objects)
-
-        it_service_schema = _field_schema_type(resolved, "customfield_22400")
-        if it_service_schema == "array":
-            it_service_value: Any = [JC.IT_SERVICE["value"]]
-        elif it_service_schema and it_service_schema != "string":
-            it_service_value = [{"id": JC.IT_SERVICE["id"]}]
-        else:
-            # см. комментарий выше про КЭ — тот же принцип для ИТ-услуги
-            it_service_value = JC.IT_SERVICE["value"]
-        fields.setdefault("customfield_22400", it_service_value)
+        # ИТ-услуга и КЭ фиксированы для проекта и уходят ВСЕГДА, независимо от
+        # выбранного компонента. Раньше КЭ бралась из справочника по компоненту,
+        # и при незнакомом (или невыбранном) компоненте обязательное поле
+        # не уходило вовсе.
+        ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
+        fields[ke_field] = _reference_value(resolved, ke_field, JC.KE)
+        fields[JC.FIELD_IT_SERVICE] = _reference_value(
+            resolved, JC.FIELD_IT_SERVICE, JC.IT_SERVICE,
+        )
 
         for fid, value in JC.DEFAULT_FIELDS.items():
             fields.setdefault(fid, value)
@@ -621,7 +627,8 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             fields[JC.FIELD_EPIC_LINK] = body.epic_key.strip()
         else:
             warnings.append("«Эпик» не установлен — поле Epic Link не найдено в проекте")
-    if body.ke.strip() and not (is_sber911 and components):
+    # На SBER911 КЭ задана процессом и уже проставлена выше — извне её не меняем.
+    if body.ke.strip() and not is_sber911:
         _set_custom("ke", body.ke, "КЭ")
     _set_custom("environment", body.environment, "Среда обнаружения")
 

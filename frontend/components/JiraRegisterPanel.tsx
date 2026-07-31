@@ -290,7 +290,7 @@ export default function JiraRegisterPanel({
           {epics.length > 0 && <p className="text-xs text-text-muted mt-1">Активных эпиков: {epics.length}</p>}
         </div>
 
-        {/* Компоненты: до 2 (второй — при выборе мобильного), КЭ подставляется сам */}
+        {/* Компоненты: до 2 (второй — при выборе мобильного) */}
         <div>
           <label className={LBL}>Компонент</label>
           <div className="flex flex-wrap gap-1.5">
@@ -311,12 +311,12 @@ export default function JiraRegisterPanel({
             )}
           </div>
           {components.length === 2 && (
-            <p className="text-xs text-text-muted mt-1">Передаются 2 компонента и 2 КЭ</p>
+            <p className="text-xs text-text-muted mt-1">Передаются 2 компонента</p>
           )}
         </div>
 
         {/* Исполнитель, КЭ, Среда обнаружения и Стенд на фронте не задаются:
-            исполнитель назначается в Jira вручную, КЭ — автоматом из компонента,
+            исполнитель назначается в Jira вручную, КЭ и ИТ-услуга — фиксированы процессом,
             среда — всегда СТ, стенд — не используется, нужен только тип стенда ниже */}
 
         {/* Тип стенда (Major-Check / Major-GO) — видимый выбор, не тихий дефолт */}

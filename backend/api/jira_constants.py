@@ -4,7 +4,7 @@
 
 Применяются при создании дефекта в проекте SBER911:
   - DEFAULT_FIELDS — поля, заполняемые по умолчанию (id опций);
-  - COMPONENT_KE — компонент → КЭ (customfield_18300), подставляется автоматически.
+  - IT_SERVICE / KE — ИТ-услуга и КЭ, уходят всегда и не зависят от компонента.
 """
 
 PROJECT_KEY = "SBER911"
@@ -53,42 +53,32 @@ def filter_components(live_names: list[str]) -> list[str]:
     return result
 
 
-# ИТ-услуга (customfield_22400)
-IT_SERVICE = {"id": "233293", "value": "Платформа Сопровождения Sber911"}
-
-# Компонент → КЭ (customfield_18300). При выборе компонента КЭ подставляется сам.
-COMPONENT_KE: dict[str, dict] = {
-    "Back-end": {
-        "value": "Управление приоритетными событиями",
-        "typeSm": "Функциональная подсистема",
-        "smId": "3521751",
-        "itServiceValue": IT_SERVICE["value"],
-        "itServiceId": IT_SERVICE["id"],
-    },
-    "Front-end": {
-        "value": "Фронтальный компонент",
-        "typeSm": "Модуль",
-        "smId": "7801187",
-        "itServiceValue": IT_SERVICE["value"],
-        "itServiceId": IT_SERVICE["id"],
-    },
-    "iOS": {
-        "value": "Sber911. МП iOS",
-        "typeSm": "Модуль",
-        "smId": "4759215",
-        "itServiceValue": IT_SERVICE["value"],
-        "itServiceId": IT_SERVICE["id"],
-    },
-    "Android": {
-        "value": "Sber911. МП Android",
-        "typeSm": "Модуль",
-        "smId": "4759206",
-        "itServiceValue": IT_SERVICE["value"],
-        "itServiceId": IT_SERVICE["id"],
-    },
+# ИТ-услуга (customfield_22400) и КЭ (customfield_18300).
+#
+# Оба значения фиксированы для проекта и уходят при КАЖДОЙ регистрации дефекта
+# вне зависимости от выбранного компонента — так требует процесс. На UI не
+# показываются: пользователю тут нечего выбирать.
+#
+# Раньше КЭ подставлялась по компоненту (COMPONENT_KE): Back-end → «Управление
+# приоритетными событиями», iOS → «Sber911. МП iOS» и т.д. При этом, если
+# компонент не выбран или не попал в справочник, КЭ не уходила вовсе — дефект
+# создавался без обязательного поля.
+IT_SERVICE = {
+    "id":             "233293",
+    "value":          "Платформа Сопровождения Sber911",
+    "statusDetailed": "Промышленная эксплуатация",
 }
 
-# Мобильные компоненты: при их выборе разрешён второй компонент (2 компонента → 2 КЭ)
+KE = {
+    "id":             "3521751",
+    "value":          "Управление приоритетными событиями",
+    "itServiceId":    IT_SERVICE["id"],
+    "itServiceValue": IT_SERVICE["value"],
+    "typeSm":         "Функциональная подсистема",
+}
+
+# Мобильные компоненты: при их выборе разрешён второй компонент.
+# КЭ от этого не зависит — она одна и та же всегда (см. KE выше).
 MOBILE_COMPONENTS = {"iOS", "Android"}
 
 # Поля со справочными значениями — заполняются по умолчанию, если не заданы.
@@ -114,6 +104,7 @@ DEFAULT_FIELDS: dict[str, object] = {
 
 # id поля КЭ и Epic Link в SBER911 (используются, если createmeta их не отдал)
 FIELD_KE = "customfield_18300"
+FIELD_IT_SERVICE = "customfield_22400"
 FIELD_EPIC_LINK = "customfield_10006"
 
 # Тип стенда (customfield_17500) — видимый выпадающий список на экране создания,

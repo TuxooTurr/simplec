@@ -126,3 +126,49 @@ def test_имя_в_описании_совпадает_с_именем_влож�
     name = safe_attachment_name("Снимок экрана.png", 0)
     out = _md_to_jira(with_screenshots(REPORT, [name]))
     assert f"!{name}|thumbnail!" in out
+
+
+# ── Контракт загрузки вложений (подтверждён на боевой Jira) ──────────────────
+
+def _prepared_attach_request(names_and_files):
+    """Строит тот же запрос, что и attach_files, но не отправляет его."""
+    import requests
+    headers = {
+        "Authorization": "Bearer TOKEN",
+        "X-Atlassian-Token": "no-check",
+        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+    }
+    payload = [("file", (n, data, ct)) for n, data, ct in names_and_files]
+    return requests.Request(
+        "POST", "https://jira.example/rest/api/2/issue/SBER911-1/attachments",
+        headers=headers, files=payload,
+    ).prepare()
+
+
+def test_запрос_вложения_соответствует_контракту_jira():
+    """Проверено вручную на jira.sberbank.ru: без этих деталей 403 XSRF
+    либо «file is required»."""
+    req = _prepared_attach_request([
+        ("screenshot_1.png", b"\x89PNG", "image/png"),
+        ("app.log", b"error", "text/plain"),
+    ])
+    body = req.body if isinstance(req.body, bytes) else req.body.encode()
+
+    assert req.method == "POST"
+    assert req.url.endswith("/issue/SBER911-1/attachments")
+    assert req.headers["X-Atlassian-Token"] == "no-check"
+    # Content-Type с boundary проставляет requests — вручную его задавать нельзя
+    assert req.headers["Content-Type"].startswith("multipart/form-data; boundary=")
+    # Поле обязано называться именно file, иначе Jira ответит «file is required»
+    assert body.count(b'name="file"') == 2
+    assert b'filename="screenshot_1.png"' in body
+    assert b'filename="app.log"' in body
+
+
+def test_имя_вложения_уходит_нормализованным_а_не_исходным():
+    """Кириллица и пробелы в имени ломают связку с разметкой !имя! в описании."""
+    name = safe_attachment_name("Снимок экрана 2026-07-30.png", 0)
+    req = _prepared_attach_request([(name, b"x", "image/png")])
+    body = req.body if isinstance(req.body, bytes) else req.body.encode()
+    assert b'filename="2026-07-30.png"' in body
+    assert "Снимок".encode() not in body

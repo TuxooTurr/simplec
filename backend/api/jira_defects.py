@@ -724,6 +724,20 @@ async def attach_files(
             f"Приложите файлы в Jira вручную."
         ]}
 
-    attached = [a.get("filename", "") for a in (resp.json() or [])]
+    # Успешный ответ — массив объектов вложений (id, filename, size, content).
+    # Разбираем защитно: на нестандартный ответ (например, HTML от корп. прокси
+    # с кодом 200) падать нельзя — дефект уже создан и файлы, скорее всего, легли.
+    try:
+        body = resp.json()
+    except ValueError:
+        body = None
+    if not isinstance(body, list):
+        logger.warning("Jira attach: %s неожиданный ответ: %s", key, resp.text[:300])
+        return {"attached": [], "warnings": [
+            f"Дефект {key} создан, файлы отправлены, но Jira вернула неожиданный ответ — "
+            f"проверьте вложения в задаче."
+        ]}
+
+    attached = [a.get("filename", "") for a in body if isinstance(a, dict)]
     logger.info("Jira attach: %s приложено %s", key, attached)
     return {"attached": attached, "warnings": []}

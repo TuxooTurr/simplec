@@ -60,6 +60,10 @@ class BugFormatResponse(BaseModel):
     title: str = ""
     description: str = ""
     priority: str = ""
+    # Имена приложенных скриншотов в том виде, в каком на них ссылается описание.
+    # Под этими же именами файлы уходят вложениями к дефекту — иначе Jira
+    # не свяжет разметку !имя! с картинкой.
+    screenshots: list[str] = []
 
 
 class ExportResponse(BaseModel):

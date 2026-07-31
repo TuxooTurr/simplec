@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -334,6 +334,10 @@ def _md_to_jira(text: str) -> str:
     import re
     out = text
     out = re.sub(r"```(\w*)\n([\s\S]*?)```", lambda m: "{code}\n" + m.group(2) + "{code}", out)
+    # Картинка ![имя](файл) → !файл|thumbnail! — Jira покажет скрин прямо
+    # в описании, если вложение с таким именем приложено к задаче.
+    # Идёт до обработки ссылок и **жирного**, иначе разметка распадётся.
+    out = re.sub(r"!\[[^\]]*\]\(([^)\s]+)\)", r"!\1|thumbnail!", out)
     out = re.sub(r"^######\s+(.+)$", r"h6. \1", out, flags=re.M)
     out = re.sub(r"^#####\s+(.+)$",  r"h5. \1", out, flags=re.M)
     out = re.sub(r"^####\s+(.+)$",   r"h4. \1", out, flags=re.M)
@@ -664,3 +668,62 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 
     return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}",
             "warnings": warnings}
+
+
+@router.post("/api/jira/attach/{key}")
+async def attach_files(
+    key: str,
+    files: list[UploadFile] = File(default=[]),
+    names: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Прикладывает файлы к уже созданному дефекту.
+
+    Описание ссылается на скриншоты разметкой !имя!, поэтому имя вложения
+    должно совпасть с тем, что подставил /api/bugs/format — иначе Jira не
+    свяжет картинку с разметкой и в описании останется голый текст.
+    Имена приходят отдельным списком в том же порядке, что и файлы.
+    """
+    import requests
+
+    key = key.strip()
+    if not key:
+        raise HTTPException(400, "Не указан ключ дефекта")
+    real_files = [f for f in files if f and f.filename]
+    if not real_files:
+        return {"attached": [], "warnings": []}
+
+    cfg = _load_cfg(db)
+    url = cfg["base_url"] + f"/rest/api/2/issue/{key}/attachments"
+    headers = {
+        "Authorization": "Bearer " + _resolve_token(cfg),
+        # Обязателен для загрузки вложений в Jira — без него 403 XSRF check failed.
+        "X-Atlassian-Token": "no-check",
+        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+    }
+
+    payload = []
+    for i, f in enumerate(real_files):
+        name = names[i] if i < len(names) and names[i].strip() else f.filename
+        payload.append(("file", (name, await f.read(), f.content_type or "application/octet-stream")))
+
+    logger.info("Jira attach: %s файлов=%s", key, [p[1][0] for p in payload])
+    try:
+        resp = requests.post(url, files=payload, headers=headers,
+                             verify=cfg["ssl_verify"], timeout=60)
+    except requests.exceptions.RequestException as e:
+        logger.error("Jira attach: %s недоступна: %s", key, e)
+        raise HTTPException(502, f"Не удалось приложить файлы к {key}: {str(e)[:200]}")
+
+    if resp.status_code >= 400:
+        logger.error("Jira attach: %s -> %s body=%s", key, resp.status_code, resp.text[:1000])
+        # Дефект уже создан — падать целиком нельзя, иначе пользователь решит,
+        # что регистрация не прошла, и заведёт дубль.
+        return {"attached": [], "warnings": [
+            f"Дефект {key} создан, но вложения не приложились ({resp.status_code}). "
+            f"Приложите файлы в Jira вручную."
+        ]}
+
+    attached = [a.get("filename", "") for a in (resp.json() or [])]
+    logger.info("Jira attach: %s приложено %s", key, attached)
+    return {"attached": attached, "warnings": []}

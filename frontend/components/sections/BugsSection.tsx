@@ -76,7 +76,9 @@ const PLATFORMS = [
 const INPUT_CLS =
   "w-full border border-border-main rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow duration-150";
 
-const ATTACH_ACCEPT = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
+// .log бэкенд разбирал и раньше (agents/file_parser.ALLOWED_EXTENSIONS),
+// но в диалоге выбора файла его не было — приложить лог было нельзя.
+const ATTACH_ACCEPT = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.log";
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg"]);
 
 function fileExt(name: string) {
@@ -143,6 +145,11 @@ export default function BugsSection() {
   const [copied, setCopied]           = useState(false);
   const [bugError, setBugError]       = useState<{ message: string; llm_error: boolean } | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  // Скриншоты переживают очистку вложений: описание ссылается на них разметкой
+  // !имя!, и при регистрации дефекта их нужно приложить под теми же именами.
+  const [screenshots, setScreenshots] = useState<{ files: File[]; names: string[] }>(
+    { files: [], names: [] },
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Требования, приложенные как контекст — чтобы ИИ точнее описывал дефект,
@@ -230,6 +237,12 @@ export default function BugsSection() {
       const res = await formatBug({ platform, feature, description, provider, files: attachedFiles, requirementIds: selectedReqIds });
       setReport(res.report);
       setParsed({ title: res.title, description: res.description, priority: res.priority });
+      // Порядок картинок совпадает с порядком имён: бэкенд именует их в том же
+      // проходе по вложениям, что и мы здесь.
+      setScreenshots({
+        files: attachedFiles.filter(f => IMAGE_EXTS.has(fileExt(f.name))),
+        names: res.screenshots ?? [],
+      });
       setAttachedFiles([]);
       saveHistEntry({
         id: Date.now().toString(),
@@ -648,6 +661,8 @@ export default function BugsSection() {
             summary={parsed?.title || (feature ? `[${platform}] ${feature}` : `[${platform}] ${description.slice(0, 100)}`)}
             description={parsed?.description || report}
             priorityHint={parsed?.priority || ""}
+            screenshots={screenshots.files}
+            screenshotNames={screenshots.names}
           />
         )}
 

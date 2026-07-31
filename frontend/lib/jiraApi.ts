@@ -97,3 +97,19 @@ export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: stri
     body: JSON.stringify(body),
   });
 }
+
+/** Прикладывает файлы к созданному дефекту.
+ *
+ *  Имена передаются отдельно и намеренно: описание ссылается на скриншоты
+ *  разметкой !имя!, которую подставил бэкенд при форматировании. Если приложить
+ *  файл под исходным именем, Jira не свяжет его с разметкой. */
+export function attachJiraFiles(
+  key: string, files: File[], names: string[],
+): Promise<{ attached: string[]; warnings: string[] }> {
+  const body = new FormData();
+  files.forEach((f, i) => {
+    body.append("files", f);
+    body.append("names", names[i] ?? f.name);
+  });
+  return fetchJson(`/api/jira/attach/${encodeURIComponent(key)}`, { method: "POST", body });
+}

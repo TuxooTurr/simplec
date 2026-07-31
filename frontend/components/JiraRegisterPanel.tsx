@@ -16,7 +16,7 @@ import { Select } from "@/components/ui";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
   getJiraSettings, saveJiraSettings, getJiraMeta, loadJiraEpics,
-  createJiraDefect,
+  createJiraDefect, attachJiraFiles,
   type JiraProjectMeta, type JiraEpic, type JiraSettings,
 } from "@/lib/jiraApi";
 
@@ -52,8 +52,14 @@ function matchPriority(hint: string, jiraPriorities: string[]): string {
 }
 
 export default function JiraRegisterPanel({
-  summary, description, priorityHint = "",
-}: { summary: string; description: string; priorityHint?: string }) {
+  summary, description, priorityHint = "", screenshots = [], screenshotNames = [],
+}: {
+  summary: string; description: string; priorityHint?: string;
+  /** Скриншоты из баг-репорта — уходят вложениями к созданному дефекту. */
+  screenshots?: File[];
+  /** Имена, под которыми на них ссылается описание (разметка !имя!). */
+  screenshotNames?: string[];
+}) {
 
   const [settings, setSettings] = useState<JiraSettings | null>(null);
   const [jiraSettingsOpen, setJiraSettingsOpen] = useState(false);
@@ -168,11 +174,29 @@ export default function JiraRegisterPanel({
         epic_key: epicKey,
         components,
         assignee: "",     // исполнитель назначается в Jira вручную
-        ke: "",           // КЭ подставляется бэкендом из компонентов
+        ke: "",           // КЭ и ИТ-услуга проставляются бэкендом (заданы процессом)
         environment: "", // Среда обнаружения — всегда СТ (дефолт справочника)
         stand_type: standType,
       });
-      setCreated({ key: res.key, url: res.url, warnings: res.warnings });
+      const warnings = [...res.warnings];
+
+      // Скриншоты прикладываем ПОСЛЕ создания: описание уже ссылается на них
+      // разметкой !имя!, и Jira свяжет её с вложением по совпадению имени.
+      // Ошибку вложения показываем предупреждением — дефект уже заведён,
+      // и падать целиком нельзя, иначе пользователь заведёт дубль.
+      if (screenshots.length) {
+        try {
+          const att = await attachJiraFiles(res.key, screenshots, screenshotNames);
+          warnings.push(...att.warnings);
+        } catch (e) {
+          warnings.push(
+            `Дефект создан, но скриншоты не приложились: ${String(e)}. ` +
+            "Приложите их в Jira вручную.",
+          );
+        }
+      }
+
+      setCreated({ key: res.key, url: res.url, warnings });
     } catch (e) { setCreateErr(String(e)); }
     setCreating(false);
   };

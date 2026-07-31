@@ -17,6 +17,52 @@ router = APIRouter()
 
 _PRIORITIES = ("Критический", "Высокий", "Средний", "Низкий")
 
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg")
+
+# Jira ссылается на вложение по имени файла, поэтому имя должно пережить путь
+# «загрузка → создание дефекта → вложение» без изменений. Пробелы и кириллица
+# в разметке !имя! ломают отображение, поэтому имя приводим к безопасному виду
+# один раз здесь, и то же имя потом уходит во вложение.
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def is_image(filename: str) -> bool:
+    return filename.lower().endswith(_IMAGE_EXTS)
+
+
+def safe_attachment_name(filename: str, index: int) -> str:
+    """Имя вложения, одинаковое в описании и в самом файле."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "png"
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    stem = _SAFE_NAME_RE.sub("_", stem).strip("._-")
+    # Имя без единой буквы или цифры («...», «___») Jira покажет как мусор —
+    # такие заменяем на предсказуемое screenshot_N.
+    if not any(c.isalnum() for c in stem):
+        stem = f"screenshot_{index + 1}"
+    return f"{stem}.{ext}"
+
+
+def with_screenshots(report: str, names: list[str]) -> str:
+    """Добавляет в отчёт раздел «Скриншоты» с картинками.
+
+    Разметка изображений в Jira превращается в !имя|thumbnail! (см. _md_to_jira),
+    и скрин виден прямо в описании дефекта, а не только висит вложением.
+    Раньше от картинки в описание попадал лишь распознанный текст (OCR).
+
+    Раздел вставляется ПЕРЕД строкой «Приоритет: X»: она по шаблону последняя,
+    и разбор отчёта опирается на это.
+    """
+    if not names:
+        return report
+
+    block = "\n".join(["", "## Скриншоты", ""] + [f"![{n}]({n})" for n in names])
+
+    matches = list(re.finditer(r"^\s*\*{0,2}Приоритет\*{0,2}\s*[:\-].*$", report, flags=re.M))
+    if not matches:
+        return report.rstrip() + "\n" + block
+    last = matches[-1]
+    return report[:last.start()].rstrip() + "\n" + block + "\n\n" + report[last.start():]
+
 
 def _format_bug_sync(platform: str, feature: str, description: str, provider: str, requirements_context: str = "") -> str:
     from agents.llm_client import LLMClient, Message
@@ -134,16 +180,24 @@ async def format_bug(
     from agents.file_parser import parse_file
     from db.requirements_store import RequirementsStore
 
-    # Парсим вложения и добавляем их текст к описанию
+    # Парсим вложения и добавляем их текст к описанию.
+    # Скриншоты дополнительно попадают в описание картинками (раздел «Скриншоты»),
+    # а не только распознанным текстом.
     attachment_texts = []
-    for f in attachments:
-        if f and f.filename:
-            try:
-                data = await f.read()
-                text = parse_file(data, f.filename)
-                attachment_texts.append(f"[{f.filename}]:\n{text}")
-            except Exception as e:
-                attachment_texts.append(f"[{f.filename}]: не удалось прочитать — {e}")
+    screenshot_names: list[str] = []
+    for idx, f in enumerate(attachments):
+        if not (f and f.filename):
+            continue
+        if is_image(f.filename):
+            screenshot_names.append(safe_attachment_name(f.filename, idx))
+        try:
+            data = await f.read()
+            text = parse_file(data, f.filename)
+            attachment_texts.append(f"[{f.filename}]:\n{text}")
+        except Exception as e:
+            # Нераспознанный скрин — не повод терять саму картинку: имя уже
+            # в списке, файл уйдёт вложением и будет виден в описании.
+            attachment_texts.append(f"[{f.filename}]: не удалось прочитать — {e}")
 
     full_description = description
     if attachment_texts:
@@ -168,7 +222,8 @@ async def format_bug(
             _format_bug_sync,
             platform, feature, full_description, provider, requirements_context,
         )
-        return {"report": report, **_parse_report(report)}
+        report = with_screenshots(report, screenshot_names)
+        return {"report": report, "screenshots": screenshot_names, **_parse_report(report)}
     except Exception as e:
         from agents.llm_client import LLMClient
         is_llm, friendly = LLMClient.classify_error(e)

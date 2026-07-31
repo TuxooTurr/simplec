@@ -6,12 +6,14 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Database, Settings,
   LogOut, User, Play, ScrollText, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
 import { ThemeToggle } from "./ui";
+import WhatsNewModal from "./WhatsNewModal";
+import { LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -70,11 +72,21 @@ export default function Sidebar() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [releaseUnseen, setReleaseUnseen] = useState(false);
 
   useEffect(() => {
     setOrder(loadList(ORDER_KEY));
     setHidden(loadList(HIDDEN_KEY));
     setMounted(true);
+
+    // Окно релиза открывается само один раз — после этого остаётся кнопка.
+    // Читаем localStorage только здесь: на сервере его нет, а разметка первого
+    // рендера должна совпасть с серверной, иначе React ругается на гидрацию.
+    if (!isReleaseSeen(LATEST_RELEASE.id)) {
+      setReleaseUnseen(true);
+      setWhatsNewOpen(true);
+    }
   }, []);
 
   const persist = (nextOrder: string[], nextHidden: string[]) => {
@@ -259,6 +271,22 @@ export default function Sidebar() {
           </div>
         )}
         <div className="px-4 pb-3 flex items-center justify-end gap-1">
+          {/* Что нового — точка гаснет, как только релиз просмотрен */}
+          <button
+            type="button"
+            onClick={() => setWhatsNewOpen(true)}
+            title="Что нового"
+            aria-label="Что нового в этой версии"
+            className="relative p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors"
+          >
+            <Sparkles className="w-4 h-4" />
+            {releaseUnseen && (
+              <span
+                aria-hidden="true"
+                className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-bg-card"
+              />
+            )}
+          </button>
           <ThemeToggle />
           {isSuperuser && (
             <Link
@@ -271,6 +299,15 @@ export default function Sidebar() {
           )}
         </div>
       </div>
+
+      <WhatsNewModal
+        open={whatsNewOpen}
+        onClose={() => {
+          setWhatsNewOpen(false);
+          markReleaseSeen(LATEST_RELEASE.id);
+          setReleaseUnseen(false);
+        }}
+      />
     </aside>
   );
 }

@@ -552,6 +552,102 @@ def list_epics(project: str = Query(...), db: Session = Depends(get_db)) -> dict
 
 # ── Routes: создание дефекта ─────────────────────────────────────────────────
 
+def _reference_candidates(item: dict, schema: str) -> list[Any]:
+    """Форматы значения справочного поля, от наиболее вероятного к запасным.
+
+    Один и тот же customfield в разных инстансах Jira объявлен по-разному, а на
+    экране создания поля может не быть вовсе — тогда схема неизвестна. Перебор
+    нужен, чтобы не гадать: первый принятый формат и есть правильный.
+    """
+    obj = dict(item)
+    forms: list[Any] = []
+    if schema == "array":
+        forms = [[obj], [{"id": item["id"]}], [item["value"]], obj, item["value"]]
+    elif schema and schema != "string":
+        forms = [obj, {"id": item["id"]}, [obj], item["value"]]
+    elif schema == "string":
+        forms = [item["value"], [obj], obj]
+    else:
+        # Схемы нет (поле не на экране создания либо createmeta недоступен).
+        # Начинаем с формы из выгрузки реальных дефектов SBER911.
+        forms = [[obj], obj, item["value"], [{"id": item["id"]}]]
+    # Без дублей, порядок сохраняем
+    seen, uniq = set(), []
+    for f in forms:
+        marker = json.dumps(f, sort_keys=True, ensure_ascii=False)
+        if marker not in seen:
+            seen.add(marker)
+            uniq.append(f)
+    return uniq
+
+
+def _is_field_filled(value: Any) -> bool:
+    return not (value is None or value == "" or value == [] or value == {})
+
+
+def _ensure_reference_fields(cfg: dict, key: str, resolved: dict,
+                             targets: list[tuple[str, str, dict]],
+                             warnings: list[str]) -> None:
+    """Проверяет, что справочные поля реально записались, и дозаполняет их.
+
+    Jira может принять создание задачи и молча проигнорировать поле, которого
+    нет на экране создания, — задача заводится «успешно», а ИТ-услуга и КЭ
+    остаются пустыми. Поэтому читаем задачу обратно и, если поле пустое,
+    доставляем его отдельным редактированием: на экране редактирования поле
+    обычно доступно, даже когда на экране создания его нет.
+    """
+    ids = [fid for fid, _, _ in targets]
+    try:
+        issue = _jira_request(cfg, "GET", f"/rest/api/2/issue/{key}",
+                              params={"fields": ",".join(ids)})
+    except HTTPException as e:
+        logger.warning("Jira create: %s не удалось перечитать поля: %s", key, e.detail)
+        return
+
+    current = issue.get("fields", {}) or {}
+    for fid, label, item in targets:
+        if _is_field_filled(current.get(fid)):
+            logger.info("Jira create: %s поле %s (%s) проставлено", key, label, fid)
+            continue
+
+        schema = _field_schema_type(resolved, fid)
+        on_screen = fid in (resolved.get("_by_id") or {})
+        logger.warning(
+            "Jira create: %s поле %s (%s) осталось пустым — на экране создания: %s, схема: %s. "
+            "Дозаполняю редактированием.",
+            key, label, fid, "да" if on_screen else "НЕТ", schema or "неизвестна",
+        )
+
+        filled = False
+        for candidate in _reference_candidates(item, schema):
+            try:
+                _jira_request(cfg, "PUT", f"/rest/api/2/issue/{key}",
+                              json_body={"fields": {fid: candidate}})
+            except HTTPException as e:
+                logger.info("Jira create: %s формат для %s не принят (%s)", key, label, e.detail)
+                continue
+            # Приняли запрос — убеждаемся, что значение действительно легло
+            try:
+                check = _jira_request(cfg, "GET", f"/rest/api/2/issue/{key}",
+                                      params={"fields": fid})
+            except HTTPException:
+                filled = True
+                break
+            if _is_field_filled((check.get("fields", {}) or {}).get(fid)):
+                logger.info("Jira create: %s поле %s заполнено форматом %s",
+                            key, label, json.dumps(candidate, ensure_ascii=False)[:120])
+                filled = True
+                break
+
+        if not filled:
+            warnings.append(
+                f"«{label}» не проставилась в {key}: поле "
+                + ("есть на экране создания, но Jira его не приняла"
+                   if on_screen else "отсутствует на экране создания и редактирования")
+                + ". Проставьте вручную и покажите это сообщение администратору Jira."
+            )
+
+
 @router.post("/api/jira/create")
 def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict:
     if not body.project.strip():
@@ -665,6 +761,16 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             )
     except HTTPException as e:
         logger.warning("Jira create: %s не удалось получить переходы статуса: %s", key, e.detail)
+
+    # ИТ-услуга и КЭ обязательны по процессу, но Jira может принять создание и
+    # молча их проигнорировать — проверяем факт и дозаполняем.
+    if is_sber911 and key:
+        _ensure_reference_fields(
+            cfg, key, resolved,
+            [(JC.FIELD_IT_SERVICE, "ИТ-услуга", JC.IT_SERVICE),
+             (resolved.get("ke", {}).get("id") or JC.FIELD_KE, "КЭ", JC.KE)],
+            warnings,
+        )
 
     return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}",
             "warnings": warnings}

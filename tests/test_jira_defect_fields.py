@@ -4,6 +4,8 @@
 ещё. На UI их нет — пользователю нечего выбирать.
 """
 
+import json
+
 import pytest
 
 import backend.api.jira_constants as JC
@@ -152,3 +154,110 @@ def test_на_чужом_проекте_фиксированные_значен�
     JD.create_defect(body, db=None)
     assert IT_SERVICE_FIELD not in captured_payload
     assert KE_FIELD not in captured_payload
+
+
+# ── Jira приняла создание, но поля не записала ───────────────────────────────
+
+class FakeJira:
+    """Jira, которая при создании молча игнорирует справочные поля.
+
+    Так ведёт себя реальный инстанс, когда поля нет на экране создания: задача
+    заводится «успешно», а ИТ-услуга и КЭ остаются пустыми.
+    """
+
+    def __init__(self, accepts=None, edit_ok=True):
+        # Форматы, которые принимает редактирование. None = принимает любой.
+        self.accepts = accepts
+        self.edit_ok = edit_ok
+        self.stored: dict = {}
+        self.edit_attempts: list = []
+
+    def __call__(self, cfg, method, path, json_body=None, params=None, **kw):
+        if method == "POST" and path == "/rest/api/2/issue":
+            return {"key": "SBER911-1"}                 # поля игнорируются
+        if method == "GET" and path.endswith("/transitions"):
+            return {"transitions": [{"name": "В работу"}]}
+        if method == "GET" and path.startswith("/rest/api/2/issue/"):
+            want = (params or {}).get("fields", "").split(",")
+            return {"fields": {f: self.stored.get(f) for f in want if f}}
+        if method == "PUT" and path.startswith("/rest/api/2/issue/"):
+            fid, value = next(iter(json_body["fields"].items()))
+            self.edit_attempts.append((fid, value))
+            if not self.edit_ok:
+                raise JD.HTTPException(400, "поле недоступно")
+            if self.accepts is not None and value != self.accepts:
+                raise JD.HTTPException(400, "неверный формат значения")
+            self.stored[fid] = value
+            return {}
+        return {}
+
+
+@pytest.fixture
+def fake_jira(monkeypatch):
+    def _make(**kw):
+        jira = FakeJira(**kw)
+        monkeypatch.setattr(JD, "_jira_request", jira)
+        monkeypatch.setattr(JD, "_load_cfg", lambda db: {
+            "base_url": "https://jira.example", "token": "t", "token_path": "",
+            "ssl_verify": False, "labels": [], "issuetype": "Дефект",
+        })
+        monkeypatch.setattr(JD, "_resolve_fields",
+                            lambda cfg, project, issuetype: _schema("array", IT_SERVICE_FIELD, KE_FIELD))
+        return jira
+    return _make
+
+
+def test_поля_дозаполняются_если_создание_их_проглотило(fake_jira):
+    """Главный сценарий обращения: дефект создан, а ИТ-услуга и КЭ пустые."""
+    jira = fake_jira()
+    res = JD.create_defect(_create(["Back-end"]), db=None)
+
+    assert res["key"] == "SBER911-1"
+    assert jira.stored[IT_SERVICE_FIELD] == [dict(JC.IT_SERVICE)]
+    assert jira.stored[KE_FIELD] == [dict(JC.KE)]
+    assert not [w for w in res["warnings"] if "не проставилась" in w]
+
+
+def test_подбирается_формат_который_jira_принимает(fake_jira):
+    """Инстанс ждёт одиночный объект, а не массив — перебор должен дойти до него."""
+    jira = fake_jira(accepts=dict(JC.IT_SERVICE))
+    JD.create_defect(_create(), db=None)
+
+    assert jira.stored[IT_SERVICE_FIELD] == dict(JC.IT_SERVICE)
+    # Первым пробовали массив — значит перебор реально шёл по вариантам
+    assert jira.edit_attempts[0][1] == [dict(JC.IT_SERVICE)]
+
+
+def test_если_поле_недоступно_пользователь_видит_предупреждение(fake_jira):
+    """Молчаливая потеря обязательного поля недопустима — говорим прямо."""
+    fake_jira(edit_ok=False)
+    res = JD.create_defect(_create(), db=None)
+
+    texts = " ".join(res["warnings"])
+    assert "ИТ-услуга" in texts and "не проставилась" in texts
+    assert "КЭ" in texts
+
+
+def test_уже_заполненные_поля_не_трогаем(fake_jira):
+    jira = fake_jira()
+    jira.stored[IT_SERVICE_FIELD] = [dict(JC.IT_SERVICE)]
+    jira.stored[KE_FIELD] = [dict(JC.KE)]
+
+    JD.create_defect(_create(), db=None)
+    assert jira.edit_attempts == [], "лишние правки уже корректной задачи"
+
+
+@pytest.mark.parametrize("schema, first", [
+    ("array",  [dict(JC.KE)]),
+    ("option", dict(JC.KE)),
+    ("string", JC.KE["value"]),
+    ("",       [dict(JC.KE)]),   # схема неизвестна — начинаем с формы из боевой выгрузки
+])
+def test_порядок_кандидатов_зависит_от_схемы(schema, first):
+    assert JD._reference_candidates(JC.KE, schema)[0] == first
+
+
+def test_кандидаты_без_дублей():
+    for schema in ("array", "option", "string", ""):
+        forms = JD._reference_candidates(JC.IT_SERVICE, schema)
+        assert len(forms) == len({json.dumps(f, sort_keys=True, ensure_ascii=False) for f in forms})

@@ -8,7 +8,7 @@ import {
   CircleCheck, CircleX, Wifi, WifiOff, RefreshCw, Eraser,
   RotateCcw, Eye, EyeOff, Clock, User, List,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, Copy,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import {
@@ -1057,6 +1057,28 @@ export default function AlertsSection() {
     });
   };
 
+  // Копия создаётся сразу на сервере (новый id, та же папка) и встаёт в списке
+  // следующей за оригиналом — так её видно рядом и не надо искать в конце.
+  const handleDuplicate = async (s: AlertScript) => {
+    try {
+      const copy = await saveAlertScript({
+        name:                  `${s.name} (копия)`,
+        topic:                 s.topic,
+        notebook:              s.notebook.map(c => ({ ...c })),
+        dynamic_params:        s.dynamic_params.map(p => ({ ...p, options: [...(p.options ?? [])] })),
+        visible_to_monitoring: s.visible_to_monitoring,
+        folder_id:             s.folder_id ?? null,
+      });
+      setScripts(prev => [...prev, copy]);
+      const ids = sortByPref(scripts).map(x => x.id);
+      const at = ids.indexOf(s.id);
+      ids.splice(at < 0 ? ids.length : at + 1, 0, copy.id);
+      setScriptOrder(ids);
+      localStorage.setItem("st_alert_script_order", JSON.stringify(ids));
+      setSelectedId(copy.id);
+    } catch (e) { alert(String(e)); }
+  };
+
   const handleDelete = async (s: AlertScript) => {
     if (!confirm(`Удалить алерт "${s.name}"?`)) return;
     try {
@@ -1239,6 +1261,7 @@ export default function AlertsSection() {
                   {isSuperuser && (
                     <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0 mt-0.5">
                       <button onClick={e => { e.stopPropagation(); setEditScript(s); setShowModal(true); }} className="p-1 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Редактировать"><Pencil className="w-3 h-3" /></button>
+                      <button onClick={e => { e.stopPropagation(); handleDuplicate(s); }} className="p-1 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Копировать"><Copy className="w-3 h-3" /></button>
                       <button onClick={e => { e.stopPropagation(); handleDelete(s); }} className="p-1 rounded text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить"><Trash2 className="w-3 h-3" /></button>
                     </div>
                   )}
@@ -1360,6 +1383,7 @@ export default function AlertsSection() {
                             {isSuperuser && (
                               <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0 mt-0.5">
                                 <button onClick={e => { e.stopPropagation(); setEditScript(s); setShowModal(true); }} className="p-0.5 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Редактировать"><Pencil className="w-2.5 h-2.5" /></button>
+                                <button onClick={e => { e.stopPropagation(); handleDuplicate(s); }} className="p-0.5 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Копировать"><Copy className="w-2.5 h-2.5" /></button>
                                 <button onClick={e => { e.stopPropagation(); handleDelete(s); }} className="p-0.5 rounded text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить"><Trash2 className="w-2.5 h-2.5" /></button>
                               </div>
                             )}

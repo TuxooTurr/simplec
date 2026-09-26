@@ -5,7 +5,7 @@ import {
   Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone,
   BarChart2, Palette, GitBranch, PlugZap,
   History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle, Trash2,
-  Paperclip, Image as ImageIcon, FileText, File as FileIcon, ListChecks, X,
+  Paperclip, Image as ImageIcon, FileText, File as FileIcon, ListChecks, X, RotateCcw,
 } from "lucide-react";
 import { formatBug, addDefect, listRequirements, type Requirement } from "@/lib/api";
 import { SectionSettingsButton } from "@/components/ui";
@@ -137,6 +137,9 @@ export default function BugsSection() {
   const [jiraOpen, setJiraOpen]       = useState(false);
   const [platform, setPlatform]       = useState("Back");
   const [feature, setFeature]         = useState("");
+  // Эпик Jira живёт здесь, а не в панели: панель размонтируется при каждой
+  // генерации, а следующий дефект по той же фиче обычно идёт в тот же эпик.
+  const [jiraEpicKey, setJiraEpicKey] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading]         = useState(false);
   const [report, setReport]           = useState("");
@@ -225,6 +228,27 @@ export default function BugsSection() {
       }, 8000);
     }
   }, []);
+
+  /* ── Следующий дефект / с нуля ──────────────────────────────────── */
+
+  // Следующий дефект по той же фиче: очищаем только то, что относится
+  // к конкретному дефекту. Компонент, фича, требования и эпик остаются.
+  const handleNextBug = () => {
+    setReport("");
+    setParsed(null);
+    setDescription("");
+    setBugError(null);
+    setAttachedFiles([]);
+    setScreenshots({ files: [], names: [] });
+  };
+
+  const handleResetAll = () => {
+    handleNextBug();
+    setFeature("");
+    setPlatform("Back");
+    setSelectedReqIds([]);
+    setJiraEpicKey("");
+  };
 
   /* ── Format handler ─────────────────────────────────────────────── */
 
@@ -623,19 +647,20 @@ export default function BugsSection() {
               <h3 className="text-sm font-semibold text-text-main">Баг-репорт</h3>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => {
-                    setReport("");
-                    setParsed(null);
-                    setDescription("");
-                    setFeature("");
-                    setBugError(null);
-                    setPlatform("Back");
-                    setAttachedFiles([]);
-                  }}
+                  onClick={handleNextBug}
+                  title="Компонент, фича, требования и эпик сохранятся"
                   className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
                     text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 active:scale-[0.97]"
                 >
                   <Bug className="w-3.5 h-3.5" /> Новый дефект
+                </button>
+                <button
+                  onClick={handleResetAll}
+                  title="Очистить всё, включая фичу и эпик"
+                  className="flex items-center gap-1.5 text-sm px-3 py-1.5 border border-border-main rounded-lg
+                    text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 active:scale-[0.97]"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" /> С нуля
                 </button>
                 <button
                   onClick={handleCopy}
@@ -663,6 +688,8 @@ export default function BugsSection() {
             priorityHint={parsed?.priority || ""}
             screenshots={screenshots.files}
             screenshotNames={screenshots.names}
+            epicKey={jiraEpicKey}
+            onEpicKeyChange={setJiraEpicKey}
           />
         )}
 

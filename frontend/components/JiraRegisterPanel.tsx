@@ -37,6 +37,37 @@ const PRIORITY_SYNONYMS: Record<string, string[]> = {
   "низкий":      ["низк", "low", "minor", "trivial"],
 };
 
+/* Список эпиков сохраняется между генерациями и перезагрузками страницы.
+   Панель размонтируется на каждой новой генерации отчёта, и раньше список
+   пропадал вместе с ней — приходилось выгружать заново перед каждым дефектом.
+   Эпики меняются редко, поэтому обновление — только по кнопке. */
+const EPICS_CACHE_KEY = "st_jira_epics";
+
+type EpicsCache = { epics: JiraEpic[]; loadedAt: number };
+
+function readEpicsCache(project: string): EpicsCache | null {
+  try {
+    const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
+    const c = all[project];
+    return c && Array.isArray(c.epics) ? c : null;
+  } catch { return null; }
+}
+
+function writeEpicsCache(project: string, epics: JiraEpic[]): EpicsCache {
+  const entry = { epics, loadedAt: Date.now() };
+  try {
+    const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
+    localStorage.setItem(EPICS_CACHE_KEY, JSON.stringify({ ...all, [project]: entry }));
+  } catch { /* кэш не критичен: список останется в памяти панели */ }
+  return entry;
+}
+
+function formatLoadedAt(ts: number): string {
+  return new Date(ts).toLocaleString("ru-RU", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
 function matchPriority(hint: string, jiraPriorities: string[]): string {
   const h = hint.trim().toLowerCase();
   if (!h) return "";
@@ -53,8 +84,12 @@ function matchPriority(hint: string, jiraPriorities: string[]): string {
 
 export default function JiraRegisterPanel({
   summary, description, priorityHint = "", screenshots = [], screenshotNames = [],
+  epicKey, onEpicKeyChange,
 }: {
   summary: string; description: string; priorityHint?: string;
+  /** Выбранный эпик хранит родитель: «Новый дефект» по той же фиче его не сбрасывает. */
+  epicKey: string;
+  onEpicKeyChange: (key: string) => void;
   /** Скриншоты из баг-репорта — уходят вложениями к созданному дефекту. */
   screenshots?: File[];
   /** Имена, под которыми на них ссылается описание (разметка !имя!). */
@@ -76,9 +111,9 @@ export default function JiraRegisterPanel({
   const [components, setComponents] = useState<string[]>([]);
   const [standType, setStandType] = useState("");
 
-  // Эпик: кнопка «Выгрузить» → полный список активных эпиков → Select с поиском
-  const [epicKey, setEpicKey] = useState("");
-  const [epics, setEpics] = useState<JiraEpic[]>([]);
+  // Эпик: список из кэша, кнопка «Выгрузить/Обновить» → Select с поиском
+  const [epicsCache, setEpicsCache] = useState<EpicsCache | null>(() => readEpicsCache(PROJECT));
+  const epics = epicsCache?.epics ?? [];
   const [epicsLoading, setEpicsLoading] = useState(false);
   const [epicsErr, setEpicsErr] = useState("");
 
@@ -125,7 +160,7 @@ export default function JiraRegisterPanel({
     setEpicsLoading(true); setEpicsErr("");
     try {
       const r = await loadJiraEpics(PROJECT);
-      setEpics(r.epics);
+      setEpicsCache(writeEpicsCache(PROJECT, r.epics));
       if (r.epics.length === 0) setEpicsErr("Активных эпиков не найдено");
     } catch (e) { setEpicsErr(String(e)); }
     setEpicsLoading(false);
@@ -292,12 +327,12 @@ export default function JiraRegisterPanel({
           </div>
         </div>
 
-        {/* Эпик: кнопка «Выгрузить» + выпадающий список с поиском */}
+        {/* Эпик: сохранённый список + кнопка «Выгрузить/Обновить» */}
         <div>
           <label className={LBL}>Эпик</label>
           <div className="flex gap-2">
             <div className="min-w-0 flex-1">
-              <Select value={epicKey} onChange={setEpicKey}
+              <Select value={epicKey} onChange={onEpicKeyChange}
                 placeholder={epics.length ? "— выберите эпик —" : "сначала выгрузите эпики"}
                 disabled={epics.length === 0}
                 searchable searchPlaceholder="Поиск эпика по названию…">
@@ -307,11 +342,15 @@ export default function JiraRegisterPanel({
             </div>
             <button onClick={handleLoadEpics} disabled={epicsLoading}
               className="px-3 py-2 border border-border-main rounded-lg text-xs font-semibold text-text-muted hover:bg-bg-subtle disabled:opacity-40 whitespace-nowrap flex-shrink-0">
-              {epicsLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Выгрузить"}
+              {epicsLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : epics.length ? "Обновить" : "Выгрузить"}
             </button>
           </div>
           {epicsErr && <p className="text-xs text-red-500 mt-1">{epicsErr}</p>}
-          {epics.length > 0 && <p className="text-xs text-text-muted mt-1">Активных эпиков: {epics.length}</p>}
+          {epicsCache && epics.length > 0 && (
+            <p className="text-xs text-text-muted mt-1">
+              Активных эпиков: {epics.length} · выгружено {formatLoadedAt(epicsCache.loadedAt)}
+            </p>
+          )}
         </div>
 
         {/* Компоненты: до 2 (второй — при выборе мобильного) */}

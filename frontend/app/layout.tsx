@@ -3,7 +3,9 @@ import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 
 export const metadata: Metadata = {
-  title: "SimpleTest — AI-генератор тест-кейсов",
+  // Страницы задают только своё имя, шаблон дописывает продукт:
+  // во вкладке браузера видно, в каком разделе пользователь.
+  title: { default: "SimpleTest", template: "%s — SimpleTest" },
   description: "Превращает требования в тест-кейсы для Jira Zephyr Scale",
 };
 

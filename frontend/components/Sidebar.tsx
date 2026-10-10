@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Zap, BookOpen, Bug, Bell, BarChart2, Scale, FlaskConical, Database, Settings,
-  LogOut, User, Play, ScrollText, GripVertical, Eye, EyeOff,
+  Zap, BookOpen, Bug, BarChart2, Database, Settings, ScrollText,
+  LogOut, User, GripVertical, Eye, EyeOff,
   SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -25,18 +25,18 @@ const NAV: {
   ai?: boolean;
   superuserOnly?: boolean;
 }[] = [
-  { id: "generation",  href: "/generation",  label: "Ручное тестирование",   Icon: Zap,          ai: true },
-  { id: "auto_model",  href: "/auto-model",  label: "Автотестирование",       Icon: FlaskConical, ai: true },
+  { id: "generation",  href: "/generation",  label: "Тестовая модель",        Icon: Zap,          ai: true },
   { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
-  { id: "jobs",        href: "/jobs",        label: "Jobs",                     Icon: Play },
   { id: "bugs",        href: "/bugs",        label: "Дефекты",                 Icon: Bug,         ai: true },
-  { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText,  ai: true },
-  { id: "alerts",      href: "/alerts",      label: "Генератор алертов",       Icon: Bell },
+  // Логи вернулись анализатором: источник — сценарий веб-коннектора (локальный MCP web).
+  { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },
-  // Генератор метрик переехал внутрь «Генераторов событий» как сценарий
-  // «Метрики ОД». Маршрут /metrics остался рабочим — старые ссылки не ломаем.
-  { id: "event_generators", href: "/event-generators", label: "Генераторы событий", Icon: BarChart2, superuserOnly: true },
-  { id: "revisor",     href: "/revisor",     label: "Ревизор",                 Icon: Scale },
+  // Хаб генераторов: Метрики ОД, ТКС, Jobs и папки алертов — плитками внутри.
+  // Открыт всем: плитки Метрик и ТКС видит только суперюзер, алерты — по
+  // доступу к скриптам (visible_to_monitoring).
+  { id: "event_generators", href: "/event-generators", label: "Генераторы событий", Icon: BarChart2 },
+  // Автотестирование и Ревизор скрыты: код разделов сохранён, Ревизор ждёт
+  // доработки через веб-коннекторы (доступа к API стендов нет).
   { id: "etalons",     href: "/etalons",     label: "Данные",                  Icon: BookOpen,    superuserOnly: true },
   { id: "model_bench", href: "/model-bench", label: "Тестирование моделей LLM", Icon: SplitSquareHorizontal, ai: true },
 ];

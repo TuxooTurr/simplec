@@ -106,11 +106,12 @@ SimpleTest/
 │   ├── app/                 # Next.js App Router страницы
 │   ├── components/
 │   │   ├── sections/        # Основные секции UI
-│   │   │   ├── GenerationSection.tsx   # Генерация тест-кейсов
+│   │   │   ├── GenerationSection.tsx   # «Тестовая модель»: генерация тест-кейсов
 │   │   │   ├── BugsSection.tsx         # Баг-трекер
-│   │   │   ├── AutoModelSection.tsx    # Автотесты (Java)
-│   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter
-│   │   │   └── RevisorSection.tsx      # Ревизия
+│   │   │   ├── EventGeneratorsSection.tsx # Хаб: Метрики, ТКС, Jobs, папки алертов
+│   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)
+│   │   │   ├── AutoModelSection.tsx    # Автотесты (Java) — скрыт, код сохранён
+│   │   │   └── RevisorSection.tsx      # Ревизия — скрыт, код сохранён
 │   │   ├── ExportPanel.tsx  # Экспорт в Jira Zephyr Scale
 │   │   └── NotionRenderer.tsx  # Markdown → Notion-стиль
 │   ├── contexts/
@@ -119,6 +120,8 @@ SimpleTest/
 │   └── lib/
 │       ├── api.ts           # HTTP клиент к бэкенду
 │       └── useGeneration.ts # Реэкспорт из GenerationContext
+├── webconnect/              # Веб-коннекторы: запись действий под сессией, шаблоны, повтор
+├── mcp_server/              # Локальный MCP-сервер (GigaCode): SimpleTest, dropup, разбор логов
 ├── agents/
 │   ├── llm_client.py        # Универсальный LLM клиент (все провайдеры)
 │   ├── layered_generator.py # 4-слойный генератор тест-кейсов

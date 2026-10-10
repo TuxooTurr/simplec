@@ -1,8 +1,6 @@
-import type { Metadata } from "next";
-import JobsSection from "@/components/sections/JobsSection";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Jobs" };
-
-export default function JobsPage() {
-  return <JobsSection />;
+// Jobs переехали в «Генераторы событий» плиткой. Старые ссылки открывают её сразу.
+export default function Page() {
+  redirect("/event-generators?open=jobs");
 }

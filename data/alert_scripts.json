@@ -171,7 +171,7 @@
   },
   {
     "id": "5a00343c",
-    "name": "ERKC-Mon",
+    "name": "МСР-Мониторинг (Данные ЕРКЦК\\ЦКР)",
     "topic": "",
     "notebook": [
       {
@@ -192,7 +192,7 @@
     ],
     "visible_to_monitoring": false,
     "folder_id": "fld-7b490180",
-    "created_at": "2026-07-10T15:07:57.292905+00:00"
+    "created_at": "2026-09-04T08:40:31.255857+00:00"
   },
   {
     "id": "1dd9c2d7",
@@ -940,5 +940,1000 @@
     "visible_to_monitoring": false,
     "folder_id": "fld-62f453f0",
     "created_at": "2026-07-28T15:22:40.379526+00:00"
+  },
+  {
+    "id": "b7ea462d",
+    "name": "Инцидент из SberESM",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785681132977-68uy",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785681135197-lakj",
+        "type": "init",
+        "source": "import os\nimport json\nimport uuid\nimport random\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ====== KAFKA ======\n# ⚠️ Замени на свой стенд\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\n\n# Топики (Sigma / Omega в зависимости от проверяемого пути)\nINCIDENT_TOPIC = \"repl.sber_esm_input\"  # Sigma → incidentit-esm-integ-service\n# INCIDENT_TOPIC = \"sber_esm_input\"     # Omega → полный путь через SEDR\n\n# Тестовый префикс — не пересекается с prod-инцидентами\nINC_TEST_PREFIX = \"INC9\"\n\n# Локальный реестр отправленных инцидентов\nINCIDENT_REGISTRY_PATH = os.path.abspath(\"./incident_test_registry.json\")\n\nproducer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):  return obj.encode(\"utf-8\")\n    if isinstance(obj, dict): return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_iso(shift_sec: int = 0) -> str:\n    \"\"\"UTC в ISO-8601, как ожидает SberESM.\"\"\"\n    from datetime import timedelta\n    return (datetime.now(timezone.utc) + timedelta(seconds=shift_sec)).strftime(\"%Y-%m-%dT%H:%M:%SZ\")\n\n\ndef make_test_inc_id(suffix: int) -> str:\n    \"\"\"Тестовый businessId, например: INC9021744270.\"\"\"\n    return f\"{INC_TEST_PREFIX}{datetime.now().strftime('%d%H%M%S')}{suffix % 10}\"\n\n\n# ── Реестр инцидентов ──────────────────────────────────────────────────\ndef _load_registry() -> dict:\n    if not os.path.exists(INCIDENT_REGISTRY_PATH):\n        return {}\n    try:\n        with open(INCIDENT_REGISTRY_PATH, \"r\", encoding=\"utf-8\") as f:\n            return json.load(f)\n    except Exception:\n        return {}\n\n\ndef _save_registry(reg: dict) -> None:\n    with open(INCIDENT_REGISTRY_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(reg, f, ensure_ascii=False, indent=2)\n\n\ndef registry_put(record: dict) -> None:\n    reg = _load_registry()\n    reg[record[\"businessId\"]] = record\n    _save_registry(reg)\n\n\ndef registry_get(business_id: str) -> dict | None:\n    return _load_registry().get(business_id)\n\n\ndef registry_list(prefix: str = INC_TEST_PREFIX, limit: int = 20) -> list[str]:\n    reg = _load_registry()\n    ids = [bid for bid in reg.keys() if bid.startswith(prefix)]\n    ids.sort(reverse=True)\n    return ids[:limit]\n\n\nprint(\"✅ Константы и утилиты загружены\")\nprint(f\"   Брокеры:        {BROKERS}\")\nprint(f\"   Топик:          {INCIDENT_TOPIC}\")\nprint(f\"   Префикс тест.:  {INC_TEST_PREFIX}\")\nprint(f\"   Реестр:         {INCIDENT_REGISTRY_PATH}\")"
+      },
+      {
+        "id": "cell-1785681147430-ckkb",
+        "type": "init",
+        "source": "def make_incident_record(\n    business_id: str,\n    priority_code: str = \"HIGH\",\n    state_code: str = \"IN_WORK\",\n    inc_type: str = \"AVAILABILITY_INC\",\n    stand_type: str = None,\n    potential_vpi: bool = False,\n    is_auto_healing: bool = None,\n    **overrides,\n) -> dict:\n    \"\"\"Формирует ОДНУ запись инцидента SberESM.\"\"\"\n    rec = {\n        # ─── Идентификаторы ───────────────────────────────────────────\n        \"id\": str(uuid.uuid4()),                       # → sberesm_id (uuid)\n        \"businessId\": business_id,                     # → sm_id (номер инцидента)\n        \"IntegrationHubId\": \"IHIM000099999\",\n        \n        # ─── РОУТИНГ (определяет топики) ──────────────────────────────\n        \"priorityCode\": priority_code,                 # HIGH|MEDIUM|LOW|IMPORTANT|CRITICAL\n        \"stateCode\": state_code,                       # REGISTERED|IN_WORK|WAITING|COMPLETED|CLOSED\n        \"incType\": inc_type,                           # AVAILABILITY_INC|PROD_STAND_INC|...\n        \"potentialVPI\": potential_vpi,                 # true|false\n        \"standType\": stand_type,                       # PSI|IFT|LT|MAJOR-GO (для PROD_STAND_INC)\n        \n        # ─── Услуга / КЭ ──────────────────────────────────────────────\n        \"itService\": {\n            \"guid\": str(uuid.uuid4()),\n            \"code\": \"CI05610496\",                      # КЭ услуги → маппинг sd_system\n        },\n        \"configurationElement\": \"CI00221084\",          # V3: дочерний элемент\n        \n        # ─── Содержание ───────────────────────────────────────────────\n        \"title\": \"Тестовый инцидент Sber911\",          # V3 → short_description\n        \"description\": \"Заканчивается место под архивные БД TPS2\",\n        \"reasonINC\": \"DEF_PPO\",                        # NSI.31 Причины инцидента\n        \"priorityMethod\": \"BY_TS\",                     # MANUALLY|BY_TS|BY_3612\n        \"largeScale\": False,\n        \"impactCustomService\": True,                   # V3\n        \n        # ─── Люди и группы ────────────────────────────────────────────\n        \"workGroup\": \"7fcf8429-24d1-30e3-8ba3-5670eaf99615\",  # GUID РГ\n        \"assignee\": {\"personalNumber\": \"00994015\", \"idBhb\": None, \"idEps\": None},\n        \"createdBy\": {\"personalNumber\": \"00887737\", \"idBhb\": None, \"idEps\": None},\n        \"systemCreatedBy\": \"CI00233293\",\n        \n        # ─── Даты ─────────────────────────────────────────────────────\n        \"createdAt\": now_iso(-3600),\n        \"updatedAt\": now_iso(),\n        \"closeDate\": None,\n        \"targetDate\": now_iso(7200),\n        \"postedBySberESM\": now_iso(),\n        \n        # ─── V4: Автохилинг ───────────────────────────────────────────\n        \"resolutionDescription\": None,\n        \"startDate\": None,\n        \"finishDate\": None,\n        \"factStartDate\": None,\n        \"factFinishDate\": None,\n        \n        # ─── V6: дополнительные атрибуты ──────────────────────────────\n        \"expired\": False,\n        \"standIn\": False,\n        \"registeredByEventId\": True,\n        \"creationType\": \"AUTO\",\n        \n        # ─── Источник ─────────────────────────────────────────────────\n        \"sourceSystemList\": [{\"id\": \"SberESM\", \"incidentId\": None,\n                              \"incidentNumber\": None, \"primary\": True}],\n    }\n    \n    # Добавить isAutoHealing только если явно указан\n    if is_auto_healing is not None:\n        rec[\"isAutoHealing\"] = is_auto_healing\n    \n    rec.update(overrides)\n    return rec\n\n\ndef make_incident_message(records: list) -> dict:\n    return records[0] if len(records) == 1 else {\"incidents\": records}\n\n\nprint(\"✅ Шаблон инцидента загружен\")"
+      },
+      {
+        "id": "cell-1785681165448-qr4l",
+        "type": "init",
+        "source": "producer = KafkaProducer(**producer_kafka_config)\nprint(f\"✅ Producer создан, брокеры: {BROKERS}\")\n\n\ndef send_to_kafka(topic: str, message: dict, key: str = None) -> None:\n    msg_key = (key or str(uuid.uuid4())).encode(\"utf-8\")\n    future = producer.send(topic, value=get_byte_string(message), key=msg_key)\n    result = future.get(timeout=15)\n    print(f\"✅ Отправлено  topic={result.topic} \"\n          f\"partition={result.partition} offset={result.offset}\")"
+      },
+      {
+        "id": "cell-1785681195373-rvol",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════════\n# 🎛  ПОЛЯ РОУТИНГА — меняй для проверки разных ветвей логики\n# ════════════════════════════════════════════════════════════════════════════\n\nOVERRIDES = {\n    # Основной роутинг\n    \"priorityCode\": \"HIGH\",                           # HIGH|MEDIUM|LOW|IMPORTANT|CRITICAL\n    \"stateCode\": \"IN_WORK\",                           # REGISTERED|IN_WORK|WAITING|COMPLETED|CLOSED\n    \"incType\": \"AVAILABILITY_INC\",                    # AVAILABILITY_INC|PROD_STAND_INC|DATA_PASS_INC|...\n    \"potentialVPI\": False,                            # true (+ MEDIUM) = ВПИ\n    \"standType\": None,                                # PSI|IFT|LT (только для PROD_STAND_INC)\n    # \"isAutoHealing\": True,                          # раскомментировать для V4\n    \n    # Опциональные поля — переопредели по необходимости\n    \"title\": \"ТЕСТ: Кастомный заголовок\",\n    \"description\": \"ТЕСТ: Кастомное описание\",\n    \"itService\": {\"guid\": str(uuid.uuid4()), \"code\": \"CI05610496\"},\n    # \"workGroup\": \"7fcf8429-24d1-30e3-8ba3-5670eaf99615\",\n}\n\nbusiness_id = make_test_inc_id(suffix=random.randint(1, 9999))\n\nrec = make_incident_record(\n    business_id=business_id,\n    **OVERRIDES,\n)\nmsg = make_incident_message([rec])\n\n# ── JSON_Body: полная замена тела (необязательно) ─────────────────────────\n# Если не заполнено или содержит плейсхолдер — используется сгенерированное выше.\n# Если заполнено валидным JSON — полностью заменяет тело.\nJSON_BODY = r\"\"\"__JSON_BODY__\"\"\"\n\nif JSON_BODY.strip() and \"__JSON_BODY\" not in JSON_BODY:\n    try:\n        msg = json.loads(JSON_BODY)\n        _r = msg if isinstance(msg, dict) else {}\n        business_id = _r.get(\"businessId\") or business_id\n        print(\"📝 Тело заменено из поля JSON_Body\")\n    except json.JSONDecodeError as e:\n        print(f\"❌ Ошибка JSON в JSON_Body: {e}\")\n        msg = make_incident_message([rec])\n\n# ── Синхронизация sourceSystemList ─────────────────────────────────────────\nfor s in msg.get(\"sourceSystemList\", []):\n    s[\"incidentId\"] = msg[\"id\"]\n    s[\"incidentNumber\"] = msg[\"businessId\"]\n\nprint(f\"🆕 businessId = {business_id}\")\nprint(f\"   id         = {msg['id']}\")\nprint(f\"   ожидаемые топики: {['vpi-in', 'npi-in'] if msg['priorityCode'] in ('HIGH','IMPORTANT','CRITICAL') and msg['stateCode'] in ('REGISTERED','IN_WORK','WAITING') else ['?']}\")\nprint()\nprint(json.dumps(msg, indent=2, ensure_ascii=False)[:1500], \"...\")\nprint()\nsend_to_kafka(INCIDENT_TOPIC, msg, key=business_id)\n\nregistry_put(rec)\nprint(f\"💾 Сохранено в реестр: {business_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785681223116-k9f",
+        "label": "Приоритет",
+        "code_key": "priorityCode",
+        "placeholder": "HIGH",
+        "field_type": "dropdown",
+        "options": [
+          "LOW",
+          "MEDIUM",
+          "HIGH",
+          "IMPORTANT",
+          "CRITICAL"
+        ]
+      },
+      {
+        "id": "param-1785681271173-ajo",
+        "label": "Признак ПВПИ",
+        "code_key": "potentialVPI",
+        "placeholder": "False",
+        "field_type": "dropdown",
+        "options": [
+          "True",
+          "False"
+        ]
+      },
+      {
+        "id": "param-1785681349647-82x",
+        "label": "Статус",
+        "code_key": "stateCode",
+        "placeholder": "IN_WORK",
+        "field_type": "dropdown",
+        "options": [
+          "REGISTERED",
+          "INWORKGROUP_ASSIGNED",
+          "IN_WORK",
+          "WAITING",
+          "COMPLETED",
+          "CLOSED"
+        ]
+      },
+      {
+        "id": "param-1785681419604-t4j",
+        "label": "Тип инцидента",
+        "code_key": "incType",
+        "placeholder": "AVAILABILITY_INC",
+        "field_type": "dropdown",
+        "options": [
+          "AVAILABILITY_INC",
+          "DATA_PASS_INC",
+          "AFTERMATH_DEAL_INC",
+          "CONFIG_INC",
+          "VSP_INC",
+          "USER_INC",
+          "DATA_QUALITY_INC",
+          "PROD_STAND_INC"
+        ]
+      },
+      {
+        "id": "param-1785681499483-04a",
+        "label": "Стенд",
+        "code_key": "standType",
+        "placeholder": "None",
+        "field_type": "dropdown",
+        "options": [
+          "PSI",
+          "IFT",
+          "LT",
+          "MAJOR-GO",
+          "MAJOR-CHECK",
+          "DEV",
+          "RDT",
+          "HF",
+          "ST",
+          "None"
+        ]
+      },
+      {
+        "id": "param-1785681832800-ech",
+        "label": "JSON_Body",
+        "code_key": "JSON_Body",
+        "placeholder": "__JSON_BODY__",
+        "field_type": "json",
+        "options": []
+      },
+      {
+        "id": "param-1785682334948-sg2",
+        "label": "КЭ",
+        "code_key": "code",
+        "placeholder": "CI05610496",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-681eeeee",
+    "created_at": "2026-08-03T07:11:15.534032+00:00"
+  },
+  {
+    "id": "a5b677f9",
+    "name": "MCP-Инцидент (Получить инструкцию)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785695648839-1pzf",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785695650970-dnum",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785695687054-hd02",
+        "type": "loop",
+        "source": "# 1️⃣ requestIncidentInstruction — НОМЕР ИНЦИДЕНТА\nINCIDENTS = [\"INC0001543210\"]\nsent = send_tool(\"requestIncidentInstruction\", \"incidentSmId\", INCIDENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785695702941-qpw",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0001543210",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-02T09:23:24.711926+00:00"
+  },
+  {
+    "id": "9d48456b",
+    "name": "МСР-Инцидент (Активные инциденты по услуге)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785695750635-6en9",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785695760304-8lp2",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785695790316-na0f",
+        "type": "loop",
+        "source": "# 2️⃣ getActiveIncidentsByConfigElement — КЭ УСЛУГИ\nCONFIG_ELEMENTS = [\"CI01245836\"]\nsent = send_tool(\"getActiveIncidentsByConfigElement\", \"configElementSmId\", CONFIG_ELEMENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785695801845-mol",
+        "label": "CONFIG_ELEMENTS",
+        "code_key": "CONFIG_ELEMENTS",
+        "placeholder": "CI01245836",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-08-02T19:12:26.783083+00:00"
+  },
+  {
+    "id": "47a690b4",
+    "name": "МСР-Инциденты (Детали инцидента)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785695865947-ty9s",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785695868049-xaxi",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785695897750-02b6",
+        "type": "loop",
+        "source": "# 3️⃣ getIncidentDetails — НОМЕР ИНЦИДЕНТА\nINCIDENTS = [\"INC0001543210\"]\nsent = send_tool(\"getIncidentDetails\", \"incidentSmId\", INCIDENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785695901912-fsq",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0001543210",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-08-02T19:12:34.042711+00:00"
+  },
+  {
+    "id": "c67de1df",
+    "name": "МСР-Инциденты (Транскрибация по инциденту)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785695956694-bv3h",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785695958480-cead",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785695975019-5cnh",
+        "type": "loop",
+        "source": "# 4️⃣ requestIncidentTranscription — НОМЕР ИНЦИДЕНТА\nINCIDENTS = [\"INC0001543210\"]\nsent = send_tool(\"requestIncidentTranscription\", \"incidentSmId\", INCIDENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785696029845-ag4",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0001543210",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-08-02T19:12:41.441911+00:00"
+  },
+  {
+    "id": "36686f71",
+    "name": "МСР-Инциденты (Маркеры инцидента)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785696091454-5xp3",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785696093673-3gkc",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785696119090-0mqi",
+        "type": "loop",
+        "source": "# 5️⃣ getIncidentMarkers — НОМЕР ИНЦИДЕНТА\nINCIDENTS = [\"INC0000700316\"]\nsent = send_tool(\"getIncidentMarkers\", \"incidentSmId\", INCIDENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785696125600-86v",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0000700316",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-08-02T19:36:57.180625+00:00"
+  },
+  {
+    "id": "c3c03749",
+    "name": "MCP-Инциденты (Запрос TOOL)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785697617217-r25u",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785697619567-xgvf",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785697629985-1fvb",
+        "type": "loop",
+        "source": "# 0️⃣ tools/list — контрольная проверка связи (запустить первым)\nreq_id = str(uuid.uuid4())\nsend_raw({\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/list\", \"params\": {}}, req_id)\nprint(f\"\\n🔎 Ответ в mcp-out по id: {req_id}\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-04T07:44:37.825863+00:00"
+  },
+  {
+    "id": "03825fff",
+    "name": "МСР-Рабочая Группа getResponsibleByConfigElement (Список ответственных по КЭ)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785698826956-j6ds",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785698827772-csoc",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785698828621-y7xd",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ: КЭ услуги (один или список)\nCONFIG_ELEMENTS = [\"CI01245836\"]\n\nsent = send_tool(\"getResponsibleByConfigElement\",\n                 [{\"configElementSmId\": ce} for ce in CONFIG_ELEMENTS],\n                 label_key=\"configElementSmId\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699538071-hw1",
+        "label": "CONFIG_ELEMENTS",
+        "code_key": "CONFIG_ELEMENTS",
+        "placeholder": "CI01245836",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:58:45.520629+00:00"
+  },
+  {
+    "id": "44127c62",
+    "name": "МСР-Рабочая Группа getCiRelations (Ресурсно-сервисная модель КЭ)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785699090416-4423",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785699091050-1hpf",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785699091897-52fo",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ: КЭ (любого уровня — АС, ФП, Модуль, Стенд, ИР, Сервер)\nCIS = [\"CI05084263\"]\n\nsent = send_tool(\"getCiRelations\",\n                 [{\"ci\": c} for c in CIS],\n                 label_key=\"ci\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699557965-mk5",
+        "label": "CONFIG_ELEMENTS",
+        "code_key": "CIS",
+        "placeholder": "CI05084263",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:58:31.508995+00:00"
+  },
+  {
+    "id": "61e29749",
+    "name": "МСР-Рабочая Группа getInformationResources (Взаимосвязи КЭ для МпР)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785699134706-18cf",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785699135360-oftj",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785699135999-fdl7",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ: КЭ (любого уровня)\nCIS = [\"CI05084263\"]\n\nsent = send_tool(\"getInformationResources\",\n                 [{\"ci\": c} for c in CIS],\n                 label_key=\"ci\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699591066-tv0",
+        "label": "CONFIG_ELEMENTS",
+        "code_key": "CIS",
+        "placeholder": "CI05084263",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:58:18.631541+00:00"
+  },
+  {
+    "id": "e3b19244",
+    "name": "МСР-Рабочая Группа getMprCiRelations (Взаимосвязи КЭ для МпР, указанных в карточке МпР)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785699260766-7oss",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785699261418-6i9b",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785699262145-4v4t",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ:\nROOT_CI     = \"CI05084263\"                                  # корневой КЭ: АС / ФП / Модуль / Стенд\nRELATED_CIS = [\"CI05084264\", \"CI05084265\", \"CI05084266\"]    # КЭ из МпР, до 1100 шт.\nCATEGORIES  = None                                          # None = дефолт; или свой список категорий\n\nargs = {\"rootCi\": ROOT_CI, \"relatedCis\": RELATED_CIS}\nif CATEGORIES:\n    args[\"categories\"] = CATEGORIES\n\nsent = send_tool(\"getMprCiRelations\", [args], label_key=\"rootCi\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699642535-l8e",
+        "label": "ROOT_CI",
+        "code_key": "ROOT_CI",
+        "placeholder": "CI05084263",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:58:06.921224+00:00"
+  },
+  {
+    "id": "ae33cb4f",
+    "name": "МСР-Рабочая Группа getTechStandards (Техстандарт)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785699313199-qlsr",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785699314069-06oo",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785699314739-zwvk",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ: номер инцидента (один или список)\nINCIDENTS = [\"INC0001543210\"]\n\nsent = send_tool(\"getTechStandards\",\n                 [{\"incidentSmId\": v} for v in INCIDENTS],\n                 label_key=\"incidentSmId\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699710424-8gl",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0001543210",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:59:04.144536+00:00"
+  },
+  {
+    "id": "fd5f0fc0",
+    "name": "МСР-Рабочая Группа getCiDropAppClusters (Связанные КЭ с кластерами DropApp)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785699385642-s66i",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785699386261-0j92",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP WORKGROUP — ИФТ\n#  ⚠️ Не вставлять сюда посторонний текст — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_workgroup_log.json\")\n\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_workgroup\"   # ⬅️ MCP WORKGROUP\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"⚠️ ContexId — без 't'\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arguments_list, label_key=None):\n    \"\"\"arguments_list — список готовых словарей arguments (полный контроль над схемой).\"\"\"\n    if isinstance(arguments_list, dict):\n        arguments_list = [arguments_list]\n\n    print(f\"🎯 {tool}   запросов: {len(arguments_list)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for args in arguments_list:\n        req_id = str(uuid.uuid4())\n        label = str(args.get(label_key)) if label_key else json.dumps(args, ensure_ascii=False)[:40]\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": args}}\n        print(f\"\\n📤 [{label}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"label\": label, \"args\": args,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['label']:<30} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры: {BROKERS}\")\nprint(f\"   Топик:   {MCP_IN_TOPIC}\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785699386922-33z0",
+        "type": "loop",
+        "source": "# 👉 МЕНЯТЬ: корневой КЭ (АС / ФП / Модуль / Стенд)\nROOT_CIS = [\"CI00233293\"]\n\nsent = send_tool(\"getCiDropAppClusters\",\n                 [{\"rootCi\": c} for c in ROOT_CIS],\n                 label_key=\"rootCi\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785699731814-29l",
+        "label": "CONFIG_ELEMENTS",
+        "code_key": "ROOT_CIS",
+        "placeholder": "CI00233293",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:59:17.067035+00:00"
+  },
+  {
+    "id": "8f071cd2",
+    "name": "МПР",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785742220861-8i29",
+        "type": "init",
+        "source": "# %pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python\n# %pip install kafka-python\n# !pwd"
+      },
+      {
+        "id": "cell-1785742222880-ozqk",
+        "type": "init",
+        "source": "from sys import path\nimport json\nimport jwt\n# import base64\nimport random\nimport string\nimport uuid\nfrom time import sleep\nfrom datetime import datetime, timezone\nfrom kafka import KafkaConsumer, KafkaProducer, TopicPartition\n\n# KAFKA\nREQUEST_TOPIC = \"agent-in\"\nRESPONSE_TOPIC = \"agent-out\"\nPKAP_MPR_TOPIC = \"REPL.PKAP1173.911_MPR\"\nPKAP_CMDB_TOPIC=\"REPL.PKAP1173.911_CMDB\"\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\n\n# AGENT_EXPERT\n# AGENT_EXPERT_NAME = \"AI_K8S_UPDATE\"\nMPR_SERVICE_NAME = \"mrp.service\"\nAGENT_EXPERT_NAME = \"sber.digital_admin.dopscsvulns\"\n# AGENT_EXPERT_NAME = \"sber.digital_admin.mpr_vulns_change_ai_agent\"\n# AGENT_EXPERT_NAME = \"sber.change_management.mpr_vulns_change_ai_agent\"\nAGENT_EXPERT_TEST_CI = \"CI00641491\"#\"CI00058876\"#\"CI00233293\"#\"CI03421642\"#\"CI02470352\"# \"CI04036848\" # 'CI00633199', 'CI02470352', \"CI03388027'\n# AGENT_EXPERT_TEST_CI = \"CI03229258\"\n# AGENT_EXPERT_TEST_CI = \"CI00641491\" #\"CI03421642\"#\"CI02470352\"# \"CI04036848\" # 'CI00633199', 'CI02470352', 'CI03388027'\n\n# PLATFORM_AGENTs\nCHANNEL_AGENT_NAME = \"sber.support_platform.channel_agent\"\nASSISTANT_AGENT_NAME = \"sber.support_platform.channel_agent\"\n\ndef get_byte_string(obj):\n    if type(obj) == str: return obj.encode('utf-8')\n    if type(obj) == dict: return json.dumps(obj).encode('utf-8')\n    "
+      },
+      {
+        "id": "cell-1785742228196-m6kw",
+        "type": "init",
+        "source": "SECRET = \"SBER911_SECRET_KEY\"\nALG = \"HS256\"\ndef create_message_headers(sender: str = CHANNEL_AGENT_NAME, recipient: str = AGENT_EXPERT_NAME, ci: str = AGENT_EXPERT_TEST_CI):\n    AUTH_PAYLOAD = {\n        \"iss\": \"https://sber911.sberbank.ru/\",\n        \"sub\": \"Тех. пользователь Sber911\",\n        \"upn\": \"CI02000001IFTsber911\",\n        \"exp\": \"1759102365673\",\n        \"iat\": \"1755092365673\",\n        \"pid\": \"CI02000001IFTsber911\",\n        \"jti\": \"a556aee2-ceb0-4581-bb5d-9d44cdcf01c4\"\n    }\n    AUTH_TOKEN = \"Bearer \" + jwt.encode(AUTH_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n    MESSAGE_PAYLOAD = {\n        \"senderAgentName\": sender,\n        \"recipientAgentName\": recipient,\n        \"senderIdAEF\": \"CI00213821\",\n        \"recipientIdAEF\": \"CI00293210\",\n        \"systemCi\": ci,\n        \"agentModelVersion\": \"PRO 2.0\",\n        \"a2aSessionId\": \"none\",\n        \"gigaChatSessionId\": \"none\"\n    }\n\n    MESSAGE_TOKEN = jwt.encode(MESSAGE_PAYLOAD, SECRET, algorithm=ALG, headers={\"alg\": ALG, \"typ\": \"JWT\"})\n\n    HEADERS = [\n        (\"Authorization\", get_byte_string(AUTH_TOKEN)),\n        (\"MessageToken\", get_byte_string(MESSAGE_TOKEN)),\n        (\"SenderAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"senderAgentName\"])),\n        (\"RecipientAgentName\", get_byte_string(MESSAGE_PAYLOAD[\"recipientAgentName\"])),\n        (\"SystemCi\", get_byte_string(MESSAGE_PAYLOAD[\"systemCi\"])),\n        (\"Timestamp\", get_byte_string(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))),\n    ]\n    return HEADERS\ndef get_message_headers(headers):\n    parced_message_headers = {}\n    for header in headers:\n        if header[0] in (\"MessageToken\"): \n            value = jwt.decode(header[1].decode(\"utf-8\"), algorithms=ALG, options={\"verify_signature\": False})\n        else:\n            value = header[1].decode(\"utf-8\")\n        parced_message_headers[header[0]] = value\n    return parced_message_headers\ntest_headers = create_message_headers()\nprint(test_headers)\nprint(json.dumps(get_message_headers(test_headers), ensure_ascii=False, indent=4))"
+      },
+      {
+        "id": "cell-1785742234454-tw5w",
+        "type": "init",
+        "source": "def create_pkap_request_message(message: dict):\n  return get_byte_string(message)\n\ndef create_a2a_request_message(message: str, sender:str = CHANNEL_AGENT_NAME, context: dict = None):\n  parts = []\n  if context:\n    parts.append(\n      {\n        \"kind\": \"data\",\n        \"data\": {\n          \"type\": \"default_context\",\n          \"value\": json.dumps(context, ensure_ascii=False) if type(context)==dict else context,\n        }\n      }\n    )\n  parts.append(\n    {\n      \"kind\": \"data\",\n      \"data\": {\n        \"type\": \"mpr\",\n        \"value\": json.dumps(message, ensure_ascii=False) if type(message)==dict else message\n      },\n    }\n  )\n  return get_byte_string(\n    {\n      \"jsonrpc\": \"2.0\",\n      \"id\": str(uuid.uuid4()),\n      \"method\": \"message/send\",\n      \"params\": {\n        \"message\": {\n          \"contextId\": f\"mpr#{str(uuid.uuid4())}>{sender}#{str(uuid.uuid4())}\",\n          \"kind\": \"message\",\n          \"role\": \"agent\",\n          \"parts\": parts,\n          \"messageId\": str(uuid.uuid4())\n        },\n        \"metadata\": {},\n      }\n    }\n  )\n\ndef create_a2a_request_message_to_channel_agent(message: str, sender:str = CHANNEL_AGENT_NAME):\n  parts = []\n  parts.append(\n    {\n      \"kind\": \"data\",\n      \"data\": {\n        \"type\": \"mpr\",\n        \"value\": json.dumps(message, ensure_ascii=False) if type(message)==dict else message\n        # \"value\": message\n      },\n    }\n  )\n  parts.append(\n    {\n      \"kind\": \"text\",\n      \"text\": \"Обработай МПР\",\n      # \"text\": json.dumps(message, ensure_ascii=False) if type(message)==dict else message,\n    }\n  )\n  return get_byte_string(\n    {\n      \"jsonrpc\": \"2.0\",\n      \"id\": str(uuid.uuid4()),\n      \"method\": \"message/send\",\n      \"params\": {\n        \"message\": {\n          \"contextId\": f\"mpr#{str(uuid.uuid4())}\",\n          \"kind\": \"message\",\n          \"role\": \"agent\",\n          \"parts\": parts,\n          \"messageId\": str(uuid.uuid4())\n        },\n        \"metadata\": {},\n      }\n    }\n  )\n\n# def create_a2a_response_task(\n#   request: dict,\n#   result: str,\n#   state: str = \"completed\",\n#   taskId: str = str(uuid.uuid4())\n#   ):\n#   status = { \"message\": state, \"state\": state, \"timestamp\": datetime.now().isoformat() }\n#   return get_byte_string(\n#     {\n#       \"id\": request[\"id\"],\n#       \"jsonrpc\": \"2.0\",\n#       \"result\": {\n#         \"task\": {\n#           \"artifacts\": [\n#             {\n#               \"artifactId\": str(uuid.uuid4()),\n#               \"parts\": [{\n#                 \"kind\": \"text\",\n#                 \"text\": result, \n#               }]\n#             }\n#           ],\n#           \"contextId\": request[\"params\"][\"message\"][\"contextId\"],\n#           \"history\": [], # \"history\": [request],\n#           \"id\": taskId,\n#           \"kind\": \"task\",\n#           \"status\": status\n#         }\n#       }\n#     }\n#   )\n\nreq_message = create_a2a_request_message(message = \"my message\")\nprint(req_message)\nreq_message_json = json.loads(req_message.decode(\"utf-8\"))\n\n# res_task = create_a2a_response_task(req_message_json, \"my result\", \"submitted\")\n# res_task_json = json.loads(res_task.decode(\"utf-8\"))\n# print(res_task_json[\"result\"][\"task\"][\"id\"] ,res_task)"
+      },
+      {
+        "id": "cell-1785742247474-foju",
+        "type": "init",
+        "source": "producer_kafka_config = {\n    \"bootstrap_servers\": BROKERS,\n    \"security_protocol\": \"PLAINTEXT\",\n}\nproducer = KafkaProducer(**producer_kafka_config)\n\n# consumer_kafka_config = {\n#     \"bootstrap_servers\": BROKERS,\n#     \"security_protocol\": \"PLAINTEXT\",\n#     \"auto_offset_reset\": \"latest\",\n#     \"enable_auto_commit\": True,\n#     # \"group_id\": \"sber911-channel-agent\",\n# }\n# consumer = KafkaConsumer(**consumer_kafka_config)\n# partitions = [TopicPartition(RESPONSE_TOPIC, i) for i in range(1)]\n# consumer.assign(partitions)"
+      },
+      {
+        "id": "cell-1785742262045-yg7a",
+        "type": "init",
+        "source": "# МпР полученный по интеграции\nwith open(\"/Users/16538296/Documents/Скрипты/МПР/mpr_examples_2025-12-16.json\", \"r\") as f:\n  OLD_MPR = json.load(f)\nwith open(\"/Users/16538296/Documents/Скрипты/МПР/mpr_examples_corax_sowa_2026-04-20.json\", \"r\") as f:\n  MPR = json.load(f)\n\nRELATED_CIS = [\n  # \"CI08446562\",\n  # \"CI08446331\",\n  # \"CI08957273\",\n  # \"CI08446033\",\n  # \"CI08446311\",\n  # \"CI08446025\",\n  # \"CI08446334\",\n  # \"CI09789325\",\n  # \"CI08446380\",\n  # \"CI08446381\",\n  # \"CI08446174\",\n  # \"CI08446559\",\n  # \"CI08446449\",\n  # \"CI08446307\",\n  \"TEST_SERVER_XXX\",\n  \"TEST_SERVER_YYY\",\n  \"TEST_SERVER_UUU\",\n  \"TEST_SERVER_ZZZ\",\n]\n\nIR_CIS = ['CI08528858']\n\nSERVER_TEMPLATE = {\n  \"logical_name\": \"CI08531315\",\n  \"tps_comments1\": None,\n  \"tps_name\": \"tslds-pprb00823\",\n  \"display_name\": \"tslds-pprb00823 (CI08531315)\",\n  \"hpc_device_type_rus\": \"Сервер\",\n  \"type\": \"server\",\n  \"sb_service_level\": None,\n  \"itservice\": False,\n  \"tps_service_description\": \"\",\n  \"tps_information_category\": \"\",\n  \"sb_service_man_name\": \"\",\n  \"tps_own_coordinator_name\": \"\",\n  \"tps_block\": \"\",\n  \"tps_owner_name\": \"\",\n  \"assignment\": \"Сопровождение и развитие АС Sber911 (Тюрин А. Е.)\",\n  \"subtype\": \"Виртуальный\",\n  \"hpc_status\": \"Эксплуатируется\",\n  \"environment\": \"Тестовый\",\n  \"operating_system\": \"SberLinux 8\",\n  \"tps_platform\": \"\",\n  \"ip_address\": \"10.111.111.222\",\n  \"tps_dns_name\": \"delta.sbrf.ru\",\n  \"tps_cpu_count\": None,\n  \"tps_ram_size\": None,\n  \"tps_hdd_capacity\": \"\",\n  \"operated_in_disb\": True,\n  \"admin_group2_name\": \"SberInfra Группа администрирования Linux (Тюкин А.Ю.)\",\n  \"tps_placement\": \"ЦОД Сколково\",\n  \"sb_servroom\": \"3.2\",\n  \"sb_coord_rack\": \"Q59\",\n  \"ctl_action\": \"I\",\n  \"ctl_validfrom\": \"2025-11-19T05:39:40\",\n  \"j_host_name\": \"\",\n  \"j_purpose\": \"\",\n  \"j_cluster_type\": \"\",\n  \"j_network_security_area\": \"\",\n  \"j_ alloc_infra_owner_ci\": \"\",\n  \"sb_status\": \"\",\n  \"j_parametrs\": \"\",\n  \"sb_reliability_experts_wg_id\": \"ЭНРБ_СХ (00029952)\",\n  \"group_id\": \"00029952\"\n}\n\n\nSERVER_NAME_TEMPLATE = 'tvlds-pprb'\nSERVER_IND = int(1000*random.random())\n\n\nPKAP_SERVER_CIS = {   \n    \"table_name\": \"device2m1_911\",\n    \"table_schema\": \"espd_receiver\",\n    \"data\": [ {**SERVER_TEMPLATE, \"logical_name\": ci, \"tps_name\": f\"{SERVER_NAME_TEMPLATE}{(SERVER_IND+RELATED_CIS.index(ci)):05d}\", \"display_name\": f\"{SERVER_NAME_TEMPLATE}{(SERVER_IND+RELATED_CIS.index(ci)):05d} ({ci})\"} for ci in RELATED_CIS ]\n}\n\nPKAP_SERVER_RELATIONS = {\n  \"table_name\": \"t_sm_rdh_cirelationsm1_nrt\",\n  \"table_schema\": \"sberesm_receiver_nrt\",\n  \"data\": [\n    {\n      \"tps_related_cis\": ci,\n      \"logical_name\": IR_CIS[0],\n      \"relationship_type\": \"Physical\",\n      \"ctl_action\": \"I\",\n      \"ctl_validfrom\": \"2025-11-19T02:04:26\",\n      \"relationship_name\": f\"{IR_CIS[0]}-{ci}\"\n    } for ci in RELATED_CIS\n  ]\n}\n\nMPR_RELATIONS = [\n  {\n    \"table_name\": \"sbrelatedevicem1_cr\",\n    \"table_schema\": \"espd_receiver\",\n    \"data\": [{\n      \"logical_name\": item,\n      \"record_id\": \"NONE\",\n      \"ctl_action\": \"I\",\n      \"ctl_validfrom\" : \"2025-07-10 13:51:38.000\"\n    } for item in RELATED_CIS]\n  }\n]\n\n\nCONTEXTS = [\n  # None,\n  # None,\n  # {\"jira_link\": \"htira.sberbank.ru/projects/SBER1999/\"},\n  {\"jira_link\": \"https://jira.sberbank.ru/projects/SBER1-999/\"},\n]\n\nlen(CONTEXTS), len(MPR), len(MPR_RELATIONS[0][\"data\"])"
+      },
+      {
+        "id": "cell-1785742283764-7tka",
+        "type": "loop",
+        "source": "    MPR_NUMBER = random.randrange(0,999999)\n    # MPR_NUMBER = \"TEST_RSKT00000001\"\n    f\"TEST_RSKT{MPR_NUMBER:08d}\", AGENT_EXPERT_TEST_CI\n"
+      },
+      {
+        "id": "cell-1785742295089-kt57",
+        "type": "loop",
+        "source": "try:\n    while True:\n        try:\n\n           # отправка КЭ серверов\n            message_body = PKAP_SERVER_CIS\n            message = create_pkap_request_message(message=message_body)\n            future = producer.send(PKAP_CMDB_TOPIC, message, key=str(uuid.uuid4()).encode(\"utf-8\"), partition=0)\n            future.get()\n            print(\", \".join([ item[\"logical_name\"] for item in PKAP_SERVER_CIS[\"data\"] ]))\n            print(future.value, future.is_done)\n\n            # отправка взаимодсязей КЭ сервер-ИР\n            message_body = PKAP_SERVER_RELATIONS\n            message = create_pkap_request_message(message=message_body)\n            future = producer.send(PKAP_CMDB_TOPIC, message, key=str(uuid.uuid4()).encode(\"utf-8\"), partition=0)\n            future.get()\n            print(\", \".join([ item[\"relationship_name\"] for item in PKAP_SERVER_RELATIONS[\"data\"] ]))\n            print(future.value, future.is_done)\n\n            # отправка МпР\n            # message_body = random.choice(OLD_MPR)\n            message_body = MPR[-2]\n            # message_body = OLD_MPR[-1]\n            relations = []\n            for item in message_body[\"data\"]:\n                mpr_number = f\"TEST_RSKT{MPR_NUMBER:08d}\"\n                relations.append(mpr_number)\n                item[\"number\"] = mpr_number\n                # item[\"number\"] = MPR_NUMBER\n                print(mpr_number)\n                MPR_NUMBER += 1\n                item[\"sb_service\"] = AGENT_EXPERT_TEST_CI\n                # item[\"risk_number\"] = \"TEST_RSK00000001\"\n            message_body[\"action\"] = \"MPR ACTION\"\n            message = create_pkap_request_message(message=message_body)\n            future = producer.send(PKAP_MPR_TOPIC, message, key=str(uuid.uuid4()).encode(\"utf-8\"), partition=0)\n            future.get()\n            print(future.value, future.is_done)\n\n            # отправка взаимосвязей МпР\n            for mpr_number in relations:\n                message_body = MPR_RELATIONS[0]\n                for item in message_body[\"data\"]:\n                    item[\"record_id\"] = mpr_number\n                    print(mpr_number, item[\"logical_name\"])\n                message = create_pkap_request_message(message=message_body)\n                future = producer.send(PKAP_MPR_TOPIC, message, key=str(uuid.uuid4()).encode(\"utf-8\"), partition=0)\n                future.get()\n                print(future.value, future.is_done)\n\n            # req_message_json = json.loads(message.decode(\"utf-8\"))\n            # print(req_message_json)\n            # ----------------------------------------\n            break\n            sleep(5*60-5)\n        except Exception as err:\n            print(err)\nexcept KeyboardInterrupt:\n    pass\n\n# mpr#9e4336f5-d80e-4419-9c90-b721f664f087\n# mpr#ed7834a1-1735-4a0c-aa1f-336b55072329"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785925719762-oqr",
+        "label": "message_body",
+        "code_key": "message_body",
+        "placeholder": "MPR[-2]",
+        "field_type": "dropdown",
+        "options": [
+          "MPR[-2]",
+          "OLD_MPR[-1]"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-053ae053",
+    "created_at": "2026-08-05T10:30:15.716727+00:00"
+  },
+  {
+    "id": "49a8e5ec",
+    "name": "MCP-Внедрения getMaintenanceActivities",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1788520493726-aldz",
+        "type": "init",
+        "source": "%pip install -q --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1788520507744-n8mm",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ВНЕДРЕНИЙ — ИФТ. Импорты + константы + токен + отправка\n#  MCP Server: sber.support_platform.mcp_maintenance_activities\n#  Tool: getMaintenanceActivities\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_maintenance_activities_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_maintenance_activities\"\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\ndef now_millis(shift_sec: float = 0) -> int:\n    \"\"\"Unix timestamp в миллисекундах. shift_sec < 0 — время в прошлом.\"\"\"\n    dt = datetime.now(timezone.utc) + timedelta(seconds=shift_sec)\n    return int(dt.timestamp() * 1000)\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Tool:     getMaintenanceActivities\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1788520524706-3ibk",
+        "type": "init",
+        "source": "# 0️⃣ tools/list — контрольная проверка связи (запустить первым)\nreq_id = str(uuid.uuid4())\nsend_raw({\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/list\", \"params\": {}}, req_id)\nprint(f\"\\n🔎 Ответ в mcp-out по id: {req_id}\")"
+      },
+      {
+        "id": "cell-1788520538047-ifha",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n# TOOL: getMaintenanceActivities\n# Получить внедрения и ЗНИ на Услуге за период\n# ════════════════════════════════════════════════════════════════════════\n\n# ПАРАМЕТРЫ (МЕНЯЙ ЗДЕСЬ)\nCONFIG_ELEMENT_SM_ID = \"CI17362884\"\nPERIOD_HOURS = 24\n\n# Формируем временной диапазон\ndate_to_ms = now_millis()\ndate_from_ms = now_millis(-PERIOD_HOURS * 3600)\n\n# Формируем запрос\nreq_id = str(uuid.uuid4())\npayload = {\n    \"jsonrpc\": \"2.0\",\n    \"id\": req_id,\n    \"method\": \"tools/call\",\n    \"params\": {\n        \"name\": \"getMaintenanceActivities\",\n        \"arguments\": {\n            \"configElementSmId\": CONFIG_ELEMENT_SM_ID,\n            \"dateFrom\": date_from_ms,\n            \"dateTo\": date_to_ms\n        }\n    }\n}\n\nprint(f\"🎯 TOOL: getMaintenanceActivities\")\nprint(f\"   MCP Server: {RECIPIENT_AGENT}\")\nprint(\"=\" * 78)\nprint(f\"\\n📤 КЭ:      {CONFIG_ELEMENT_SM_ID}\")\nprint(f\"   Период:  {PERIOD_HOURS} ч\")\nprint(f\"   От:      {datetime.fromtimestamp(date_from_ms/1000, tz=timezone.utc).isoformat()}\")\nprint(f\"   До:      {datetime.fromtimestamp(date_to_ms/1000, tz=timezone.utc).isoformat()}\")\nprint(f\"   id = {req_id}\\n\")\n\nr = send_raw(payload, req_id)\n\n_log([{\n    \"ts\": now_ts(),\n    \"tool\": \"getMaintenanceActivities\",\n    \"configElementSmId\": CONFIG_ELEMENT_SM_ID,\n    \"period_hours\": PERIOD_HOURS,\n    \"req_id\": req_id,\n    \"partition\": r.partition,\n    \"offset\": r.offset\n}])\n\nprint(\"\\n\" + \"=\" * 78)\nprint(f\"🔎 Ответ в mcp-out по id: {req_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1788341529312-dzv",
+        "label": "DEFAULT_CONFIG_ELEMENT",
+        "code_key": "DEFAULT_CONFIG_ELEMENT",
+        "placeholder": "CI17362884",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1788513791791-9gb",
+        "label": "DEFAULT_PERIOD_HOURS",
+        "code_key": "DEFAULT_PERIOD_HOURS",
+        "placeholder": "24",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T10:59:52.143929+00:00"
+  },
+  {
+    "id": "ceea52d7",
+    "name": "MCP-Внедрений getMaintenanceActivitiesSystems",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1788521096761-hzfs",
+        "type": "init",
+        "source": "%pip install -q --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1788521099924-6l7q",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ВНЕДРЕНИЙ — ИФТ. Импорты + константы + токен + отправка\n#  Tool: getMaintenanceActivitiesSystems\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_maintenance_systems_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_maintenance_activities\"\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1788521559899-t3h6",
+        "type": "init",
+        "source": "# 0️⃣ tools/list — контрольная проверка связи (запустить первым)\nreq_id = str(uuid.uuid4())\nsend_raw({\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/list\", \"params\": {}}, req_id)\nprint(f\"\\n🔎 Ответ в mcp-out по id: {req_id}\")"
+      },
+      {
+        "id": "cell-1788341849330-p22r",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n# getMaintenanceActivitiesSystems — внедрения на смежных АС\n# ════════════════════════════════════════════════════════════════════════\n\n# ПАРАМЕТРЫ (МЕНЯЙ ЗДЕСЬ)\nINCIDENT_SM_ID = \"INC0000700316\"  # ID инцидента в SM\n\n# Формируем запрос\nreq_id = str(uuid.uuid4())\npayload = {\n    \"jsonrpc\": \"2.0\",\n    \"id\": req_id,\n    \"method\": \"tools/call\",\n    \"params\": {\n        \"name\": \"getMaintenanceActivitiesSystems\",\n        \"arguments\": {\n            \"incidentSmId\": INCIDENT_SM_ID\n        }\n    }\n}\n\nprint(f\"🎯 getMaintenanceActivitiesSystems\")\nprint(f\"   Адресат: {RECIPIENT_AGENT}\")\nprint(\"=\" * 78)\nprint(f\"\\n📤 Инцидент: {INCIDENT_SM_ID}\")\nprint(f\"   id = {req_id}\")\nprint(f\"\\n   Логика:\")\nprint(f\"     1. Найти инцидент {INCIDENT_SM_ID}\")\nprint(f\"     2. Определить ИТ-услугу инцидента\")\nprint(f\"     3. Найти смежные АС (provider/consumer/internal*)\")\nprint(f\"     4. Для каждой найти внедрения за последние 24ч от даты регистрации\\n\")\n\nr = send_raw(payload, req_id)\n\n_log([{\n    \"ts\": now_ts(),\n    \"tool\": \"getMaintenanceActivitiesSystems\",\n    \"incidentSmId\": INCIDENT_SM_ID,\n    \"req_id\": req_id,\n    \"partition\": r.partition,\n    \"offset\": r.offset\n}])\n\nprint(\"\\n\" + \"=\" * 78)\nprint(f\"🔎 Ответ в mcp-out по id: {req_id}\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1788341884208-xq7",
+        "label": "DEFAULT_INCIDENT_SM_ID",
+        "code_key": "DEFAULT_INCIDENT_SM_ID",
+        "placeholder": "INC0000700316",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T11:00:00.693572+00:00"
+  },
+  {
+    "id": "c06a391b",
+    "name": "МСР-Мониторинг getDeviationsByConfigElement (Отклонения Метрик)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1788511081080-up9v",
+        "type": "loop",
+        "source": "# ====================================================================\n# ====  ОТПРАВКА MCP ЗАПРОСА В KAFKA (ИФТ)  =========================\n# ====  MCP Tool: getDeviationsByConfigElement                 ======\n# ====  Топик: mcp-in                                          ======\n# ====  Библиотека: kafka-python | PLAINTEXT | порт 9092       ======\n# ====================================================================\nimport json\nimport uuid\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\n# ====================================================================\n# БЛОК 1: КОНСТАНТЫ И НАСТРОЙКИ\n# ====================================================================\n\n# ---------- KAFKA (ИФТ) ----------\nTOPIC = \"mcp-in\"  # Топик для MCP запросов\n\nBROKERS = [\n    \"tvldq-sber00010.delta.sbrf.ru:9092\",\n    \"tvldq-sber00011.delta.sbrf.ru:9092\",\n]\n\n# ---------- ПАРАМЕТРЫ ПО УМОЛЧАНИЮ ----------\nDEFAULT_CONFIG_ELEMENT = \"CI00641491\"  # ID КЭ (ИТ-Услуги)\nDEFAULT_PERIOD_HOURS = 3               # период запроса в часах (макс 3)\n\n# ====================================================================\n# БЛОК 2: ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ\n# ====================================================================\n\ndef now_millis(shift_sec: float = 0) -> int:\n    \"\"\"\n    Возвращает Unix timestamp в миллисекундах.\n    shift_sec < 0 — время в прошлом.\n    \"\"\"\n    dt = datetime.now(timezone.utc) + timedelta(seconds=shift_sec)\n    return int(dt.timestamp() * 1000)\n\n\ndef now_iso() -> str:\n    \"\"\"Возвращает UTC-время в ISO 8601 формате с миллисекундами.\"\"\"\n    now = datetime.now(timezone.utc)\n    return now.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{now.microsecond // 1000:03d}Z\"\n\n\n# ====================================================================\n# БЛОК 3: KAFKA PRODUCER\n# ====================================================================\n\ndef create_producer() -> KafkaProducer:\n    \"\"\"Создаёт Kafka Producer для отправки MCP запросов.\"\"\"\n    producer = KafkaProducer(\n        bootstrap_servers=BROKERS,\n        security_protocol=\"PLAINTEXT\",\n        value_serializer=lambda v: json.dumps(v, ensure_ascii=False).encode(\"utf-8\"),\n        key_serializer=lambda k: k.encode(\"utf-8\") if k else None,\n        acks=\"all\",              # ждём подтверждения от брокера\n        retries=3,\n    )\n    print(\"✅ Producer создан.\")\n    return producer\n\n\n# ====================================================================\n# БЛОК 4: ФОРМИРОВАНИЕ MCP ЗАПРОСА\n# ====================================================================\n\ndef build_mcp_request(\n    config_element_sm_id: str = DEFAULT_CONFIG_ELEMENT,\n    period_hours: float = DEFAULT_PERIOD_HOURS,\n) -> dict:\n    \"\"\"\n    Формирует MCP запрос для tool getDeviationsByConfigElement.\n    \n    Параметры:\n        config_element_sm_id - ID КЭ (ИТ-Услуги) в SM\n        period_hours         - период запроса в часах (от текущего момента в прошлое)\n    \n    Возвращает JSON-RPC 2.0 запрос.\n    \n    Ограничения (из требований):\n    - Период не более 3 часов\n    - dateFrom/dateTo в миллисекундах\n    \n    Ожидаемые ответы:\n    - Период > 3ч: {\"message\": \"Запрошен период больше, чем 3 часа\"}\n    - Нет метрик:  {\"message\": \"Нет метрик по запрошенной Услуге\"}\n    - Успех:       {\"metrics\": [...]}\n    \"\"\"\n    request_id = str(uuid.uuid4())\n    \n    # Временной диапазон: от (сейчас - period_hours) до сейчас\n    date_to_ms = now_millis()\n    date_from_ms = now_millis(-period_hours * 3600)\n    \n    request = {\n        \"jsonrpc\": \"2.0\",\n        \"id\": request_id,\n        \"method\": \"tools/call\",\n        \"params\": {\n            \"name\": \"getDeviationsByConfigElement\",\n            \"arguments\": {\n                \"configElementSmId\": config_element_sm_id,\n                \"dateFrom\": date_from_ms,\n                \"dateTo\": date_to_ms\n            }\n        }\n    }\n    \n    return request\n\n\n# ====================================================================\n# БЛОК 5: ОТПРАВКА MCP ЗАПРОСА\n# ====================================================================\n\ndef send_mcp_request(producer: KafkaProducer, request: dict):\n    \"\"\"\n    Отправляет MCP запрос в Kafka топик mcp-in.\n    \n    Параметры:\n        producer - Kafka Producer\n        request  - тело MCP запроса (JSON-RPC 2.0)\n    \"\"\"\n    key = request[\"id\"]\n    \n    headers = [\n        (\"ContextId\", request[\"id\"].encode(\"utf-8\")),\n        (\"Timestamp\", now_iso().encode(\"utf-8\")),\n    ]\n    \n    # Извлекаем параметры для логирования\n    args = request.get(\"params\", {}).get(\"arguments\", {})\n    ce_id = args.get(\"configElementSmId\", \"unknown\")\n    date_from = args.get(\"dateFrom\", 0)\n    date_to = args.get(\"dateTo\", 0)\n    period_ms = date_to - date_from\n    period_hours = period_ms / (1000 * 3600)\n    \n    print(f\"\\n📤 Отправка MCP запроса\")\n    print(f\"   request_id:         {key}\")\n    print(f\"   configElementSmId:  {ce_id}\")\n    print(f\"   dateFrom:           {date_from} ({datetime.fromtimestamp(date_from/1000, tz=timezone.utc).isoformat()})\")\n    print(f\"   dateTo:             {date_to} ({datetime.fromtimestamp(date_to/1000, tz=timezone.utc).isoformat()})\")\n    print(f\"   Период:             {period_hours:.2f} часов\")\n    \n    if period_hours > 3:\n        print(f\"   ⚠️  Период > 3 часов — MCP вернёт предупреждение\")\n    \n    future = producer.send(\n        TOPIC,\n        value=request,\n        key=key,\n        headers=headers,\n    )\n    \n    meta = future.get(timeout=15)   # блокирующе ждём подтверждения доставки\n    producer.flush()\n    \n    print(f\"\\n✅ Доставлено\")\n    print(f\"   topic:      {meta.topic}\")\n    print(f\"   partition:  {meta.partition}\")\n    print(f\"   offset:     {meta.offset}\")\n    print(f\"   request_id: {key}\")\n\n\n# ====================================================================\n# БЛОК 6: ЗАПУСК\n# ====================================================================\n\nif __name__ == \"__main__\":\n    print(\"\\n\" + \"=\"*70)\n    print(\"🚀 MCP CLIENT - getDeviationsByConfigElement\")\n    print(\"   MCP Server: mcp_system_monitoring v1.0.0\")\n    print(\"   Topic:      mcp-in\")\n    print(\"=\"*70)\n    \n    producer = create_producer()\n    \n    try:\n        # ── Генерация запроса с параметрами по умолчанию ──────────────\n        request = build_mcp_request(\n            config_element_sm_id=DEFAULT_CONFIG_ELEMENT,\n            period_hours=DEFAULT_PERIOD_HOURS,\n        )\n        \n        # ── JSON_Body: ПОЛНОЕ ПЕРЕОПРЕДЕЛЕНИЕ ЗАПРОСА ─────────────────\n        # Пустое поле — работает генерация выше.\n        # Заполненное — заменяет запрос целиком.\n        JSON_BODY = \"\"\"__JSON_BODY__\"\"\"\n        \n        if JSON_BODY.strip() and not JSON_BODY.lstrip().startswith(\"__JSON_BODY\"):\n            request = json.loads(JSON_BODY)\n            print(\"📝 Запрос переопределён из JSON_Body\")\n        \n        # ── Вывод тела запроса ────────────────────────────────────────\n        print(\"\\n\" + \"-\"*70)\n        print(\"ТЕЛО MCP ЗАПРОСА:\")\n        print(\"-\"*70)\n        print(json.dumps(request, ensure_ascii=False, indent=2))\n        print(\"-\"*70)\n        \n        # ── Отправка ──────────────────────────────────────────────────\n        send_mcp_request(producer, request)\n        \n    except Exception as ex:\n        print(f\"\\n❌ Ошибка: {ex}\")\n        import traceback\n        traceback.print_exc()\n    \n    finally:\n        producer.close()\n        print(\"\\n\" + \"=\"*70)\n        print(\"🏁 Готово.\")\n        print(\"=\"*70 + \"\\n\")"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1788508691329-ngx",
+        "label": "DEFAULT_CONFIG_ELEMENT",
+        "code_key": "DEFAULT_CONFIG_ELEMENT",
+        "placeholder": "CI00641491",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-09-08T11:00:26.331069+00:00"
+  },
+  {
+    "id": "41f0c6aa",
+    "name": "Проверка",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1788526153491-543u",
+        "type": "init",
+        "source": "%pip install -q --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1788526155216-88ef",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ВНЕДРЕНИЙ — ИФТ. Импорты + константы + токен + отправка\n#  MCP Server: sber.support_platform.mcp_maintenance_activities\n#  Tool: getMaintenanceActivities\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_maintenance_activities_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_maintenance_activities\"\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\ndef now_millis(shift_sec: float = 0) -> int:\n    \"\"\"Unix timestamp в миллисекундах. shift_sec < 0 — время в прошлом.\"\"\"\n    dt = datetime.now(timezone.utc) + timedelta(seconds=shift_sec)\n    return int(dt.timestamp() * 1000)\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Tool:     getMaintenanceActivities\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1788526163668-plp6",
+        "type": "init",
+        "source": "# 0️⃣ tools/list — контрольная проверка связи (запустить первым)\nreq_id = str(uuid.uuid4())\nsend_raw({\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/list\", \"params\": {}}, req_id)\nprint(f\"\\n🔎 Ответ в mcp-out по id: {req_id}\")"
+      },
+      {
+        "id": "cell-1788526174844-ipwl",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n# TOOL: getMaintenanceActivities\n# Получить внедрения и ЗНИ на Услуге за период\n# ════════════════════════════════════════════════════════════════════════\n\n# ПАРАМЕТРЫ (МЕНЯЙ ЗДЕСЬ)\nSYSTEM_SM_ID = \"CI17362884\"\nPERIOD_HOURS = 24\n\n# Формируем временной диапазон\ndate_to_ms = now_millis()\ndate_from_ms = now_millis(-PERIOD_HOURS * 3600)\n\n# Формируем запрос\nreq_id = str(uuid.uuid4())\npayload = {\n    \"jsonrpc\": \"2.0\",\n    \"id\": req_id,\n    \"method\": \"tools/call\",\n    \"params\": {\n        \"name\": \"getMaintenanceActivities\",\n        \"arguments\": {\n            \"systemSmId\": SYSTEM_SM_ID,\n            \"dateFrom\": date_from_ms,\n            \"dateTo\": date_to_ms\n        }\n    }\n}\n\nprint(f\"🎯 TOOL: getMaintenanceActivities\")\nprint(f\"   MCP Server: {RECIPIENT_AGENT}\")\nprint(\"=\" * 78)\nprint(f\"\\n📤 System SM ID: {SYSTEM_SM_ID}\")\nprint(f\"   Период:       {PERIOD_HOURS} ч\")\nprint(f\"   От:           {datetime.fromtimestamp(date_from_ms/1000, tz=timezone.utc).isoformat()}\")\nprint(f\"   До:           {datetime.fromtimestamp(date_to_ms/1000, tz=timezone.utc).isoformat()}\")\nprint(f\"   id = {req_id}\\n\")\n\nr = send_raw(payload, req_id)\n\n_log([{\n    \"ts\": now_ts(),\n    \"tool\": \"getMaintenanceActivities\",\n    \"systemSmId\": SYSTEM_SM_ID,\n    \"period_hours\": PERIOD_HOURS,\n    \"req_id\": req_id,\n    \"partition\": r.partition,\n    \"offset\": r.offset\n}])\n\nprint(\"\\n\" + \"=\" * 78)\nprint(f\"🔎 Ответ в mcp-out по id: {req_id}\")"
+      }
+    ],
+    "dynamic_params": [],
+    "visible_to_monitoring": false,
+    "folder_id": null,
+    "created_at": "2026-09-04T12:49:54.728632+00:00"
+  },
+  {
+    "id": "437d6450",
+    "name": "AC AKC - USER Invite",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1789554279317-gtou",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1789554309894-k2vf",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  USER_INVITE — юзера ПРИГЛАСИЛИ, он ЕЩЁ НЕ ПОДКЛЮЧЁН.\n#  Топик: conference-events\n#\n#  ОДНО ПОЛЕ = ОДНА СТРОКА.\n#  Поставил \"#\" в начале строки → поле НЕ уйдёт в сообщение вообще.\n#  Убрал \"#\" → поле вернулось. Порядок полей = порядок строк.\n# ════════════════════════════════════════════════════════════════════════\nimport json\nimport time\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nTOPIC = \"conference-events\"\n\n\ndef java_time(value=None, plus_minutes=0):\n    \"\"\"Время как Java LocalDateTime: [год, месяц, день, час, мин, сек, наносек].\n    Часовой пояс берётся из TZ_OFFSET (0 = UTC, 3 = МСК).\n    Можно передать свой список: java_time([2026, 9, 16, 11, 38, 56, 731547184])\"\"\"\n    if isinstance(value, list):\n        return value\n    ns = time.time_ns() + int(plus_minutes * 60 * 1_000_000_000)   # сдвиг: +N минут от текущего\n    sec, nano = divmod(ns, 1_000_000_000)\n    dt = datetime.fromtimestamp(sec, tz=timezone(timedelta(hours=TZ_OFFSET)))\n    return [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, nano]\n\n\ndef date(text):\n    \"\"\"Обычная дата → [год, месяц, день, час, мин, сек, наносек].\n    Дата уходит РОВНО как написана, TZ_OFFSET на неё НЕ влияет.\n    Форматы:  \"01.10.2026\"   \"01.10.2026 09:00\"   \"01.10.2026 09:00:30\"\n              \"2026-10-01\"   \"2026-10-01 09:00\"   \"2026-10-01 09:00:30\"\n    Без времени = 00:00:00.\"\"\"\n    formats = [\"%d.%m.%Y %H:%M:%S\", \"%d.%m.%Y %H:%M\", \"%d.%m.%Y\",\n               \"%Y-%m-%d %H:%M:%S\", \"%Y-%m-%d %H:%M\", \"%Y-%m-%d\"]\n    for fmt in formats:\n        try:\n            dt = datetime.strptime(text.strip(), fmt)\n            return [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, 0]\n        except ValueError:\n            pass\n    raise ValueError(f'Не понял дату \"{text}\". Пиши так: \"01.10.2026 09:00\" или \"2026-10-01 09:00\"')\n\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  СОБИРАЕМ СООБЩЕНИЕ. Комментируй/раскомментируй строки целиком.      ║\n# ╚══════════════════════════════════════════════════════════════════════╝\nTZ_OFFSET = 0          # часовой пояс времени в сообщении: 0 = UTC, 3 = МСК\n\nEVENT = {}\n\nEVENT[\"eventType\"]          = \"user_invite\"    # тип события\nEVENT[\"time\"]               = java_time(plus_minutes=1)      # текущее +1 мин; java_time() = сейчас; java_time(plus_minutes=5) = +5 мин\nEVENT[\"conferenceId\"]       = 11277              # id конференции, число\nEVENT[\"userName\"]           = \"Тестовый Стефан\"          # имя/логин приглашённого\nEVENT[\"userEmail\"]          = \"TestStef@sberbank.ru\"         # почта приглашённого\nEVENT[\"userConferenceType\"] = \"jazz\"           # тип конференции\nEVENT[\"userPhone\"]          = \"989250789251\"         # телефон приглашённого\nEVENT[\"attemptNumber\"]      = 1                # какая по счёту попытка приглашения\nEVENT[\"absentStartDate\"]    = date(\"01.10.2026 09:00\")   # НАЧАЛО отсутствия (отпуска): \"ДД.ММ.ГГГГ ЧЧ:ММ\"\nEVENT[\"absentEndDate\"]      = date(\"14.10.2026 18:00\")   # КОНЕЦ отсутствия (выход из отпуска)\nEVENT[\"employeeNumber\"]     = \"324498\"\nEVENT[\"inviteSource\"]       = \"test_source\"    # источник приглашения\nEVENT[\"absent\"]             = False            # помечен отсутствующим: True / False\n\n\n# Ключ сообщения в Kafka. Обычно = conferenceId, чтобы события одной\n# конференции шли в одну партицию и не перемешивались по порядку.\nKAFKA_KEY = str(EVENT.get(\"conferenceId\", \"0\"))\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  НИЖЕ МЕНЯТЬ НЕ НАДО                                                 ║\n# ╚══════════════════════════════════════════════════════════════════════╝\nALL_FIELDS = [\"eventType\", \"time\", \"conferenceId\", \"userName\", \"userEmail\",\n              \"userConferenceType\", \"userPhone\", \"attemptNumber\",\n              \"absentStartDate\", \"absentEndDate\", \"inviteSource\", \"absent\"]\n\nprint(f\"🎯 Топик: {TOPIC}   ключ: {KAFKA_KEY}\")\nprint(\"─\" * 78)\nprint(\"Поля в сообщении:\")\nfor f in ALL_FIELDS:\n    print(f\"   {'✅ отправляется' if f in EVENT else '🚫 ЗАКОММЕНЧЕНО '}  {f}\")\nextra = [k for k in EVENT if k not in ALL_FIELDS]\nfor f in extra:\n    print(f\"   ➕ добавлено вручную  {f}\")\nif \"absentStartDate\" in EVENT and \"absentEndDate\" in EVENT:\n    if EVENT[\"absentEndDate\"] < EVENT[\"absentStartDate\"]:\n        print(\"   ⚠️  absentEndDate РАНЬШЕ absentStartDate — отправляю как есть\")\nprint(\"─\" * 78)\n\npayload = json.dumps(EVENT, ensure_ascii=False)\nprint(json.dumps(EVENT, ensure_ascii=False, indent=2))\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\nr = producer.send(TOPIC, value=payload.encode(\"utf-8\"), key=KAFKA_KEY.encode(\"utf-8\")).get(timeout=15)\nproducer.flush()\n\nprint(\"─\" * 78)\nprint(f\"✅ Отправлено → {r.topic}  partition={r.partition}  offset={r.offset}  key={KAFKA_KEY}\")\nprint(f\"   полей в сообщении: {len(EVENT)} из {len(ALL_FIELDS)}\")\n"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1789554330063-qql",
+        "label": "conferenceId",
+        "code_key": "conferenceId",
+        "placeholder": "11277",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789554345220-xni",
+        "label": "userName",
+        "code_key": "userName",
+        "placeholder": "Тестовый Стефан",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789554356281-xtf",
+        "label": "userEmail",
+        "code_key": "userEmail",
+        "placeholder": "TestStef@sberbank.ru",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789554382505-nxi",
+        "label": "userConferenceType",
+        "code_key": "userConferenceType",
+        "placeholder": "jazz",
+        "field_type": "select",
+        "options": [
+          "jazz",
+          "tcs"
+        ]
+      },
+      {
+        "id": "param-1789554419995-bjo",
+        "label": "userPhone",
+        "code_key": "userPhone",
+        "placeholder": "989250789251",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789724037991-d55",
+        "label": "inviteSource",
+        "code_key": "EVENT[\"inviteSource\"]",
+        "placeholder": "test_source",
+        "field_type": "select",
+        "options": [
+          "absent",
+          "not_connected",
+          "calling"
+        ]
+      },
+      {
+        "id": "param-1789734538509-3f8",
+        "label": "absent",
+        "code_key": "EVENT[\"absent\"]",
+        "placeholder": "False",
+        "field_type": "select",
+        "options": [
+          "False",
+          "True"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-dcedb1d1",
+    "created_at": "2026-09-22T14:04:49.210271+00:00"
+  },
+  {
+    "id": "7c4c51f8",
+    "name": "AC AKC - USER Call",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1789643609452-1rue",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1789643610914-gpgv",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  USER_CONNECT — юзер ПОДКЛЮЧИЛСЯ к конференции.   Топик: conference-events\n#\n#  ОДНО ПОЛЕ = ОДНА СТРОКА.\n#  Поставил \"#\" в начале строки → поле НЕ уйдёт в сообщение вообще.\n#  Убрал \"#\" → поле вернулось. Порядок полей = порядок строк.\n# ════════════════════════════════════════════════════════════════════════\nimport json\nimport time\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nTOPIC = \"conference-events\"\n\n\ndef java_time(value=None, plus_minutes=0):\n    \"\"\"Время как Java LocalDateTime: [год, месяц, день, час, мин, сек, наносек].\n    Часовой пояс берётся из TZ_OFFSET (0 = UTC, 3 = МСК).\n    Можно передать свой список: java_time([2026, 9, 16, 11, 39, 5, 731889702])\"\"\"\n    if isinstance(value, list):\n        return value\n    ns = time.time_ns() + int(plus_minutes * 60 * 1_000_000_000)   # сдвиг: +N минут от текущего\n    sec, nano = divmod(ns, 1_000_000_000)\n    dt = datetime.fromtimestamp(sec, tz=timezone(timedelta(hours=TZ_OFFSET)))\n    return [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, nano]\n\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  СОБИРАЕМ СООБЩЕНИЕ. Комментируй/раскомментируй строки целиком.      ║\n# ╚══════════════════════════════════════════════════════════════════════╝\nTZ_OFFSET = 0          # часовой пояс времени в сообщении: 0 = UTC, 3 = МСК\n\nEVENT = {}\n\nEVENT[\"eventType\"]          = \"user_connect\"   # тип события\nEVENT[\"time\"]               = java_time(plus_minutes=1)      # текущее +1 мин; java_time() = сейчас; java_time(plus_minutes=5) = +5 мин\nEVENT[\"conferenceId\"]       = 11277              # id конференции, число\nEVENT[\"userName\"]           = \"Тестовый Стефан\"          # имя/логин юзера\nEVENT[\"userPhone\"]          = \"989250789251\"         # телефон юзера\nEVENT[\"userEmail\"]          = \"TestStef@sberbank.ru\"         # почта юзера\nEVENT[\"microphoneEnabled\"]  = True             # микрофон включён: True / False\nEVENT[\"cameraEnabled\"]      = False            # камера включена: True / False\nEVENT[\"screenEnabled\"]      = True             # демонстрация экрана: True / False\nEVENT[\"inviteSource\"]       = \"test_source\"    # источник приглашения\nEVENT[\"userConferenceType\"] = \"jazz\"           # тип конференции\n\n# Ключ сообщения в Kafka. Обычно = conferenceId, чтобы события одной\n# конференции шли в одну партицию и не перемешивались по порядку.\nKAFKA_KEY = str(EVENT.get(\"conferenceId\", \"0\"))\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  НИЖЕ МЕНЯТЬ НЕ НАДО                                                 ║\n# ╚══════════════════════════════════════════════════════════════════════╝\nALL_FIELDS = [\"eventType\", \"time\", \"conferenceId\", \"userName\", \"userPhone\",\n              \"userEmail\", \"microphoneEnabled\", \"cameraEnabled\",\n              \"screenEnabled\", \"userConferenceType\"]\n\nprint(f\"🎯 Топик: {TOPIC}   ключ: {KAFKA_KEY}\")\nprint(\"─\" * 78)\nprint(\"Поля в сообщении:\")\nfor f in ALL_FIELDS:\n    print(f\"   {'✅ отправляется' if f in EVENT else '🚫 ЗАКОММЕНЧЕНО '}  {f}\")\nextra = [k for k in EVENT if k not in ALL_FIELDS]\nfor f in extra:\n    print(f\"   ➕ добавлено вручную  {f}\")\nprint(\"─\" * 78)\n\npayload = json.dumps(EVENT, ensure_ascii=False)\nprint(json.dumps(EVENT, ensure_ascii=False, indent=2))\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\nr = producer.send(TOPIC, value=payload.encode(\"utf-8\"), key=KAFKA_KEY.encode(\"utf-8\")).get(timeout=15)\nproducer.flush()\n\nprint(\"─\" * 78)\nprint(f\"✅ Отправлено → {r.topic}  partition={r.partition}  offset={r.offset}  key={KAFKA_KEY}\")\nprint(f\"   полей в сообщении: {len(EVENT)} из {len(ALL_FIELDS)}\")\n"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1789643662107-r82",
+        "label": "conferenceId",
+        "code_key": "conferenceId",
+        "placeholder": "11277",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789643673356-w8j",
+        "label": "userName",
+        "code_key": "userName",
+        "placeholder": "Тестовый Стефан",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789643677481-ou9",
+        "label": "userPhone",
+        "code_key": "userPhone",
+        "placeholder": "989250789251",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789643686009-e9v",
+        "label": "userEmail",
+        "code_key": "userEmail",
+        "placeholder": "TestStef@sberbank.ru",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789643774537-fi5",
+        "label": "userConferenceType",
+        "code_key": "userConferenceType",
+        "placeholder": "jazz",
+        "field_type": "select",
+        "options": [
+          "jazz",
+          "tcs"
+        ]
+      },
+      {
+        "id": "param-1789724205252-cdc",
+        "label": "inviteSource",
+        "code_key": "inviteSource",
+        "placeholder": "",
+        "field_type": "select",
+        "options": [
+          "manual",
+          "template"
+        ]
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-dcedb1d1",
+    "created_at": "2026-09-18T09:37:03.289397+00:00"
+  },
+  {
+    "id": "db152713",
+    "name": "AC AKC - TCS Invite",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1789656367917-2fwd",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1789656368674-ejzp",
+        "type": "loop",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  TCS — НАЧАЛО / ЗАВЕРШЕНИЕ ТКС (конференции).   Топик: conference-events\n#\n#  ОДНО ПОЛЕ = ОДНА СТРОКА.\n#  Поставил \"#\" в начале строки → поле НЕ уйдёт в сообщение вообще.\n#  Убрал \"#\" → поле вернулось. Порядок полей = порядок строк.\n# ════════════════════════════════════════════════════════════════════════\nimport json\nimport time\nfrom datetime import datetime, timezone, timedelta\nfrom kafka import KafkaProducer\n\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nTOPIC = \"conference-events\"\n\n\ndef java_time(value=None, plus_minutes=0):\n    \"\"\"Время как Java LocalDateTime: [год, месяц, день, час, мин, сек, наносек].\n    Часовой пояс берётся из TZ_OFFSET (0 = UTC, 3 = МСК).\n    Можно передать свой список: java_time([2026, 9, 16, 12, 45, 44, 219794000])\"\"\"\n    if isinstance(value, list):\n        return value\n    ns = time.time_ns() + int(plus_minutes * 60 * 1_000_000_000)   # сдвиг: +N минут от текущего\n    sec, nano = divmod(ns, 1_000_000_000)\n    dt = datetime.fromtimestamp(sec, tz=timezone(timedelta(hours=TZ_OFFSET)))\n    return [dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, nano]\n\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  СОБИРАЕМ СООБЩЕНИЕ. Комментируй/раскомментируй строки целиком.      ║\n# ╚══════════════════════════════════════════════════════════════════════╝\nTZ_OFFSET = 0          # часовой пояс времени в сообщении: 0 = UTC, 3 = МСК\n\nEVENT = {}\n\n# ── Тип события: раскомментирована должна быть ОДНА строка ──────────────\nEVENT[\"eventType\"]    = \"tcs_start\"          # НАЧАЛО ТКС\n# EVENT[\"eventType\"]  = \"tcs_end\"            # ЗАВЕРШЕНИЕ ТКС  ⚠️ имя не подтверждено — сверь с промом\n\nEVENT[\"time\"]         = java_time(plus_minutes=1)          # текущее +1 мин; java_time() = сейчас; java_time(plus_minutes=5) = +5 мин\nEVENT[\"conferenceId\"] = 11277                # id конференции, число\n\n# ── Хвост: поля, которые дописываются В КОНЕЦ JSON ──────────────────────\n# На проме eventType приходит дважды: в начале и в конце.\n# Закомментируй строку — дубля не будет.\nTAIL = {}\nTAIL[\"eventType\"]     = EVENT.get(\"eventType\")   # дубль eventType в конце, как на проме\n\n# Ключ сообщения в Kafka. Обычно = conferenceId, чтобы события одной\n# конференции шли в одну партицию и не перемешивались по порядку.\nKAFKA_KEY = str(EVENT.get(\"conferenceId\", \"0\"))\n\n# ╔══════════════════════════════════════════════════════════════════════╗\n# ║  НИЖЕ МЕНЯТЬ НЕ НАДО                                                 ║\n# ╚══════════════════════════════════════════════════════════════════════╝\ndef build_payload(head, tail):\n    \"\"\"Склеивает JSON вручную. Обычный dict не умеет хранить один ключ дважды,\n    поэтому head и tail сериализуются отдельно и соединяются в одну строку.\"\"\"\n    parts = [f\"{json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}\"\n             for d in (head, tail) for k, v in d.items()]\n    return \"{\" + \", \".join(parts) + \"}\"\n\n\ndef pretty(payload):\n    \"\"\"Красивый вывод с сохранением дублей (json.loads их бы схлопнул).\"\"\"\n    pairs = json.loads(payload, object_pairs_hook=lambda p: p)\n    lines = [f'  {json.dumps(k)}: {json.dumps(v, ensure_ascii=False)}' for k, v in pairs]\n    return \"{\\n\" + \",\\n\".join(lines) + \"\\n}\"\n\n\nALL_FIELDS = [\"eventType\", \"time\", \"conferenceId\"]\n\nprint(f\"🎯 Топик: {TOPIC}   ключ: {KAFKA_KEY}\")\nprint(\"─\" * 78)\nprint(\"Поля в сообщении:\")\nfor f in ALL_FIELDS:\n    print(f\"   {'✅ отправляется' if f in EVENT else '🚫 ЗАКОММЕНЧЕНО '}  {f}\")\nfor f in TAIL:\n    print(f\"   ↪️  в конце (дубль) {f}\")\nif not TAIL:\n    print(f\"   🚫 ЗАКОММЕНЧЕНО   eventType в конце (дубля нет)\")\nprint(\"─\" * 78)\n\npayload = build_payload(EVENT, TAIL)\nprint(pretty(payload))\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\nr = producer.send(TOPIC, value=payload.encode(\"utf-8\"), key=KAFKA_KEY.encode(\"utf-8\")).get(timeout=15)\nproducer.flush()\n\nprint(\"─\" * 78)\nprint(f\"✅ Отправлено → {r.topic}  partition={r.partition}  offset={r.offset}  key={KAFKA_KEY}\")\nprint(f\"   сырое сообщение: {payload}\")\n"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1789656394253-4e9",
+        "label": "TZ_OFFSET",
+        "code_key": "TZ_OFFSET",
+        "placeholder": "0",
+        "field_type": "text",
+        "options": []
+      },
+      {
+        "id": "param-1789656413499-owb",
+        "label": "eventType",
+        "code_key": "eventType",
+        "placeholder": "tcs_start",
+        "field_type": "select",
+        "options": [
+          "tcs_start",
+          "tcs_end"
+        ]
+      },
+      {
+        "id": "param-1789656462565-uhf",
+        "label": "conferenceId",
+        "code_key": "conferenceId",
+        "placeholder": "11277",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-dcedb1d1",
+    "created_at": "2026-10-01T12:49:50.091755+00:00"
+  },
+  {
+    "id": "3fd7db2b",
+    "name": "MCP-Инцидент (Получить инструкцию) (копия)",
+    "topic": "",
+    "notebook": [
+      {
+        "id": "cell-1785695648839-1pzf",
+        "type": "init",
+        "source": "%pip install --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org kafka-python"
+      },
+      {
+        "id": "cell-1785695650970-dnum",
+        "type": "init",
+        "source": "# ════════════════════════════════════════════════════════════════════════\n#  MCP ИНЦИДЕНТОВ — ИФТ. Импорты + константы + токен + отправка\n#  ⚠️ Не вставлять сюда посторонний текст (UUID, номера) — сломается импорт\n# ════════════════════════════════════════════════════════════════════════\nimport os\nimport json\nimport uuid\nimport base64\nfrom datetime import datetime, timezone\nfrom kafka import KafkaProducer\n\n# ── Kafka ИФТ ───────────────────────────────────────────────────────────\nBROKERS = [\"tvldq-sber00010.delta.sbrf.ru:9092\", \"tvldq-sber00011.delta.sbrf.ru:9092\"]\nMCP_IN_TOPIC = \"mcp-in\"\nMCP_LOG_PATH = os.path.abspath(\"./mcp_calls_log.json\")\n\n# ── Параметры агента ────────────────────────────────────────────────────\nJWT_KID          = \"428767806807497946486321640986937786342747736979\"\nSENDER_AGENT     = \"sber.service_proxy.mcpTools-hpi-agent\"\nRECIPIENT_AGENT  = \"sber.support_platform.mcp_incident\"   # ⬅️ MCP ИНЦИДЕНТОВ\nSENDER_ID_AEF    = \"CI09912231\"\nRECIPIENT_ID_AEF = \"CI10148116\"\nSYSTEM_CI        = \"CI15451717\"\nAGENT_MODEL_VER  = \"GigaChat-3-Ultra-preview\"\n\nproducer = KafkaProducer(bootstrap_servers=BROKERS, security_protocol=\"PLAINTEXT\")\n\n\ndef get_byte_string(obj):\n    if isinstance(obj, str):\n        return obj.encode(\"utf-8\")\n    if isinstance(obj, (dict, list)):\n        return json.dumps(obj, ensure_ascii=False).encode(\"utf-8\")\n    return str(obj).encode(\"utf-8\")\n\n\ndef now_ts():\n    \"\"\"2026-08-02T18:19:59.951Z\"\"\"\n    n = datetime.now(timezone.utc)\n    return n.strftime(\"%Y-%m-%dT%H:%M:%S.\") + f\"{n.microsecond // 1000:03d}Z\"\n\n\ndef _b64u(data):\n    raw = data if isinstance(data, bytes) else json.dumps(data, separators=(\",\", \":\")).encode()\n    return base64.urlsafe_b64encode(raw).decode().rstrip(\"=\")\n\n\ndef make_message_token(session_id):\n    \"\"\"JWT как у агента. Подпись = base64('dummy-signature-' + b64(payload)).\"\"\"\n    header = {\"kid\": JWT_KID, \"typ\": \"JWT\", \"alg\": \"RS256\"}\n    payload = {\n        \"senderAgentName\":    SENDER_AGENT,\n        \"recipientAgentName\": RECIPIENT_AGENT,\n        \"senderIdAEF\":        SENDER_ID_AEF,\n        \"recipientIdAEF\":     RECIPIENT_ID_AEF,\n        \"systemCi\":           SYSTEM_CI,\n        \"agentModelVersion\":  AGENT_MODEL_VER,\n        \"a2aSessionId\":       session_id,      # == id запроса == key == ContexId\n        \"gigaChatSessionId\":  \"none\",\n        \"version\":            \"1.0\",\n    }\n    h_b64 = _b64u(header)\n    p_b64 = _b64u(payload)\n    sig   = _b64u((\"dummy-signature-\" + p_b64).encode())\n    return f\"{h_b64}.{p_b64}.{sig}\"\n\n\ndef make_headers(session_id):\n    \"\"\"Kafka headers: list[tuple[str, bytes]]. ⚠️ ContexId — без 't'.\"\"\"\n    return [\n        (\"Authorization\",      b\"MessageToken\"),\n        (\"MessageToken\",       make_message_token(session_id).encode()),\n        (\"SenderAgentName\",    SENDER_AGENT.encode()),\n        (\"RecipientAgentName\", RECIPIENT_AGENT.encode()),\n        (\"SystemCi\",           SYSTEM_CI.encode()),\n        (\"Timestamp\",          now_ts().encode()),\n        (\"ContexId\",           session_id.encode()),\n    ]\n\n\ndef _log(entries):\n    log = []\n    if os.path.exists(MCP_LOG_PATH):\n        try:\n            with open(MCP_LOG_PATH, encoding=\"utf-8\") as f:\n                log = json.load(f)\n        except Exception:\n            log = []\n    log.extend(entries)\n    with open(MCP_LOG_PATH, \"w\", encoding=\"utf-8\") as f:\n        json.dump(log[-500:], f, ensure_ascii=False, indent=2)\n\n\ndef send_raw(payload, req_id, show_token=False):\n    \"\"\"Отправка любого JSON-RPC с полным набором заголовков.\"\"\"\n    headers = make_headers(req_id)\n    print(json.dumps(payload, ensure_ascii=False, indent=2))\n    print(\"\\n   Заголовки:\")\n    for k, v in headers:\n        s = v.decode()\n        if k == \"MessageToken\" and not show_token:\n            s = s[:40] + f\"... ({len(s)} симв.)\"\n        print(f\"     {k:<20} {s}\")\n    r = producer.send(MCP_IN_TOPIC, value=get_byte_string(payload),\n                      key=req_id.encode(), headers=headers).get(timeout=15)\n    producer.flush()\n    print(f\"\\n   ✅ → {r.topic}  partition={r.partition}  offset={r.offset}\")\n    return r\n\n\ndef send_tool(tool, arg_name, values):\n    \"\"\"Отправляет tools/call в mcp-in. Ответы не читает.\"\"\"\n    if isinstance(values, str):\n        values = [values]\n\n    print(f\"🎯 {tool}   запросов: {len(values)}\")\n    print(f\"   Адресат: {RECIPIENT_AGENT}\")\n    print(\"=\" * 78)\n\n    sent = []\n    for v in values:\n        req_id = str(uuid.uuid4())          # только UUID\n        payload = {\"jsonrpc\": \"2.0\", \"id\": req_id, \"method\": \"tools/call\",\n                   \"params\": {\"name\": tool, \"arguments\": {arg_name: v}}}\n        print(f\"\\n📤 [{v}]  id = {req_id}\")\n        r = send_raw(payload, req_id)\n        sent.append({\"ts\": now_ts(), \"tool\": tool, \"arg\": arg_name, \"value\": v,\n                     \"req_id\": req_id, \"partition\": r.partition, \"offset\": r.offset})\n\n    _log(sent)\n    print(\"\\n\" + \"=\" * 78)\n    print(f\"📊 Отправлено: {len(sent)}\")\n    print(\"\\n🔎 Искать ответы в mcp-out по id:\")\n    for s in sent:\n        print(f\"   {s['value']:<20} → {s['req_id']}\")\n    return sent\n\n\nprint(\"✅ INIT выполнен\")\nprint(f\"   Брокеры:  {BROKERS}\")\nprint(f\"   Топик:    {MCP_IN_TOPIC}\")\nprint(f\"   Адресат:  {RECIPIENT_AGENT}\")\nprint(f\"   Проверка uuid: {str(uuid.uuid4())}\")"
+      },
+      {
+        "id": "cell-1785695687054-hd02",
+        "type": "loop",
+        "source": "# 1️⃣ requestIncidentInstruction — НОМЕР ИНЦИДЕНТА\nINCIDENTS = [\"INC0001543210\"]\nsent = send_tool(\"requestIncidentInstruction\", \"incidentSmId\", INCIDENTS)"
+      }
+    ],
+    "dynamic_params": [
+      {
+        "id": "param-1785695702941-qpw",
+        "label": "INCIDENTS",
+        "code_key": "INCIDENTS",
+        "placeholder": "INC0001543210",
+        "field_type": "text",
+        "options": []
+      }
+    ],
+    "visible_to_monitoring": false,
+    "folder_id": "fld-7b490180",
+    "created_at": "2026-10-09T18:20:25.493393+00:00"
   }
 ]

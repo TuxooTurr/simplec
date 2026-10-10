@@ -113,3 +113,71 @@ export function attachJiraFiles(
   });
   return fetchJson(`/api/jira/attach/${encodeURIComponent(key)}`, { method: "POST", body });
 }
+
+/* ── Jira-аналитика: представления (выборка + группировка + колонки) ──────── */
+
+export interface JiraField { id: string; name: string; custom: boolean; type: string }
+
+export interface JiraView {
+  id?: string;
+  name: string;
+  description?: string;
+  jql: string;
+  columns: string[];
+  group_by: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface JiraViewRow { key: string; url: string; values: Record<string, string> }
+
+export interface JiraViewGroup {
+  field: string;
+  value: string;
+  count: number;
+  groups?: JiraViewGroup[];
+  issues?: JiraViewRow[];
+}
+
+export interface JiraViewResult {
+  total: number;
+  loaded: number;
+  truncated: boolean;
+  columns: { id: string; name: string }[];
+  group_by: { id: string; name: string }[];
+  fetched_at: number;
+  groups?: JiraViewGroup[];
+  issues?: JiraViewRow[];
+}
+
+export function getJiraFields(): Promise<{ fields: JiraField[] }> {
+  return fetchJson("/api/jira/fields");
+}
+
+export function listJiraViews(): Promise<{ views: JiraView[] }> {
+  return fetchJson("/api/jira/views");
+}
+
+export function saveJiraView(view: JiraView): Promise<JiraView> {
+  return fetchJson("/api/jira/views", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(view),
+  });
+}
+
+export function deleteJiraView(id: string): Promise<{ status: string }> {
+  return fetchJson(`/api/jira/views/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+/** Выполняет представление. Передаём его содержимое, а не id: так можно
+ *  посмотреть результат несохранённых правок. refresh — мимо кэша бэкенда. */
+export function runJiraView(
+  view: Pick<JiraView, "jql" | "columns" | "group_by">, refresh = false,
+): Promise<JiraViewResult> {
+  return fetchJson("/api/jira/views/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...view, refresh }),
+  });
+}

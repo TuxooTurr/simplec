@@ -1008,20 +1008,6 @@ export default function GenerationSection() {
                   <button
                     onClick={() => {
                       const sel = cases.filter((_, i) => selectedCases.has(i));
-                      const text = exportResult?.xml ?? casesToText(sel);
-                      sessionStorage.setItem("st_automodel_prefill",
-                        JSON.stringify({ text, feature: genMetaRef.current.feature ?? "" }));
-                      window.location.href = "/auto-model";
-                    }}
-                    className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs
-                      text-text-muted hover:bg-bg-subtle hover:text-violet-600 transition-all duration-150 whitespace-nowrap flex-shrink-0"
-                  >
-                    <FlaskConical className="w-3 h-3" />
-                    Автотест
-                  </button>
-                  <button
-                    onClick={() => {
-                      const sel = cases.filter((_, i) => selectedCases.has(i));
                       exportingHistIdRef.current = currentHistIdRef.current ?? sessionId;
                       setExportSource({ cases: sel, qaDoc });
                       setExportBackStage("review");
@@ -1399,20 +1385,6 @@ export default function GenerationSection() {
                             </button>
                           );
                         })()}
-                        <button
-                          onClick={() => {
-                            const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));
-                            const text = histView.export_result?.xml ?? casesToText(sel);
-                            sessionStorage.setItem("st_automodel_prefill",
-                              JSON.stringify({ text, feature: histView.feature }));
-                            window.location.href = "/auto-model";
-                          }}
-                          className="flex items-center gap-1.5 px-3.5 py-2 border border-border-main rounded-lg text-sm
-                            text-text-muted hover:bg-bg-subtle hover:text-violet-600 transition-all duration-150"
-                        >
-                          <FlaskConical className="w-3.5 h-3.5" />
-                          В автотесты
-                        </button>
                         <button
                           onClick={() => {
                             const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));

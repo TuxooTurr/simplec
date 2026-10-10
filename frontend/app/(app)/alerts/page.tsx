@@ -1,8 +1,7 @@
-import type { Metadata } from "next";
-import AlertsSection from "@/components/sections/AlertsSection";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Генератор алертов" };
-
-export default function AlertsPage() {
-  return <AlertsSection />;
+// Генератор алертов переехал в «Генераторы событий»: каждая папка алертов —
+// отдельная плитка. Старые ссылки ведут в хаб.
+export default function Page() {
+  redirect("/event-generators");
 }

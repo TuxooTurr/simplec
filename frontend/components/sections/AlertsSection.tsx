@@ -5,7 +5,7 @@ import {
   Bell, Plus, Trash2, Pencil, Loader2, X,
   Upload, Code, AlignLeft, ChevronDown, ChevronUp, GripVertical,
   BookOpen, Settings2, Play, Square, Timer,
-  CircleCheck, CircleX, Wifi, WifiOff, RefreshCw, Eraser,
+  CircleCheck, CircleX, Wifi, WifiOff, RefreshCw,
   RotateCcw, Eye, EyeOff, Clock, User, List,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
   Maximize2, Minimize2, Copy,
@@ -18,7 +18,8 @@ import {
   type AlertScript, type AlertFolder, type DynamicParam, type NotebookCell,
   type ParamFieldType, type KernelInfo, type KernelAuditEntry,
 } from "@/lib/api";
-import { useAlertsScheduler, missingParams, type OutputLine } from "@/contexts/AlertsSchedulerContext";
+import { useAlertsScheduler, missingParams } from "@/contexts/AlertsSchedulerContext";
+import KernelChat from "@/components/alerts/KernelChat";
 import { useAuth } from "@/contexts/AuthContext";
 
 // ── Styles ───────────────────────────────────────────────────────────────────
@@ -539,16 +540,18 @@ function ParamInput({ param, value, onChange }: {
 
 // ── Create / Edit Modal ───────────────────────────────────────────────────────
 
-function ScriptModal({ initial, folders, onSave, onClose }: {
+function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
   initial?: AlertScript | null;
   folders:  AlertFolder[];
+  /** Папка для нового алерта — та, из которой его создают. */
+  defaultFolderId?: string | null;
   onSave:   (s: AlertScript) => void;
   onClose:  () => void;
 }) {
   const { isSuperuser } = useAuth();
   const editing = !!initial?.id;
   const [name,     setName]     = useState(initial?.name  ?? "");
-  const [folderId, setFolderId] = useState<string>(initial?.folder_id ?? "");
+  const [folderId, setFolderId] = useState<string>(initial ? (initial.folder_id ?? "") : (defaultFolderId ?? ""));
   const [cells,    setCells]    = useState<NotebookCell[]>(
     (initial?.notebook ?? []).map(c => ({ ...c, type: normType(c.type) }))
   );
@@ -839,18 +842,26 @@ function ScriptModal({ initial, folders, onSave, onClose }: {
   );
 }
 
-// ── Output console bottom helper ──────────────────────────────────────────────
-
-function OutputConsoleBottom({ output }: { output: OutputLine[] }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { ref.current?.scrollIntoView({ behavior: "smooth" }); }, [output]);
-  return <div ref={ref} />;
-}
-
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function AlertsSection() {
+function pluralAlerts(n: number): string {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return "алерт";
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return "алерта";
+  return "алертов";
+}
+
+/**
+ * folderId не задан — полный раздел с деревом папок (прежний вид).
+ * folderId задан — раздел одной папки: так его открывает плитка в «Генераторах
+ * событий». null — алерты без папки.
+ */
+export default function AlertsSection({ folderId, onFolderDeleted }: {
+  folderId?:        string | null;
+  onFolderDeleted?: () => void;
+} = {}) {
   const { isSuperuser } = useAuth();
+  const scoped = folderId !== undefined;
 
   const {
     scripts, setScripts, folders, setFolders, loadErr,
@@ -917,13 +928,14 @@ export default function AlertsSection() {
     } catch (e) { alert(String(e)); }
   };
 
-  const handleDeleteFolder = async (fid: string) => {
-    if (!confirm("Удалить папку? Алерты из неё переместятся в корень.")) return;
+  const handleDeleteFolder = async (fid: string): Promise<boolean> => {
+    if (!confirm("Удалить папку? Алерты из неё переместятся в «Без папки».")) return false;
     try {
       await deleteAlertFolder(fid);
       setFolders(prev => prev.filter(f => f.id !== fid));
       setScripts(prev => prev.map(s => s.folder_id === fid ? { ...s, folder_id: null } : s));
-    } catch (e) { alert(String(e)); }
+      return true;
+    } catch (e) { alert(String(e)); return false; }
   };
 
   // ── Ширины колонок (тянутся мышью, запоминаются) ─────────────────────────
@@ -986,7 +998,16 @@ export default function AlertsSection() {
     );
   };
 
-  const selected = scripts.find(s => s.id === selectedId) ?? null;
+  const scopedScripts = scoped ? scripts.filter(s => (s.folder_id ?? null) === folderId) : scripts;
+  const scopedFolder  = scoped && folderId ? folders.find(f => f.id === folderId) ?? null : null;
+  const selected = scopedScripts.find(s => s.id === selectedId) ?? null;
+
+  // Открыли папку, а выбран алерт из другой — выбираем первый в этой папке.
+  useEffect(() => {
+    if (!scoped) return;
+    if (!scopedScripts.some(s => s.id === selectedId)) setSelectedId(scopedScripts[0]?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scoped, folderId, scopedScripts.length]);
 
   // Обычные поля и JSON-тела разведены по вкладкам: JSON-поле высокое и
   // вытесняло бы остальные параметры за пределы экрана.
@@ -1098,6 +1119,64 @@ export default function AlertsSection() {
 
   const getKernelForScript = (scriptId: string) => allKernels.find(k => k.script_id === scriptId && k.alive);
 
+  // Строка алерта в списке. compact — внутри папки дерева (мельче шрифт и иконки).
+  const renderRow = (s: AlertScript, compact: boolean) => {
+    const sess = sessions[s.id];
+    const alive      = !!sess?.kernelAlive;
+    const connecting = !!sess?.kernelConnecting;
+    const sched      = !!sess?.schedActive;
+    const exec       = !!sess?.executing;
+    const kInfo = isSuperuser ? getKernelForScript(s.id) : null;
+
+    let statusLabel = "";
+    let statusColor = "";
+    let dotColor    = "bg-bg-muted";
+
+    if (sched) {
+      const elapsed = sess?.schedStartedAt ? formatElapsed(nowTick - sess.schedStartedAt) : "";
+      statusLabel = `Работает ${elapsed} · #${sess?.schedCount ?? 0}`.trim();
+      statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse";
+    }
+    else if (exec) { statusLabel = "Выполняется..."; statusColor = "text-amber-600"; dotColor = "bg-amber-400 animate-pulse"; }
+    else if (connecting) { statusLabel = "Подключение..."; statusColor = "text-amber-500"; dotColor = "bg-amber-400 animate-pulse"; }
+    else if (alive) { statusLabel = "Ядро подключено"; statusColor = "text-green-600"; dotColor = "bg-green-500"; }
+    else if (isSuperuser && kInfo) { statusLabel = kInfo.started_by; statusColor = "text-blue-500"; dotColor = "bg-blue-400"; }
+
+    const isActive = alive || sched || connecting;
+    const icon = compact ? "w-2.5 h-2.5" : "w-3 h-3";
+    const btn  = compact ? "p-0.5" : "p-1";
+
+    return (
+      <div key={s.id} onClick={() => handleSelectScript(s)}
+        draggable
+        onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
+        onDragEnd={() => setScriptDragId(null)}
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
+        className={`group flex items-start ${compact ? "gap-2 px-2.5 py-1.5" : "gap-2.5 px-3 py-2"} rounded-lg cursor-grab active:cursor-grabbing transition-all ${
+          scriptDragId === s.id ? "opacity-50" : ""} ${
+          selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
+          : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
+          : "hover:bg-bg-subtle border border-transparent"}`}>
+        <div className="relative flex-shrink-0 mt-0.5">
+          <Bell className={`${compact ? "w-3.5 h-3.5" : "w-4 h-4"} ${selectedId === s.id ? "text-primary" : isActive ? "text-green-600" : "text-text-muted"}`} />
+          {(isActive || kInfo) && <span className={`absolute -top-0.5 -right-0.5 ${compact ? "w-2 h-2 border" : "w-2.5 h-2.5 border-2"} rounded-full border-white ${dotColor}`} />}
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className={`${compact ? "text-xs leading-4" : "text-sm leading-5"} block truncate ${selectedId === s.id ? "font-semibold text-primary" : isActive ? "font-medium text-text-main" : "text-text-main"}`}>{s.name}</span>
+          {statusLabel && <span className={`${compact ? "text-[9px] leading-3" : "text-[10px] leading-4"} font-medium block truncate ${statusColor}`}>{statusLabel}</span>}
+        </div>
+        {isSuperuser && (
+          <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0 mt-0.5">
+            <button onClick={e => { e.stopPropagation(); setEditScript(s); setShowModal(true); }} className={`${btn} rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]`} title="Редактировать"><Pencil className={icon} /></button>
+            <button onClick={e => { e.stopPropagation(); handleDuplicate(s); }} className={`${btn} rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]`} title="Копировать"><Copy className={icon} /></button>
+            <button onClick={e => { e.stopPropagation(); handleDelete(s); }} className={`${btn} rounded text-text-muted hover:text-red-500 hover:bg-red-50`} title="Удалить"><Trash2 className={icon} /></button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const runningAlerts = scripts.filter(s => {
     const sess = sessions[s.id];
     return sess?.kernelAlive || sess?.schedActive;
@@ -1112,9 +1191,23 @@ export default function AlertsSection() {
 
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold text-text-main mb-1">Алерты</h1>
+        <div className="min-w-0">
+          {scoped && renamingFolder === folderId && folderId ? (
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={e => setRenameValue(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleRenameFolder(folderId); if (e.key === "Escape") setRenamingFolder(null); }}
+              onBlur={() => handleRenameFolder(folderId)}
+              aria-label="Название папки"
+              className="text-xl font-bold text-text-main mb-1 bg-transparent border-b border-primary/40 focus:outline-none"
+            />
+          ) : !scoped && (
+            // В папке заголовок уже в шапке хаба — здесь только сводка.
+            <h1 className="text-xl font-bold text-text-main mb-1 truncate">Алерты</h1>
+          )}
           <p className="text-sm text-text-muted">
+            {scoped && <>{scopedScripts.length} {pluralAlerts(scopedScripts.length)} · </>}
             Jupyter-ядро · Init (однократно) + Loop (цикл)
             {runningAlerts.length > 0 && (
               <span className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
@@ -1124,7 +1217,27 @@ export default function AlertsSection() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {scoped && folderId && scopedScripts.length > 0 && (
+            <button onClick={() => runFolderScripts(folderId)} title="Запустить все алерты папки"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-green-200 text-green-700 hover:bg-green-50 transition-all">
+              <Play className="w-3.5 h-3.5" /> Запустить все
+            </button>
+          )}
+          {scoped && folderId && isSuperuser && (
+            <>
+              <button onClick={() => { setRenamingFolder(folderId); setRenameValue(scopedFolder?.name ?? ""); }}
+                aria-label="Переименовать папку" title="Переименовать папку"
+                className="p-2 rounded-lg border border-border-main text-text-muted hover:text-primary hover:bg-bg-subtle transition-all">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={async () => { if (await handleDeleteFolder(folderId)) onFolderDeleted?.(); }}
+                aria-label="Удалить папку" title="Удалить папку (алерты переедут в «Без папки»)"
+                className="p-2 rounded-lg border border-border-main text-text-muted hover:text-red-500 hover:bg-red-50 transition-all">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
           {isSuperuser && (
             <button onClick={() => setShowAudit(v => !v)}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
@@ -1174,10 +1287,13 @@ export default function AlertsSection() {
         </div>
       )}
 
-      {scripts.length === 0 ? (
+      {scopedScripts.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center gap-3 text-text-muted">
           <Bell className="w-12 h-12 opacity-20" />
-          <p className="text-sm">Нет алертов. {isSuperuser ? "Создайте первый." : "Суперюзер ещё не открыл вам доступ."}</p>
+          <p className="text-sm">
+            {scoped ? "В папке нет алертов." : "Нет алертов."}{" "}
+            {isSuperuser ? "Создайте первый." : "Суперюзер ещё не открыл вам доступ."}
+          </p>
         </div>
       ) : (
         <div ref={mainRowRef} className="flex gap-1 flex-1 min-h-0 min-w-0">
@@ -1186,8 +1302,11 @@ export default function AlertsSection() {
           <div style={{ width: listW }}
             className="flex-shrink-0 bg-bg-card border border-border-main rounded-xl p-3 overflow-y-auto scrollbar-thin flex flex-col gap-1">
 
+            {/* Режим одной папки — плоский список, без дерева */}
+            {scoped && sortByPref(scopedScripts).map(s => renderRow(s, false))}
+
             {/* New folder button + inline input */}
-            {isSuperuser && (
+            {!scoped && isSuperuser && (
               showNewFolder ? (
                 <div className="flex items-center gap-1 px-2 py-1.5">
                   <input
@@ -1214,63 +1333,10 @@ export default function AlertsSection() {
             )}
 
             {/* Root-level alerts (no folder) */}
-            {sortByPref(scripts.filter(s => !s.folder_id)).map(s => {
-              const sess = sessions[s.id];
-              const alive     = !!sess?.kernelAlive;
-              const connecting = !!sess?.kernelConnecting;
-              const sched     = !!sess?.schedActive;
-              const exec      = !!sess?.executing;
-              const kInfo = isSuperuser ? getKernelForScript(s.id) : null;
-
-              let statusLabel = "";
-              let statusColor = "";
-              let dotColor    = "bg-bg-muted";
-
-              if (sched) {
-                const elapsed = sess?.schedStartedAt ? formatElapsed(nowTick - sess.schedStartedAt) : "";
-                statusLabel = `Работает ${elapsed} · #${sess?.schedCount ?? 0}`.trim();
-                statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse";
-              }
-              else if (exec) { statusLabel = "Выполняется..."; statusColor = "text-amber-600"; dotColor = "bg-amber-400 animate-pulse"; }
-              else if (connecting) { statusLabel = "Подключение..."; statusColor = "text-amber-500"; dotColor = "bg-amber-400 animate-pulse"; }
-              else if (alive) { statusLabel = "Ядро подключено"; statusColor = "text-green-600"; dotColor = "bg-green-500"; }
-              else if (isSuperuser && kInfo) { statusLabel = kInfo.started_by; statusColor = "text-blue-500"; dotColor = "bg-blue-400"; }
-
-              const isActive = alive || sched || connecting;
-
-              return (
-                <div key={s.id} onClick={() => handleSelectScript(s)}
-                  draggable
-                  onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
-                  onDragEnd={() => setScriptDragId(null)}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
-                  className={`group flex items-start gap-2.5 px-3 py-2 rounded-lg cursor-grab active:cursor-grabbing transition-all ${
-                    scriptDragId === s.id ? "opacity-50" : ""} ${
-                    selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
-                    : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
-                    : "hover:bg-bg-subtle border border-transparent"}`}>
-                  <div className="relative flex-shrink-0 mt-0.5">
-                    <Bell className={`w-4 h-4 ${selectedId === s.id ? "text-primary" : isActive ? "text-green-600" : "text-text-muted"}`} />
-                    {(isActive || kInfo) && <span className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-white ${dotColor}`} />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className={`text-sm block truncate leading-5 ${selectedId === s.id ? "font-semibold text-primary" : isActive ? "font-medium text-text-main" : "text-text-main"}`}>{s.name}</span>
-                    {statusLabel && <span className={`text-[10px] font-medium block truncate leading-4 ${statusColor}`}>{statusLabel}</span>}
-                  </div>
-                  {isSuperuser && (
-                    <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0 mt-0.5">
-                      <button onClick={e => { e.stopPropagation(); setEditScript(s); setShowModal(true); }} className="p-1 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Редактировать"><Pencil className="w-3 h-3" /></button>
-                      <button onClick={e => { e.stopPropagation(); handleDuplicate(s); }} className="p-1 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Копировать"><Copy className="w-3 h-3" /></button>
-                      <button onClick={e => { e.stopPropagation(); handleDelete(s); }} className="p-1 rounded text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить"><Trash2 className="w-3 h-3" /></button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            {!scoped && sortByPref(scripts.filter(s => !s.folder_id)).map(s => renderRow(s, false))}
 
             {/* Folders */}
-            {folders.map(folder => {
+            {!scoped && folders.map(folder => {
               const isOpen = openFolders.has(folder.id);
               const folderScripts = sortByPref(scripts.filter(s => s.folder_id === folder.id));
               const hasActive = folderScripts.some(s => {
@@ -1336,60 +1402,7 @@ export default function AlertsSection() {
                       {folderScripts.length === 0 && (
                         <p className="text-[10px] text-text-muted/50 px-2 py-1 italic">Пусто</p>
                       )}
-                      {folderScripts.map(s => {
-                        const sess = sessions[s.id];
-                        const alive     = !!sess?.kernelAlive;
-                        const connecting = !!sess?.kernelConnecting;
-                        const sched     = !!sess?.schedActive;
-                        const exec      = !!sess?.executing;
-                        const kInfo = isSuperuser ? getKernelForScript(s.id) : null;
-
-                        let statusLabel = "";
-                        let statusColor = "";
-                        let dotColor    = "bg-bg-muted";
-
-                        if (sched) {
-                const elapsed = sess?.schedStartedAt ? formatElapsed(nowTick - sess.schedStartedAt) : "";
-                statusLabel = `Работает ${elapsed} · #${sess?.schedCount ?? 0}`.trim();
-                statusColor = "text-green-600"; dotColor = "bg-green-500 animate-pulse";
-              }
-                        else if (exec) { statusLabel = "Выполняется..."; statusColor = "text-amber-600"; dotColor = "bg-amber-400 animate-pulse"; }
-                        else if (connecting) { statusLabel = "Подключение..."; statusColor = "text-amber-500"; dotColor = "bg-amber-400 animate-pulse"; }
-                        else if (alive) { statusLabel = "Ядро подключено"; statusColor = "text-green-600"; dotColor = "bg-green-500"; }
-                        else if (isSuperuser && kInfo) { statusLabel = kInfo.started_by; statusColor = "text-blue-500"; dotColor = "bg-blue-400"; }
-
-                        const isActive = alive || sched || connecting;
-
-                        return (
-                          <div key={s.id} onClick={() => handleSelectScript(s)}
-                            draggable
-                            onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
-                            onDragEnd={() => setScriptDragId(null)}
-                            onDragOver={e => e.preventDefault()}
-                            onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
-                            className={`group flex items-start gap-2 px-2.5 py-1.5 rounded-lg cursor-grab active:cursor-grabbing transition-all ${
-                              scriptDragId === s.id ? "opacity-50" : ""} ${
-                              selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
-                              : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
-                              : "hover:bg-bg-subtle border border-transparent"}`}>
-                            <div className="relative flex-shrink-0 mt-0.5">
-                              <Bell className={`w-3.5 h-3.5 ${selectedId === s.id ? "text-primary" : isActive ? "text-green-600" : "text-text-muted"}`} />
-                              {(isActive || kInfo) && <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-white ${dotColor}`} />}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <span className={`text-xs block truncate leading-4 ${selectedId === s.id ? "font-semibold text-primary" : isActive ? "font-medium text-text-main" : "text-text-main"}`}>{s.name}</span>
-                              {statusLabel && <span className={`text-[9px] font-medium block truncate leading-3 ${statusColor}`}>{statusLabel}</span>}
-                            </div>
-                            {isSuperuser && (
-                              <div className="hidden group-hover:flex items-center gap-0.5 flex-shrink-0 mt-0.5">
-                                <button onClick={e => { e.stopPropagation(); setEditScript(s); setShowModal(true); }} className="p-0.5 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Редактировать"><Pencil className="w-2.5 h-2.5" /></button>
-                                <button onClick={e => { e.stopPropagation(); handleDuplicate(s); }} className="p-0.5 rounded text-text-muted hover:text-primary hover:bg-[var(--color-active-bg)]" title="Копировать"><Copy className="w-2.5 h-2.5" /></button>
-                                <button onClick={e => { e.stopPropagation(); handleDelete(s); }} className="p-0.5 rounded text-text-muted hover:text-red-500 hover:bg-red-50" title="Удалить"><Trash2 className="w-2.5 h-2.5" /></button>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                      {folderScripts.map(s => renderRow(s, true))}
                     </div>
                   )}
                 </div>
@@ -1492,36 +1505,7 @@ export default function AlertsSection() {
               {/* Right: output console + scheduler */}
               <div className="min-w-0 bg-bg-card border border-border-main rounded-xl p-5 flex flex-col gap-3 overflow-hidden">
 
-                {/* Output header */}
-                <div className="flex items-center justify-between flex-shrink-0">
-                  <h3 className="text-sm font-semibold text-text-main flex items-center gap-1.5">
-                    <Code className="w-4 h-4 text-text-muted" /> Вывод ядра
-                    {executing && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary ml-1" />}
-                  </h3>
-                  <button onClick={clearOutput} title="Очистить"
-                    className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
-                    <Eraser className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Output console */}
-                <div className="flex-1 min-h-0 border border-border-main rounded-lg bg-gray-950 overflow-y-auto scrollbar-thin">
-                  <div className="text-xs font-mono space-y-0 p-2 min-h-full">
-                    {output.length === 0 ? (
-                      <p className="text-text-muted italic p-2">— ожидание вывода —</p>
-                    ) : (
-                      output.map((line, i) => (
-                        <div key={i} className={`flex gap-2 leading-5 ${
-                          line.kind === "error"  ? "text-red-400" :
-                          line.kind === "system" ? "text-blue-400" : "text-green-300"}`}>
-                          <span className="text-text-muted flex-shrink-0 select-none">{line.ts}</span>
-                          <pre className="whitespace-pre-wrap break-all flex-1">{line.text}</pre>
-                        </div>
-                      ))
-                    )}
-                    <OutputConsoleBottom output={output} />
-                  </div>
-                </div>
+                <KernelChat output={output} executing={executing} onClear={clearOutput} />
 
                 {/* Scheduling */}
                 <div className="border-t border-border-main pt-3 flex-shrink-0 space-y-2.5">
@@ -1623,6 +1607,7 @@ export default function AlertsSection() {
         <ScriptModal
           initial={editScript}
           folders={folders}
+          defaultFolderId={scoped ? folderId : undefined}
           onSave={handleModalSave}
           onClose={() => { setShowModal(false); setEditScript(null); }}
         />

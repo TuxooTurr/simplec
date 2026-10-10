@@ -1432,14 +1432,12 @@ function RequirementsTab() {
 export default function EtalonsSection() {
   const [tab, setTab] = useState<Tab>("requirements");
 
-  // Вкладки эталонов ручных кейсов/автотестов/дефектов скрыты с фронта — их
-  // пары по-прежнему пишутся кнопками "В эталон" в других разделах (Ручное
-  // тестирование, Автотестирование, Дефекты), просто больше не просматриваются
-  // здесь напрямую. Компоненты (TestCasesTab/AutotestsTab/DefectsTab) оставлены
-  // как есть — это скрытие, не удаление, восстановить можно вернув строки сюда.
+  // В разделе осталась только вкладка «Требования». Эталоны (TestCasesTab/
+  // AutotestsTab/DefectsTab) и «Документы» (ContextDocsTab) скрыты, не удалены:
+  // пары по-прежнему пишутся кнопками «В эталон» в других разделах. Вернуть
+  // вкладку — добавить строку сюда; при двух и более вкладках вернётся панель.
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: "requirements", label: "Требования",   icon: <ClipboardList className="w-4 h-4" /> },
-    { id: "docs",         label: "Документы",    icon: <FolderOpen    className="w-4 h-4" /> },
   ];
 
   return (
@@ -1448,10 +1446,11 @@ export default function EtalonsSection() {
         {/* Заголовок */}
         <div className="mb-5">
           <h1 className="text-xl font-bold text-text-main mb-1">Данные</h1>
-          <p className="text-sm text-text-muted">База знаний для RAG (эталоны, документы) и локальная библиотека требований.</p>
+          <p className="text-sm text-text-muted">Библиотека требований: исходник и QA-документация в одной записи.</p>
         </div>
 
-        {/* Вкладки */}
+        {/* Вкладки — панель нужна, только когда есть из чего выбирать */}
+        {TABS.length > 1 && (
         <div className="flex gap-1 bg-bg-muted rounded-xl p-1 mb-6 w-fit">
           {TABS.map((t) => (
             <button
@@ -1467,6 +1466,7 @@ export default function EtalonsSection() {
             </button>
           ))}
         </div>
+        )}
 
         {/* Контент */}
         {tab === "testcases"    && <TestCasesTab />}

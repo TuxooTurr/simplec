@@ -580,7 +580,7 @@ export default function BugsSection() {
               <div className="mt-2 border border-border-main rounded-lg bg-bg-card max-h-48 overflow-auto p-1">
                 {requirementsList.length === 0 ? (
                   <p className="text-xs text-text-muted px-2 py-1.5">
-                    Список требований пуст — сохраните их кнопкой «Сохранить как требование» в разделе «Ручное тестирование».
+                    Список требований пуст — сохраните их кнопкой «Сохранить как требование» в разделе «Тестовая модель».
                   </p>
                 ) : (
                   requirementsList.map((r) => (

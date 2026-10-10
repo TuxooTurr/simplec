@@ -1,8 +1,7 @@
-import type { Metadata } from "next";
-import AutoModelSection from "@/components/sections/AutoModelSection";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Автотестирование" };
-
-export default function AutoModelPage() {
-  return <AutoModelSection />;
+// Раздел «Автотестирование» скрыт: код раздела (AutoModelSection) сохранён,
+// вернуть — восстановить рендер секции здесь и пункт в Sidebar.
+export default function Page() {
+  redirect("/generation");
 }

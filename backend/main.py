@@ -51,8 +51,8 @@ from backend.api import (
     auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
-    testdata, jobs, logs, kafka_explorer, jira_defects, model_bench, requirements,
-    datagen,
+    testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, model_bench, requirements,
+    datagen, webconnect,
 )
 from db.postgres import init_db
 
@@ -93,6 +93,12 @@ async def lifespan(app_: FastAPI):
         pass
     try:
         await autotest_runs.stop_autorun_monitor()
+    except Exception:
+        pass
+    # Окна веб-коннекторов: сохранить сессии и закрыть браузеры.
+    try:
+        from webconnect.browser import windows
+        await windows.close_all()
     except Exception:
         pass
 
@@ -171,6 +177,8 @@ app.include_router(autotests_gen.router)
 app.include_router(autotest_runs.router)
 app.include_router(app_settings.router)
 app.include_router(jira_defects.router)
+app.include_router(jira_views.router)
+app.include_router(webconnect.router)
 app.include_router(testdata.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)

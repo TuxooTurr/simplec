@@ -2,13 +2,13 @@
 
 /**
  * Глобальный индикатор активных алертов — виден с ЛЮБОЙ вкладки (рендерится
- * в Sidebar, а не внутри секции «Алерты»). Ядра/планировщики живут в
+ * в Sidebar, а не внутри «Генераторов событий»). Ядра/планировщики живут в
  * AlertsSchedulerContext на уровне WorkspaceShell и продолжают работать при
  * переключении разделов — этот виджет даёт увидеть их, не заходя в «Алерты».
  */
 
 import { useEffect, useState } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { useAlertsScheduler } from "@/contexts/AlertsSchedulerContext";
 
@@ -25,7 +25,6 @@ function formatElapsed(ms: number): string {
 export default function RunningAlertsIndicator() {
   const { scripts, sessions, setSelectedId } = useAlertsScheduler();
   const router = useRouter();
-  const pathname = usePathname();
   const [now, setNow] = useState(() => Date.now());
 
   const active = Object.entries(sessions)
@@ -47,9 +46,11 @@ export default function RunningAlertsIndicator() {
 
   if (active.length === 0) return null;
 
+  // Алерты живут плитками-папками в «Генераторах событий» — открываем папку алерта.
   const openAlert = (id: string) => {
     setSelectedId(id);
-    if (pathname !== "/alerts") router.push("/alerts");
+    const folder = scripts.find((sc) => sc.id === id)?.folder_id;
+    router.push(`/event-generators?open=alerts:${folder ?? "none"}`);
   };
 
   return (

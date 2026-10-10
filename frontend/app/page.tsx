@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Zap, FlaskConical, Database, Bug, SplitSquareHorizontal, Scale, Bell, Network,
+  Zap, Database, Bug, SplitSquareHorizontal, BarChart2, Network,
   ArrowRight, Loader2,
 } from "lucide-react";
 import type { ComponentType } from "react";
@@ -18,13 +18,8 @@ const FEATURES: {
 }[] = [
   {
     Icon: Zap,
-    title: "Генерация тест-кейсов",
+    title: "Тестовая модель",
     description: "AI превращает требования, файлы и документы в тест-кейсы, готовые для Jira Zephyr Scale.",
-  },
-  {
-    Icon: FlaskConical,
-    title: "Автотесты на Java",
-    description: "AI пишет автотесты и подключается к базам через JDBC-драйверы для реальных проверок.",
   },
   {
     Icon: Database,
@@ -42,14 +37,9 @@ const FEATURES: {
     description: "Сравнение моделей на одних и тех же сценариях с отчётом судьи и экспортом в Word.",
   },
   {
-    Icon: Scale,
-    title: "Ревизор",
-    description: "Автоматическая проверка качества сгенерированных тест-кейсов перед выгрузкой.",
-  },
-  {
-    Icon: Bell,
-    title: "Генератор алертов",
-    description: "Управление алертами и сценариями мониторинга через встроенные Jupyter-ядра.",
+    Icon: BarChart2,
+    title: "Генераторы событий",
+    description: "Алерты через Jupyter-ядра, метрики, ТКС и Jobs — в одном хабе, ответы ядра в виде чата по топикам.",
   },
   {
     Icon: Network,
@@ -92,7 +82,7 @@ export default function LandingPage() {
             </span>
           </h1>
           <p className="animate-slide-up-delay-1 mt-5 text-lg text-text-muted max-w-2xl mx-auto">
-            Генерирует тест-кейсы, пишет автотесты на Java, оформляет баг-репорты
+            Генерирует тест-кейсы, отправляет тестовые события, оформляет баг-репорты
             и сравнивает LLM-модели — весь цикл тестирования в одном инструменте.
           </p>
           <div className="animate-slide-up-delay-2 mt-9 flex items-center justify-center gap-3">

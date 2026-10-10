@@ -5,16 +5,13 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import GenerationSection from "./sections/GenerationSection";
 import EtalonsSection from "./sections/EtalonsSection";
 import BugsSection from "./sections/BugsSection";
-import AlertsSection from "./sections/AlertsSection";
 import MetricsSection from "./sections/MetricsSection";
 import EventGeneratorsSection from "./sections/EventGeneratorsSection";
-import RevisorSection from "./sections/RevisorSection";
-import AutoModelSection from "./sections/AutoModelSection";
 import TestDataSection from "./sections/TestDataSection";
 import SettingsSection from "./sections/SettingsSection";
-import JobsSection from "./sections/JobsSection";
 import KafkaSection from "./sections/KafkaSection";
 import ModelBenchSection from "./sections/ModelBenchSection";
+import LogAnalyzerSection from "./sections/LogAnalyzerSection";
 
 export default function SectionRenderer() {
   const { rightSection, dragging } = useWorkspace();
@@ -49,16 +46,13 @@ export default function SectionRenderer() {
 
   const sections: Record<string, React.ReactNode> = {
     generation: <GenerationSection />,
-    auto_model: <AutoModelSection />,
     test_data:  <TestDataSection />,
     etalons:    <EtalonsSection />,
     bugs:       <BugsSection />,
-    alerts:     <AlertsSection />,
+    logs:       <LogAnalyzerSection />,
     kafka:      <KafkaSection />,
-    jobs:       <JobsSection />,
     metrics:    <MetricsSection />,
     event_generators: <EventGeneratorsSection />,
-    revisor:    <RevisorSection />,
     settings:   <SettingsSection />,
     model_bench: <ModelBenchSection />,
   };

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Play, Users, X, Zap,
+  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Users, X, Zap,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -14,7 +14,10 @@ import WebConnectorsSection from "./WebConnectorsSection";
 import AlertsSection from "./AlertsSection";
 import { useAlertsScheduler } from "@/contexts/AlertsSchedulerContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { saveAlertFolder } from "@/lib/api";
+import { getHubTiles, resetHubTile, saveAlertFolder, saveHubTile, type HubTileStyle } from "@/lib/api";
+import type { TileColor } from "@/lib/tileStyle";
+import TileGlyph from "@/components/hub/TileGlyph";
+import TileEditor, { type TileDefaults } from "@/components/hub/TileEditor";
 
 /* ── Хаб генераторов ─────────────────────────────────────────────────────
    Плитки двух видов:
@@ -23,14 +26,17 @@ import { saveAlertFolder } from "@/lib/api";
    - папки алертов — строятся из данных: каждая папка = плитка, внутри неё
      раздел алертов этой папки (скрипты, редактирование, запуск, чат ядра).
    Открытая плитка живёт в адресе (?open=…), если раздел открыт страницей:
-   так на неё ведут индикатор активных алертов и старые ссылки /alerts, /jobs. */
+   так на неё ведут индикатор активных алертов и старые ссылки /alerts, /jobs.
+   Оформление (название, подсказка, иконка, цвет) суперюзер меняет карандашом
+   на плитке; хранится на сервере (data/hub_tiles.json) и одинаково у всей команды.
+   Название папки алертов — это имя самой папки, оно меняется в папке. */
 
 type Generator = {
   id:             string;
   title:          string;
   subtitle:       string;
   Icon:           ComponentType<{ className?: string; strokeWidth?: number }>;
-  accent:         string;
+  color:          TileColor;
   Component:      ComponentType;
   superuserOnly?: boolean;
 };
@@ -41,7 +47,7 @@ const GENERATORS: Generator[] = [
     title: "Метрики ОД",
     subtitle: "Системы, метрики и пороги здоровья · отправка в Kafka по расписанию",
     Icon: BarChart2,
-    accent: "from-indigo-500 to-violet-500",
+    color: "indigo",
     Component: MetricsSection,
     superuserOnly: true,
   },
@@ -50,7 +56,7 @@ const GENERATORS: Generator[] = [
     title: "ТКС",
     subtitle: "Участники выбранной ТКС: добавить, убавить, обновить счётчик",
     Icon: Users,
-    accent: "from-emerald-500 to-teal-500",
+    color: "green",
     Component: TcsGeneratorSection,
     superuserOnly: true,
   },
@@ -59,7 +65,7 @@ const GENERATORS: Generator[] = [
     title: "Веб-коннекторы",
     subtitle: "Запись действий на сайте под вашей сессией и повтор: выгрузка логов и данных по сервису",
     Icon: Globe,
-    accent: "from-fuchsia-500 to-pink-500",
+    color: "pink",
     Component: WebConnectorsSection,
     superuserOnly: true,
   },
@@ -68,13 +74,14 @@ const GENERATORS: Generator[] = [
     title: "Jobs",
     subtitle: "Задачи и скрипты с папками, подключениями к БД и историей запусков",
     Icon: Play,
-    accent: "from-sky-500 to-blue-600",
+    color: "blue",
     Component: JobsSection,
   },
 ];
 
 const ALERTS_PREFIX = "alerts:";
 const NO_FOLDER = "none";
+const ALERT_DEFAULTS = { Icon: Bell, color: "orange" as TileColor };
 
 function plural(n: number, one: string, few: string, many: string): string {
   const d = n % 10, h = n % 100;
@@ -83,31 +90,38 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-function TileShell({ onClick, delay, children }: {
-  onClick: () => void; delay: number; children: React.ReactNode;
+function TileShell({ onClick, onEdit, editLabel, delay, children }: {
+  onClick: () => void; onEdit?: () => void; editLabel: string; delay: number; children: React.ReactNode;
 }) {
+  // Карандаш — отдельная кнопка рядом с плиткой: кнопка внутри кнопки недопустима.
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{ animationDelay: `${delay}ms` }}
-      className="animate-fade-in group text-left bg-bg-card border border-border-main rounded-xl p-5 transition-all
-        hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5 cursor-pointer
-        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-    >
-      {children}
-      <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary
-        opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
-        Открыть →
-      </span>
-    </button>
-  );
-}
-
-function TileIcon({ Icon, accent }: { Icon: Generator["Icon"]; accent: string }) {
-  return (
-    <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${accent} flex items-center justify-center shadow-sm mb-3`}>
-      <Icon className="w-5 h-5 text-white" strokeWidth={2} />
+    <div className="relative group/tile animate-fade-in" style={{ animationDelay: `${delay}ms` }}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="group w-full h-full text-left bg-bg-card border border-border-main rounded-xl p-5 transition-all
+          hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5 cursor-pointer
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      >
+        {children}
+        <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary
+          opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
+          Открыть →
+        </span>
+      </button>
+      {onEdit && (
+        <button
+          type="button"
+          onClick={onEdit}
+          aria-label={editLabel}
+          title="Оформление плитки"
+          className="absolute top-3 right-3 p-1.5 rounded-lg text-text-muted bg-bg-card border border-border-main
+            opacity-0 group-hover/tile:opacity-100 focus-visible:opacity-100 hover:text-primary transition-opacity
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -128,6 +142,40 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
   };
 
   const [newFolder, setNewFolder] = useState<string | null>(null);
+
+  // Оформление плиток: общее на команду, правит суперюзер.
+  const [tiles, setTiles] = useState<Record<string, HubTileStyle>>({});
+  const [editing, setEditing] = useState<{ key: string; defaults: TileDefaults; folderId?: string } | null>(null);
+  const loadTiles = useCallback(() => { getHubTiles().then(setTiles).catch(() => { /* стандартные плитки */ }); }, []);
+  useEffect(() => { loadTiles(); }, [loadTiles]);
+  const tileOf = (key: string): HubTileStyle => tiles[key] ?? {};
+
+  const saveStyle = async (style: HubTileStyle) => {
+    if (!editing) return;
+    let rest = style;
+    if (editing.folderId) {
+      // Название папки — имя самой папки: его видно и внутри раздела алертов.
+      const name = (style.title ?? "").trim();
+      const folder = folders.find(f => f.id === editing.folderId);
+      if (folder && name && name !== folder.name) {
+        const saved = await saveAlertFolder({ ...folder, name });
+        setFolders(prev => prev.map(f => (f.id === saved.id ? saved : f)));
+      }
+      rest = { ...style, title: "" };
+    }
+    const saved = await saveHubTile(editing.key, rest);
+    setTiles(prev => {
+      const next = { ...prev };
+      if (Object.keys(saved).length) next[editing.key] = saved; else delete next[editing.key];
+      return next;
+    });
+  };
+
+  const resetStyle = async () => {
+    if (!editing) return;
+    await resetHubTile(editing.key);
+    setTiles(prev => { const next = { ...prev }; delete next[editing.key]; return next; });
+  };
 
   const generators = GENERATORS.filter(g => !g.superuserOnly || isSuperuser);
 
@@ -166,7 +214,8 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
     : undefined;
 
   if (openGenerator || openAlerts) {
-    const title = openGenerator?.title ?? openAlerts!.title;
+    const style = tileOf(openGenerator ? openGenerator.id : openId!);
+    const title = openGenerator ? (style.title || openGenerator.title) : (openFolder ? openAlerts!.title : style.title || openAlerts!.title);
     const Icon = openGenerator?.Icon ?? Bell;
     return (
       <div className="flex flex-col h-full overflow-hidden">
@@ -180,7 +229,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
             Генераторы
           </button>
           <span className="text-text-muted/40">·</span>
-          <Icon className="w-5 h-5 text-primary" />
+          <TileGlyph icon={style.icon} fallbackIcon={Icon} fallbackColor="indigo" size="inline" />
           <h1 className="text-lg font-bold text-text-main truncate">{title}</h1>
           {openAlerts && <span className="text-xs text-text-muted flex-shrink-0">папка алертов</span>}
         </div>
@@ -211,13 +260,18 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
               Сценарии
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl">
-              {generators.map(({ id, title, subtitle, Icon, accent }) => (
-                <TileShell key={id} onClick={() => setOpenId(id)} delay={nextDelay()}>
-                  <TileIcon Icon={Icon} accent={accent} />
-                  <h3 className="text-sm font-semibold text-text-main mb-1">{title}</h3>
-                  <p className="text-xs text-text-muted leading-relaxed">{subtitle}</p>
-                </TileShell>
-              ))}
+              {generators.map(({ id, title, subtitle, Icon, color }) => {
+                const st = tileOf(id);
+                return (
+                  <TileShell key={id} onClick={() => setOpenId(id)} delay={nextDelay()}
+                    editLabel={`Оформление плитки «${st.title || title}»`}
+                    onEdit={isSuperuser ? () => setEditing({ key: id, defaults: { title, subtitle, Icon, color } }) : undefined}>
+                    <TileGlyph icon={st.icon} color={st.color} fallbackIcon={Icon} fallbackColor={color} />
+                    <h3 className="text-sm font-semibold text-text-main mb-1 pr-7">{st.title || title}</h3>
+                    <p className="text-xs text-text-muted leading-relaxed">{st.subtitle || subtitle}</p>
+                  </TileShell>
+                );
+              })}
             </div>
           </section>
         )}
@@ -232,11 +286,20 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl">
             {alertTiles.map(t => {
               const running = runningIn(t.folderId);
+              const key = ALERTS_PREFIX + t.key;
+              const st = tileOf(key);
+              const title = t.folderId ? t.title : st.title || t.title;
+              const count = `${t.total} ${plural(t.total, "алерт", "алерта", "алертов")}`;
               return (
-                <TileShell key={t.key} onClick={() => setOpenId(ALERTS_PREFIX + t.key)} delay={nextDelay()}>
-                  <TileIcon Icon={Bell} accent="from-amber-500 to-orange-500" />
-                  <div className="flex items-center gap-2 mb-1 min-w-0">
-                    <h3 className="text-sm font-semibold text-text-main truncate">{t.title}</h3>
+                <TileShell key={t.key} onClick={() => setOpenId(key)} delay={nextDelay()}
+                  editLabel={`Оформление папки «${title}»`}
+                  onEdit={isSuperuser ? () => setEditing({
+                    key, folderId: t.folderId ?? undefined,
+                    defaults: { title: t.title, subtitle: count, ...ALERT_DEFAULTS },
+                  }) : undefined}>
+                  <TileGlyph icon={st.icon} color={st.color} fallbackIcon={ALERT_DEFAULTS.Icon} fallbackColor={ALERT_DEFAULTS.color} />
+                  <div className="flex items-center gap-2 mb-1 min-w-0 pr-7">
+                    <h3 className="text-sm font-semibold text-text-main truncate">{title}</h3>
                     {running > 0 && (
                       <span className="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold
                         bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300">
@@ -245,9 +308,8 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-text-muted leading-relaxed">
-                    {t.total} {plural(t.total, "алерт", "алерта", "алертов")}
-                  </p>
+                  {st.subtitle && <p className="text-xs text-text-muted leading-relaxed mb-0.5">{st.subtitle}</p>}
+                  <p className="text-xs text-text-muted leading-relaxed">{count}</p>
                 </TileShell>
               );
             })}
@@ -293,6 +355,19 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
           </div>
         </section>
       </div>
+
+      {editing && (
+        <TileEditor
+          key={editing.key}
+          open
+          defaults={editing.defaults}
+          style={editing.folderId ? { ...tileOf(editing.key), title: editing.defaults.title } : tileOf(editing.key)}
+          titleRequired={!!editing.folderId}
+          onSave={saveStyle}
+          onReset={resetStyle}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </div>
   );
 }

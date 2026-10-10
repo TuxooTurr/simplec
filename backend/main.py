@@ -52,7 +52,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, model_bench, requirements,
-    datagen, webconnect,
+    datagen, webconnect, hub_tiles,
 )
 from db.postgres import init_db
 
@@ -179,6 +179,7 @@ app.include_router(app_settings.router)
 app.include_router(jira_defects.router)
 app.include_router(jira_views.router)
 app.include_router(webconnect.router)
+app.include_router(hub_tiles.router)
 app.include_router(testdata.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)

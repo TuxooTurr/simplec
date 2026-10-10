@@ -1268,3 +1268,30 @@ export async function uploadSettingsFile(purpose: string, file: File): Promise<{
     body: fd,
   });
 }
+
+// ─── Плитки «Генераторов событий» ─────────────────────────────────────────
+
+/** Оформление плитки; пустое поле — стандартное значение из кода. */
+export interface HubTileStyle {
+  title?: string;
+  subtitle?: string;
+  /** «lucide:<Имя>» или «emoji:<символ>» */
+  icon?: string;
+  color?: string;
+}
+
+export function getHubTiles(): Promise<Record<string, HubTileStyle>> {
+  return fetchJson("/api/hub/tiles");
+}
+
+export function saveHubTile(key: string, style: HubTileStyle): Promise<HubTileStyle> {
+  return fetchJson(`/api/hub/tiles/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(style),
+  });
+}
+
+export function resetHubTile(key: string): Promise<{ status: string }> {
+  return fetchJson(`/api/hub/tiles/${encodeURIComponent(key)}`, { method: "DELETE" });
+}

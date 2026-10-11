@@ -592,7 +592,9 @@ export default function ListTable({
         </thead>
         <tbody>
           {sections
-            ? sections.map(sec => {
+            // «Без папки» — только когда в нём есть задачи; пока тянут задачу, он виден пустым,
+            // чтобы её можно было вынуть из папки перетаскиванием.
+            ? sections.filter(sec => sec.name !== null || sec.issues.length > 0 || dragRow).map(sec => {
                 const path = `f:${sec.name ?? ""}`;
                 return (
                   <Fragment key={path}>

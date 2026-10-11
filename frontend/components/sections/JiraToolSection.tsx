@@ -67,6 +67,7 @@ export default function JiraToolSection() {
   const [collapsed, setCollapsed] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
   const [askDeleteList, setAskDeleteList] = useState<string | null>(null);
 
   /* ── Jira: подключение, справочники и задачи ── */
@@ -572,13 +573,32 @@ export default function JiraToolSection() {
                     {!list.folderList?.length && newFolder === null && (
                       <span className="text-[11px] text-text-muted">Нет. Папки делят список на разделы; группировка — внутри каждой.</span>
                     )}
-                    {(list.folderList ?? []).map(f => (
-                      <span key={f} className="flex items-center gap-1.5 text-xs text-text-main px-1 py-0.5">
-                        <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                        <span className="truncate flex-1">{f}</span>
-                        <span className="text-text-muted">{list.keys.filter(k => list.folders?.[k] === f).length}</span>
-                      </span>
-                    ))}
+                    {(list.folderList ?? []).map(f => {
+                      const n = list.keys.filter(k => list.folders?.[k] === f).length;
+                      return askDeleteFolder === f ? (
+                        <div key={f} className="flex flex-col gap-1 px-2 py-1.5 rounded-md bg-red-50 dark:bg-red-950/40 text-xs">
+                          <span className="text-text-main">
+                            Удалить папку «{f}»?{n > 0 && <> Задачи ({n}) останутся в списке — в разделе «{NO_FOLDER}».</>}
+                          </span>
+                          <span className="flex gap-1.5">
+                            <button type="button" onClick={() => { deleteFolder(f); setAskDeleteFolder(null); }}
+                              className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
+                            <button type="button" onClick={() => setAskDeleteFolder(null)}
+                              className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
+                          </span>
+                        </div>
+                      ) : (
+                        <span key={f} className="group/fd flex items-center gap-1.5 text-xs text-text-main px-1 py-0.5 rounded-md hover:bg-bg-subtle">
+                          <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                          <span className="truncate flex-1">{f}</span>
+                          <span className="text-text-muted group-hover/fd:hidden">{n}</span>
+                          <button type="button" onClick={() => setAskDeleteFolder(f)} aria-label={`Удалить папку ${f}`} title="Удалить папку"
+                            className="hidden group-hover/fd:inline-flex focus-visible:inline-flex p-0.5 rounded text-text-muted hover:text-red-500">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
                     {newFolder !== null && (
                       <input autoFocus value={newFolder} onChange={e => setNewFolder(e.target.value)} aria-label="Название папки"
                         onBlur={() => (newFolder.trim() ? addFolder() : setNewFolder(null))}

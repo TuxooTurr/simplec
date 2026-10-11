@@ -28,8 +28,8 @@ const FEATURES: {
   },
   {
     Icon: Bug,
-    title: "Дефекты",
-    description: "Форматирование баг-репортов и регистрация в Jira с трейсами прямо из интерфейса.",
+    title: "Jira tool",
+    description: "Списки задач Jira с группировкой и своими полями, назначение участников и создание дефектов с генерацией описания.",
   },
   {
     Icon: SplitSquareHorizontal,

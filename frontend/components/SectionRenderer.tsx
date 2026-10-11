@@ -4,7 +4,7 @@ import { PanelRight } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import GenerationSection from "./sections/GenerationSection";
 import EtalonsSection from "./sections/EtalonsSection";
-import BugsSection from "./sections/BugsSection";
+import JiraToolSection from "./sections/JiraToolSection";
 import MetricsSection from "./sections/MetricsSection";
 import EventGeneratorsSection from "./sections/EventGeneratorsSection";
 import TestDataSection from "./sections/TestDataSection";
@@ -48,7 +48,7 @@ export default function SectionRenderer() {
     generation: <GenerationSection />,
     test_data:  <TestDataSection />,
     etalons:    <EtalonsSection />,
-    bugs:       <BugsSection />,
+    bugs:       <JiraToolSection />,
     logs:       <LogAnalyzerSection />,
     kafka:      <KafkaSection />,
     metrics:    <MetricsSection />,

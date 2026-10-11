@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Zap, BookOpen, Bug, BarChart2, Database, Settings, ScrollText,
+  Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
   LogOut, User, GripVertical, Eye, EyeOff,
   SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles,
 } from "lucide-react";
@@ -27,7 +27,8 @@ const NAV: {
 }[] = [
   { id: "generation",  href: "/generation",  label: "Тестовая модель",        Icon: Zap,          ai: true },
   { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
-  { id: "bugs",        href: "/bugs",        label: "Дефекты",                 Icon: Bug,         ai: true },
+  // Бывшие «Дефекты»: списки задач Jira для планирования и назначения + генератор дефектов.
+  { id: "bugs",        href: "/bugs",        label: "Jira tool",               Icon: LayoutList,  ai: true },
   // Логи вернулись анализатором: источник — сценарий веб-коннектора (локальный MCP web).
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },

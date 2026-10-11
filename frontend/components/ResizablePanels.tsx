@@ -9,7 +9,7 @@ import type { SectionId } from "@/contexts/WorkspaceContext";
 const SECTION_LABELS: Record<string, string> = {
   generation: "Генерация",
   etalons: "Данные",
-  bugs: "Дефекты",
+  bugs: "Jira tool",
   alerts: "Алерты",
   metrics: "Метрики",
   revisor: "Ревизор",
@@ -224,7 +224,7 @@ export default function ResizablePanels({
         className="flex flex-1 min-h-0 h-full overflow-hidden"
       >
         <div
-          className={`flex-1 h-full flex flex-col transition-all ${
+          className={`flex-1 min-w-0 h-full flex flex-col transition-all ${
             sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-primary/5" : ""
           }`}
           onDragOver={handleDragOver}

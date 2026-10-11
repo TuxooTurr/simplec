@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import BugsSection from "@/components/sections/BugsSection";
+import JiraToolSection from "@/components/sections/JiraToolSection";
 
-export const metadata: Metadata = { title: "Дефекты" };
+export const metadata: Metadata = { title: "Jira tool" };
 
 export default function BugsPage() {
-  return <BugsSection />;
+  return <JiraToolSection />;
 }

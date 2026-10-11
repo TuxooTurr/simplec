@@ -60,6 +60,9 @@ export default function JiraToolSection() {
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Режим выбора задач: чекбоксы в таблице и панель действий. Выход — снимает выбор. */
+  const [selecting, setSelecting] = useState(false);
+  const stopSelecting = () => { setSelecting(false); setSelected(new Set()); };
   const [modal, setModal] = useState<ModalState>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [panel, setPanel] = useState<Panel>(null);
@@ -238,7 +241,7 @@ export default function JiraToolSection() {
   const pending = list ? list.keys.filter(k => !byKey.has(k) && !missing.has(k)).length : 0;
 
   /* ── Действия ── */
-  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setAskDelete(false); setSelected(new Set()); setRenaming(null); };
+  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setAskDelete(false); stopSelecting(); setRenaming(null); };
 
   const createList = () => {
     const name = (newList ?? "").trim();
@@ -735,25 +738,28 @@ export default function JiraToolSection() {
                 </div>
               )}
 
-              {selected.size > 0 && (
+              {selecting && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 animate-fade-in">
                   <ListChecks className="w-4 h-4 text-primary" />
-                  <span className="text-sm text-text-main">Выбрано: <b>{selected.size}</b></span>
-                  <button type="button" onClick={() => setModal("bulk")}
-                    className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90">Сменить статус</button>
+                  <span className="text-sm text-text-main">
+                    {selected.size ? <>Выбрано: <b>{selected.size}</b></> : "Отметьте задачи чекбоксами"}
+                  </span>
+                  <button type="button" onClick={() => setModal("bulk")} disabled={!selected.size}
+                    className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
                   <button type="button" onClick={() => { updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)) })); setSelected(new Set()); }}
-                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">Убрать из списка</button>
+                    disabled={!selected.size}
+                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Убрать из списка</button>
                   {!!list.folderList?.length && (
                     <select value="" onChange={e => e.target.value && moveSelectedToFolder(e.target.value === "__none__" ? null : e.target.value)}
-                      aria-label="Переложить выбранные в папку"
-                      className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)]">
+                      aria-label="Переложить выбранные в папку" disabled={!selected.size}
+                      className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)] disabled:opacity-40">
                       <option value="">В папку…</option>
                       {list.folderList.map(f => <option key={f} value={f}>{f}</option>)}
                       <option value="__none__">{NO_FOLDER}</option>
                     </select>
                   )}
-                  <button type="button" onClick={() => setSelected(new Set())} aria-label="Снять выбор"
-                    className="ml-auto p-1.5 rounded-lg text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+                  <button type="button" onClick={stopSelecting}
+                    className="ml-auto px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
                 </div>
               )}
 
@@ -776,6 +782,7 @@ export default function JiraToolSection() {
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
                 ) : (
                   <ListTable key={list.id} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
+                    selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
                     selected={selected}
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
                     onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}

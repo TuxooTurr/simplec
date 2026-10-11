@@ -61,7 +61,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin,
 }: {
@@ -69,6 +69,12 @@ export default function ListTable({
   issues: Issue[];
   sort: SortState;
   onSort: (s: SortState) => void;
+  /**
+   * Режим выбора: чекбоксы видны только в нём (кнопка с карандашом в заголовке).
+   * Вне режима у строки только ручка перетаскивания — чекбокс рядом с ней мешал схватить строку.
+   */
+  selecting: boolean;
+  onToggleSelecting: () => void;
   selected: Set<string>;
   onSelect: (keys: string[], on: boolean) => void;
   onValue: (key: string, fieldId: string, v: string | string[]) => void;
@@ -278,8 +284,10 @@ export default function ListTable({
               ${rowsMovable ? "cursor-grab active:cursor-grabbing hover:text-text-main" : "cursor-not-allowed"}`}>
             <GripVertical className="w-3.5 h-3.5" />
           </button>
-          <input type="checkbox" checked={on} onChange={() => onSelect([issue.key], !on)} aria-label={`Выбрать ${issue.key}`}
-            className="align-middle ml-0.5" />
+          {selecting && (
+            <input type="checkbox" checked={on} onChange={() => onSelect([issue.key], !on)} aria-label={`Выбрать ${issue.key}`}
+              className="align-middle ml-0.5" />
+          )}
         </td>
         <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
           style={{ ...stick(SELECT_W), paddingLeft: 12 + depth * INDENT }}>
@@ -360,8 +368,10 @@ export default function ListTable({
           }}>
           <td className="pl-1 pr-1 py-1.5 bg-bg-subtle" style={stick(0)}>
             <span className="inline-block w-[18px]" />
-            <input type="checkbox" checked={groupOn} onChange={() => onSelect(keys, !groupOn)} aria-label={`Выбрать группу ${node.label}`}
-              className="align-middle ml-0.5" />
+            {selecting && (
+              <input type="checkbox" checked={groupOn} onChange={() => onSelect(keys, !groupOn)} aria-label={`Выбрать группу ${node.label}`}
+                className="align-middle ml-0.5" />
+            )}
           </td>
           <td colSpan={width - 1} className="py-1.5">
             {/* Подпись группы не уезжает при прокрутке вбок */}
@@ -442,8 +452,10 @@ export default function ListTable({
               <GripVertical className="w-3.5 h-3.5" />
             </span>
           ) : <span className="inline-block w-[18px]" />}
-          <input type="checkbox" checked={allIn} onChange={() => onSelect(keys, !allIn)} aria-label={`Выбрать папку ${name ?? NO_FOLDER}`}
-            className="align-middle ml-0.5" />
+          {selecting && (
+            <input type="checkbox" checked={allIn} onChange={() => onSelect(keys, !allIn)} aria-label={`Выбрать папку ${name ?? NO_FOLDER}`}
+              className="align-middle ml-0.5" />
+          )}
         </td>
         <td colSpan={width - 1} className="py-2 pl-2">
           <div className="flex items-center gap-2 min-w-0 w-max" style={{ position: "sticky", left: SELECT_W + 8 }}>
@@ -493,10 +505,18 @@ export default function ListTable({
         </colgroup>
         <thead className="sticky top-0 z-10 bg-bg-card">
           <tr className="text-left">
-            <th className="pl-1 pr-1 py-2 text-left bg-bg-card" style={stick(0, 4)}>
-              <span className="inline-block w-[18px]" />
-              <input type="checkbox" checked={allOn} onChange={() => onSelect(issues.map(i => i.key), !allOn)} aria-label="Выбрать все задачи"
-                className="align-middle ml-0.5" />
+            <th className="pl-1 pr-1 py-2 text-left bg-bg-card whitespace-nowrap" style={stick(0, 4)}>
+              <button type="button" onClick={onToggleSelecting} aria-pressed={selecting}
+                aria-label={selecting ? "Скрыть выбор задач" : "Выбрать задачи"}
+                title={selecting ? "Скрыть чекбоксы и снять выбор" : "Выбрать задачи: смена статуса, папка, убрать из списка"}
+                className={`inline-flex align-middle p-0.5 rounded transition-colors
+                  ${selecting ? "bg-primary/15 text-primary" : "text-text-muted hover:text-primary hover:bg-bg-subtle"}`}>
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              {selecting && (
+                <input type="checkbox" checked={allOn} onChange={() => onSelect(issues.map(i => i.key), !allOn)} aria-label="Выбрать все задачи"
+                  className="align-middle ml-0.5" />
+              )}
             </th>
             <th className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap bg-bg-card ${lastPinned ? "" : EDGE}`}
               style={stick(SELECT_W, 4)} title="Ключ закреплён всегда">Ключ</th>

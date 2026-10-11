@@ -36,7 +36,7 @@ from pydantic import BaseModel, Field
 
 from webconnect.browser import NeedLogin, WebError, windows
 from webconnect.runner import run_operation
-from webconnect.secrets import encrypt
+from webconnect.secrets import SecretError, encrypt
 from webconnect.store import WebStore
 from webconnect.templates import (
     PARAM_NAME_RE, detect_login, template_params, templatize, templatize_steps, uses_window,
@@ -98,7 +98,10 @@ def save_connector(body: ConnectorBody, request: Request) -> dict:
     auth["mode"] = body.auth_mode
     auth["login"] = body.login.strip()
     if body.password:
-        auth["password_enc"] = encrypt(body.password)
+        try:
+            auth["password_enc"] = encrypt(body.password)
+        except SecretError as e:
+            raise HTTPException(503, str(e))
     if body.auth_mode == "manual":
         auth.pop("password_enc", None)      # ручной вход — пароль больше не нужен, не храним
     item = {k: v for k, v in body.model_dump(exclude_none=True).items() if k not in ("auth_mode", "login", "password")}

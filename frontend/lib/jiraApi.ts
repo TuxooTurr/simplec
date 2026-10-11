@@ -6,7 +6,7 @@ import { authHeaders } from "./authApi";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   for (const [k, v] of Object.entries(authHeaders())) {
     if (!headers.has(k)) headers.set(k, v);
@@ -88,6 +88,8 @@ export interface CreateJiraDefect {
   ke: string;
   environment: string;
   stand_type: string;
+  /** Тип задачи; пусто — из настроек (Дефект). Для «Задачи» поля дефекта не уходят. */
+  issuetype?: string;
 }
 
 export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: string; key: string; url: string; warnings: string[] }> {

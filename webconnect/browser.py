@@ -46,6 +46,14 @@ class NeedLogin(WebError):
     pass
 
 
+MISSING_PLAYWRIGHT = (
+    "Не установлен Playwright — без него веб-коннектор не может открыть браузер. "
+    "В окружении, где запущен бэкенд SimpleTest, выполните «pip install -r requirements.txt» "
+    "(или «pip install playwright») и перезапустите бэкенд. Скачивать браузер не нужно — "
+    "используется установленный Google Chrome."
+)
+
+
 # Скрипт записи: клики, ввод, Enter. Пароли не записываются — только факт ввода.
 _RECORDER_JS = r"""
 (() => {
@@ -141,7 +149,10 @@ class ConnectorWindow:
         if self.is_open and self.headless == headless and self.recording == record:
             return
         await self.close()
-        from playwright.async_api import async_playwright
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as e:
+            raise WebError(MISSING_PLAYWRIGHT) from e
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self._pw = await async_playwright().start()

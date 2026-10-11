@@ -6,11 +6,12 @@
  * - Эпик: этап считается по всем сторям, привязанным к нему через Epic Link, —
  *   берётся этап самой отстающей стори. Отменённые стори не учитываются.
  *   Эпик без сторей остаётся без этапа и подсвечивается красным: это нарушение процесса.
- * - Статус, которого нет в таблице, — «не сопоставлен», а не тихо «Разработка»:
- *   иначе новый статус незаметно испортит расчёт эпиков.
+ * - Пока таблица группы не сохранена, этап угадывается по названию статуса (guessStage).
+ *   В сохранённой таблице статус, которого в ней нет, — «не сопоставлен», а не тихо
+ *   «Разработка»: иначе новый статус незаметно испортит расчёт эпиков.
  */
 
-import { WORKFLOWS, categoryOf, projectKeyOfIssue, type Category, type Issue } from "./jiraMock";
+import { categoryOf, epicLinkId, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
 
 export type Stage = "dev" | "test" | "release" | "done" | "excluded";
 
@@ -48,8 +49,9 @@ export function guessStage(status: string): Stage {
   return "dev";
 }
 
-export function defaultMapping(category: Exclude<Category, "epic">): Record<string, Stage> {
-  return Object.fromEntries(WORKFLOWS[category].order.map(s => [s, guessStage(s)]));
+/** Черновик таблицы для статусов группы (статусы — из workflow проекта в Jira). */
+export function defaultMapping(statuses: string[]): Record<string, Stage> {
+  return Object.fromEntries(statuses.map(s => [s, guessStage(s)]));
 }
 
 export type StageInfo =
@@ -72,8 +74,9 @@ export function stageText(info: StageInfo): string {
  */
 export function makeStageResolver(allIssues: Issue[], mapping: StageMapping) {
   const storiesByEpic = new Map<string, Issue[]>();
+  const epicField = epicLinkId();
   for (const i of allIssues) {
-    const epic = i.fields.customfield_10006;
+    const epic = i.fields[epicField];
     if (categoryOf(i) === "story" && typeof epic === "string" && epic) {
       if (!storiesByEpic.has(epic)) storiesByEpic.set(epic, []);
       storiesByEpic.get(epic)!.push(i);
@@ -83,8 +86,9 @@ export function makeStageResolver(allIssues: Issue[], mapping: StageMapping) {
   const mapped = (issue: Issue): StageInfo => {
     const cat = categoryOf(issue) as Exclude<Category, "epic">;
     const status = String(issue.fields.status ?? "");
-    const table = mapping[projectKeyOfIssue(issue.key)]?.[cat] ?? defaultMapping(cat);
-    const st = table[status];
+    const table = mapping[projectKeyOfIssue(issue.key)]?.[cat];
+    if (!status) return { kind: "unmapped", status };
+    const st = table ? table[status] : guessStage(status);
     return st ? { kind: "stage", stage: st } : { kind: "unmapped", status };
   };
 

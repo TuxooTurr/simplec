@@ -287,6 +287,15 @@ export async function getAlertScripts(): Promise<AlertScript[]> {
   return fetchJson("/api/alerts/scripts");
 }
 
+/** Ручной порядок скриптов (общий на всех): id одной папки в новом порядке. */
+export async function reorderAlertScripts(ids: string[]): Promise<{ status: string }> {
+  return fetchJson("/api/alerts/scripts/reorder", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ ids }),
+  });
+}
+
 export async function saveAlertScript(script: Partial<AlertScript>): Promise<AlertScript> {
   return fetchJson("/api/alerts/scripts", {
     method:  "POST",
@@ -380,6 +389,23 @@ export async function formatBug(params: {
     }
   }
   return fetchJson("/api/bugs/format", { method: "POST", body });
+}
+
+/** Генерация задачи (не дефекта): название и описание; требования — источник для ИИ. */
+export async function formatTask(params: {
+  feature: string;
+  description: string;
+  provider: string;
+  files?: File[];
+  requirementIds?: string[];
+}): Promise<{ report: string; title: string; description: string; priority: string; screenshots: string[] }> {
+  const body = new FormData();
+  body.append("feature", params.feature);
+  body.append("description", params.description);
+  body.append("provider", params.provider);
+  for (const f of params.files ?? []) body.append("attachments", f);
+  for (const id of params.requirementIds ?? []) body.append("requirement_ids", id);
+  return fetchJson("/api/tasks/format", { method: "POST", body });
 }
 
 // ─── Autotest generation ────────────────────────────────────────────────────

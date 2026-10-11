@@ -27,6 +27,7 @@ data/web_connectors.json
 data/log_services.json
 data/webconnect_recordings/
 data/hub_tiles.json
+.deps-installed
 Linly-Dubbing/
 simpletest.db
 certs/ca-bundle.pem

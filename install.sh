@@ -48,6 +48,11 @@ fi
 echo "Устанавливаю зависимости..."
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
+# Та же отметка, что проверяет start.sh: при следующем запуске повторно ставить не будет.
+python - > .deps-installed <<'PY'
+import hashlib, sys
+print(sys.prefix + "|" + hashlib.sha256(open("requirements.txt", "rb").read()).hexdigest())
+PY
 echo "Зависимости: установлены"
 
 # 4. .env setup

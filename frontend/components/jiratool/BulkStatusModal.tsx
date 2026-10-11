@@ -1,44 +1,60 @@
 "use client";
 
-import { useState } from "react";
-import { ArrowRight, CheckCircle2, MinusCircle, XCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, MinusCircle, XCircle } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { RESOLUTIONS, WORKFLOWS, categoryOf, transitionsOf, type Issue } from "@/lib/jiraTool";
+import { RESOLUTIONS, categoryOf, type Issue } from "@/lib/jiraTool";
+import { applyTransitions, getTransitions, type Transition } from "@/lib/jiraToolApi";
 
-export interface StatusChange { key: string; status: string; resolution: string | null }
-
-type Verdict = { issue: Issue; kind: "go" | "same" | "no-transition" | "epic" };
+type Verdict = { issue: Issue; kind: "go" | "same" | "no-transition" | "epic" | "error"; tr?: Transition };
 
 /**
- * Массовая смена статуса. В Jira статус меняется только переходом workflow,
- * поэтому для каждой задачи проверяем, есть ли переход из её текущего статуса.
- * Эпики пропускаем: их этап считается по сторям, руками его не двигаем.
+ * Массовая смена статуса в Jira. Статус меняется только переходом workflow, поэтому
+ * сначала спрашиваем у Jira, какие переходы доступны каждой задаче сейчас (с учётом
+ * прав токена), и показываем, сколько задач перейдёт и почему остальные — нет.
+ * Эпики пропускаем: их статус (st) считается по сторям, руками его не двигаем.
  */
-export default function BulkStatusModal({ open, issues, onApply, onClose }: {
+export default function BulkStatusModal({ open, issues, onDone, onClose }: {
   open: boolean;
   issues: Issue[];
-  onApply: (changes: StatusChange[]) => void;
+  /** Переходы выполнены: ключи задач, которые надо перечитать из Jira. */
+  onDone: (keys: string[]) => void;
   onClose: () => void;
 }) {
   const [target, setTarget] = useState("");
   const [resolution, setResolution] = useState("");
+  const [avail, setAvail] = useState<Record<string, { transitions?: Transition[]; error?: string }> | null>(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<{ key: string; error?: string }[]>([]);
 
-  const movable = issues.filter(i => categoryOf(i) !== "epic");
-  const epics = issues.length - movable.length;
+  const movable = issues.filter(i => categoryOf(i) !== "epic" && !i.local);
+  const skipped = issues.length - movable.length;
+  const movableKeys = movable.map(i => i.key).join(",");
 
-  // Куда можно перевести и сколько задач туда перейдёт.
+  useEffect(() => {
+    if (!movableKeys) return;
+    getTransitions(movableKeys.split(",")).then(r => setAvail(r.issues)).catch(e => setLoadErr((e as Error).message));
+  }, [movableKeys]);
+
+  const trOf = (i: Issue) => avail?.[i.key]?.transitions ?? [];
+
+  // Куда можно перевести и сколько задач туда перейдёт (по статусу назначения перехода).
   const counts = new Map<string, number>();
-  for (const i of movable) for (const t of transitionsOf(i)) counts.set(t, (counts.get(t) ?? 0) + 1);
+  for (const i of movable) for (const to of new Set(trOf(i).map(t => t.to))) counts.set(to, (counts.get(to) ?? 0) + 1);
   const targets = [...counts.entries()].sort((a, b) => b[1] - a[1]);
 
   const verdicts: Verdict[] = issues.map(issue => {
-    if (categoryOf(issue) === "epic") return { issue, kind: "epic" };
+    if (categoryOf(issue) === "epic" || issue.local) return { issue, kind: "epic" };
+    if (avail?.[issue.key]?.error) return { issue, kind: "error" };
     if (!target) return { issue, kind: "no-transition" };
     if (issue.fields.status === target) return { issue, kind: "same" };
-    return { issue, kind: transitionsOf(issue).includes(target) ? "go" : "no-transition" };
+    const tr = trOf(issue).find(t => t.to === target);
+    return tr ? { issue, kind: "go", tr } : { issue, kind: "no-transition" };
   });
   const go = verdicts.filter(v => v.kind === "go");
-  const needRes = go.some(v => WORKFLOWS[categoryOf(v.issue)].needResolution.includes(target));
+  const needRes = go.some(v => v.tr?.resolution_required);
+  const errors = verdicts.filter(v => v.kind === "error");
 
   // Почему нельзя: группируем по исходному статусу — так видно, какой переход отсутствует.
   const blocked = new Map<string, number>();
@@ -47,17 +63,29 @@ export default function BulkStatusModal({ open, issues, onApply, onClose }: {
     blocked.set(s, (blocked.get(s) ?? 0) + 1);
   }
 
-  const apply = () => {
-    onApply(go.map(v => ({ key: v.issue.key, status: target, resolution: needRes ? resolution : null })));
-    onClose();
+  const apply = async () => {
+    setBusy(true); setFailed([]);
+    try {
+      const r = await applyTransitions(go.map(v => ({ key: v.issue.key, transition_id: v.tr!.id, resolution: needRes ? resolution : "" })));
+      onDone(go.map(v => v.issue.key));
+      const bad = r.results.filter(x => !x.ok);
+      if (bad.length) setFailed(bad); else onClose();
+    } catch (e) { setFailed([{ key: "—", error: (e as Error).message }]); }
+    setBusy(false);
   };
   const field = "w-full text-sm border border-border-main rounded-lg px-3 py-2 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
-    <Modal open={open} onClose={onClose} title={`Сменить статус: выбрано ${issues.length}`} size="max-w-2xl">
+    <Modal open={open} onClose={onClose} title={`Сменить статус в Jira: выбрано ${issues.length}`} size="max-w-2xl">
       <div className="space-y-4">
         {movable.length === 0 ? (
-          <p className="text-sm text-text-muted">Выбраны только эпики. Их этап считается по сторям — двигайте стори.</p>
+          <p className="text-sm text-text-muted">Выбраны только эпики и черновики. Этап эпика считается по сторям, черновика в Jira ещё нет.</p>
+        ) : loadErr ? (
+          <p className="text-sm text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-2.5">
+            Переходы не загрузились: {loadErr}
+          </p>
+        ) : !avail ? (
+          <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Спрашиваю у Jira доступные переходы…</p>
         ) : (
           <>
             <div>
@@ -65,7 +93,7 @@ export default function BulkStatusModal({ open, issues, onApply, onClose }: {
               <div className="flex flex-wrap gap-1.5">
                 {targets.length === 0 && <span className="text-sm text-text-muted">Из текущих статусов переходов нет.</span>}
                 {targets.map(([t, n]) => (
-                  <button key={t} type="button" onClick={() => { setTarget(t); setResolution(""); }} aria-pressed={target === t}
+                  <button key={t} type="button" onClick={() => { setTarget(t); setResolution(""); setFailed([]); }} aria-pressed={target === t}
                     className={`px-3 py-1.5 rounded-lg border text-sm transition-colors
                       ${target === t ? "border-primary bg-primary/10 text-primary font-medium" : "border-border-main text-text-main hover:bg-bg-subtle"}`}>
                     {t} <span className="text-[11px] text-text-muted">· {n} из {movable.length}</span>
@@ -103,19 +131,32 @@ export default function BulkStatusModal({ open, issues, onApply, onClose }: {
                 )}
               </div>
             )}
+            {errors.length > 0 && (
+              <p className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                Переходы не получены для {errors.map(v => v.issue.key).join(", ")}: {avail[errors[0].issue.key]?.error}
+              </p>
+            )}
           </>
         )}
-        {epics > 0 && (
-          <p className="text-xs text-text-muted">Эпики ({epics}) пропущены: их этап считается по сторям.</p>
+        {skipped > 0 && (
+          <p className="text-xs text-text-muted">Пропущены эпики и черновики ({skipped}): этап эпика считается по сторям, черновика в Jira ещё нет.</p>
+        )}
+        {failed.length > 0 && (
+          <div className="text-xs text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-2.5 space-y-1">
+            <p className="font-semibold">Jira не выполнила переход для {failed.length}:</p>
+            {failed.map(f => <p key={f.key}>{f.key}: {f.error}</p>)}
+          </div>
         )}
 
         <div className="flex items-center gap-2 pt-1">
-          <p className="text-[11px] text-text-muted">Демо: статус меняется в мок-Jira этого браузера.</p>
           <div className="ml-auto flex gap-2">
-            <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
-            <button type="button" onClick={apply} disabled={!go.length || (needRes && !resolution)}
-              className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
-              Перевести {go.length || ""}
+            <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">
+              {failed.length ? "Закрыть" : "Отмена"}
+            </button>
+            <button type="button" onClick={apply} disabled={busy || !go.length || (needRes && !resolution)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
+              {busy && <Loader2 className="w-4 h-4 animate-spin" />} Перевести {go.length || ""}
             </button>
           </div>
         </div>

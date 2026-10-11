@@ -379,6 +379,9 @@ class CreateDefectBody(BaseModel):
     environment: str = ""      # среда обнаружения — для проектов без дефолта в справочнике
     stand_type: str = ""       # тип стенда (Major-Check / Major-GO) — если пусто, берём дефолт справочника
     description_is_markdown: bool = True
+    # Тип задачи. Пусто — тип из настроек (Дефект). Для не-дефекта (например, «Задача»)
+    # поля, обязательные только для дефекта SBER911 (вид испытаний, тип объекта, стенд), не уходят.
+    issuetype: str = ""
 
 
 # ── Routes: настройки и токен ────────────────────────────────────────────────
@@ -659,7 +662,9 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     is_sber911 = body.project.strip().upper() == JC.PROJECT_KEY
 
     cfg = _load_cfg(db)
-    resolved = _resolve_fields(cfg, body.project.strip(), cfg["issuetype"])
+    issuetype = body.issuetype.strip() or cfg["issuetype"]
+    is_defect = issuetype.lower() in ("дефект", "bug", "баг", "ошибка") or issuetype == cfg["issuetype"]
+    resolved = _resolve_fields(cfg, body.project.strip(), issuetype)
 
     description = body.description
     if body.description_is_markdown and description:
@@ -667,7 +672,7 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 
     fields: dict[str, Any] = {
         "project":     {"key": body.project.strip()},
-        "issuetype":   {"name": resolved.get("_issuetype", cfg["issuetype"])},
+        "issuetype":   {"name": resolved.get("_issuetype", issuetype)},
         "summary":     body.summary.strip()[:250],
         "description": description,
     }
@@ -700,12 +705,16 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             resolved, JC.FIELD_IT_SERVICE, JC.IT_SERVICE,
         )
 
-        for fid, value in JC.DEFAULT_FIELDS.items():
-            fields.setdefault(fid, value)
-        # Тип стенда — видимый выбор пользователя; если не выбрал, берём дефолт справочника
-        stand_type_name = body.stand_type.strip() or JC.DEFAULT_STAND_TYPE
-        if stand_type_name in JC.STAND_TYPE:
-            fields[JC.FIELD_STAND_TYPE] = {"id": JC.STAND_TYPE[stand_type_name]}
+        if is_defect:
+            for fid, value in JC.DEFAULT_FIELDS.items():
+                fields.setdefault(fid, value)
+            # Тип стенда — видимый выбор пользователя; если не выбрал, берём дефолт справочника
+            stand_type_name = body.stand_type.strip() or JC.DEFAULT_STAND_TYPE
+            if stand_type_name in JC.STAND_TYPE:
+                fields[JC.FIELD_STAND_TYPE] = {"id": JC.STAND_TYPE[stand_type_name]}
+        elif "security" in JC.DEFAULT_FIELDS:
+            # Уровень доступа общий для проекта — нужен и задаче.
+            fields.setdefault("security", JC.DEFAULT_FIELDS["security"])
 
     warnings: list[str] = []
 

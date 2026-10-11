@@ -125,6 +125,20 @@ def upsert_script(script: AlertScript) -> dict:
     return AlertsStore.save_script(data)
 
 
+class ReorderBody(BaseModel):
+    ids: list[str]
+
+
+@router.post("/api/alerts/scripts/reorder")
+def reorder_scripts(body: ReorderBody, request: Request) -> dict:
+    """Ручной порядок скриптов (перетаскиванием) — общий на всю команду."""
+    user = getattr(request.state, "user", None)
+    if user and user.get("role") != "superuser":
+        raise HTTPException(status_code=403, detail="Порядок алертов меняет только суперюзер")
+    AlertsStore.reorder_scripts(body.ids)
+    return {"status": "ok"}
+
+
 @router.delete("/api/alerts/scripts/{script_id}")
 def remove_script(script_id: str) -> dict:
     ok = AlertsStore.delete_script(script_id)

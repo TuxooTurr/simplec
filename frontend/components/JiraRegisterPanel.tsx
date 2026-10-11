@@ -43,9 +43,9 @@ const PRIORITY_SYNONYMS: Record<string, string[]> = {
    Эпики меняются редко, поэтому обновление — только по кнопке. */
 const EPICS_CACHE_KEY = "st_jira_epics";
 
-type EpicsCache = { epics: JiraEpic[]; loadedAt: number };
+export type EpicsCache = { epics: JiraEpic[]; loadedAt: number };
 
-function readEpicsCache(project: string): EpicsCache | null {
+export function readEpicsCache(project: string): EpicsCache | null {
   try {
     const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
     const c = all[project];
@@ -53,7 +53,7 @@ function readEpicsCache(project: string): EpicsCache | null {
   } catch { return null; }
 }
 
-function writeEpicsCache(project: string, epics: JiraEpic[]): EpicsCache {
+export function writeEpicsCache(project: string, epics: JiraEpic[]): EpicsCache {
   const entry = { epics, loadedAt: Date.now() };
   try {
     const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
@@ -62,13 +62,13 @@ function writeEpicsCache(project: string, epics: JiraEpic[]): EpicsCache {
   return entry;
 }
 
-function formatLoadedAt(ts: number): string {
+export function formatLoadedAt(ts: number): string {
   return new Date(ts).toLocaleString("ru-RU", {
     day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
   });
 }
 
-function matchPriority(hint: string, jiraPriorities: string[]): string {
+export function matchPriority(hint: string, jiraPriorities: string[]): string {
   const h = hint.trim().toLowerCase();
   if (!h) return "";
   const exact = jiraPriorities.find(p => p.toLowerCase() === h);

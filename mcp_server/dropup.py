@@ -135,7 +135,11 @@ class ConsoleClient:
         if self._ctx is not None and self._headless == headless:
             return
         await self._close_browser()
-        from playwright.async_api import async_playwright
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as e:
+            raise ConsoleError("Не установлен Playwright — выполните «pip install -r requirements.txt» "
+                               "в окружении MCP-сервера и перезапустите его.") from e
 
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self._pw = await async_playwright().start()

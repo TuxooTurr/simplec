@@ -15,6 +15,7 @@ import {
   getAlertScripts, getAlertFolders, kernelStart, kernelStop, kernelExecute, kernelStatus,
   type AlertScript, type AlertFolder, type NotebookCell, type DynamicParam,
 } from "@/lib/api";
+import { MCP_REPLY_TIMEOUT, extractMcpReplyIds, mcpReplyCode } from "@/lib/mcpReply";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -403,12 +404,13 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
     }
 
     const loopCells = cells.filter(cellIsLoop);
+    let runOutput = "";
     for (const cell of loopCells) {
       if (!cell.source.trim()) continue;
       const code = applyParams(cell.source, params, vals);
       try {
         const res = await kernelExecute(sid, code, 60);
-        if (res.output) pushOutput(sid, "stdout", res.output);
+        if (res.output) { pushOutput(sid, "stdout", res.output); runOutput += `${res.output}\n`; }
         if (res.error)  pushOutput(sid, "error",  res.error);
       } catch (e) {
         if (_isKernelDeadError(e)) {
@@ -417,6 +419,20 @@ export function AlertsSchedulerProvider({ children }: { children: ReactNode }) {
           return;
         }
         pushOutput(sid, "error", `Loop error: ${e}`);
+      }
+    }
+
+    // MCP-скрипт отправил запрос в mcp-in и сам ответ не читает — дочитываем его из
+    // mcp-out в том же ядре (те же брокеры), чтобы ответ появился в чате.
+    const replyIds = extractMcpReplyIds(runOutput);
+    if (replyIds.length) {
+      pushOutput(sid, "system", `⏳ Жду ответ из mcp-out по id: ${replyIds.join(", ")} (до ${MCP_REPLY_TIMEOUT} с)…`);
+      try {
+        const res = await kernelExecute(sid, mcpReplyCode(replyIds), MCP_REPLY_TIMEOUT + 30);
+        if (res.output) pushOutput(sid, "stdout", res.output);
+        if (res.error)  pushOutput(sid, "error",  `Чтение mcp-out: ${res.error}`);
+      } catch (e) {
+        pushOutput(sid, "error", `Чтение mcp-out не удалось: ${e}`);
       }
     }
 

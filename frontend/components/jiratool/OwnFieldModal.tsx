@@ -17,6 +17,7 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [type, setType] = useState<OwnFieldType>(initial?.type ?? "text");
+  const [wrap, setWrap] = useState<boolean>(initial?.wrap ?? false);
   const [options, setOptions] = useState<string[]>(initial?.options ?? []);
   const [opt, setOpt] = useState("");
   const [asking, setAsking] = useState(false);
@@ -52,6 +53,22 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
           </div>
           {typeLocked && <p className="text-[11px] text-text-muted mt-1.5">Тип не меняется: в поле уже есть значения.</p>}
         </fieldset>
+        {type === "text" && (
+          <fieldset>
+            <legend className="block text-xs font-semibold text-text-muted mb-1.5">Длинный текст в таблице</legend>
+            <div className="grid grid-cols-2 gap-1.5">
+              <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer
+                ${!wrap ? "border-primary/50 bg-primary/5 text-text-main" : "border-border-main text-text-muted hover:text-text-main"}`}>
+                <input type="radio" name="own-wrap" checked={!wrap} onChange={() => setWrap(false)} /> Обрезать многоточием…
+              </label>
+              <label className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer
+                ${wrap ? "border-primary/50 bg-primary/5 text-text-main" : "border-border-main text-text-muted hover:text-text-main"}`}>
+                <input type="radio" name="own-wrap" checked={wrap} onChange={() => setWrap(true)} /> Переносить, показывать всё
+              </label>
+            </div>
+            <p className="text-[11px] text-text-muted mt-1.5">Переключить можно и прямо в заголовке колонки.</p>
+          </fieldset>
+        )}
         {withOptions && (
           <div>
             <label htmlFor="own-opt" className="block text-xs font-semibold text-text-muted mb-1.5">Варианты</label>
@@ -88,7 +105,7 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
           <div className="ml-auto flex gap-2">
             <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
             <button type="button" disabled={!valid}
-              onClick={() => { onSave({ id: initial?.id ?? newId("own"), name: name.trim(), type, options: withOptions ? options : [] }); onClose(); }}
+              onClick={() => { onSave({ id: initial?.id ?? newId("own"), name: name.trim(), type, options: withOptions ? options : [], wrap: type === "text" ? wrap : undefined }); onClose(); }}
               className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {initial ? "Сохранить" : "Создать поле"}
             </button>

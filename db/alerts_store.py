@@ -77,6 +77,19 @@ class AlertsStore:
                 return True
         return False
 
+    @classmethod
+    def reorder_scripts(cls, ids: list[str]) -> list[dict]:
+        """Порядок скриптов = порядок в файле. Переданные id встают в нужном порядке
+        на те же места, что занимали (обычно — скрипты одной папки); остальные не двигаются."""
+        scripts = cls._load_scripts()
+        wanted = [i for i in dict.fromkeys(ids) if any(s.get("id") == i for s in scripts)]
+        slots = [n for n, s in enumerate(scripts) if s.get("id") in set(wanted)]
+        by_id = {s.get("id"): s for s in scripts}
+        for slot, sid in zip(slots, wanted):
+            scripts[slot] = by_id[sid]
+        cls._save_scripts(scripts)
+        return scripts
+
     # ── Folders ─────────────────────────────────────────────────────────────
 
     @staticmethod

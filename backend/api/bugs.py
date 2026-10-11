@@ -160,21 +160,11 @@ def _parse_report(report: str) -> dict:
     return {"title": title, "description": desc, "priority": priority}
 
 
-@router.post("/api/bugs/format", response_model=BugFormatResponse)
-async def format_bug(
-    platform: str = Form(...),
-    feature: str = Form(""),
-    description: str = Form(...),
-    provider: str = Form(...),
-    attachments: List[UploadFile] = File(default=[]),
-    requirement_ids: List[str] = Form(default=[]),
-):
+async def _collect_context(attachments: List[UploadFile], requirement_ids: List[str]) -> tuple[str, list[str], str]:
+    """Текст вложений, имена скриншотов и контекст из требований (раздел «Данные»)."""
     from agents.file_parser import parse_file
     from db.requirements_store import RequirementsStore
 
-    # Парсим вложения и добавляем их текст к описанию.
-    # Скриншоты дополнительно попадают в описание картинками (раздел «Скриншоты»),
-    # а не только распознанным текстом.
     attachment_texts = []
     screenshot_names: list[str] = []
     for idx, f in enumerate(attachments):
@@ -187,20 +177,103 @@ async def format_bug(
             text = parse_file(data, f.filename)
             attachment_texts.append(f"[{f.filename}]:\n{text}")
         except Exception as e:
-            # Нераспознанный скрин — не повод терять саму картинку: имя уже
-            # в списке, файл уйдёт вложением и будет виден в описании.
             attachment_texts.append(f"[{f.filename}]: не удалось прочитать — {e}")
 
-    full_description = description
-    if attachment_texts:
-        full_description += "\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)
-
-    # Требования, выбранные как контекст (фича/API/поля БД — для точности дефекта)
     requirements_context = ""
     if requirement_ids:
         reqs = [RequirementsStore.get_requirement(rid) for rid in requirement_ids]
         blocks = [f"### {r['name']}\n{r['text']}" for r in reqs if r]
         requirements_context = "\n\n".join(blocks)
+
+    attachments_block = ("\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)) if attachment_texts else ""
+    return attachments_block, screenshot_names, requirements_context
+
+
+def _format_task_sync(feature: str, description: str, provider: str, requirements_context: str = "") -> str:
+    """Задача (не дефект): название и описание по свободному тексту + требованиям."""
+    from agents.llm_client import LLMClient, Message
+
+    llm = LLMClient(provider=provider)
+    feature_hint = f"\nФИЧА / МОДУЛЬ (подсказка): {feature.strip()}" if feature.strip() else ""
+    requirements_block = (
+        "\n\n═══ КОНТЕКСТ ИЗ ТРЕБОВАНИЙ (используй, чтобы задача была конкретной и соответствовала требованиям; "
+        f"не выдумывай того, чего нет) ═══\n{requirements_context}"
+    ) if requirements_context.strip() else ""
+
+    prompt = f"""Ты — опытный QA-лид. Оформи задачу для Jira по неформальному описанию.{feature_hint}
+
+ВХОДНЫЕ ДАННЫЕ:
+{description}{requirements_block}
+
+ПРАВИЛА:
+1. Коротко и по сути, без вводных слов. Одна задача.
+2. Не выдумывай конкретику (ID, стенды, версии), которой нет во входных данных.
+3. Название — до 100 символов, глагол в начале («Проверить…», «Подготовить…», «Автоматизировать…»).
+4. Только Markdown, ровно разделы шаблона, в том же порядке. Раздел без данных — опусти.
+
+ШАБЛОН ОТВЕТА:
+
+# Название задачи
+
+## Цель
+1–2 предложения: зачем задача.
+
+## Что сделать
+1. ...
+
+## Критерии готовности
+- ...
+
+## Контекст
+Ссылки на требования и важные детали из входных данных."""
+
+    response = llm.chat_continued(
+        [Message(role="user", content=prompt)],
+        temperature=0.2,
+        max_tokens=3000,
+        continuation_instruction="Продолжи описание задачи точно с места обрыва, не повторяя написанное.",
+    )
+    return response.content.strip()
+
+
+@router.post("/api/tasks/format", response_model=BugFormatResponse)
+async def format_task(
+    feature: str = Form(""),
+    description: str = Form(...),
+    provider: str = Form(...),
+    attachments: List[UploadFile] = File(default=[]),
+    requirement_ids: List[str] = Form(default=[]),
+):
+    """Генерация задачи: название + описание. Источник для ИИ — требования из раздела «Данные»."""
+    attachments_block, _shots, requirements_context = await _collect_context(attachments, requirement_ids)
+    provider = provider.strip()
+    if not provider:
+        raise HTTPException(status_code=400, detail={"message": "LLM-провайдер не выбран", "llm_error": False})
+    try:
+        report = await asyncio.to_thread(
+            _format_task_sync, feature, description + attachments_block, provider, requirements_context,
+        )
+        parsed = _parse_report(report)
+        return {"report": report, "screenshots": [], **parsed, "priority": ""}
+    except Exception as e:
+        from agents.llm_client import LLMClient
+        is_llm, friendly = LLMClient.classify_error(e)
+        raise HTTPException(status_code=503 if is_llm else 500, detail={"message": friendly, "llm_error": is_llm})
+
+
+@router.post("/api/bugs/format", response_model=BugFormatResponse)
+async def format_bug(
+    platform: str = Form(...),
+    feature: str = Form(""),
+    description: str = Form(...),
+    provider: str = Form(...),
+    attachments: List[UploadFile] = File(default=[]),
+    requirement_ids: List[str] = Form(default=[]),
+):
+    # Вложения: текст — в контекст, скриншоты — ещё и картинками в описание (раздел «Скриншоты»).
+    # Требования — контекст из раздела «Данные» (фича/API/поля БД — для точности дефекта).
+    attachments_block, screenshot_names, requirements_context = await _collect_context(attachments, requirement_ids)
+    full_description = description + attachments_block
 
     provider = provider.strip()
     if not provider:

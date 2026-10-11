@@ -51,9 +51,19 @@ else
 fi
 
 # ── Зависимости Python ────────────────────────────────────────
-if ! python -c "import fastapi" &>/dev/null 2>&1; then
-    info "Устанавливаю зависимости Python (может занять несколько минут)..."
-    pip install -q -r requirements.txt
+# Ставим не только в пустое окружение, но и когда изменился requirements.txt:
+# раньше проверялся один fastapi, и новые пакеты (playwright, mcp, cryptography)
+# после обновления кода не доезжали — веб-коннектор падал с «No module named 'playwright'».
+# Отметка = окружение + хэш requirements.txt; другое окружение или новый файл → pip install.
+DEPS_STAMP="$(python - <<'PY'
+import hashlib, sys
+print(sys.prefix + "|" + hashlib.sha256(open("requirements.txt", "rb").read()).hexdigest())
+PY
+)"
+if ! python -c "import fastapi" &>/dev/null || [ "$(cat .deps-installed 2>/dev/null)" != "$DEPS_STAMP" ]; then
+    info "Устанавливаю/обновляю зависимости Python (может занять несколько минут)..."
+    pip install -q -r requirements.txt || err "pip install не прошёл. В корпоративной сети проверьте прокси/зеркало PyPI и повторите: pip install -r requirements.txt"
+    echo "$DEPS_STAMP" > .deps-installed
     ok "Зависимости Python установлены"
 fi
 

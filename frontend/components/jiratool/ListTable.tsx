@@ -1,28 +1,13 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, ChevronRight, GripVertical, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
-  BLOCK_COL, DEFECTS_COL, FIELD_BY_ID, FOLDER_COL, PARTICIPANT_COL, STAGE_COL, blockersOf, colLabel, colValues, groupIssues,
-  isOpenDefect, isWritableGroupRef, orderIndex, type GroupLevel,
-  type ColCtx, type ColRef, type GroupNode, type Issue, type OwnField, type Participant,
+  BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
+  groupIssues, isWritableGroupRef, orderIndex,
+  type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
 } from "@/lib/jiraTool";
-import { STAGE_CLS, STAGE_LABEL, type StageInfo } from "@/lib/jiraStages";
-
-const STATUS_CLS: Record<string, string> = {
-  "Открыт": "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
-  "В работе": "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
-  "Разработка": "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
-  "Готов к тестированию": "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
-  "Готово к тестированию": "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
-  "Переоткрыт": "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
-  "Выполнен": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  "Выполнено": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  "Закрыт": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-};
-const PRIO_DOT: Record<string, string> = {
-  "Блокирующий": "bg-red-600", "Критичный": "bg-orange-500", "Высокий": "bg-amber-400", "Средний": "bg-sky-400", "Низкий": "bg-slate-400",
-};
+import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, PlanCell, SpendDateCell, StageCell } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
 export type Place = "before" | "after";
@@ -30,7 +15,7 @@ export type GroupChange = { ref: ColRef; from: string; to: string };
 
 function sortKey(ref: ColRef, issue: Issue, ctx: ColCtx): string {
   const v = colValues(ref, issue, ctx);
-  if (ref === DEFECTS_COL) return v.length ? v[0].padStart(5, "0") : "\uffff";
+  if (ref === DEFECTS_COL) return v.length ? v[0].padStart(5, "0") : "￿";
   const idx = orderIndex(ref, v[0] ?? "");
   if (idx !== -1 || ref === "jira:status" || ref === "jira:priority" || ref === STAGE_COL) return String(idx + 10).padStart(4, "0");
   return (v.join(", ") || "￿").toLowerCase();
@@ -42,165 +27,43 @@ export function sortIssues(issues: Issue[], sort: SortState, ctx: ColCtx): Issue
     sortKey(sort.col, a, ctx).localeCompare(sortKey(sort.col, b, ctx), "ru", { numeric: true }) * sort.dir);
 }
 
-/* ── Ячейки ────────────────────────────────────────────────────────────── */
+/* ── Ширина колонок ──────────────────────────────────────────────────────── */
 
-function JiraCell({ id, issue }: { id: string; issue: Issue }) {
-  const v = issue.fields[id];
-  if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return <span className="text-text-muted/50">—</span>;
-  if (id === "status") return <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[String(v)] ?? "bg-bg-subtle text-text-main"}`}>{String(v)}</span>;
-  if (id === "priority") return <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><span className={`w-2 h-2 rounded-full ${PRIO_DOT[String(v)] ?? "bg-slate-400"}`} />{String(v)}</span>;
-  if (id === "issuetype" && v === "Epic") return <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 text-[11px] font-semibold">Epic</span>;
-  if (Array.isArray(v)) return (
-    <span className="flex flex-wrap gap-1">{v.map(x => <span key={x} className="px-1.5 py-0.5 rounded bg-bg-subtle text-[11px] whitespace-nowrap">{x}</span>)}</span>
-  );
-  if (id === "summary") return <span className="block min-w-[260px] max-w-[460px]">{String(v)}</span>;
-  if (FIELD_BY_ID[id]?.kind === "longtext") return <span className="block min-w-[220px] line-clamp-2 text-text-muted">{String(v)}</span>;
-  return <span>{String(v)}</span>;
-}
+const SELECT_W = 56, REMOVE_W = 36, MIN_W = 60, INDENT = 12;
 
-/**
- * Сумма неустранённых дефектов задачи (всё, кроме «Подтверждено исправление» и «Закрыт»);
- * по клику — окно со списком. У самих дефектов поля нет.
- */
-function DefectsCell({ defects, onOpen }: { defects: Issue[] | null; onOpen: () => void }) {
-  if (defects === null) return <span className="text-text-muted/50">—</span>;
-  const open = defects.filter(isOpenDefect).length;
-  const fixed = defects.length - open;
-  return (
-    <button type="button" onClick={onOpen}
-      title={`Неустранённых ${open}${fixed ? `, устранённых ${fixed}` : ""} — открыть список`}
-      className={`inline-flex items-center gap-1 min-w-[32px] justify-center px-2 py-0.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors
-        ${open > 0 ? "bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-950/60 dark:text-red-300"
-          : "bg-bg-subtle text-text-muted hover:text-text-main"}`}>
-      {open}
-    </button>
-  );
-}
-
-/** Знак внимания, если среди неустранённых дефектов есть блокирующие. */
-function BlockCell({ defects, onOpen }: { defects: Issue[] | null; onOpen: () => void }) {
-  if (defects === null) return <span className="text-text-muted/50">—</span>;
-  const blockers = blockersOf(defects);
-  if (!blockers.length) return null;
-  return (
-    <button type="button" onClick={onOpen} aria-label={`Блокирующих дефектов: ${blockers.length}`}
-      title={`Блокирующих дефектов: ${blockers.length} — ${blockers.map(b => b.key).join(", ")}`}
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/60">
-      <AlertTriangle className="w-4 h-4" strokeWidth={2.5} />
-      {blockers.length > 1 && <span className="text-xs font-bold">{blockers.length}</span>}
-    </button>
-  );
-}
-
-export function StageCell({ info }: { info: StageInfo }) {
-  switch (info.kind) {
-    case "stage":
-      return <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STAGE_CLS[info.stage]}`}>{STAGE_LABEL[info.stage]}</span>;
-    case "epic":
-      return (
-        <span className="inline-flex items-center gap-1.5 whitespace-nowrap"
-          title={`Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
-            + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
-          <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${STAGE_CLS[info.stage]}`}>{STAGE_LABEL[info.stage]}</span>
-          <span className="text-[10px] text-text-muted">{info.behind}/{info.total}</span>
-          {info.unmapped > 0 && <AlertTriangle className="w-3 h-3 text-amber-500" />}
-        </span>
-      );
-    case "unmapped":
-      return (
-        <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 whitespace-nowrap"
-          title={`Статус Jira «${info.status}» не сопоставлен — настройте в «Статус (st)»`}>
-          <AlertTriangle className="w-3 h-3" /> Не сопоставлен
-        </span>
-      );
-    case "no-stories":
-      return (
-        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
-          title="У эпика нет сторей — этап не посчитать. Это нарушение процесса: стори нужно завести и привязать через Epic Link.">
-          <AlertTriangle className="w-3 h-3" /> Нет сторей
-        </span>
-      );
+/** Ширина по умолчанию — по смыслу колонки; пользователь растягивает её за край заголовка. */
+export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
+  if (ref === "jira:summary") return 360;
+  if (ref === STAGE_COL) return 180;
+  if (ref === DEFECTS_COL) return 110;
+  if (ref === BLOCK_COL) return 90;
+  if (ref === PARTICIPANT_COL) return 220;
+  if (ref === FOLDER_COL) return 180;
+  if (ref === PLAN_COL || ref === FACT_COL) return 140;
+  if (ref === START_COL || ref === END_COL) return 200;
+  if (ref.startsWith("own:")) {
+    const t = ctx.list.ownFields.find(f => f.id === ref.slice(4))?.type;
+    return t === "datetime" ? 200 : t === "date" ? 150 : t === "multiselect" ? 190 : 170;
   }
-}
-
-function TextCell({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  return (
-    <input value={draft} onChange={e => setDraft(e.target.value)} onBlur={() => draft !== value && onChange(draft)}
-      onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft(value); }}
-      placeholder="—" className="w-full min-w-[120px] bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main
-        focus:border-primary/40 focus:outline-none focus:bg-[var(--color-input-bg)] text-sm" />
-  );
-}
-
-function MultiCell({ field, value, onChange }: { field: OwnField; value: string[]; onChange: (v: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
-  return (
-    <div ref={box} className="relative">
-      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-        className="flex flex-wrap gap-1 min-h-[24px] min-w-[120px] w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main">
-        {value.length ? value.map(x => <span key={x} className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px]">{x}</span>)
-          : <span className="text-text-muted/50 text-sm">—</span>}
-      </button>
-      {open && (
-        <div className="absolute z-30 left-0 mt-1 w-48 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1">
-          {field.options.map(o => (
-            <label key={o} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-bg-subtle text-sm cursor-pointer">
-              <input type="checkbox" checked={value.includes(o)}
-                onChange={() => onChange(value.includes(o) ? value.filter(x => x !== o) : [...value, o])} />
-              {o}
-            </label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OwnCell({ field, value, onChange }: { field: OwnField; value: string | string[] | undefined; onChange: (v: string | string[]) => void }) {
-  const cls = "bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:border-primary/40 " +
-    "focus:outline-none focus:bg-[var(--color-input-bg)] text-sm text-text-main";
-  const s = typeof value === "string" ? value : "";
-  switch (field.type) {
-    case "date": return <input type="date" value={s} onChange={e => onChange(e.target.value)} aria-label={field.name} className={cls} />;
-    case "datetime": return <input type="datetime-local" value={s} onChange={e => onChange(e.target.value)} aria-label={field.name} className={cls} />;
-    case "select": return (
-      <select value={s} onChange={e => onChange(e.target.value)} aria-label={field.name} className={`${cls} min-w-[110px]`}>
-        <option value="">—</option>
-        {field.options.map(o => <option key={o}>{o}</option>)}
-      </select>
-    );
-    case "multiselect": return <MultiCell field={field} value={Array.isArray(value) ? value : []} onChange={onChange} />;
-    default: return <TextCell value={s} onChange={onChange} />;
-  }
-}
-
-function ParticipantCell({ value, participants, onChange }: { value: string; participants: Participant[]; onChange: (id: string) => void }) {
-  const p = participants.find(x => x.id === value);
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: p?.color ?? "transparent", border: p ? "none" : "1px dashed #94a3b8" }} />
-      <select value={value} onChange={e => onChange(e.target.value)} aria-label="Участник"
-        className="bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:outline-none text-sm text-text-main min-w-[130px]">
-        <option value="">— не назначен</option>
-        {participants.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
-      </select>
-    </span>
-  );
+  const kind = FIELD_BY_ID[ref.slice(5)]?.kind;
+  if (kind === "longtext") return 260;
+  if (ref === "jira:status") return 180;
+  if (ref === "jira:issuetype") return 120;
+  return 150;
 }
 
 /* ── Таблица ───────────────────────────────────────────────────────────── */
 
+/** Куда ведёт перенос строки: в другую папку, в другую группу (со сменой полей) или просто порядок. */
+type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; changes: GroupChange[] };
+
+/** Папка строки: undefined — в списке нет папок; null — «Без папки». */
+type FolderKey = string | null | undefined;
+
 export default function ListTable({
-  ctx, issues, sort, onSort, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects, onMoveRow, onMoveColumn, onMoveToGroup,
+  ctx, issues, sort, onSort, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
+  onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
+  onOpenDraft, onSpend, onTogglePin,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -218,33 +81,110 @@ export default function ListTable({
   onMoveColumn: (col: ColRef, target: ColRef, place: Place) => void;
   /** Перенос в другую группу по полю SimpleTest: записать значения и (если есть target) встать рядом с ним. */
   onMoveToGroup: (key: string, changes: GroupChange[], target: string | null, place: Place) => void;
+  /** Перенос в другую папку (null — «Без папки»); внутри неё задача сама попадёт в свою группу. */
+  onMoveToFolder: (key: string, folder: string | null, target: string | null, place: Place) => void;
+  /** Ширина колонки; null — вернуть стандартную. */
+  onResizeColumn: (col: ColRef, width: number | null) => void;
+  onRenameFolder: (name: string, next: string) => void;
+  onDeleteFolder: (name: string) => void;
+  onMoveFolder: (name: string, target: string, place: Place) => void;
+  /** Своё текстовое поле: переносить текст или обрезать многоточием. */
+  onToggleWrap: (fieldId: string) => void;
+  /** Черновик SimpleTest: открыть форму, чтобы поправить или отправить в Jira. */
+  onOpenDraft: (issue: Issue) => void;
+  /** Трудозатраты задачи: план (минуты; null — убрать), начало или конец теста. */
+  onSpend: (key: string, patch: { plan?: number | null; start?: string; end?: string }) => void;
+  /** Закрепить / открепить колонку. */
+  onTogglePin: (col: ColRef) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const { list, participants } = ctx;
-  const cols = list.columns;
+  // Закреплённые колонки идут первыми и при прокрутке вбок остаются на месте (как и ключ задачи).
+  const pinned = new Set(list.pinned ?? []);
+  const cols = [...list.columns.filter(c => pinned.has(c)), ...list.columns.filter(c => !pinned.has(c))];
+  const lastPinned = [...cols].reverse().find(c => pinned.has(c));
   const ownById = Object.fromEntries(list.ownFields.map(f => [f.id, f]));
   const width = cols.length + 3;
   const allOn = issues.length > 0 && issues.every(i => selected.has(i.key));
+  const sections = list.folderList?.length ? folderSections(list, issues) : null;
+
+  /* ── Ширина колонок: тянем за край заголовка ── */
+  const [live, setLive] = useState<{ col: ColRef; w: number } | null>(null);
+  const resizing = useRef<{ col: ColRef; x: number; w: number } | null>(null);
+  const colW = (c: ColRef) => (live?.col === c ? live.w : list.widths?.[c] ?? defaultWidth(c, ctx));
+  // Ключ не должен обрезаться: ширина столбца — под самый глубокий уровень вложенности (папка + 3 группы).
+  const depthMax = (sections ? 1 : 0) + list.groupBy.length;
+  const KEY_W = 150 + depthMax * INDENT;
+  const tableW = SELECT_W + KEY_W + REMOVE_W + cols.reduce((n, c) => n + colW(c), 0);
+  /** Отступ слева закреплённой колонки: выбор + ключ + закреплённые до неё. */
+  const leftOf = (c: ColRef) => {
+    let x = SELECT_W + KEY_W;
+    for (const k of cols) { if (k === c) break; if (pinned.has(k)) x += colW(k); }
+    return x;
+  };
+  const stick = (left: number, z = 2): React.CSSProperties => ({ position: "sticky", left, zIndex: z });
+  // Граница справа у последней закреплённой (или у ключа, если закреплённых нет) — видно, где «стоп».
+  const EDGE = "shadow-[inset_-1px_0_0_0_var(--color-border-main,#e2e8f0)]";
+  /** Суммы трудозатрат для заголовков групп и папок — для отчётности. */
+  const spendSum = (items: Issue[]) => {
+    if (!cols.includes(PLAN_COL) && !cols.includes(FACT_COL)) return "";
+    let plan = 0, fact = 0, hasPlan = false, hasFact = false;
+    for (const i of items) {
+      const sp = list.spend?.[i.key];
+      if (sp?.plan != null) { plan += sp.plan; hasPlan = true; }
+      const f = factMinutes(sp);
+      if (f != null && f >= 0) { fact += f; hasFact = true; }
+    }
+    return [hasPlan ? `план ${fmtMinutes(plan)}` : "", hasFact ? `факт ${fmtMinutes(fact)}` : ""].filter(Boolean).join(" · ");
+  };
+  // Слушатели мыши вешаются один раз; свежий колбэк — через ref.
+  const onResizeRef = useRef(onResizeColumn);
+  onResizeRef.current = onResizeColumn;
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const r = resizing.current;
+      if (r) setLive({ col: r.col, w: Math.max(MIN_W, Math.round(r.w + e.clientX - r.x)) });
+    };
+    const up = (e: MouseEvent) => {
+      const r = resizing.current;
+      if (!r) return;
+      resizing.current = null;
+      setLive(null);
+      onResizeRef.current(r.col, Math.max(MIN_W, Math.round(r.w + e.clientX - r.x)));
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, []);
 
   /* ── Перетаскивание ───────────────────────────────────────────────────
      Строки тянутся только за ручку (иначе мешали бы вводу в своих полях).
-     Внутри группы — меняется порядок. В другую группу — только если все отличающиеся
-     уровни — записываемые поля SimpleTest (участник, папка, свои поля): у задачи
-     меняется значение. Поля Jira и вычисляемые (st) переносом не меняются.
-     При сортировке по колонке ручной порядок не виден — перетаскивание выключено. */
+     Папки — уровень выше группировки: перенос в другую папку меняет только папку,
+     в новой папке задача сама встаёт в свою группу. Внутри папки (или списка без папок):
+     в той же группе — порядок; в другой группе — только если все отличающиеся уровни —
+     записываемые поля SimpleTest (участник, свои поля): у задачи меняется значение.
+     При сортировке по колонке ручной порядок не виден — перетаскивание строк выключено. */
   const rowsMovable = !sort;
-  const [armed, setArmed] = useState<string | null>(null);          // «row|path», за ручку которой взялись
+  const [armed, setArmed] = useState<string | null>(null);
   const [dragRow, setDragRow] = useState<{ key: string; path: string } | null>(null);
   // То же в ref: dragover приходит раньше, чем React успевает обновить состояние.
-  const dragRef = useRef<{ key: string; path: string; levels: GroupLevel[] } | null>(null);
+  const dragRef = useRef<{ key: string; path: string; levels: GroupLevel[]; folder: FolderKey } | null>(null);
   const [overRow, setOverRow] = useState<{ key: string; path: string; place: Place } | null>(null);
   const [overGroup, setOverGroup] = useState<string | null>(null);
+  const [dragCol, setDragCol] = useState<ColRef | null>(null);
+  const [overCol, setOverCol] = useState<{ col: ColRef; place: Place } | null>(null);
+  const dragFolderRef = useRef<string | null>(null);
+  const [overFolder, setOverFolder] = useState<{ name: string; place: Place } | null>(null);
+  const [renaming, setRenaming] = useState<{ name: string; value: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<string | null>(null);
 
-  /** Можно ли бросить в группу с уровнями dst и какие поля при этом изменятся. */
-  const dropPlan = (dstPath: string, dst: GroupLevel[]): GroupChange[] | null => {
+  const dropPlan = (dstPath: string, dst: GroupLevel[], dstFolder: FolderKey): DropPlan | null => {
     const src = dragRef.current;
     if (!src) return null;
-    if (src.path === dstPath) return [];
+    if (dstFolder !== undefined && src.folder !== dstFolder) return { kind: "folder", folder: dstFolder };
+    if (src.path === dstPath) return { kind: "group", changes: [] };
     const changes: GroupChange[] = [];
     for (let i = 0; i < dst.length; i++) {
       const from = src.levels[i]?.label, to = dst[i].label;
@@ -252,16 +192,17 @@ export default function ListTable({
       if (!isWritableGroupRef(dst[i].ref, list)) return null;
       changes.push({ ref: dst[i].ref, from: from ?? "", to });
     }
-    return changes;
+    return { kind: "group", changes };
   };
-  const [dragCol, setDragCol] = useState<ColRef | null>(null);
-  const [overCol, setOverCol] = useState<{ col: ColRef; place: Place } | null>(null);
 
-  const placeY = (e: React.DragEvent) => {
+  /** Фон закреплённой ячейки — непрозрачный, иначе под ней просвечивают прокрученные колонки. */
+  const rowBg = (on: boolean) => (on ? "bg-[var(--color-active-bg)]" : "bg-bg-card group-hover/row:bg-bg-subtle");
+
+  const placeY = (e: React.DragEvent): Place => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return e.clientY < r.top + r.height / 2 ? "before" : "after";
   };
-  const placeX = (e: React.DragEvent) => {
+  const placeX = (e: React.DragEvent): Place => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return e.clientX < r.left + r.width / 2 ? "before" : "after";
   };
@@ -270,19 +211,31 @@ export default function ListTable({
    * переносят разделы), поэтому без stopPropagation курсор показывал бы «можно» там, где нельзя.
    */
   const refuse = (e: React.DragEvent) => {
-    if (!dragRef.current && !dragCol) return;
+    if (!dragRef.current && !dragCol && !dragFolderRef.current) return;
     e.stopPropagation();
-    if (e.defaultPrevented) return;                                 // строка уже разрешила перенос
+    if (e.defaultPrevented) return;                                 // элемент уже разрешил перенос
     e.dataTransfer.dropEffect = "none";
   };
-  const endRowDrag = () => { dragRef.current = null; setDragRow(null); setOverRow(null); setOverGroup(null); setArmed(null); };
+  const endRowDrag = () => {
+    dragRef.current = null; dragFolderRef.current = null;
+    setDragRow(null); setOverRow(null); setOverGroup(null); setOverFolder(null); setArmed(null);
+  };
   const endColDrag = () => { setDragCol(null); setOverCol(null); };
 
   const toggle = (path: string) => setCollapsed(c => { const n = new Set(c); if (n.has(path)) n.delete(path); else n.add(path); return n; });
   const clickSort = (col: ColRef) =>
     onSort(sort?.col !== col ? { col, dir: 1 } : sort.dir === 1 ? { col, dir: -1 } : null);
 
-  const row = (issue: Issue, depth: number, path: string, levels: GroupLevel[], prev?: string, next?: string) => {
+  /** Бросили строку: в зависимости от плана — в папку, в группу или просто порядок. */
+  const dropRow = (plan: DropPlan, target: string | null, place: Place) => {
+    const src = dragRef.current;
+    if (!src) return;
+    if (plan.kind === "folder") onMoveToFolder(src.key, plan.folder, target === src.key ? null : target, place);
+    else if (plan.changes.length) onMoveToGroup(src.key, plan.changes, target === src.key ? null : target, place);
+    else if (target && target !== src.key) onMoveRow(src.key, target, place);
+  };
+
+  const row = (issue: Issue, depth: number, path: string, levels: GroupLevel[], folder: FolderKey, prev?: string, next?: string) => {
     const on = selected.has(issue.key);
     const id = `${issue.key}|${path}`;
     const over = overRow?.key === issue.key && overRow.path === path && dragRow && !(dragRow.key === issue.key && dragRow.path === path)
@@ -291,11 +244,11 @@ export default function ListTable({
       <tr key={id} draggable={armed === id}
         onDragStart={e => {
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", issue.key);
-          dragRef.current = { key: issue.key, path, levels };
+          dragRef.current = { key: issue.key, path, levels, folder };
           setDragRow({ key: issue.key, path });
         }}
         onDragOver={e => {
-          if (dropPlan(path, levels) === null) return refuse(e);    // нельзя: меняется поле Jira или вычисляемое
+          if (!dragRef.current || dropPlan(path, levels, folder) === null) return refuse(e);
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
           const place = placeY(e);
@@ -303,11 +256,8 @@ export default function ListTable({
         }}
         onDrop={e => {
           e.preventDefault();
-          const src = dragRef.current, plan = dropPlan(path, levels);
-          if (src && plan) {
-            if (plan.length) onMoveToGroup(src.key, plan, issue.key === src.key ? null : issue.key, placeY(e));
-            else if (src.key !== issue.key) onMoveRow(src.key, issue.key, placeY(e));
-          }
+          const plan = dropPlan(path, levels, folder);
+          if (plan) dropRow(plan, issue.key, placeY(e));
           endRowDrag();
         }}
         onDragEnd={endRowDrag}
@@ -315,9 +265,9 @@ export default function ListTable({
           ${dragRow?.key === issue.key && dragRow.path === path ? "opacity-40" : ""}
           ${over === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
           ${over === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
-        <td className="pl-1 pr-1 py-1.5 align-top w-10 whitespace-nowrap">
+        <td className={`pl-1 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
           <button type="button" aria-label={`Переместить ${issue.key}`} disabled={!rowsMovable}
-            title={rowsMovable ? "Перетащите, чтобы поменять порядок (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
+            title={rowsMovable ? "Перетащите, чтобы поменять порядок или папку (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
             onMouseDown={() => rowsMovable && setArmed(id)} onMouseUp={() => setArmed(null)}
             onKeyDown={e => {
               if (!rowsMovable) return;
@@ -331,22 +281,41 @@ export default function ListTable({
           <input type="checkbox" checked={on} onChange={() => onSelect([issue.key], !on)} aria-label={`Выбрать ${issue.key}`}
             className="align-middle ml-0.5" />
         </td>
-        <td className="px-3 py-1.5 whitespace-nowrap align-top" style={{ paddingLeft: 12 + depth * 18 }}>
-          <span className="font-mono text-xs text-primary">{issue.key}</span>
-          {issue.local && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">новый</span>}
+        <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
+          style={{ ...stick(SELECT_W), paddingLeft: 12 + depth * INDENT }}>
+          {issue.url ? (
+            <a href={issue.url} target="_blank" rel="noreferrer" title="Открыть в Jira" className="font-mono text-xs text-primary hover:underline">{issue.key} ↗</a>
+          ) : issue.local ? (
+            <button type="button" onClick={() => onOpenDraft(issue)} title="Черновик SimpleTest: открыть, поправить или отправить в Jira"
+              className="font-mono text-xs text-primary hover:underline">{issue.key}</button>
+          ) : <span className="font-mono text-xs text-primary">{issue.key}</span>}
+          {issue.local && (
+            <button type="button" onClick={() => onOpenDraft(issue)} title="В Jira не отправлялся — открыть и отправить"
+              className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-950/60 dark:text-amber-300">
+              черновик → Jira</button>
+          )}
         </td>
         {cols.map(c => (
-          <td key={c} className="px-3 py-1.5 align-top text-sm text-text-main">
+          <td key={c} className={`px-3 py-1.5 align-top text-sm text-text-main overflow-hidden
+            ${pinned.has(c) ? rowBg(on) : ""} ${c === lastPinned ? EDGE : ""}`}
+            style={pinned.has(c) ? stick(leftOf(c)) : undefined}>
             {c === PARTICIPANT_COL ? (
-              <ParticipantCell value={list.assignees[issue.key] ?? ""} participants={participants} onChange={id => onParticipant(issue.key, id)} />
+              <ParticipantCell value={list.assignees[issue.key] ?? ""} participants={participants} onChange={pid => onParticipant(issue.key, pid)} />
             ) : c === STAGE_COL ? (
               <StageCell info={ctx.stageOf(issue)} />
             ) : c === DEFECTS_COL ? (
               <DefectsCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
             ) : c === BLOCK_COL ? (
               <BlockCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
+            ) : c === PLAN_COL ? (
+              <PlanCell value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} />
+            ) : c === START_COL || c === END_COL ? (
+              <SpendDateCell value={list.spend?.[issue.key]?.[c === START_COL ? "start" : "end"]} label={colLabel(c, list)}
+                onChange={v => onSpend(issue.key, c === START_COL ? { start: v } : { end: v })} />
+            ) : c === FACT_COL ? (
+              <FactCell spend={list.spend?.[issue.key]} />
             ) : c === FOLDER_COL ? (
-              <span className="text-xs text-text-muted whitespace-nowrap">{list.folders?.[issue.key] ?? "—"}</span>
+              <span className="block truncate text-xs text-text-muted">{list.folders?.[issue.key] ?? "—"}</span>
             ) : c.startsWith("jira:") ? (
               <JiraCell id={c.slice(5)} issue={issue} />
             ) : ownById[c.slice(4)] ? (
@@ -355,7 +324,7 @@ export default function ListTable({
             ) : <span className="text-text-muted/50">—</span>}
           </td>
         ))}
-        <td className="px-2 py-1.5 align-top w-8">
+        <td className="px-1 py-1.5 align-top">
           <button type="button" onClick={() => onRemove(issue.key)} aria-label={`Убрать ${issue.key} из списка`} title="Убрать из списка"
             className="p-1 rounded text-text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-red-500">
             <X className="w-3.5 h-3.5" />
@@ -365,73 +334,180 @@ export default function ListTable({
     );
   };
 
-  const group = (node: GroupNode, depth: number, parent: GroupLevel[] = []): React.ReactNode => {
+  const group = (node: GroupNode, depth: number, parent: GroupLevel[], folder: FolderKey): React.ReactNode => {
     const shut = collapsed.has(node.path);
     const keys = node.issues.map(i => i.key);
     const groupOn = keys.length > 0 && keys.every(k => selected.has(k));
     const levels = [...parent, { ref: node.ref, label: node.label }];
-    // На заголовок можно бросить, только если группа конечная (без подгрупп) — тогда понятно, куда класть.
+    // На заголовок можно бросить, если группа конечная (понятно, куда класть) или это другая папка.
     const leaf = !node.children.length;
     return (
       <Fragment key={node.path}>
         <tr className={`border-t border-border-main bg-bg-subtle/70 ${overGroup === node.path ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}
           onDragOver={e => {
-            if (!leaf) return refuse(e);
-            const plan = dropPlan(node.path, levels);
-            if (!plan || !plan.length) return refuse(e);
+            const plan = dropPlan(node.path, levels, folder);
+            const ok = plan && (plan.kind === "folder" || (leaf && plan.changes.length > 0));
+            if (!ok) return refuse(e);
             e.preventDefault();
             if (overGroup !== node.path) setOverGroup(node.path);
           }}
           onDragLeave={() => overGroup === node.path && setOverGroup(null)}
           onDrop={e => {
             e.preventDefault();
-            const src = dragRef.current, plan = leaf ? dropPlan(node.path, levels) : null;
-            if (src && plan?.length) onMoveToGroup(src.key, plan, null, "after");
+            const plan = dropPlan(node.path, levels, folder);
+            if (plan && (plan.kind === "folder" || (leaf && plan.changes.length))) dropRow(plan, null, "after");
             endRowDrag();
           }}>
-          <td className="pl-1 pr-1 py-1.5 w-10">
+          <td className="pl-1 pr-1 py-1.5 bg-bg-subtle" style={stick(0)}>
             <span className="inline-block w-[18px]" />
             <input type="checkbox" checked={groupOn} onChange={() => onSelect(keys, !groupOn)} aria-label={`Выбрать группу ${node.label}`}
               className="align-middle ml-0.5" />
           </td>
-          <td colSpan={width - 1} className="py-1.5" style={{ paddingLeft: 8 + depth * 18 }}>
+          <td colSpan={width - 1} className="py-1.5">
+            {/* Подпись группы не уезжает при прокрутке вбок */}
             <button type="button" onClick={() => toggle(node.path)} aria-expanded={!shut}
-              className="flex items-center gap-1.5 text-sm text-text-main">
+              style={{ position: "sticky", left: SELECT_W + 8 + depth * INDENT }}
+              className="flex items-center gap-1.5 text-sm text-text-main w-max">
               <ChevronRight className={`w-4 h-4 text-text-muted transition-transform ${shut ? "" : "rotate-90"}`} />
               <span className="text-[11px] text-text-muted">{node.field}:</span>
-              <span className={`font-semibold ${node.ref === STAGE_COL && node.label === "Нет сторей" ? "text-red-600 dark:text-red-400" : ""}`}>{node.label}</span>
+              <span className={`font-semibold ${node.ref === STAGE_COL && node.label === "Нет сторей" ? "text-red-600 dark:text-red-400" : ""}`}>
+                {jiraDateKind(node.ref) && node.label !== EMPTY_GROUP ? fmtJiraDate(node.label, jiraDateKind(node.ref) === "datetime") : node.label}</span>
               <span className="text-[11px] px-1.5 rounded-full bg-bg-card border border-border-main text-text-muted">{node.issues.length}</span>
+              {spendSum(node.issues) && <span className="text-[11px] text-text-muted ml-1">{spendSum(node.issues)}</span>}
             </button>
           </td>
         </tr>
         {!shut && (node.children.length
-          ? node.children.map(ch => group(ch, depth + 1, levels))
+          ? node.children.map(ch => group(ch, depth + 1, levels, folder))
           : node.issues.length === 0
             ? <tr className="border-t border-border-main"><td colSpan={width} className="py-1.5 text-[11px] text-text-muted/70"
-                style={{ paddingLeft: 40 + depth * 18 }}>пусто — перетащите сюда задачу</td></tr>
-            : sortIssues(node.issues, sort, ctx).map((i, n, arr) => row(i, depth + 1, node.path, levels, arr[n - 1]?.key, arr[n + 1]?.key)))}
+                style={{ paddingLeft: 40 + depth * INDENT }}>пусто — перетащите сюда задачу</td></tr>
+            : sortIssues(node.issues, sort, ctx).map((i, n, arr) =>
+                row(i, depth + 1, node.path, levels, folder, arr[n - 1]?.key, arr[n + 1]?.key)))}
       </Fragment>
     );
   };
 
-  const groups = list.groupBy.length ? groupIssues(issues, list.groupBy, ctx) : null;
+  /** Содержимое папки (или всего списка): группы или строки по ручному порядку. */
+  const content = (items: Issue[], prefix: string, folder: FolderKey, depth: number) =>
+    list.groupBy.length
+      ? groupIssues(items, list.groupBy, ctx, prefix, true).map(g => group(g, depth, [], folder))
+      : sortIssues(items, sort, ctx).map((i, n, arr) => row(i, depth, prefix, [], folder, arr[n - 1]?.key, arr[n + 1]?.key));
+
+  /** Заголовок папки: перенос задач внутрь, перестановка папок, переименование, удаление. */
+  const folderHeader = (name: string | null, items: Issue[]) => {
+    const path = `f:${name ?? ""}`;
+    const shut = collapsed.has(path);
+    const keys = items.map(i => i.key);
+    const allIn = keys.length > 0 && keys.every(k => selected.has(k));
+    const isOver = overGroup === path;
+    const fOver = name && overFolder?.name === name ? overFolder.place : null;
+    return (
+      <tr key={`fh-${path}`} draggable={!!name && renaming?.name !== name}
+        onDragStart={e => {
+          if (!name) return;
+          e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", name);
+          dragFolderRef.current = name;
+        }}
+        onDragOver={e => {
+          if (dragFolderRef.current) {
+            if (!name || dragFolderRef.current === name) return refuse(e);
+            e.preventDefault();
+            const place = placeY(e);
+            if (overFolder?.name !== name || overFolder.place !== place) setOverFolder({ name, place });
+            return;
+          }
+          const plan = dropPlan(path, [], name);
+          if (!plan || plan.kind !== "folder") return refuse(e);
+          e.preventDefault();
+          if (overGroup !== path) setOverGroup(path);
+        }}
+        onDragLeave={() => { if (overGroup === path) setOverGroup(null); }}
+        onDrop={e => {
+          e.preventDefault();
+          if (dragFolderRef.current && name && dragFolderRef.current !== name) onMoveFolder(dragFolderRef.current, name, placeY(e));
+          else {
+            const plan = dropPlan(path, [], name);
+            if (plan?.kind === "folder") dropRow(plan, null, "after");
+          }
+          endRowDrag();
+        }}
+        onDragEnd={endRowDrag}
+        className={`group/fh border-t-2 border-border-main bg-bg-card ${isOver ? "outline outline-2 -outline-offset-2 outline-primary" : ""}
+          ${fOver === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
+          ${fOver === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
+        <td className="pl-1 pr-1 py-2 whitespace-nowrap bg-bg-card" style={stick(0)}>
+          {name ? (
+            <span className="inline-flex align-middle p-0.5 text-text-muted opacity-0 group-hover/fh:opacity-100 cursor-grab" title="Перетащите, чтобы поменять порядок папок">
+              <GripVertical className="w-3.5 h-3.5" />
+            </span>
+          ) : <span className="inline-block w-[18px]" />}
+          <input type="checkbox" checked={allIn} onChange={() => onSelect(keys, !allIn)} aria-label={`Выбрать папку ${name ?? NO_FOLDER}`}
+            className="align-middle ml-0.5" />
+        </td>
+        <td colSpan={width - 1} className="py-2 pl-2">
+          <div className="flex items-center gap-2 min-w-0 w-max" style={{ position: "sticky", left: SELECT_W + 8 }}>
+            <button type="button" onClick={() => toggle(path)} aria-expanded={!shut} className="flex items-center gap-1.5 min-w-0">
+              <ChevronRight className={`w-4 h-4 text-text-muted transition-transform ${shut ? "" : "rotate-90"}`} />
+              <Folder className={`w-4 h-4 flex-shrink-0 ${name ? "text-amber-500" : "text-text-muted"}`} />
+            </button>
+            {renaming?.name === name && name ? (
+              <input autoFocus value={renaming.value} onChange={e => setRenaming({ name, value: e.target.value })} aria-label="Название папки"
+                onBlur={() => { const v = renaming.value.trim(); if (v && v !== name) onRenameFolder(name, v); setRenaming(null); }}
+                onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setRenaming(null); }}
+                className="text-sm font-semibold bg-[var(--color-input-bg)] border border-primary/40 rounded px-1.5 py-0.5 text-text-main focus:outline-none" />
+            ) : (
+              <span className={`text-sm font-semibold truncate ${name ? "text-text-main" : "text-text-muted"}`}>{name ?? NO_FOLDER}</span>
+            )}
+            <span className="text-[11px] px-1.5 rounded-full bg-bg-subtle border border-border-main text-text-muted">{items.length}</span>
+            {spendSum(items) && <span className="text-[11px] text-text-muted">{spendSum(items)}</span>}
+            {name && renaming?.name !== name && (askDelete === name ? (
+              <span className="flex items-center gap-1.5 text-xs">
+                <span className="text-text-muted">Удалить папку? Задачи перейдут в «{NO_FOLDER}».</span>
+                <button type="button" onClick={() => { onDeleteFolder(name); setAskDelete(null); }}
+                  className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
+                <button type="button" onClick={() => setAskDelete(null)} className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
+              </span>
+            ) : (
+              <span className="flex items-center gap-0.5 opacity-0 group-hover/fh:opacity-100 focus-within:opacity-100">
+                <button type="button" onClick={() => setRenaming({ name, value: name })} aria-label={`Переименовать папку ${name}`}
+                  className="p-1 rounded text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
+                <button type="button" onClick={() => setAskDelete(name)} aria-label={`Удалить папку ${name}`}
+                  className="p-1 rounded text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+              </span>
+            ))}
+          </div>
+        </td>
+      </tr>
+    );
+  };
 
   return (
     <div className="border border-border-main rounded-xl overflow-auto scrollbar-thin bg-bg-card" onDragOver={refuse}>
-      <table className="w-full border-collapse">
+      <table className="border-collapse" style={{ tableLayout: "fixed", width: tableW }}>
+        <colgroup>
+          <col style={{ width: SELECT_W }} />
+          <col style={{ width: KEY_W }} />
+          {cols.map(c => <col key={c} style={{ width: colW(c) }} />)}
+          <col style={{ width: REMOVE_W }} />
+        </colgroup>
         <thead className="sticky top-0 z-10 bg-bg-card">
           <tr className="text-left">
-            <th className="pl-1 pr-1 py-2 w-10 text-left">
+            <th className="pl-1 pr-1 py-2 text-left bg-bg-card" style={stick(0, 4)}>
               <span className="inline-block w-[18px]" />
               <input type="checkbox" checked={allOn} onChange={() => onSelect(issues.map(i => i.key), !allOn)} aria-label="Выбрать все задачи"
                 className="align-middle ml-0.5" />
             </th>
-            <th className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">Ключ</th>
+            <th className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap bg-bg-card ${lastPinned ? "" : EDGE}`}
+              style={stick(SELECT_W, 4)} title="Ключ закреплён всегда">Ключ</th>
             {cols.map((c, n) => {
               const over = overCol?.col === c && dragCol && dragCol !== c ? overCol.place : null;
               return (
-                <th key={c} draggable
-                  onDragStart={e => { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c); setDragCol(c); }}
+                <th key={c} draggable={!live}
+                  onDragStart={e => {
+                    if (resizing.current) { e.preventDefault(); return; }
+                    e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c); setDragCol(c);
+                  }}
                   onDragOver={e => {
                     if (!dragCol) return refuse(e);
                     e.preventDefault();
@@ -440,13 +516,14 @@ export default function ListTable({
                   }}
                   onDrop={e => { e.preventDefault(); if (dragCol && dragCol !== c) onMoveColumn(dragCol, c, placeX(e)); endColDrag(); }}
                   onDragEnd={endColDrag}
-                  title="Перетащите заголовок, чтобы поменять порядок колонок"
-                  className={`group/th px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap cursor-grab
-                    active:cursor-grabbing ${dragCol === c ? "opacity-40" : ""}
+                  title="Перетащите заголовок — порядок колонок; край заголовка — ширина"
+                  style={pinned.has(c) ? stick(leftOf(c), 4) : undefined}
+                  className={`group/th relative bg-bg-card ${c === lastPinned ? EDGE : ""} px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap cursor-grab
+                    active:cursor-grabbing overflow-hidden ${dragCol === c ? "opacity-40" : ""}
                     ${over === "before" ? "shadow-[inset_2px_0_0_0_var(--color-primary,#6366f1)]" : ""}
                     ${over === "after" ? "shadow-[inset_-2px_0_0_0_var(--color-primary,#6366f1)]" : ""}`}>
-                  <span className="inline-flex items-center gap-0.5">
-                    <GripVertical className="w-3 h-3 -ml-2 opacity-0 group-hover/th:opacity-60" />
+                  <span className="flex items-center gap-0.5 min-w-0">
+                    <GripVertical className="w-3 h-3 -ml-2 flex-shrink-0 opacity-0 group-hover/th:opacity-60" />
                     <button type="button" onClick={() => clickSort(c)}
                       onKeyDown={e => {
                         // Alt+←/→ — переставить колонку с клавиатуры.
@@ -454,20 +531,60 @@ export default function ListTable({
                         if (e.key === "ArrowLeft" && n > 0) { e.preventDefault(); onMoveColumn(c, cols[n - 1], "before"); }
                         if (e.key === "ArrowRight" && n < cols.length - 1) { e.preventDefault(); onMoveColumn(c, cols[n + 1], "after"); }
                       }}
-                      className="inline-flex items-center gap-1 hover:text-text-main uppercase">
-                      {colLabel(c, list)}
-                      {sort?.col === c && (sort.dir === 1 ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                      className="inline-flex items-center gap-1 hover:text-text-main uppercase min-w-0">
+                      <span className="truncate">{colLabel(c, list)}</span>
+                      {sort?.col === c && (sort.dir === 1 ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />)}
                     </button>
+                    <button type="button" onClick={() => onTogglePin(c)} aria-pressed={pinned.has(c)}
+                      aria-label={pinned.has(c) ? `Открепить колонку ${colLabel(c, list)}` : `Закрепить колонку ${colLabel(c, list)}`}
+                      title={pinned.has(c) ? "Открепить" : "Закрепить: колонка не уедет при прокрутке вбок"}
+                      className={`ml-1 p-0.5 rounded flex-shrink-0 ${pinned.has(c) ? "text-primary" : "text-text-muted opacity-0 group-hover/th:opacity-100 hover:text-text-main"}`}>
+                      {pinned.has(c) ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
+                    </button>
+                    {ownById[c.slice(4)]?.type === "text" && (() => {
+                      const wrap = !!ownById[c.slice(4)].wrap;
+                      return (
+                        <button type="button" onClick={() => onToggleWrap(c.slice(4))} aria-pressed={wrap}
+                          aria-label={wrap ? "Обрезать длинный текст" : "Переносить длинный текст"}
+                          title={wrap ? "Сейчас: перенос, весь текст. Нажмите — обрезать многоточием" : "Сейчас: обрезка многоточием. Нажмите — переносить и показывать всё"}
+                          className={`ml-1 p-0.5 rounded flex-shrink-0 ${wrap ? "text-primary" : "text-text-muted hover:text-text-main"}`}>
+                          {wrap ? <WrapText className="w-3.5 h-3.5" /> : <MoreHorizontal className="w-3.5 h-3.5" />}
+                        </button>
+                      );
+                    })()}
                   </span>
+                  {/* Край для изменения ширины. Двойной щелчок — стандартная ширина. */}
+                  <span role="separator" aria-orientation="vertical" aria-label={`Ширина колонки ${colLabel(c, list)}`}
+                    title="Тяните — ширина колонки; двойной щелчок — по умолчанию"
+                    onMouseDown={e => {
+                      e.preventDefault(); e.stopPropagation();
+                      resizing.current = { col: c, x: e.clientX, w: colW(c) };
+                      setLive({ col: c, w: colW(c) });
+                      document.body.style.cursor = "col-resize";
+                    }}
+                    onDoubleClick={e => { e.stopPropagation(); onResizeColumn(c, null); }}
+                    className={`absolute top-0 right-0 h-full w-2 cursor-col-resize hover:bg-primary/30 ${live?.col === c ? "bg-primary/40" : ""}`} />
                 </th>
               );
             })}
-            <th className="w-8" />
+            <th />
           </tr>
         </thead>
         <tbody>
-          {groups ? groups.map(g => group(g, 0))
-            : sortIssues(issues, sort, ctx).map((i, n, arr) => row(i, 0, "root", [], arr[n - 1]?.key, arr[n + 1]?.key))}
+          {sections
+            ? sections.map(sec => {
+                const path = `f:${sec.name ?? ""}`;
+                return (
+                  <Fragment key={path}>
+                    {folderHeader(sec.name, sec.issues)}
+                    {!collapsed.has(path) && (sec.issues.length
+                      ? content(sec.issues, path, sec.name, 1)
+                      : <tr className="border-t border-border-main"><td colSpan={width} className="py-2 pl-12 text-[11px] text-text-muted/70">
+                          пусто — перетащите сюда задачи</td></tr>)}
+                  </Fragment>
+                );
+              })
+            : content(issues, "root", undefined, 0)}
         </tbody>
       </table>
     </div>

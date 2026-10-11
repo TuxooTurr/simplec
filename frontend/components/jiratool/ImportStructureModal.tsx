@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ChevronRight, Folder, FolderTree, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ChevronRight, Folder, FolderTree, Loader2, Search } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { STRUCTURES, flattenStructure, type StructNode, type StructureDef } from "@/lib/jiraTool";
+import { flattenStructure, type StructNode, type StructureInfo } from "@/lib/jiraTool";
+import { getStructureTree, getStructures } from "@/lib/jiraToolApi";
 
 export interface StructureImport {
-  structure: StructureDef;
+  structure: { id: number; name: string };
   items: { key: string; folder: string; parent?: string }[];
   target: "current" | "new";
 }
@@ -44,7 +45,7 @@ function FolderTree_({ nodes, depth = 0 }: { nodes: StructNode[]; depth?: number
 
 /**
  * Импорт структуры (плагин Structure в Jira): все задачи с папками попадают в список,
- * папка становится колонкой «Папка структуры» и первым уровнем группировки.
+ * папки структуры становятся папками списка.
  */
 export default function ImportStructureModal({ open, listName, onImport, onClose }: {
   open: boolean;
@@ -53,14 +54,27 @@ export default function ImportStructureModal({ open, listName, onImport, onClose
   onClose: () => void;
 }) {
   const [q, setQ] = useState("");
-  const [picked, setPicked] = useState<StructureDef | null>(null);
+  const [all, setAll] = useState<StructureInfo[] | null>(null);
+  const [listErr, setListErr] = useState("");
+  const [picked, setPicked] = useState<StructureInfo | null>(null);
+  const [tree, setTree] = useState<StructNode[] | null>(null);
+  const [treeErr, setTreeErr] = useState("");
   const [target, setTarget] = useState<"current" | "new">("new");
+
+  useEffect(() => {
+    getStructures().then(r => setAll(r.structures)).catch(e => { setAll([]); setListErr((e as Error).message); });
+  }, []);
+
+  const pick = (st: StructureInfo) => {
+    setPicked(st); setTree(null); setTreeErr("");
+    getStructureTree(st.id).then(r => setTree(r.root)).catch(e => setTreeErr((e as Error).message));
+  };
 
   const found = useMemo(() => {
     const s = q.trim().toLowerCase();
-    return STRUCTURES.filter(x => !s || x.name.toLowerCase().includes(s) || String(x.id) === s);
-  }, [q]);
-  const items = picked ? flattenStructure(picked.root) : [];
+    return (all ?? []).filter(x => !s || x.name.toLowerCase().includes(s) || String(x.id) === s);
+  }, [q, all]);
+  const items = tree ? flattenStructure(tree) : [];
 
   return (
     <Modal open={open} onClose={onClose} title="Импорт структуры" size="max-w-3xl">
@@ -74,16 +88,18 @@ export default function ImportStructureModal({ open, listName, onImport, onClose
 
         <div className="grid grid-cols-[1fr_1.2fr] gap-4">
           <ul className="border border-border-main rounded-xl divide-y divide-border-main max-h-80 overflow-y-auto scrollbar-thin">
-            {found.length === 0 && <li className="p-3 text-sm text-text-muted">Структура не найдена.</li>}
+            {all === null && <li className="flex items-center gap-2 p-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю структуры из Jira…</li>}
+            {listErr && <li className="p-3 text-sm text-red-600">{listErr}</li>}
+            {all !== null && !listErr && found.length === 0 && <li className="p-3 text-sm text-text-muted">Структура не найдена.</li>}
             {found.map(st => (
               <li key={st.id}>
-                <button type="button" onClick={() => setPicked(st)} aria-pressed={picked?.id === st.id}
+                <button type="button" onClick={() => pick(st)} aria-pressed={picked?.id === st.id}
                   className={`w-full text-left px-3 py-2.5 transition-colors ${picked?.id === st.id ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
                   <span className="flex items-center gap-2 text-sm font-medium text-text-main">
                     <FolderTree className="w-4 h-4 text-primary" /> {st.name}
                   </span>
                   <span className="block text-[11px] text-text-muted mt-0.5 pl-6">
-                    ID {st.id} · {st.owner} · задач: {flattenStructure(st.root).length}
+                    ID {st.id}{st.owner ? ` · ${st.owner}` : ""}
                   </span>
                 </button>
               </li>
@@ -91,10 +107,14 @@ export default function ImportStructureModal({ open, listName, onImport, onClose
           </ul>
 
           <div className="border border-border-main rounded-xl p-3 max-h-80 overflow-y-auto scrollbar-thin">
-            {picked ? (
+            {picked && treeErr ? (
+              <p className="text-sm text-red-600">Структура не прочиталась: {treeErr}</p>
+            ) : picked && !tree ? (
+              <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Читаю «{picked.name}»…</p>
+            ) : picked && tree ? (
               <>
                 <p className="text-xs font-semibold text-text-muted mb-2">Папки «{picked.name}» · задач: {items.length}</p>
-                <FolderTree_ key={picked.id} nodes={picked.root} />
+                <FolderTree_ key={picked.id} nodes={tree} />
               </>
             ) : (
               <p className="text-sm text-text-muted">Выберите структуру слева — здесь появятся её папки.</p>
@@ -117,11 +137,11 @@ export default function ImportStructureModal({ open, listName, onImport, onClose
         )}
 
         <div className="flex items-center gap-2 pt-1">
-          <p className="text-[11px] text-text-muted min-w-0">Демо: структуры из мок-Jira. Папка станет колонкой и первым уровнем группировки.</p>
+          <p className="text-[11px] text-text-muted min-w-0">Структуры из плагина Structure в Jira. Папки структуры станут папками списка.</p>
           <div className="ml-auto flex gap-2 flex-shrink-0">
             <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
-            <button type="button" disabled={!picked}
-              onClick={() => { if (picked) { onImport({ structure: picked, items, target }); onClose(); } }}
+            <button type="button" disabled={!picked || !items.length}
+              onClick={() => { if (picked) { onImport({ structure: { id: picked.id, name: picked.name }, items, target }); onClose(); } }}
               className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40 whitespace-nowrap">
               Импортировать {items.length || ""}
             </button>

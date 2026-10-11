@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import {
-  saveAlertScript, deleteAlertScript, parseNotebook,
+  saveAlertScript, deleteAlertScript, parseNotebook, reorderAlertScripts,
   saveAlertFolder, deleteAlertFolder,
   kernelAllStatus, kernelAudit,
   type AlertScript, type AlertFolder, type DynamicParam, type NotebookCell,
@@ -1025,28 +1025,49 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
   // образцом из шаблона, поэтому скрипт с пустым параметром просто не поедет.
   const missing = selected ? missingParams(selected.dynamic_params, values) : [];
 
-  // ── Ручной порядок скриптов в колонке (drag-and-drop, хранится локально) ──
-  const [scriptOrder, setScriptOrder] = useState<string[]>([]);
+  // ── Ручной порядок скриптов (перетаскивание) ──
+  // Порядок — это порядок в общем файле скриптов на сервере: одинаковый у всей
+  // команды и на любой машине. Раньше он жил в localStorage браузера.
+  // Перетаскивать можно только внутри своей папки; менять — только суперюзеру.
   const [scriptDragId, setScriptDragId] = useState<string | null>(null);
+  const [dropAt, setDropAt] = useState<{ id: string; place: "before" | "after" } | null>(null);
+  const sortByPref = (list: typeof scripts) => list;          // порядок уже с сервера
+  const folderOf = (id: string) => scripts.find(x => x.id === id)?.folder_id ?? null;
+
+  /** Переставить drag перед/после target в пределах папки и сохранить на сервере. */
+  const reorderScript = async (drag: string, target: string, place: "before" | "after") => {
+    if (drag === target || folderOf(drag) !== folderOf(target)) return;
+    const folder = folderOf(drag);
+    const inFolder = scripts.filter(s => (s.folder_id ?? null) === folder).map(s => s.id).filter(id => id !== drag);
+    inFolder.splice(inFolder.indexOf(target) + (place === "after" ? 1 : 0), 0, drag);
+    // Тот же алгоритм, что на сервере: скрипты папки встают по порядку на свои же места.
+    const slots = scripts.map((s, i) => ((s.folder_id ?? null) === folder ? i : -1)).filter(i => i >= 0);
+    const byId = new Map(scripts.map(s => [s.id, s]));
+    const prev = scripts;
+    const next = [...scripts];
+    slots.forEach((slot, k) => { next[slot] = byId.get(inFolder[k])!; });
+    setScripts(next);
+    try { await reorderAlertScripts(inFolder); }
+    catch (e) { setScripts(prev); alert(`Порядок не сохранился: ${e}`); }
+  };
+
+  // Порядок, настроенный раньше в этом браузере, переносим на сервер один раз.
   useEffect(() => {
-    try { setScriptOrder(JSON.parse(localStorage.getItem("st_alert_script_order") ?? "[]")); } catch { /* ignore */ }
-  }, []);
-  const sortByPref = (list: typeof scripts) => {
-    const pos = (id: string) => { const i = scriptOrder.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i; };
-    return [...list].sort((a, b) => pos(a.id) - pos(b.id));
-  };
-  const reorderScript = (drag: string, target: string) => {
-    if (drag === target) return;
-    const ids = sortByPref(scripts).map(s => s.id);
-    const from = ids.indexOf(drag);
-    if (from < 0) return;
-    ids.splice(from, 1);
-    const to = ids.indexOf(target);
-    if (to < 0) return;
-    ids.splice(to, 0, drag);
-    setScriptOrder(ids);
-    localStorage.setItem("st_alert_script_order", JSON.stringify(ids));
-  };
+    if (!isSuperuser || !scripts.length) return;
+    let local: string[] = [];
+    try { local = JSON.parse(localStorage.getItem("st_alert_script_order") ?? "[]"); } catch { /* ignore */ }
+    if (!local.length) return;
+    const pos = (id: string) => { const i = local.indexOf(id); return i === -1 ? Number.MAX_SAFE_INTEGER : i; };
+    const ordered = [...scripts].sort((a, b) => pos(a.id) - pos(b.id)).map(s => s.id);
+    reorderAlertScripts(ordered)
+      .then(() => {
+        const byId = new Map(scripts.map(s => [s.id, s]));
+        setScripts(ordered.map(id => byId.get(id)!));
+        try { localStorage.removeItem("st_alert_script_order"); } catch { /* ignore */ }
+      })
+      .catch(() => { /* попробуем при следующем открытии */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperuser, scripts.length]);
 
   useEffect(() => {
     if (!isSuperuser) return;
@@ -1090,12 +1111,12 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
         visible_to_monitoring: s.visible_to_monitoring,
         folder_id:             s.folder_id ?? null,
       });
-      setScripts(prev => [...prev, copy]);
-      const ids = sortByPref(scripts).map(x => x.id);
-      const at = ids.indexOf(s.id);
-      ids.splice(at < 0 ? ids.length : at + 1, 0, copy.id);
-      setScriptOrder(ids);
-      localStorage.setItem("st_alert_script_order", JSON.stringify(ids));
+      // Копия встаёт следующей за оригиналом — и в списке, и в общем порядке на сервере.
+      const at = scripts.findIndex(x => x.id === s.id);
+      setScripts(prev => { const n = [...prev]; n.splice(at < 0 ? n.length : at + 1, 0, copy); return n; });
+      const inFolder = scripts.filter(x => (x.folder_id ?? null) === (s.folder_id ?? null)).map(x => x.id);
+      inFolder.splice(inFolder.indexOf(s.id) + 1, 0, copy.id);
+      reorderAlertScripts(inFolder).catch(() => { /* не критично: копия просто окажется в конце */ });
       setSelectedId(copy.id);
     } catch (e) { alert(String(e)); }
   };
@@ -1148,16 +1169,49 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
 
     return (
       <div key={s.id} onClick={() => handleSelectScript(s)}
-        draggable
-        onDragStart={e => { e.stopPropagation(); setScriptDragId(s.id); }}
-        onDragEnd={() => setScriptDragId(null)}
-        onDragOver={e => e.preventDefault()}
-        onDrop={e => { e.preventDefault(); e.stopPropagation(); if (scriptDragId) reorderScript(scriptDragId, s.id); }}
-        className={`group flex items-start ${compact ? "gap-2 px-2.5 py-1.5" : "gap-2.5 px-3 py-2"} rounded-lg cursor-grab active:cursor-grabbing transition-all ${
+        draggable={isSuperuser}
+        tabIndex={0}
+        title={isSuperuser ? "Перетащите, чтобы поменять порядок в папке (или Alt+↑/↓)" : undefined}
+        onKeyDown={e => {
+          if (e.key === "Enter") { handleSelectScript(s); return; }
+          if (!isSuperuser || !e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+          e.preventDefault();
+          const same = scripts.filter(x => (x.folder_id ?? null) === (s.folder_id ?? null));
+          const i = same.findIndex(x => x.id === s.id);
+          const nb = same[e.key === "ArrowUp" ? i - 1 : i + 1];
+          if (nb) reorderScript(s.id, nb.id, e.key === "ArrowUp" ? "before" : "after");
+        }}
+        onDragStart={e => { e.stopPropagation(); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", s.id); setScriptDragId(s.id); }}
+        onDragEnd={() => { setScriptDragId(null); setDropAt(null); }}
+        onDragOver={e => {
+          // Только внутри своей папки; иначе гасим, чтобы раскладка не показывала «можно».
+          e.stopPropagation();
+          if (!scriptDragId || scriptDragId === s.id || folderOf(scriptDragId) !== (s.folder_id ?? null)) {
+            e.dataTransfer.dropEffect = "none";
+            return;
+          }
+          e.preventDefault();
+          const r = e.currentTarget.getBoundingClientRect();
+          const place = e.clientY < r.top + r.height / 2 ? "before" : "after";
+          if (dropAt?.id !== s.id || dropAt.place !== place) setDropAt({ id: s.id, place });
+        }}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation();
+          if (scriptDragId && dropAt?.id === s.id) reorderScript(scriptDragId, s.id, dropAt.place);
+          setScriptDragId(null); setDropAt(null);
+        }}
+        className={`group relative flex items-start ${compact ? "gap-2 px-2.5 py-1.5" : "gap-2.5 px-3 py-2"} rounded-lg transition-all
+          focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
+          ${isSuperuser ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${
+          dropAt?.id === s.id && dropAt.place === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""} ${
+          dropAt?.id === s.id && dropAt.place === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""} ${
           scriptDragId === s.id ? "opacity-50" : ""} ${
           selectedId === s.id ? "bg-[var(--color-active-bg)] border border-primary/30 shadow-sm"
           : isActive ? "bg-green-50/50 border border-green-200/50 hover:bg-green-50"
           : "hover:bg-bg-subtle border border-transparent"}`}>
+        {isSuperuser && (
+          <GripVertical aria-hidden className={`${compact ? "w-3 h-3" : "w-3.5 h-3.5"} -ml-1.5 -mr-1 mt-0.5 flex-shrink-0 text-text-muted/50 opacity-0 group-hover:opacity-100`} />
+        )}
         <div className="relative flex-shrink-0 mt-0.5">
           <Bell className={`${compact ? "w-3.5 h-3.5" : "w-4 h-4"} ${selectedId === s.id ? "text-primary" : isActive ? "text-green-600" : "text-text-muted"}`} />
           {(isActive || kInfo) && <span className={`absolute -top-0.5 -right-0.5 ${compact ? "w-2 h-2 border" : "w-2.5 h-2.5 border-2"} rounded-full border-white ${dotColor}`} />}

@@ -13,8 +13,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from cryptography.fernet import Fernet, InvalidToken
-
 _KEY_FILE = Path(os.environ.get("SIMPLETEST_SECRET_KEY_FILE",
                                 str(Path.home() / ".simpletest" / "secret.key"))).expanduser()
 
@@ -23,7 +21,14 @@ class SecretError(Exception):
     pass
 
 
-def _fernet() -> Fernet:
+def _fernet():
+    # Импорт здесь, а не в начале модуля: без cryptography бэкенд должен стартовать,
+    # а ошибка — появиться только при сохранении пароля коннектора и с понятным текстом.
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError as e:
+        raise SecretError("Не установлен пакет cryptography — пароль коннектора не зашифровать. "
+                          "Выполните «pip install -r requirements.txt» и перезапустите бэкенд.") from e
     key = os.environ.get("SIMPLETEST_SECRET_KEY", "").strip()
     if not key:
         if not _KEY_FILE.exists():
@@ -39,8 +44,10 @@ def encrypt(plain: str) -> str:
 
 
 def decrypt(token: str) -> str:
+    f = _fernet()
+    from cryptography.fernet import InvalidToken
     try:
-        return _fernet().decrypt(token.encode("ascii")).decode("utf-8")
+        return f.decrypt(token.encode("ascii")).decode("utf-8")
     except (InvalidToken, ValueError) as e:
         raise SecretError("Сохранённый пароль не расшифровывается (сменился ключ или машина) — "
                           "введите пароль в настройках коннектора заново.") from e

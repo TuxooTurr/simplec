@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, Columns3, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, Columns3, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 
@@ -19,7 +19,7 @@ import DefectsModal from "@/components/jiratool/DefectsModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFECTS_COL, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState,
@@ -76,6 +76,10 @@ export default function JiraToolSection() {
   const [panel, setPanel] = useState<Panel>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
+  /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
+  const [newTpl, setNewTpl] = useState("");
+  const [tplName, setTplName] = useState<string | null>(null);
+  const [tplNote, setTplNote] = useState("");
   const [askDeleteList, setAskDeleteList] = useState<string | null>(null);
 
   /* ── Jira: подключение, справочники и задачи ── */
@@ -270,14 +274,27 @@ export default function JiraToolSection() {
   const pending = list ? list.keys.filter(k => !byKey.has(k) && !missing.has(k)).length : 0;
 
   /* ── Действия ── */
-  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setAskDelete(false); stopSelecting(); setRenaming(null); };
+  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null); };
 
   const createList = () => {
     const name = (newList ?? "").trim();
     if (!name) return;
-    const l = emptyList(name, list?.project);
+    const tpl = state?.templates.find(t => t.id === newTpl);
+    const l = tpl ? listFromTemplate(name, list?.project ?? DEFAULT_PROJECT, tpl) : emptyList(name, list?.project);
     update(s => ({ ...s, lists: [...s.lists, l] }));
-    openList(l.id); setNewList(null);
+    openList(l.id); setNewList(null); setNewTpl("");
+  };
+
+  /** Структура текущего списка → шаблон. Шаблон с тем же названием перезаписывается. */
+  const saveTemplate = () => {
+    const name = (tplName ?? "").trim();
+    if (!list || !name) return;
+    const tpl = templateOf(list, name);
+    const replaced = state?.templates.some(t => t.name === name);
+    update(s => ({ ...s, templates: [...s.templates.filter(t => t.name !== name), tpl] }));
+    setTplName(null);
+    setTplNote(replaced ? `Шаблон «${name}» обновлён` : `Шаблон «${name}» сохранён`);
+    setTimeout(() => setTplNote(""), 3000);
   };
 
   /** Поля задачи из формы — пока Jira не вернула свои (или для черновика). */
@@ -530,10 +547,44 @@ export default function JiraToolSection() {
                   <Plus className="w-4 h-4" /> Новый список
                 </button>
               ) : (
-                <input autoFocus value={newList} onChange={e => setNewList(e.target.value)} onBlur={() => !newList.trim() && setNewList(null)}
-                  onKeyDown={e => { if (e.key === "Enter") createList(); if (e.key === "Escape") setNewList(null); }}
-                  placeholder="Название, Enter" aria-label="Название нового списка"
-                  className="mx-1 text-sm border border-primary/40 rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                <div className="mx-1 flex flex-col gap-1.5 py-1">
+                  <input autoFocus value={newList} onChange={e => setNewList(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") createList(); if (e.key === "Escape") { setNewList(null); setNewTpl(""); } }}
+                    placeholder="Название, Enter" aria-label="Название нового списка"
+                    className="text-sm border border-primary/40 rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  {state.templates.length > 0 && (
+                    <select value={newTpl} onChange={e => setNewTpl(e.target.value)} aria-label="Шаблон нового списка"
+                      className="text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main">
+                      <option value="">Без шаблона — пустой список</option>
+                      {state.templates.map(t => <option key={t.id} value={t.id}>Шаблон: {t.name}</option>)}
+                    </select>
+                  )}
+                  <div className="flex gap-1.5">
+                    <button type="button" onClick={createList} disabled={!newList.trim()}
+                      className="px-2.5 py-1 rounded-md bg-primary text-white text-xs font-semibold disabled:opacity-40">Создать</button>
+                    <button type="button" onClick={() => { setNewList(null); setNewTpl(""); }}
+                      className="px-2.5 py-1 rounded-md border border-border-main text-xs text-text-muted">Отмена</button>
+                  </div>
+                </div>
+              )}
+              {state.templates.length > 0 && (
+                <div className="border-t border-border-main mt-1 pt-1.5 px-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1">Шаблоны</p>
+                  <div className="flex flex-col gap-0.5">
+                    {state.templates.map(t => (
+                      <span key={t.id} className="group/tp flex items-center gap-1.5 text-xs text-text-main py-0.5"
+                        title={`Колонок: ${t.columns.length} · своих полей: ${t.ownFields.length} · папок: ${t.folderList.length}`}>
+                        <LayoutTemplate className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+                        <span className="truncate flex-1">{t.name}</span>
+                        <button type="button" onClick={() => update(s => ({ ...s, templates: s.templates.filter(x => x.id !== t.id) }))}
+                          aria-label={`Удалить шаблон ${t.name}`} title="Удалить шаблон (списки, созданные по нему, не изменятся)"
+                          className="hidden group-hover/tp:inline-flex focus-visible:inline-flex p-0.5 rounded text-text-muted hover:text-red-500">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -549,11 +600,36 @@ export default function JiraToolSection() {
                   ) : (
                     <p className="min-w-0 flex-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">Настройка списка</p>
                   )}
+                  <button type="button" onClick={() => setTplName(t => (t === null ? list.name : null))} aria-label="Сохранить как шаблон"
+                    aria-pressed={tplName !== null} title="Сохранить как шаблон: колонки, свои поля и папки (без задач)"
+                    className={`p-1 rounded-md hover:text-primary ${tplName !== null ? "text-primary" : "text-text-muted"}`}>
+                    <LayoutTemplate className="w-3.5 h-3.5" />
+                  </button>
                   <button type="button" onClick={() => setRenaming(list.name)} aria-label="Переименовать список" title="Переименовать список"
                     className="p-1 rounded-md text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => setAskDelete(true)} aria-label="Удалить список" title="Удалить список"
                     className="p-1 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
+                {tplName !== null && (
+                  <div className="flex flex-col gap-1.5 -mt-1 p-2 rounded-lg bg-bg-subtle">
+                    <p className="text-[11px] text-text-muted">
+                      В шаблон попадут колонки по порядку ({list.columns.length}), свои поля ({list.ownFields.length}) и папки
+                      ({list.folderList?.length ?? 0}). Задачи и значения — нет.
+                    </p>
+                    <div className="flex gap-1.5">
+                      <input autoFocus value={tplName} onChange={e => setTplName(e.target.value)} maxLength={60}
+                        onKeyDown={e => { if (e.key === "Enter") saveTemplate(); if (e.key === "Escape") setTplName(null); }}
+                        placeholder="Название шаблона" aria-label="Название шаблона"
+                        className="min-w-0 flex-1 text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      <button type="button" onClick={saveTemplate} disabled={!tplName.trim()}
+                        className="px-2.5 rounded-md bg-primary text-white text-xs font-semibold disabled:opacity-40">Сохранить</button>
+                    </div>
+                    {state.templates.some(t => t.name === tplName.trim()) && (
+                      <p className="text-[11px] text-amber-700 dark:text-amber-300">Шаблон с таким названием есть — он будет заменён.</p>
+                    )}
+                  </div>
+                )}
+                {tplNote && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 -mt-1" role="status">{tplNote}</p>}
                 {askDelete && (
                   <div className="flex items-center gap-1.5 text-xs -mt-1">
                     <span className="text-text-muted flex-1">Удалить список? Задачи в Jira останутся.</span>

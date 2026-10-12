@@ -294,6 +294,43 @@ export interface ToolState {
   roleNames: Record<string, string[]>;
   /** Свои названия и цвета статусов (st); пусто — по умолчанию. */
   stageStyles: StageStyles;
+  /** Шаблоны списков: только структура — порядок колонок, свои поля и папки. */
+  templates: ListTemplate[];
+}
+
+/**
+ * Шаблон списка — структура без данных: колонки по порядку, свои поля (с вариантами, тегами
+ * и цветами) и папки. Задачи, значения полей, участники, трудозатраты, группировка и проект
+ * в шаблон не входят.
+ */
+export interface ListTemplate {
+  id: string;
+  name: string;
+  columns: ColRef[];
+  ownFields: OwnField[];
+  folderList: string[];
+  createdAt: string;
+}
+
+export function templateOf(list: TaskList, name: string): ListTemplate {
+  return {
+    id: newId("tpl"), name, createdAt: new Date().toISOString(),
+    columns: [...list.columns],
+    ownFields: list.ownFields.map(f => ({ ...f, options: [...f.options], colors: f.colors ? { ...f.colors } : undefined })),
+    folderList: [...(list.folderList ?? [])],
+  };
+}
+
+/** Новый пустой список по шаблону: структура из шаблона, задач нет. */
+export function listFromTemplate(name: string, project: string, tpl: ListTemplate): TaskList {
+  const ownIds = new Set(tpl.ownFields.map(f => f.id));
+  return {
+    ...emptyList(name, project),
+    // Колонка своего поля, которого в шаблоне нет, — мусор; колонка папки без папок не нужна.
+    columns: tpl.columns.filter(c => (!c.startsWith("own:") || ownIds.has(c.slice(4))) && (c !== FOLDER_COL || tpl.folderList.length > 0)),
+    ownFields: tpl.ownFields.map(f => ({ ...f, options: [...f.options], colors: f.colors ? { ...f.colors } : undefined })),
+    folderList: tpl.folderList.length ? [...tpl.folderList] : undefined,
+  };
 }
 
 export const DEFAULT_COLUMNS: ColRef[] = ["jira:summary", "jira:issuetype", "jira:status", STAGE_COL, "jira:priority", PARTICIPANT_COL];
@@ -317,7 +354,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {} };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, templates: [] };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -342,6 +379,7 @@ export function loadState(): ToolState {
           mapping: s.mapping ?? {},
           roleNames: s.roleNames ?? {},
           stageStyles: s.stageStyles ?? {},
+          templates: s.templates ?? [],
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);

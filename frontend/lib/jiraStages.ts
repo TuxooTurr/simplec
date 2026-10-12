@@ -97,6 +97,12 @@ export type StageInfo =
   | { kind: "no-stories" }
   | { kind: "epic"; stage: Stage; total: number; behind: number; unmapped: number };
 
+/** Задача на этапе «Готово к релизу» или дальше (готово, исключено); у заблокированной — по этапу без блокировки. */
+export function isReleaseOrLater(info: StageInfo): boolean {
+  const base = info.kind === "blocked" ? info.base : info;
+  return (base.kind === "stage" || base.kind === "epic") && ["release", "done", "excluded"].includes(base.stage);
+}
+
 export function stageText(info: StageInfo): string {
   switch (info.kind) {
     case "blocked": return STAGE_LABEL.blocked;

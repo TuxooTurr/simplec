@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Layers, Plus, X, Zap } from "lucide-react";
+import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Globe, Layers, Pencil, Plus, X, Zap } from "lucide-react";
 import {
-  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
-  type Issue, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
+  type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
 import { STAGE_LABEL, stageStyle, stageText, textOn, type StageInfo } from "@/lib/jiraStages";
 
@@ -198,6 +198,49 @@ function MultiCell({ field, value, onChange }: { field: OwnField; value: string[
   );
 }
 
+/**
+ * Поле «Ссылка»: что бы ни вставили, в ячейке — значок глобуса, по клику ссылка открывается в новой вкладке
+ * (адрес — в подсказке). Карандаш рядом — изменить; пусто — «+ ссылка». Не похожее на адрес — серый глобус.
+ */
+function LinkCell({ value, label, onChange }: { value: string; label: string; onChange: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const href = linkHref(value);
+  const save = () => { setEditing(false); if (draft.trim() !== value) onChange(draft.trim()); };
+
+  if (editing) {
+    return (
+      <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} aria-label={`${label}: ссылка`}
+        onKeyDown={e => { if (e.key === "Enter") save(); if (e.key === "Escape") { setDraft(value); setEditing(false); } }}
+        placeholder="Вставьте ссылку"
+        className="w-full text-sm px-1 py-0.5 rounded border border-primary/40 bg-[var(--color-input-bg)] text-text-main focus:outline-none" />
+    );
+  }
+  if (!value) {
+    return (
+      <button type="button" onClick={() => setEditing(true)} aria-label={`${label}: добавить ссылку`}
+        className="text-xs text-text-muted/60 hover:text-primary px-1 py-0.5">+ ссылка</button>
+    );
+  }
+  return (
+    <span className="group/ln inline-flex items-center gap-1">
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" title={href} aria-label={`${label}: открыть ${href}`}
+          className="inline-flex p-1 rounded-md text-primary hover:bg-primary/10">
+          <Globe className="w-4 h-4" />
+        </a>
+      ) : (
+        <span title={`Не похоже на ссылку: ${value}`} className="inline-flex p-1 text-text-muted/50"><Globe className="w-4 h-4" /></span>
+      )}
+      <button type="button" onClick={() => setEditing(true)} aria-label={`${label}: изменить ссылку`} title="Изменить"
+        className="p-0.5 rounded text-text-muted opacity-0 group-hover/ln:opacity-100 focus-visible:opacity-100 hover:text-text-main">
+        <Pencil className="w-3 h-3" />
+      </button>
+    </span>
+  );
+}
+
 /** Цветной тег варианта своего поля. */
 export function Tag({ field, value }: { field: OwnField; value: string }) {
   const c = tagColor(field, value);
@@ -278,6 +321,7 @@ export function OwnCell({ field, value, onChange }: { field: OwnField; value: st
       </select>
     );
     case "multiselect": return <MultiCell field={field} value={Array.isArray(value) ? value : []} onChange={onChange} />;
+    case "link": return <LinkCell value={s} label={field.name} onChange={onChange} />;
     default: return <TextCell value={s} wrap={field.wrap} onChange={onChange} />;
   }
 }
@@ -409,6 +453,97 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
         </div>
       )}
     </span>
+  );
+}
+
+/* ── Требования (st): документы из раздела «Данные» ─────────────────────── */
+
+export interface ReqOption { id: string; name: string; feature?: string }
+
+/**
+ * Требования задачи: названия документов; клик — список с поиском и галочками (поверх таблицы,
+ * fixed — внутри ячейки его обрезала бы прокрутка; при прокрутке закрывается).
+ */
+export function ReqCell({ value, options, onChange }: { value: string[]; options: ReqOption[]; onChange: (ids: string[]) => void }) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [q, setQ] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pos) return;
+    const close = (e: Event) => {
+      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
+      if (e.type === "scroll" && box.current?.contains(e.target as Node)) return;   // прокрутка самого списка
+      setPos(null);
+    };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
+  }, [pos]);
+  const byId = new Map(options.map(o => [o.id, o]));
+  const s = q.trim().toLowerCase();
+  const shown = options.filter(o => !s || o.name.toLowerCase().includes(s) || (o.feature ?? "").toLowerCase().includes(s));
+  return (
+    <>
+      <button ref={btn} type="button" aria-expanded={!!pos} aria-haspopup="listbox" aria-label="Требования (st)"
+        onClick={() => {
+          if (pos) { setPos(null); return; }
+          const r = btn.current?.getBoundingClientRect();
+          if (r) { setQ(""); setPos({ left: r.left, top: r.bottom + 4 }); }
+        }}
+        className="flex flex-wrap gap-1 min-h-[24px] w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main">
+        {value.length ? value.map(id => (
+          <span key={id} className="max-w-full truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px]"
+            title={byId.get(id)?.name ?? "Документ удалён из «Данных»"}>
+            {byId.get(id)?.name ?? "удалён"}
+          </span>
+        )) : <span className="text-text-muted/50 text-sm">—</span>}
+      </button>
+      {pos && (
+        <div ref={box} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+          className="w-72 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Найти требование" aria-label="Найти требование"
+            onKeyDown={e => { if (e.key === "Escape") setPos(null); }}
+            className="w-full mb-1 text-sm px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+          <div role="listbox" aria-multiselectable aria-label="Требования" className="max-h-60 overflow-y-auto scrollbar-thin">
+            {options.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">В разделе «Данные» пока нет требований.</p>}
+            {options.length > 0 && shown.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">Ничего не нашлось.</p>}
+            {shown.map(o => {
+              const on = value.includes(o.id);
+              return (
+                <button key={o.id} type="button" role="option" aria-selected={on}
+                  onClick={() => onChange(on ? value.filter(x => x !== o.id) : [...value, o.id])}
+                  className={`w-full flex items-start gap-2 px-2 py-1 rounded text-left hover:bg-bg-subtle ${on ? "bg-primary/10" : ""}`}>
+                  <input type="checkbox" readOnly checked={on} tabIndex={-1} aria-hidden className="mt-0.5" />
+                  <span className="min-w-0">
+                    <span className="block text-sm text-text-main truncate">{o.name}</span>
+                    {o.feature && <span className="block text-[10px] text-text-muted truncate">{o.feature}</span>}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ── Нагрузка (st): учитывать ли задачу ─────────────────────────────────── */
+
+/**
+ * Галочка «учитывать в нагрузке». Снята вручную — «вручную»; задача в «Готово к релизу» и дальше
+ * не учитывается сама (правило списка) — галочка недоступна, подсказка объясняет почему.
+ */
+export function LoadCell({ skip, stage, onChange }: { skip: LoadSkip; stage: string; onChange: (skip: boolean) => void }) {
+  const auto = skip === "stage";
+  return (
+    <label className={`inline-flex items-center gap-1.5 text-xs whitespace-nowrap ${auto ? "cursor-not-allowed" : "cursor-pointer"}`}
+      title={auto ? `Статус (st) «${stage}» — в нагрузке не учитывается автоматически. Правило выключается в блоке «Нагрузка по списку».`
+        : skip === "manual" ? "Исключена из нагрузки вручную — отметьте, чтобы снова учитывать" : "Учитывается в нагрузке — снимите, чтобы исключить"}>
+      <input type="checkbox" checked={!skip} disabled={auto} onChange={e => onChange(!e.target.checked)} />
+      <span className={skip ? "text-text-muted" : "text-text-main"}>{auto ? "нет · по статусу" : skip ? "нет · вручную" : "да"}</span>
+    </label>
   );
 }
 

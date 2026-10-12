@@ -15,7 +15,11 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
   if (!res.ok) {
     const text = await res.text();
     let msg = text;
-    try { msg = (JSON.parse(text) as { detail?: string }).detail ?? text; } catch { /* keep */ }
+    try {
+      // detail бывает строкой или объектом {message} (ошибки LLM) — иначе в тексте было бы «[object Object]».
+      const d = (JSON.parse(text) as { detail?: string | { message?: string } }).detail;
+      msg = typeof d === "string" ? d : d?.message ?? text;
+    } catch { /* keep */ }
     throw new Error(msg);
   }
   return res.json() as Promise<T>;

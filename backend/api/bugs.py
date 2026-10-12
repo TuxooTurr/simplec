@@ -11,6 +11,7 @@ import asyncio
 import re
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from pydantic import BaseModel, Field
 from backend.schemas import BugFormatResponse
 
 router = APIRouter()
@@ -259,6 +260,77 @@ async def format_task(
         from agents.llm_client import LLMClient
         is_llm, friendly = LLMClient.classify_error(e)
         raise HTTPException(status_code=503 if is_llm else 500, detail={"message": friendly, "llm_error": is_llm})
+
+
+# ── Чек-лист фичи по требованиям (Jira tool → «Чек-лист») ────────────────────
+
+# Требования бывают длинными; контекст режем, чтобы запрос влез в окно модели.
+_CHECKLIST_CONTEXT_LIMIT = 12000
+_CHECK_LINE_RE = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s+(.+?)\s*$")
+
+
+class ChecklistBody(BaseModel):
+    key: str = Field("", max_length=40)
+    summary: str = Field(..., min_length=1, max_length=500)
+    requirement_ids: List[str] = Field(default_factory=list, max_length=20)
+    provider: str = Field(..., min_length=1)
+
+
+def parse_checks(text: str) -> list[str]:
+    """Ответ модели → пункты проверок: нумерованные или маркированные строки, без пустых и повторов."""
+    out: list[str] = []
+    for line in text.splitlines():
+        m = _CHECK_LINE_RE.match(line)
+        # Жирный и курсив из Markdown модели убираем: в чате у Сберчата своя разметка (*жирный*).
+        item = re.sub(r"\*\*|__", "", m.group(1) if m else "").strip().strip("*_ ")
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def _checklist_sync(summary: str, requirements_context: str, provider: str) -> str:
+    from agents.llm_client import LLMClient, Message
+
+    llm = LLMClient(provider=provider)
+    prompt = f"""Ты — опытный QA-лид. По требованиям составь критически важные базовые проверки фичи.
+
+ФИЧА: {summary}
+
+═══ ТРЕБОВАНИЯ (единственный источник; не выдумывай того, чего в них нет) ═══
+{requirements_context}
+
+ПРАВИЛА:
+1. Только самое важное: 3–8 проверок, без которых фичу нельзя считать рабочей.
+2. Язык бизнес-пользователя, без технических терминов, API, SQL и кода — проверку должен провести
+   младший специалист сопровождения, впервые видящий фичу.
+3. Каждая проверка — одна строка: что сделать → что должно получиться.
+   Пример: «Откройте карточку инцидента и нажмите „Взять в работу“ — статус сменится на „В работе“».
+4. Ответ — только нумерованный список «1. …», без заголовков, вступлений и выводов."""
+
+    response = llm.chat([Message(role="user", content=prompt)], temperature=0.2, max_tokens=1500)
+    return response.content.strip()
+
+
+@router.post("/api/tasks/checklist")
+async def task_checklist(body: ChecklistBody) -> dict:
+    """Критически важные базовые проверки фичи по её требованиям из раздела «Данные»."""
+    from db.requirements_store import RequirementsStore
+
+    reqs = [RequirementsStore.get_requirement(rid) for rid in body.requirement_ids]
+    blocks = [f"### {r['name']}\n{r['text']}" for r in reqs if r and (r.get("text") or "").strip()]
+    if not blocks:
+        raise HTTPException(status_code=400, detail={"message": "У фичи нет требований с текстом", "llm_error": False})
+    context = "\n\n".join(blocks)[:_CHECKLIST_CONTEXT_LIMIT]
+    try:
+        text = await asyncio.to_thread(_checklist_sync, body.summary, context, body.provider.strip())
+    except Exception as e:
+        from agents.llm_client import LLMClient
+        is_llm, friendly = LLMClient.classify_error(e)
+        raise HTTPException(status_code=503 if is_llm else 500, detail={"message": friendly, "llm_error": is_llm})
+    checks = parse_checks(text)
+    if not checks:
+        raise HTTPException(status_code=502, detail={"message": "Модель не вернула список проверок", "llm_error": True})
+    return {"key": body.key, "checks": checks}
 
 
 @router.post("/api/bugs/format", response_model=BugFormatResponse)

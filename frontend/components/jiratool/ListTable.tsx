@@ -4,10 +4,12 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  categoryOf, groupIssues, isRoleCol, isWritableGroupRef, orderIndex,
+  LOAD_COL, REQ_COL, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
 } from "@/lib/jiraTool";
-import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, PlanCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
+import { stageText } from "@/lib/jiraStages";
+import type { ReqOption } from "./ListCells";
+import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
 export type Place = "before" | "after";
@@ -42,9 +44,11 @@ export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
   if (ref === PLAN_COL || ref === FACT_COL) return 140;
   if (ref === START_COL || ref === END_COL) return 200;
   if (isRoleCol(ref)) return 170;
+  if (ref === LOAD_COL) return 150;
+  if (ref === REQ_COL) return 220;
   if (ref.startsWith("own:")) {
     const t = ctx.list.ownFields.find(f => f.id === ref.slice(4))?.type;
-    return t === "datetime" ? 200 : t === "date" ? 150 : t === "multiselect" ? 190 : 170;
+    return t === "link" ? 90 : t === "datetime" ? 200 : t === "date" ? 150 : t === "multiselect" ? 190 : 170;
   }
   const kind = FIELD_BY_ID[ref.slice(5)]?.kind;
   if (kind === "longtext") return 260;
@@ -64,7 +68,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -109,6 +113,12 @@ export default function ListTable({
   roleNames: Record<string, string[]>;
   onRole: (key: string, fieldId: string, patch: { name?: string; state?: "todo" | "doing" | "done" }) => void;
   onRoleNames: (fieldId: string, names: string[]) => void;
+  /** Исключить задачу из нагрузки (true) или вернуть (false). */
+  onNoLoad: (key: string, skip: boolean) => void;
+  /** Требования по задачам (ключ → id документов «Данных») и все документы для выбора. */
+  reqLinks: Record<string, string[]>;
+  reqOptions: ReqOption[];
+  onReqs: (key: string, ids: string[]) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const { list, participants } = ctx;
@@ -180,7 +190,22 @@ export default function ListTable({
      записываемые поля SimpleTest (участник, свои поля): у задачи меняется значение.
      При сортировке по колонке ручной порядок не виден — перетаскивание строк выключено. */
   const rowsMovable = !sort;
-  const [armed, setArmed] = useState<string | null>(null);
+  /**
+   * Строку тянут только за ручку ⋮⋮ (иначе нельзя выделить текст в ячейках). Строка становится
+   * перетаскиваемой прямо в обработчике нажатия на ручку — атрибутом в DOM, без перерисовки React:
+   * браузер решает, что тянуть, по нажатию, и ждать перерисовки нельзя.
+   */
+  const armedRef = useRef<{ id: string; tr: HTMLTableRowElement } | null>(null);
+  const arm = (id: string, el: Element) => {
+    const tr = el.closest("tr");
+    if (!tr) return;
+    tr.setAttribute("draggable", "true");
+    armedRef.current = { id, tr };
+  };
+  const disarm = () => {
+    armedRef.current?.tr.removeAttribute("draggable");
+    armedRef.current = null;
+  };
   const [dragRow, setDragRow] = useState<{ key: string; path: string } | null>(null);
   // То же в ref: dragover приходит раньше, чем React успевает обновить состояние.
   const dragRef = useRef<{ key: string; path: string; levels: GroupLevel[]; folder: FolderKey } | null>(null);
@@ -231,7 +256,7 @@ export default function ListTable({
   };
   const endRowDrag = () => {
     dragRef.current = null; dragFolderRef.current = null;
-    setDragRow(null); setOverRow(null); setOverGroup(null); setOverFolder(null); setArmed(null);
+    setDragRow(null); setOverRow(null); setOverGroup(null); setOverFolder(null); disarm();
   };
   /*
    * Автопрокрутка вбок при переносе колонки: подвели заголовок к краю видимой области —
@@ -287,11 +312,14 @@ export default function ListTable({
     const over = overRow?.key === issue.key && overRow.path === path && dragRow && !(dragRow.key === issue.key && dragRow.path === path)
       ? overRow.place : null;
     return (
-      <tr key={id} draggable={armed === id}
+      <tr key={id}
         onDragStart={e => {
+          if (dragFolderRef.current || dragCol) return;            // тянут папку или колонку — не строку
+          if (armedRef.current?.id !== id) { e.preventDefault(); return; }
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", issue.key);
           dragRef.current = { key: issue.key, path, levels, folder };
-          setDragRow({ key: issue.key, path });
+          // Подсветку — после начала переноса: Chrome отменяет перенос, если в dragstart меняется страница.
+          setTimeout(() => { if (dragRef.current?.key === issue.key) setDragRow({ key: issue.key, path }); }, 0);
         }}
         onDragOver={e => {
           if (!dragRef.current || dropPlan(path, levels, folder) === null) return refuse(e);
@@ -312,9 +340,11 @@ export default function ListTable({
           ${over === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
           ${over === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
         <td className={`pl-1 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
-          <button type="button" aria-label={`Переместить ${issue.key}`} disabled={!rowsMovable}
+          {/* span, а не button: с кнопки Firefox и Safari перенос не начинают (у папок ручка — тоже span) */}
+          <span role="button" tabIndex={rowsMovable ? 0 : -1} aria-label={`Переместить ${issue.key}`} aria-disabled={!rowsMovable}
             title={rowsMovable ? "Перетащите, чтобы поменять порядок или папку (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
-            onMouseDown={() => rowsMovable && setArmed(id)} onMouseUp={() => setArmed(null)}
+            onMouseDown={e => { if (rowsMovable && e.button === 0) arm(id, e.currentTarget); }}
+            onMouseUp={() => { if (!dragRef.current) disarm(); }}
             onKeyDown={e => {
               if (!rowsMovable) return;
               if (e.key === "ArrowUp" && prev) { e.preventDefault(); onMoveRow(issue.key, prev, "before"); }
@@ -323,7 +353,7 @@ export default function ListTable({
             className={`inline-flex align-middle p-0.5 rounded text-text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100
               ${rowsMovable ? "cursor-grab active:cursor-grabbing hover:text-text-main" : "cursor-not-allowed"}`}>
             <GripVertical className="w-3.5 h-3.5" />
-          </button>
+          </span>
           {selecting && (
             <input type="checkbox" checked={on} onChange={() => onSelect([issue.key], !on)} aria-label={`Выбрать ${issue.key}`}
               className="align-middle ml-0.5" />
@@ -362,6 +392,10 @@ export default function ListTable({
                 onChange={v => onSpend(issue.key, c === START_COL ? { start: v } : { end: v })} />
             ) : c === FACT_COL ? (
               <FactCell spend={list.spend?.[issue.key]} />
+            ) : c === REQ_COL ? (
+              <ReqCell value={reqLinks[issue.key] ?? []} options={reqOptions} onChange={ids => onReqs(issue.key, ids)} />
+            ) : c === LOAD_COL ? (
+              <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />
             ) : isRoleCol(c) ? (
               <RoleCell label={colLabel(c, list)} value={list.roles?.[issue.key]?.[c.slice(5)]} names={roleNames[c.slice(5)] ?? []}
                 onChange={patch => onRole(issue.key, c.slice(5), patch)} onNames={names => onRoleNames(c.slice(5), names)} />

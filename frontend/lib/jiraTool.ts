@@ -15,13 +15,13 @@ import {
   DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isClosedDefect, isResolvedDefect,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
-import { STAGES, STAGE_LABEL, stageText, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
+import { STAGES, STAGE_LABEL, isReleaseOrLater, stageText, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
 /* ── Свои поля, участники, списки ──────────────────────────────────────── */
 
-export type OwnFieldType = "text" | "date" | "datetime" | "select" | "multiselect";
+export type OwnFieldType = "text" | "date" | "datetime" | "select" | "multiselect" | "link";
 
 export const OWN_TYPE_LABEL: Record<OwnFieldType, string> = {
   text: "Свободный ввод",
@@ -29,7 +29,26 @@ export const OWN_TYPE_LABEL: Record<OwnFieldType, string> = {
   datetime: "Дата и время",
   select: "Выпадающий список",
   multiselect: "Множественный выбор",
+  link: "Ссылка",
 };
+
+/**
+ * Ссылка из поля «Ссылка» → адрес для перехода. Без схемы («jira.sberbank.ru/browse/X») — https://.
+ * Открываем только http(s): «javascript:» и прочие схемы из вставленного текста не исполняем.
+ * null — не похоже на адрес (пробелы, нет точки в домене).
+ */
+export function linkHref(raw: string): string | null {
+  const t = raw.trim();
+  if (!t || /\s/.test(t)) return null;
+  // Схема — только с «//» («https://…»); иначе «jira.ru:8080/x» приняли бы за схему «jira.ru:».
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`;
+  try {
+    const u = new URL(withScheme);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    if (!u.hostname.includes(".") && u.hostname !== "localhost") return null;
+    return u.href;
+  } catch { return null; }
+}
 
 export interface OwnField {
   id: string;
@@ -112,7 +131,12 @@ export const ROLE_STATES: RoleState[] = ["todo", "doing", "done"];
 export const ROLE_STATE_LABEL: Record<RoleState, string> = { todo: "Не взят в работу", doing: "В работе", done: "Выполнен" };
 export interface RoleValue { name?: string; state?: RoleState }
 
-export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, FOLDER_COL];
+/** Учитывать ли задачу в нагрузке участника (галочка в строке; авто — по статусу (st)). */
+export const LOAD_COL: ColRef = "load";
+/** Требования из раздела «Данные», привязанные к задаче (хранятся у SimpleTest, общие на все списки). */
+export const REQ_COL: ColRef = "reqs";
+
+export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, FOLDER_COL];
 
 /**
  * Норма для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч — 7 часов в день.
@@ -139,16 +163,36 @@ export function defaultLoadRange(now = new Date()): { from: string; to: string }
   return { from: iso(now), to: iso(to) };
 }
 
-export interface LoadRow { participant: Participant; planned: number; tasks: number; unplanned: number; capacity: number; over: boolean }
+export interface LoadRow {
+  participant: Participant; planned: number; tasks: number; unplanned: number; capacity: number; over: boolean;
+  /** Задачи участника, не учтённые в нагрузке (вручную или по статусу). */
+  skipped: number;
+}
 
-/** Нагрузка участников по списку: сумма «Траты план (st)» их задач против нормы за период. */
-export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string }): LoadRow[] {
+/**
+ * Почему задача не в нагрузке: «manual» — сняли галочку в строке; «stage» — статус (st)
+ * «Готово к релизу» и дальше (правило списка, по умолчанию включено); null — учитывается.
+ * Ручная отметка важнее: например, протестировали, а задачу в Jira ещё не перевели.
+ */
+export type LoadSkip = "manual" | "stage" | null;
+
+export function loadSkip(list: TaskList, issue: Issue | undefined, stageOf: (i: Issue) => StageInfo): LoadSkip {
+  if (!issue) return null;
+  if (list.noLoad?.[issue.key]) return "manual";
+  if (list.loadAuto !== false && isReleaseOrLater(stageOf(issue))) return "stage";
+  return null;
+}
+
+/** Нагрузка участников по списку: сумма «Траты план (st)» их учитываемых задач против нормы за период. */
+export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string },
+                         skip: (key: string) => LoadSkip = () => null): LoadRow[] {
   const capacity = workdaysBetween(range.from, range.to) * LOAD_DAY_MINUTES;
   return participants.map(p => {
-    const keys = list.keys.filter(k => list.assignees[k] === p.id);
+    const all = list.keys.filter(k => list.assignees[k] === p.id);
+    const keys = all.filter(k => !skip(k));
     const planned = keys.reduce((n, k) => n + (list.spend?.[k]?.plan ?? 0), 0);
     return {
-      participant: p, planned, tasks: keys.length, capacity, over: planned > capacity,
+      participant: p, planned, tasks: keys.length, capacity, over: planned > capacity, skipped: all.length - keys.length,
       unplanned: keys.filter(k => list.spend?.[k]?.plan == null).length,
     };
   }).sort((a, b) => (b.capacity ? b.planned / b.capacity : 0) - (a.capacity ? a.planned / a.capacity : 0) || b.planned - a.planned);
@@ -275,6 +319,10 @@ export interface TaskList {
   roles?: Record<string, Record<string, RoleValue>>;
   /** период для расчёта нагрузки, «ГГГГ-ММ-ДД» */
   load?: { from: string; to: string };
+  /** задачи, вручную исключённые из нагрузки: ключ → true */
+  noLoad?: Record<string, boolean>;
+  /** false — не исключать автоматически задачи в «Готово к релизу» и дальше (по умолчанию исключаем) */
+  loadAuto?: boolean;
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -296,6 +344,11 @@ export interface ToolState {
   stageStyles: StageStyles;
   /** Шаблоны списков: только структура — порядок колонок, свои поля и папки. */
   templates: ListTemplate[];
+  /**
+   * Требования (раздел «Данные») по задачам: ключ Jira → id документов. На уровне SimpleTest, а не списка:
+   * одна фича бывает в нескольких списках, требования у неё одни.
+   */
+  reqLinks: Record<string, string[]>;
 }
 
 /**
@@ -354,7 +407,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, templates: [] };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, templates: [], reqLinks: {} };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -380,6 +433,7 @@ export function loadState(): ToolState {
           roleNames: s.roleNames ?? {},
           stageStyles: s.stageStyles ?? {},
           templates: s.templates ?? [],
+          reqLinks: s.reqLinks ?? {},
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);
@@ -436,6 +490,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
   };
   return {
     ...s,
+    reqLinks: remap(s.reqLinks) ?? {},
     created: s.created.map(i => (i.key === draftKey ? issue : i)),
     lists: s.lists.map(l => ({
       ...l,
@@ -445,6 +500,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
       folders: remap(l.folders),
       spend: remap(l.spend),
       roles: remap(l.roles),
+      noLoad: remap(l.noLoad),
     })),
   };
 }
@@ -458,6 +514,8 @@ export interface ColCtx {
   stageOf: (issue: Issue) => StageInfo;
   /** Дефекты задачи; null — у дефекта такого поля нет. */
   defectsOf: (issue: Issue) => Issue[] | null;
+  /** Названия требований задачи (поле «Требования (st)»). */
+  reqsOf?: (key: string) => string[];
 }
 
 /** Дефекты задачи по индексу из defectIndex(); у самих дефектов — null. */
@@ -489,6 +547,8 @@ export function colLabel(ref: ColRef, list: TaskList): string {
   if (ref === START_COL) return "Начало теста (st)";
   if (ref === END_COL) return "Конец теста (st)";
   if (ref === FACT_COL) return "Траты факт (st)";
+  if (ref === LOAD_COL) return "Нагрузка (st)";
+  if (ref === REQ_COL) return "Требования (st)";
   if (isRoleCol(ref)) return `${ROLE_FIELDS.find(f => roleCol(f.id) === ref)?.label ?? ref.slice(5)} (st)`;
   if (ref.startsWith("jira:")) return FIELD_BY_ID[ref.slice(5)]?.name ?? ref.slice(5);
   if (ref.startsWith("own:")) return list.ownFields.find(f => f.id === ref.slice(4))?.name ?? "Удалённое поле";
@@ -520,6 +580,11 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
     v = f == null ? null : String(f);
   } else if (ref === START_COL || ref === END_COL) {
     v = ctx.list.spend?.[issue.key]?.[ref === START_COL ? "start" : "end"] ?? null;
+  } else if (ref === REQ_COL) {
+    v = ctx.reqsOf?.(issue.key) ?? null;
+  } else if (ref === LOAD_COL) {
+    const why = loadSkip(ctx.list, issue, ctx.stageOf);
+    v = why === "manual" ? "Не учитывается (вручную)" : why === "stage" ? "Не учитывается (статус)" : "Учитывается";
   } else if (isRoleCol(ref)) {
     v = ctx.list.roles?.[issue.key]?.[ref.slice(5)]?.name ?? null;
   } else if (ref.startsWith("jira:")) {
@@ -708,4 +773,57 @@ export function jqlExamples(project: string): string[] {
     `project = ${project} AND fixVersion in unreleasedVersions() ORDER BY priority`,
     `project = ${project} AND created >= -14d`,
   ];
+}
+
+/* ── Отчёт в чат и чек-лист (Сберчат: *жирный*, _курсив_) ──────────────── */
+
+/** Задачи для отчёта: по папкам (если есть) в порядке таблицы; folder — заголовок раздела или null. */
+export type ReportSection = { folder: string | null; issues: Issue[] };
+
+/**
+ * «Скопировать в чат»: по фиче — код, наименование, статус (st), дефекты, участник; под фичей —
+ * её неустранённые дефекты (номер, наименование, статус, приоритет); между фичами — пустая строка.
+ */
+export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
+  const out: string[] = [];
+  for (const sec of sections) {
+    if (!sec.issues.length) continue;
+    if (sec.folder !== null) out.push(`*${sec.folder}*`);
+    for (const i of sec.issues) {
+      const defects = ctx.defectsOf(i);
+      const open = defects?.filter(isOpenDefect) ?? [];
+      const p = ctx.participants.find(x => x.id === ctx.list.assignees[i.key]);
+      const parts = [`*${i.key}*`, String(i.fields.summary ?? ""), stageText(ctx.stageOf(i))];
+      if (defects !== null) parts.push(open.length ? `дефектов: ${open.length}` : "дефектов нет");
+      parts.push(p ? p.name : "участник не назначен");
+      out.push(parts.join(" — "));
+      for (const d of open) {
+        out.push(`    • ${d.key} ${String(d.fields.summary ?? "")} — ${String(d.fields.status ?? "—")} — ${String(d.fields.priority ?? "—")}`);
+      }
+      out.push("");
+    }
+  }
+  return out.join("\n").trimEnd();
+}
+
+/**
+ * «Чек-лист»: по фиче — код и наименование, затем критически важные проверки (если сгенерированы
+ * по требованиям) и «Результат проверок:» — его заполняет тестировщик.
+ */
+export function checklistReport(sections: ReportSection[], checks: Record<string, string[]>): string {
+  const out: string[] = [];
+  for (const sec of sections) {
+    if (!sec.issues.length) continue;
+    if (sec.folder !== null) out.push(`*${sec.folder}*`);
+    for (const i of sec.issues) {
+      out.push(`*${i.key}* ${String(i.fields.summary ?? "")}`);
+      const c = checks[i.key];
+      if (c?.length) {
+        out.push("_Критически важные базовые проверки:_");
+        c.forEach((x, n) => out.push(`${n + 1}. ${x}`));
+      }
+      out.push("_Результат проверок:_", "");
+    }
+  }
+  return out.join("\n").trimEnd();
 }

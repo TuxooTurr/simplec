@@ -66,3 +66,13 @@ export function getStructures(): Promise<{ structures: StructureInfo[] }> {
 export function getStructureTree(id: number): Promise<{ id: number; root: StructNode[] }> {
   return fetchJson(`/api/jira/tool/structures/${id}`);
 }
+
+/** Чек-лист фичи по требованиям (LLM): критически важные базовые проверки. */
+export function taskChecklist(body: { key: string; summary: string; requirement_ids: string[]; provider: string }):
+  Promise<{ key: string; checks: string[] }> {
+  return fetchJson("/api/tasks/checklist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}

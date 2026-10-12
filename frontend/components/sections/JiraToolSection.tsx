@@ -2,12 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, Columns3, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, ClipboardCheck, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 
 import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker";
-import ListTable, { type SortState } from "@/components/jiratool/ListTable";
+import ListTable, { sortIssues, type SortState } from "@/components/jiratool/ListTable";
+import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
+import type { ReqOption } from "@/components/jiratool/ListCells";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { listRequirements } from "@/lib/api";
 import AddIssuesModal from "@/components/jiratool/AddIssuesModal";
 import OwnFieldModal from "@/components/jiratool/OwnFieldModal";
 import ParticipantsModal, { initials } from "@/components/jiratool/ParticipantsModal";
@@ -19,14 +23,15 @@ import DefectsModal from "@/components/jiratool/DefectsModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  type ReportSection, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState,
   type ColCtx, type Issue, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic } from "@/lib/jiraStages";
-import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKeys, relatedIssues } from "@/lib/jiraToolApi";
+import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKeys, relatedIssues, taskChecklist } from "@/lib/jiraToolApi";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
@@ -43,7 +48,7 @@ import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKe
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -80,6 +85,21 @@ export default function JiraToolSection() {
   const [newTpl, setNewTpl] = useState("");
   const [tplName, setTplName] = useState<string | null>(null);
   const [tplNote, setTplNote] = useState("");
+
+  /* ── Требования («Данные») и отчёты в чат ── */
+  const { provider } = useWorkspace();
+  const [reqOptions, setReqOptions] = useState<ReqOption[]>([]);
+  useEffect(() => {
+    listRequirements().then(r => setReqOptions(r.map(x => ({ id: x.id, name: x.name, feature: x.feature })))).catch(() => setReqOptions([]));
+  }, []);
+  /** Идёт генерация чек-листа: сколько фич готово из скольких. */
+  const [reportBusy, setReportBusy] = useState<{ done: number; total: number } | null>(null);
+  const [reportNote, setReportNote] = useState("");
+  /** Текст, который браузер не дал скопировать сам (прошло много времени после нажатия) — копируем по кнопке. */
+  const [pendingCopy, setPendingCopy] = useState<string | null>(null);
+  const cancelReport = useRef(false);
+  /** Готовые проверки по фиче в этой сессии: повторное нажатие не гоняет LLM заново, пока не поменялись требования. */
+  const checksCache = useRef(new Map<string, { sig: string; checks: string[] }>());
   const [askDeleteList, setAskDeleteList] = useState<string | null>(null);
 
   /* ── Jira: подключение, справочники и задачи ── */
@@ -244,7 +264,11 @@ export default function JiraToolSection() {
 
   if (!state) return <Shell><div className="p-6 text-sm text-text-muted">Загрузка…</div></Shell>;
 
-  const ctx: ColCtx | null = list ? { list, participants: state.participants, stageOf, defectsOf } : null;
+  const reqName = new Map(reqOptions.map(r => [r.id, r.name]));
+  const ctx: ColCtx | null = list ? {
+    list, participants: state.participants, stageOf, defectsOf,
+    reqsOf: key => (state.reqLinks[key] ?? []).map(id => reqName.get(id) ?? "удалён"),
+  } : null;
 
   /* ── Колонки и группировка: поля проекта списка ── */
   const hasFolders = !!list?.folderList?.length;
@@ -253,13 +277,17 @@ export default function JiraToolSection() {
                                      hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
     // Поля, которые считает SimpleTest, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
-    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, ...(hasFolders ? [FOLDER_COL] : [])]
+    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, ...(hasFolders ? [FOLDER_COL] : [])]
       .map(c => ({ value: c, label: colLabel(c, list), group: "Поля SimpleTest", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
   ] : [];
   // Папка — не группировка, а уровень над ней (разделы таблицы), поэтому в группировке её нет.
   // Числа и время (дефекты, трудозатраты) — не для группировки: у каждой задачи своё значение.
-  const groupOptions = fieldOptions.filter(o => !["jira:summary", "jira:description", "jira:environment", DEFECTS_COL, FOLDER_COL, ...SPEND_COLS].includes(o.value));
+  // Ссылки тоже не группируем — у каждой задачи своя.
+  const linkCols = list ? list.ownFields.filter(f => f.type === "link").map(f => `own:${f.id}`) : [];
+  const groupOptions = fieldOptions.filter(o => ![
+    "jira:summary", "jira:description", "jira:environment", DEFECTS_COL, FOLDER_COL, ...SPEND_COLS, ...linkCols,
+  ].includes(o.value));
 
   /* ── Задачи текущего списка с фильтром ── */
   const q = filter.trim().toLowerCase();
@@ -427,6 +455,99 @@ export default function JiraToolSection() {
     folderList: (l.folderList ?? []).filter(f => f !== name),
     folders: Object.fromEntries(Object.entries(l.folders ?? {}).filter(([, f]) => f !== name)),
   }));
+  /** Требования по задачам: на уровне SimpleTest (общие на все списки). */
+  const setReqs = (keys: string[], ids: string[], mode: ReqAssignMode | "set") => update(s => {
+    const links = { ...s.reqLinks };
+    for (const k of keys) {
+      const cur = links[k] ?? [];
+      const next = mode === "set" || mode === "replace" ? ids
+        : mode === "add" ? Array.from(new Set([...cur, ...ids])) : cur.filter(x => !ids.includes(x));
+      if (next.length) links[k] = next; else delete links[k];
+    }
+    return { ...s, reqLinks: links };
+  });
+
+  /* ── Отчёт в чат и чек-лист: только отмеченные задачи, в порядке таблицы, по папкам ── */
+  const reportSections = (): ReportSection[] => {
+    if (!list || !ctx) return [];
+    const all = list.keys.map(k => byKey.get(k)).filter((i): i is Issue => !!i);
+    const chosen = sortIssues(all, sort, ctx).filter(i => selected.has(i.key));
+    return list.folderList?.length
+      ? folderSections(list, chosen).map(sec => ({ folder: sec.name ?? NO_FOLDER, issues: sec.issues }))
+      : [{ folder: null, issues: chosen }];
+  };
+
+  const copyText = async (text: string): Promise<boolean> => {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* нет доступа — запасной способ */ }
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { /* не вышло */ }
+    ta.remove();
+    return ok;
+  };
+
+  const deliver = async (text: string, note: string) => {
+    if (await copyText(text)) { setPendingCopy(null); setReportNote(note); }
+    else { setPendingCopy(text); setReportNote("Браузер не дал скопировать автоматически — нажмите «Скопировать»."); }
+  };
+
+  const copyChatReport = async () => {
+    if (!ctx) return;
+    const sections = reportSections();
+    const n = sections.reduce((a, x) => a + x.issues.length, 0);
+    await deliver(chatReport(sections, ctx), `Скопировано для чата: задач ${n}.`);
+  };
+
+  /**
+   * Чек-лист: у фич с требованиями и при выбранной модели — критически важные проверки от LLM
+   * (по одной фиче за раз, с прогрессом); у остальных — только «Результат проверок:».
+   */
+  const copyChecklist = async () => {
+    if (!state) return;
+    const sections = reportSections();
+    const all = sections.flatMap(x => x.issues);
+    const withReqs = all.filter(i => (state.reqLinks[i.key] ?? []).some(id => reqName.has(id)));
+    const checks: Record<string, string[]> = {};
+    let failed = 0, firstErr = "";
+    cancelReport.current = false;
+    setReportNote(""); setPendingCopy(null);
+    if (withReqs.length && provider) {
+      setReportBusy({ done: 0, total: withReqs.length });
+      for (const [n, i] of withReqs.entries()) {
+        if (cancelReport.current) break;
+        const ids = (state.reqLinks[i.key] ?? []).filter(id => reqName.has(id));
+        const sig = `${ids.join(",")}|${String(i.fields.summary ?? "")}`;
+        const hit = checksCache.current.get(i.key);
+        if (hit?.sig === sig) checks[i.key] = hit.checks;
+        else {
+          try {
+            const r = await taskChecklist({ key: i.key, summary: String(i.fields.summary ?? i.key), requirement_ids: ids, provider });
+            checks[i.key] = r.checks;
+            checksCache.current.set(i.key, { sig, checks: r.checks });
+          } catch (e) { failed++; firstErr ||= (e as Error).message; }
+        }
+        setReportBusy({ done: n + 1, total: withReqs.length });
+      }
+      setReportBusy(null);
+    }
+    const done = Object.keys(checks).length;
+    const parts = [`Чек-лист скопирован: фич ${all.length}`];
+    if (withReqs.length && !provider) parts.push("модель не выбрана — проверки не сгенерированы");
+    else if (withReqs.length) parts.push(`с проверками ${done}`);
+    if (cancelReport.current) parts.push("генерация прервана");
+    if (failed) parts.push(`не сгенерировано ${failed}: ${firstErr.slice(0, 120)}`);
+    await deliver(checklistReport(sections, checks), parts.join(" · ") + ".");
+  };
+
+  /** Исключить задачи из нагрузки (skip) или вернуть. */
+  const setNoLoad = (keys: string[], skip: boolean) => updateList(l => {
+    const n = { ...l.noLoad };
+    for (const k of keys) { if (skip) n[k] = true; else delete n[k]; }
+    return { ...l, noLoad: n };
+  });
+
   const moveSelectedToFolder = (folder: string | null) => {
     updateList(l => [...selected].reduce((acc, k) => setFolder(acc, k, folder), l));
     setSelected(new Set());
@@ -758,7 +879,9 @@ export default function JiraToolSection() {
 
             {list && (
               <LoadPanel list={list} participants={state.participants}
-                onRange={load => updateList(l => ({ ...l, load }))} />
+                skip={key => loadSkip(list, byKey.get(key), stageOf)}
+                onRange={load => updateList(l => ({ ...l, load }))}
+                onAuto={on => updateList(l => ({ ...l, loadAuto: on ? undefined : false }))} />
             )}
 
             <button type="button" onClick={() => setModal("stages")}
@@ -870,7 +993,7 @@ export default function JiraToolSection() {
               )}
 
               {selecting && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 animate-fade-in">
+                <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 animate-fade-in [&_button]:whitespace-nowrap">
                   <ListChecks className="w-4 h-4 text-primary" />
                   <span className="text-sm text-text-main">
                     {selected.size ? <>Выбрано: <b>{selected.size}</b></> : "Отметьте задачи чекбоксами"}
@@ -880,6 +1003,15 @@ export default function JiraToolSection() {
                   <button type="button" onClick={() => { updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)) })); setSelected(new Set()); }}
                     disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Убрать из списка</button>
+                  <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
+                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Требования…</button>
+                  <select value="" disabled={!selected.size} aria-label="Нагрузка для выбранных"
+                    onChange={e => { if (e.target.value) { setNoLoad([...selected], e.target.value === "skip"); setSelected(new Set()); } }}
+                    className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)] disabled:opacity-40">
+                    <option value="">Нагрузка…</option>
+                    <option value="skip">Не учитывать</option>
+                    <option value="count">Учитывать</option>
+                  </select>
                   {!!list.folderList?.length && (
                     <select value="" onChange={e => e.target.value && moveSelectedToFolder(e.target.value === "__none__" ? null : e.target.value)}
                       aria-label="Переложить выбранные в папку" disabled={!selected.size}
@@ -962,9 +1094,39 @@ export default function JiraToolSection() {
                     onRole={(key, fid, patch) => updateList(l => ({
                       ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
                     }))}
-                    onRoleNames={(fid, names) => update(s => ({ ...s, roleNames: { ...s.roleNames, [fid]: names } }))} />
+                    onRoleNames={(fid, names) => update(s => ({ ...s, roleNames: { ...s.roleNames, [fid]: names } }))}
+                    onNoLoad={(key, skip) => setNoLoad([key], skip)}
+                    reqLinks={state.reqLinks} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")} />
                 )}
               </div>
+
+              {/* Отчёты по отмеченным задачам — только в режиме выбора (карандаш) */}
+              {selecting && (
+                <div className="flex items-center gap-4 flex-wrap text-sm -mt-1">
+                  <button type="button" onClick={copyChatReport} disabled={!selected.size || !!reportBusy}
+                    title="Код, наименование, статус (st), дефекты, участник; под фичей — её неустранённые дефекты"
+                    className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
+                    <MessageSquareShare className="w-4 h-4" /> Скопировать в чат
+                  </button>
+                  <button type="button" onClick={copyChecklist} disabled={!selected.size || !!reportBusy}
+                    title="Код и наименование фичи, проверки по требованиям (если привязаны и выбрана модель) и «Результат проверок:»"
+                    className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
+                    <ClipboardCheck className="w-4 h-4" /> Чек-лист
+                  </button>
+                  {reportBusy && (
+                    <span className="flex items-center gap-2 text-xs text-text-muted" role="status">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Проверки по требованиям: {reportBusy.done} из {reportBusy.total}
+                      <button type="button" onClick={() => { cancelReport.current = true; }} className="underline hover:text-text-main">прервать</button>
+                    </span>
+                  )}
+                  {pendingCopy !== null && (
+                    <button type="button" onClick={() => void deliver(pendingCopy, "Скопировано.")}
+                      className="px-2.5 py-1 rounded-md bg-primary text-white text-xs font-semibold">Скопировать</button>
+                  )}
+                  {reportNote && !reportBusy && <span className="text-xs text-text-muted" role="status">{reportNote}</span>}
+                  {!selected.size && <span className="text-xs text-text-muted">Отметьте задачи — отчёт соберётся по ним.</span>}
+                </div>
+              )}
             </>
           )}
         </main>
@@ -1000,6 +1162,10 @@ export default function JiraToolSection() {
             return { ...s, participants, lists };
           })} />
       )}
+      {modal === "reqs" && (
+        <ReqAssignModal open count={selected.size} options={reqOptions} onClose={() => setModal(null)}
+          onApply={(ids, mode) => setReqs([...selected], ids, mode)} />
+      )}
       {modal === "bulk" && (
         <BulkStatusModal open issues={selectedIssues} onClose={() => setModal(null)} onDone={afterTransitions} />
       )}
@@ -1025,13 +1191,16 @@ export default function JiraToolSection() {
  * нормы за выбранный период (будни × 7 ч: 9:00–18:00 минус обед и утренние встречи). Превышение — красным.
  * Период свой у каждого списка.
  */
-function LoadPanel({ list, participants, onRange }: {
+function LoadPanel({ list, participants, skip, onRange, onAuto }: {
   list: TaskList;
   participants: Participant[];
+  skip: (key: string) => ReturnType<typeof loadSkip>;
   onRange: (r: { from: string; to: string }) => void;
+  onAuto: (on: boolean) => void;
 }) {
   const range = list.load ?? defaultLoadRange();
-  const rows = listLoad(list, participants, range);
+  const rows = listLoad(list, participants, range, skip);
+  const skippedAll = list.keys.filter(k => skip(k)).length;
   const days = workdaysBetween(range.from, range.to);
   const dateCls = "min-w-0 flex-1 text-xs border border-border-main rounded-md px-1.5 py-1 bg-[var(--color-input-bg)] text-text-main " +
     "focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -1048,6 +1217,15 @@ function LoadPanel({ list, participants, onRange }: {
       <p className="text-[11px] text-text-muted" title="Будни 9:00–18:00 минус час обеда и час утренних встреч. Праздники не учитываются.">
         Рабочих дней: {days} · норма {fmtMinutes(days * LOAD_DAY_MINUTES)} (по {LOAD_DAY_MINUTES / 60} ч в день)
       </p>
+      <label className="flex items-start gap-1.5 text-[11px] text-text-main cursor-pointer select-none">
+        <input type="checkbox" className="mt-0.5" checked={list.loadAuto !== false} onChange={e => onAuto(e.target.checked)} />
+        <span>Не учитывать задачи в «Готово к релизу» и дальше</span>
+      </label>
+      {skippedAll > 0 && (
+        <p className="text-[11px] text-text-muted" title="Вручную — галочка в колонке «Нагрузка (st)» или «Нагрузка…» в режиме выбора">
+          Не учтено задач: {skippedAll}
+        </p>
+      )}
       {participants.length === 0 ? (
         <p className="text-xs text-text-muted">Добавьте участников и назначьте их на задачи — здесь появится их нагрузка.</p>
       ) : (
@@ -1055,7 +1233,7 @@ function LoadPanel({ list, participants, onRange }: {
           {rows.map(r => {
             const pct = r.capacity ? Math.min(100, Math.round((r.planned / r.capacity) * 100)) : r.planned ? 100 : 0;
             return (
-              <li key={r.participant.id} title={`Задач в списке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}`}>
+              <li key={r.participant.id} title={`Задач в нагрузке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}${r.skipped ? `, не учтено: ${r.skipped}` : ""}`}>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.participant.color }} />
                   <span className="min-w-0 flex-1 truncate text-text-main">{r.participant.name}</span>

@@ -106,6 +106,16 @@ export function isResolvedDefect(d: Issue): boolean {
   return RESOLVED_DEFECT_STATUSES.has(String(d.fields.status ?? "").toLowerCase().trim());
 }
 
+/**
+ * Закрытый дефект — только «Закрыт». Для статуса (st) «Заблокирован» это строже, чем «устранён»:
+ * задача остаётся заблокированной, пока блокирующий дефект не закроют (решение Стефана, 12.10.2026).
+ */
+const CLOSED_DEFECT_STATUSES = new Set(["закрыт", "закрыто", "closed"]);
+
+export function isClosedDefect(d: Issue): boolean {
+  return CLOSED_DEFECT_STATUSES.has(String(d.fields.status ?? "").toLowerCase().trim());
+}
+
 /** Блокирующий приоритет (русский и английский вариант). */
 export function isBlocker(d: Issue): boolean {
   return ["блокирующий", "blocker"].includes(String(d.fields.priority ?? "").toLowerCase());

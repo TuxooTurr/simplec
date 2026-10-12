@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Bookmark, Bug, CheckSquare, Layers, Zap } from "lucide-react";
+import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Layers, Plus, X, Zap } from "lucide-react";
 import {
-  FIELD_BY_ID, WORK_DAY, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
-  type Issue, type OwnField, type Participant, type Spend,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
+  type Issue, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
-import { STAGE_CLS, STAGE_LABEL, type StageInfo } from "@/lib/jiraStages";
+import { STAGE_LABEL, stageStyle, stageText, textOn, type StageInfo } from "@/lib/jiraStages";
 
 /* Ячейки таблицы Jira tool. Ширину задаёт колонка (её можно растягивать), поэтому
    у содержимого нет своих минимальных ширин — текст переносится или обрезается. */
@@ -80,16 +80,35 @@ export function BlockCell({ defects, onOpen }: { defects: Issue[] | null; onOpen
   );
 }
 
-export function StageCell({ info }: { info: StageInfo }) {
+/** Статус (st). onOpen есть только у эпика: клик — окно со сторями эпика. */
+export function StageCell({ info, onOpen }: { info: StageInfo; onOpen?: () => void }) {
+  if (!onOpen) return <StageBadge info={info} />;
+  return (
+    <button type="button" onClick={onOpen} className="max-w-full text-left rounded-md hover:ring-2 hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/40"
+      aria-label={`Статус (st): ${stageText(info)} — подробнее`}>
+      <StageBadge info={info} />
+    </button>
+  );
+}
+
+export function StageBadge({ info }: { info: StageInfo }) {
   switch (info.kind) {
+    case "blocked":
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap" style={stageStyle("blocked")}
+          title={`Блокирующие незакрытые дефекты: ${info.by.map(d => d.key).join(", ")} (список — в «Дефекты (st)»). Без блокировки — «${stageText(info.base)}».`}>
+          <Ban className="w-3 h-3" /> {STAGE_LABEL.blocked}
+          {info.by.length > 1 && <span className="opacity-80">· {info.by.length}</span>}
+        </span>
+      );
     case "stage":
-      return <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STAGE_CLS[info.stage]}`}>{STAGE_LABEL[info.stage]}</span>;
+      return <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}>{STAGE_LABEL[info.stage]}</span>;
     case "epic":
       return (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap"
           title={`Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
             + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
-          <span className={`px-2 py-0.5 rounded-md text-[11px] font-medium ${STAGE_CLS[info.stage]}`}>{STAGE_LABEL[info.stage]}</span>
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>{STAGE_LABEL[info.stage]}</span>
           <span className="text-[10px] text-text-muted">{info.behind}/{info.total}</span>
           {info.unmapped > 0 && <AlertTriangle className="w-3 h-3 text-amber-500" />}
         </span>
@@ -179,7 +198,73 @@ function MultiCell({ field, value, onChange }: { field: OwnField; value: string[
   );
 }
 
+/** Цветной тег варианта своего поля. */
+export function Tag({ field, value }: { field: OwnField; value: string }) {
+  const c = tagColor(field, value);
+  return (
+    <span className="inline-block max-w-full truncate px-1.5 py-0.5 rounded-md text-[11px] font-medium align-middle"
+      style={{ backgroundColor: c, color: textOn(c) }}>{value}</span>
+  );
+}
+
+/**
+ * Список или множественный выбор в виде цветных тегов. Выбор — во всплывающем списке поверх таблицы
+ * (fixed: внутри ячейки его обрезала бы прокрутка таблицы); при прокрутке он закрывается.
+ */
+function TagCell({ field, value, onChange }: { field: OwnField; value: string | string[] | undefined; onChange: (v: string | string[]) => void }) {
+  const multi = field.type === "multiselect";
+  const chosen = Array.isArray(value) ? value : value ? [value] : [];
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!pos) return;
+    const close = (e: Event) => {
+      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
+      setPos(null);
+    };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
+  }, [pos]);
+  const toggleOpen = () => {
+    if (pos) { setPos(null); return; }
+    const r = btn.current?.getBoundingClientRect();
+    if (r) setPos({ left: r.left, top: r.bottom + 4 });
+  };
+  const pick = (o: string) => {
+    if (multi) onChange(chosen.includes(o) ? chosen.filter(x => x !== o) : [...chosen, o]);
+    else { onChange(chosen[0] === o ? "" : o); setPos(null); }
+  };
+  return (
+    <>
+      <button ref={btn} type="button" onClick={toggleOpen} aria-expanded={!!pos} aria-haspopup="listbox" aria-label={field.name}
+        className="flex flex-wrap gap-1 min-h-[24px] w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main">
+        {chosen.length ? chosen.map(x => <Tag key={x} field={field} value={x} />) : <span className="text-text-muted/50 text-sm">—</span>}
+      </button>
+      {pos && (
+        <div ref={box} role="listbox" aria-multiselectable={multi} aria-label={field.name}
+          style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+          className="w-56 max-h-64 overflow-y-auto scrollbar-thin rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+          {field.options.map(o => (
+            <button key={o} type="button" role="option" aria-selected={chosen.includes(o)} onClick={() => pick(o)}
+              className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left hover:bg-bg-subtle ${chosen.includes(o) ? "bg-primary/10" : ""}`}>
+              {multi && <input type="checkbox" readOnly checked={chosen.includes(o)} tabIndex={-1} aria-hidden />}
+              <Tag field={field} value={o} />
+            </button>
+          ))}
+          {!multi && chosen.length > 0 && (
+            <button type="button" onClick={() => { onChange(""); setPos(null); }}
+              className="w-full text-left px-2 py-1 rounded text-sm text-text-muted hover:bg-bg-subtle">— снять</button>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function OwnCell({ field, value, onChange }: { field: OwnField; value: string | string[] | undefined; onChange: (v: string | string[]) => void }) {
+  if (field.tags && (field.type === "select" || field.type === "multiselect")) return <TagCell field={field} value={value} onChange={onChange} />;
   const cls = "bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:border-primary/40 " +
     "focus:outline-none focus:bg-[var(--color-input-bg)] text-sm text-text-main";
   const s = typeof value === "string" ? value : "";
@@ -221,6 +306,108 @@ export function ParticipantCell({ value, participants, onChange }: { value: stri
         <option value="">— не назначен</option>
         {participants.map(x => <option key={x.id} value={x.id}>{x.role ? `${x.name} · ${x.role}` : x.name}</option>)}
       </select>
+    </span>
+  );
+}
+
+/* ── Поля направлений (st): фамилия и состояние ─────────────────────────── */
+
+const ROLE_STATE_CLS: Record<RoleState, string> = {
+  todo:  "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200",
+  doing: "bg-amber-300 text-amber-950 dark:bg-amber-500 dark:text-amber-950",
+  done:  "bg-green-600 text-white dark:bg-green-600",
+};
+
+/**
+ * Ячейка направления: фамилия (свой список у каждого поля — добавить и удалить можно прямо
+ * в выпадающем списке) и состояние цветом: серый — не взят, жёлтый — в работе, зелёный — выполнен.
+ */
+export function RoleCell({ label, value, names, onChange, onNames }: {
+  label: string;
+  value: RoleValue | undefined;
+  names: string[];
+  onChange: (patch: RoleValue) => void;
+  onNames: (names: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [draft, setDraft] = useState("");
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const state = value?.state ?? "todo";
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: Event) => {
+      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
+      setOpen(false);
+    };
+    // Список рисуется поверх таблицы (fixed): при прокрутке он бы отстал от ячейки — закрываем.
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
+  }, [open]);
+
+  const toggle = () => {
+    if (!open && btn.current) {
+      const r = btn.current.getBoundingClientRect();
+      setPos({ left: r.left, top: r.bottom + 4 });
+    }
+    setOpen(o => !o);
+  };
+  const add = () => {
+    const n = draft.trim();
+    if (!n) return;
+    if (!names.includes(n)) onNames([...names, n]);
+    onChange({ ...value, name: n });
+    setDraft(""); setOpen(false);
+  };
+  const shown = value?.name && !names.includes(value.name) ? [value.name, ...names] : names;
+
+  return (
+    <span className="flex items-center gap-1 min-w-0">
+      {/* Цветной кружок; поверх — прозрачный выпадающий список (родной: работает с клавиатуры и экранным диктором). */}
+      <span title={ROLE_STATE_LABEL[state]}
+        className={`relative w-4 h-4 flex-shrink-0 rounded-full border border-black/10 focus-within:ring-2 focus-within:ring-primary/50 ${ROLE_STATE_CLS[state]}`}>
+        <select value={state} onChange={e => onChange({ ...value, state: e.target.value as RoleState })}
+          aria-label={`${label}: состояние — ${ROLE_STATE_LABEL[state]}`}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+          {ROLE_STATES.map(st => <option key={st} value={st}>{ROLE_STATE_LABEL[st]}</option>)}
+        </select>
+      </span>
+      <button ref={btn} type="button" onClick={toggle} aria-expanded={open} aria-haspopup="listbox" aria-label={`${label}: фамилия`}
+        className="min-w-0 flex-1 text-left truncate px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm">
+        {value?.name || <span className="text-text-muted/50">—</span>}
+      </button>
+      {open && pos && (
+        <div ref={box} role="listbox" aria-label={`${label}: фамилии`} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+          className="w-56 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+          <button type="button" role="option" aria-selected={!value?.name} onClick={() => { onChange({ ...value, name: "" }); setOpen(false); }}
+            className="w-full text-left px-2 py-1 rounded text-sm text-text-muted hover:bg-bg-subtle">— не назначен</button>
+          <div className="max-h-56 overflow-y-auto scrollbar-thin">
+            {shown.map(n => (
+              <div key={n} className={`group/rn flex items-center rounded ${value?.name === n ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
+                <button type="button" role="option" aria-selected={value?.name === n} onClick={() => { onChange({ ...value, name: n }); setOpen(false); }}
+                  className="flex-1 min-w-0 truncate text-left px-2 py-1 text-sm text-text-main">{n}</button>
+                {names.includes(n) && (
+                  <button type="button" onClick={() => onNames(names.filter(x => x !== n))} aria-label={`Убрать ${n} из списка ${label}`}
+                    title="Убрать из списка фамилий (в уже заполненных ячейках останется)"
+                    className="p-1 mr-0.5 rounded text-text-muted opacity-0 group-hover/rn:opacity-100 focus-visible:opacity-100 hover:text-red-500">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-1 border-t border-border-main mt-1 pt-1">
+            <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Новая фамилия, Enter"
+              onKeyDown={e => { if (e.key === "Enter") add(); if (e.key === "Escape") setOpen(false); }} aria-label={`Добавить фамилию в ${label}`}
+              className="min-w-0 flex-1 text-sm px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            <button type="button" onClick={add} disabled={!draft.trim()} aria-label="Добавить фамилию"
+              className="p-1.5 rounded bg-primary text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" /></button>
+          </div>
+        </div>
+      )}
     </span>
   );
 }

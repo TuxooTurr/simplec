@@ -6,35 +6,71 @@
  * - Эпик: этап считается по всем сторям, привязанным к нему через Epic Link, —
  *   берётся этап самой отстающей стори. Отменённые стори не учитываются.
  *   Эпик без сторей остаётся без этапа и подсвечивается красным: это нарушение процесса.
+ * - Заблокирован: у задачи есть блокирующий дефект, который ещё не закрыт. Дефект считается,
+ *   если он связан с задачей, с эпиком стори (стори привязана к эпику) или — для эпика — с любой
+ *   его сторей. Статус держится, пока дефект не перейдёт в «Закрыт».
  * - Пока таблица группы не сохранена, этап угадывается по названию статуса (guessStage).
  *   В сохранённой таблице статус, которого в ней нет, — «не сопоставлен», а не тихо
  *   «Разработка»: иначе новый статус незаметно испортит расчёт эпиков.
  */
 
-import { categoryOf, epicLinkId, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
+import type React from "react";
+import { categoryOf, epicLinkId, isBlocker, isClosedDefect, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
 
 export type Stage = "dev" | "test" | "release" | "done" | "excluded";
 
 export const STAGES: Stage[] = ["dev", "test", "release", "done", "excluded"];
 
-export const STAGE_LABEL: Record<Stage, string> = {
-  dev: "Разработка",
-  test: "Тестирование",
-  release: "Готово к релизу",
-  done: "Готово",
-  excluded: "Исключено",
+/** Статус (st) с оформлением: этапы + «Заблокирован». */
+export type StageKey = Stage | "blocked";
+export const STAGE_KEYS: StageKey[] = [...STAGES, "blocked"];
+
+/** Названия и цвета по умолчанию. Человек меняет их в «Статус (st)» — см. applyStageStyles. */
+export const DEFAULT_STAGE_STYLE: Record<StageKey, { label: string; color: string }> = {
+  dev:      { label: "Разработка",      color: "#0284c7" },
+  test:     { label: "Тестирование",    color: "#7c3aed" },
+  release:  { label: "Готово к релизу", color: "#0d9488" },
+  done:     { label: "Готово",          color: "#16a34a" },
+  excluded: { label: "Исключено",       color: "#94a3b8" },
+  blocked:  { label: "Заблокирован",    color: "#7f1d1d" },
 };
+
+/** Свои названия и цвета статусов (st); пусто — по умолчанию. Хранятся в ToolState. */
+export type StageStyles = Partial<Record<StageKey, { label?: string; color?: string }>>;
+
+/**
+ * Действующие названия и цвета. Меняются на месте (applyStageStyles): на них ссылаются расчёт
+ * этапов, сортировка и группировка — так новое название сразу везде.
+ */
+export const STAGE_LABEL: Record<StageKey, string> = Object.fromEntries(
+  STAGE_KEYS.map(k => [k, DEFAULT_STAGE_STYLE[k].label])) as Record<StageKey, string>;
+const STAGE_COLOR: Record<StageKey, string> = Object.fromEntries(
+  STAGE_KEYS.map(k => [k, DEFAULT_STAGE_STYLE[k].color])) as Record<StageKey, string>;
+
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+
+export function applyStageStyles(styles: StageStyles): void {
+  for (const k of STAGE_KEYS) {
+    STAGE_LABEL[k] = styles[k]?.label?.trim() || DEFAULT_STAGE_STYLE[k].label;
+    const c = styles[k]?.color ?? "";
+    STAGE_COLOR[k] = HEX_RE.test(c) ? c : DEFAULT_STAGE_STYLE[k].color;
+  }
+}
+
+/** Цвет текста на заливке: белый на тёмном, почти чёрный на светлом (по яркости цвета). */
+export function textOn(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return 0.299 * r + 0.587 * g + 0.114 * b > 160 ? "#111827" : "#ffffff";
+}
+
+/** Оформление метки статуса (st): заливка цветом статуса, «Исключено» — зачёркнуто. */
+export function stageStyle(k: StageKey, color = STAGE_COLOR[k]): React.CSSProperties {
+  return { backgroundColor: color, color: textOn(color), textDecoration: k === "excluded" ? "line-through" : undefined };
+}
 
 /** Порядок продвижения: эпик получает минимальный этап из своих сторей. */
 const RANK: Record<Exclude<Stage, "excluded">, number> = { dev: 0, test: 1, release: 2, done: 3 };
-
-export const STAGE_CLS: Record<Stage, string> = {
-  dev: "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
-  test: "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
-  release: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  done: "bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-  excluded: "bg-slate-100 text-slate-500 dark:bg-slate-900 dark:text-slate-500 line-through",
-};
 
 /** Сопоставление: проект → группа → статус Jira → этап. */
 export type StageMapping = Record<string, Partial<Record<Exclude<Category, "epic">, Record<string, Stage>>>>;
@@ -55,6 +91,7 @@ export function defaultMapping(statuses: string[]): Record<string, Stage> {
 }
 
 export type StageInfo =
+  | { kind: "blocked"; by: Issue[]; base: StageInfo }
   | { kind: "stage"; stage: Stage }
   | { kind: "unmapped"; status: string }
   | { kind: "no-stories" }
@@ -62,26 +99,53 @@ export type StageInfo =
 
 export function stageText(info: StageInfo): string {
   switch (info.kind) {
+    case "blocked": return STAGE_LABEL.blocked;
     case "stage": case "epic": return STAGE_LABEL[info.stage];
     case "unmapped": return "Не сопоставлен";
     case "no-stories": return "Нет сторей";
   }
 }
 
-/**
- * Считает этапы задач. stories — все стори всех проектов (не только из списка):
- * этап эпика не должен зависеть от того, какие стори человек добавил в список.
- */
-export function makeStageResolver(allIssues: Issue[], mapping: StageMapping) {
-  const storiesByEpic = new Map<string, Issue[]>();
+/** Стори по эпикам (через Epic Link) — из всех загруженных задач, не только из списка. */
+export function storiesByEpic(allIssues: Issue[]): Map<string, Issue[]> {
+  const out = new Map<string, Issue[]>();
   const epicField = epicLinkId();
   for (const i of allIssues) {
     const epic = i.fields[epicField];
     if (categoryOf(i) === "story" && typeof epic === "string" && epic) {
-      if (!storiesByEpic.has(epic)) storiesByEpic.set(epic, []);
-      storiesByEpic.get(epic)!.push(i);
+      if (!out.has(epic)) out.set(epic, []);
+      out.get(epic)!.push(i);
     }
   }
+  return out;
+}
+
+/** Блокирующие незакрытые дефекты из списка дефектов. */
+const activeBlockers = (defects: Issue[] | undefined) => (defects ?? []).filter(d => isBlocker(d) && !isClosedDefect(d));
+
+/**
+ * Блокирующие дефекты задачи с учётом связей: свои; у стори — ещё дефекты её эпика;
+ * у эпика — ещё дефекты всех его сторей. defects — индекс «ключ → дефекты» (defectIndex).
+ */
+export function blockingDefects(issue: Issue, defects: Map<string, Issue[]>, stories: Map<string, Issue[]>): Issue[] {
+  const cat = categoryOf(issue);
+  if (cat === "defect") return [];
+  const keys = [issue.key];
+  if (cat === "story") {
+    const epic = issue.fields[epicLinkId()];
+    if (typeof epic === "string" && epic) keys.push(epic);
+  }
+  if (cat === "epic") keys.push(...(stories.get(issue.key) ?? []).map(s => s.key));
+  const seen = new Set<string>();
+  return keys.flatMap(k => activeBlockers(defects.get(k))).filter(d => !seen.has(d.key) && !!seen.add(d.key));
+}
+
+/**
+ * Считает этапы задач. Стори — все загруженные (не только из списка):
+ * этап эпика не должен зависеть от того, какие стори человек добавил в список.
+ */
+export function makeStageResolver(allIssues: Issue[], mapping: StageMapping, defects: Map<string, Issue[]> = new Map()) {
+  const byEpic = storiesByEpic(allIssues);
 
   const mapped = (issue: Issue): StageInfo => {
     const cat = categoryOf(issue) as Exclude<Category, "epic">;
@@ -100,7 +164,7 @@ export function makeStageResolver(allIssues: Issue[], mapping: StageMapping) {
     if (categoryOf(issue) !== "epic") {
       info = mapped(issue);
     } else {
-      const stories = (storiesByEpic.get(issue.key) ?? []).map(mapped)
+      const stories = (byEpic.get(issue.key) ?? []).map(mapped)
         .filter(s => !(s.kind === "stage" && s.stage === "excluded"));
       if (!stories.length) {
         info = { kind: "no-stories" };
@@ -113,6 +177,8 @@ export function makeStageResolver(allIssues: Issue[], mapping: StageMapping) {
                  unmapped: stories.filter(s => s.kind === "unmapped").length };
       }
     }
+    const by = blockingDefects(issue, defects, byEpic);
+    if (by.length) info = { kind: "blocked", by, base: info };
     cache.set(issue.key, info);
     return info;
   };

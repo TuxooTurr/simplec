@@ -4,10 +4,10 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  groupIssues, isWritableGroupRef, orderIndex,
+  categoryOf, groupIssues, isRoleCol, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
 } from "@/lib/jiraTool";
-import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, PlanCell, SpendDateCell, StageCell } from "./ListCells";
+import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, PlanCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
 export type Place = "before" | "after";
@@ -41,6 +41,7 @@ export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
   if (ref === FOLDER_COL) return 180;
   if (ref === PLAN_COL || ref === FACT_COL) return 140;
   if (ref === START_COL || ref === END_COL) return 200;
+  if (isRoleCol(ref)) return 170;
   if (ref.startsWith("own:")) {
     const t = ctx.list.ownFields.find(f => f.id === ref.slice(4))?.type;
     return t === "datetime" ? 200 : t === "date" ? 150 : t === "multiselect" ? 190 : 170;
@@ -63,7 +64,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -102,6 +103,12 @@ export default function ListTable({
   onSpend: (key: string, patch: { plan?: number | null; start?: string; end?: string }) => void;
   /** Закрепить / открепить колонку. */
   onTogglePin: (col: ColRef) => void;
+  /** Клик по статусу (st) эпика: его стори. */
+  onOpenStage: (issue: Issue) => void;
+  /** Фамилии полей направлений (st): поле → список. */
+  roleNames: Record<string, string[]>;
+  onRole: (key: string, fieldId: string, patch: { name?: string; state?: "todo" | "doing" | "done" }) => void;
+  onRoleNames: (fieldId: string, names: string[]) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const { list, participants } = ctx;
@@ -226,7 +233,40 @@ export default function ListTable({
     dragRef.current = null; dragFolderRef.current = null;
     setDragRow(null); setOverRow(null); setOverGroup(null); setOverFolder(null); setArmed(null);
   };
-  const endColDrag = () => { setDragCol(null); setOverCol(null); };
+  /*
+   * Автопрокрутка вбок при переносе колонки: подвели заголовок к краю видимой области —
+   * слева это граница закреплённых колонок, справа край таблицы — таблица едет со средней
+   * скоростью, пока колонка у края. dragover приходит и без движения мыши, поэтому по нему
+   * же понимаем, что перенос ещё идёт; нет событий 150 мс — останавливаемся.
+   */
+  const scrollBox = useRef<HTMLDivElement>(null);
+  const auto = useRef<{ dir: number; last: number; raf: number | null }>({ dir: 0, last: 0, raf: null });
+  const AUTO_ZONE = 56, AUTO_SPEED = 9;               // px от края; px за кадр (~540 px/с)
+  const stopAuto = () => {
+    if (auto.current.raf !== null) cancelAnimationFrame(auto.current.raf);
+    auto.current = { dir: 0, last: 0, raf: null };
+  };
+  const autoScroll = (e: React.DragEvent) => {
+    const el = scrollBox.current;
+    if (!dragCol || !el) return;
+    const r = el.getBoundingClientRect();
+    const pinnedEdge = r.left + SELECT_W + KEY_W + cols.filter(c => pinned.has(c)).reduce((n, c) => n + colW(c), 0);
+    const dir = e.clientX < pinnedEdge + AUTO_ZONE && el.scrollLeft > 0 ? -1
+      : e.clientX > r.right - AUTO_ZONE && el.scrollLeft + el.clientWidth < el.scrollWidth ? 1 : 0;
+    auto.current.dir = dir;
+    auto.current.last = performance.now();
+    if (dir && auto.current.raf === null) {
+      const step = () => {
+        const a = auto.current;
+        if (!a.dir || performance.now() - a.last > 150 || !scrollBox.current) { stopAuto(); return; }
+        scrollBox.current.scrollLeft += a.dir * AUTO_SPEED;
+        a.raf = requestAnimationFrame(step);
+      };
+      auto.current.raf = requestAnimationFrame(step);
+    }
+  };
+  useEffect(() => stopAuto, []);
+  const endColDrag = () => { stopAuto(); setDragCol(null); setOverCol(null); };
 
   const toggle = (path: string) => setCollapsed(c => { const n = new Set(c); if (n.has(path)) n.delete(path); else n.add(path); return n; });
   const clickSort = (col: ColRef) =>
@@ -310,7 +350,7 @@ export default function ListTable({
             {c === PARTICIPANT_COL ? (
               <ParticipantCell value={list.assignees[issue.key] ?? ""} participants={participants} onChange={pid => onParticipant(issue.key, pid)} />
             ) : c === STAGE_COL ? (
-              <StageCell info={ctx.stageOf(issue)} />
+              <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined} />
             ) : c === DEFECTS_COL ? (
               <DefectsCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
             ) : c === BLOCK_COL ? (
@@ -322,6 +362,9 @@ export default function ListTable({
                 onChange={v => onSpend(issue.key, c === START_COL ? { start: v } : { end: v })} />
             ) : c === FACT_COL ? (
               <FactCell spend={list.spend?.[issue.key]} />
+            ) : isRoleCol(c) ? (
+              <RoleCell label={colLabel(c, list)} value={list.roles?.[issue.key]?.[c.slice(5)]} names={roleNames[c.slice(5)] ?? []}
+                onChange={patch => onRole(issue.key, c.slice(5), patch)} onNames={names => onRoleNames(c.slice(5), names)} />
             ) : c === FOLDER_COL ? (
               <span className="block truncate text-xs text-text-muted">{list.folders?.[issue.key] ?? "—"}</span>
             ) : c.startsWith("jira:") ? (
@@ -380,8 +423,12 @@ export default function ListTable({
               className="flex items-center gap-1.5 text-sm text-text-main w-max">
               <ChevronRight className={`w-4 h-4 text-text-muted transition-transform ${shut ? "" : "rotate-90"}`} />
               <span className="text-[11px] text-text-muted">{node.field}:</span>
-              <span className={`font-semibold ${node.ref === STAGE_COL && node.label === "Нет сторей" ? "text-red-600 dark:text-red-400" : ""}`}>
-                {jiraDateKind(node.ref) && node.label !== EMPTY_GROUP ? fmtJiraDate(node.label, jiraDateKind(node.ref) === "datetime") : node.label}</span>
+              {node.ref.startsWith("own:") && ownById[node.ref.slice(4)]?.tags && node.label !== EMPTY_GROUP ? (
+                <Tag field={ownById[node.ref.slice(4)]} value={node.label} />
+              ) : (
+                <span className={`font-semibold ${node.ref === STAGE_COL && node.label === "Нет сторей" ? "text-red-600 dark:text-red-400" : ""}`}>
+                  {jiraDateKind(node.ref) && node.label !== EMPTY_GROUP ? fmtJiraDate(node.label, jiraDateKind(node.ref) === "datetime") : node.label}</span>
+              )}
               <span className="text-[11px] px-1.5 rounded-full bg-bg-card border border-border-main text-text-muted">{node.issues.length}</span>
               {spendSum(node.issues) && <span className="text-[11px] text-text-muted ml-1">{spendSum(node.issues)}</span>}
             </button>
@@ -495,7 +542,8 @@ export default function ListTable({
   };
 
   return (
-    <div className="border border-border-main rounded-xl overflow-auto scrollbar-thin bg-bg-card" onDragOver={refuse}>
+    <div ref={scrollBox} className="border border-border-main rounded-xl overflow-auto scrollbar-thin bg-bg-card"
+      onDragOverCapture={autoScroll} onDragOver={refuse}>
       <table className="border-collapse" style={{ tableLayout: "fixed", width: tableW }}>
         <colgroup>
           <col style={{ width: SELECT_W }} />

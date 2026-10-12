@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { OWN_TYPE_LABEL, newId, type OwnField, type OwnFieldType } from "@/lib/jiraTool";
+import { OWN_TYPE_LABEL, newId, tagColor, type OwnField, type OwnFieldType } from "@/lib/jiraTool";
+import { textOn } from "@/lib/jiraStages";
 
 /** Своё поле списка: свободный ввод, дата, дата и время, список, множественный выбор. */
 export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDelete, onClose }: {
@@ -19,6 +20,10 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
   const [type, setType] = useState<OwnFieldType>(initial?.type ?? "text");
   const [wrap, setWrap] = useState<boolean>(initial?.wrap ?? false);
   const [options, setOptions] = useState<string[]>(initial?.options ?? []);
+  const [tags, setTags] = useState<boolean>(initial?.tags ?? false);
+  const [colors, setColors] = useState<Record<string, string>>(initial?.colors ?? {});
+  // Цвет варианта считается так же, как в таблице: свой или из палитры по порядку.
+  const colorOf = (o: string) => tagColor({ id: "", name: "", type, options, colors }, o);
   const [opt, setOpt] = useState("");
   const [asking, setAsking] = useState(false);
   const withOptions = type === "select" || type === "multiselect";
@@ -79,9 +84,27 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
               <button type="button" onClick={addOpt} disabled={!opt.trim()}
                 className="px-3 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Добавить</button>
             </div>
+            <label className="flex items-center gap-2 mb-2 text-sm text-text-main cursor-pointer select-none">
+              <input type="checkbox" checked={tags} onChange={e => setTags(e.target.checked)} />
+              Показывать как цветные теги
+            </label>
             <div className="flex flex-wrap gap-1.5">
               {options.length === 0 && <span className="text-xs text-text-muted">Пока нет вариантов</span>}
-              {options.map(o => (
+              {options.map(o => tags ? (
+                <span key={o} className="inline-flex items-center gap-1 pl-1 pr-1 py-0.5 rounded-md text-xs font-medium"
+                  style={{ backgroundColor: colorOf(o), color: textOn(colorOf(o)) }}>
+                  {/* Цвет тега — нажмите на кружок */}
+                  <span className="relative w-3.5 h-3.5 rounded-full ring-2 ring-white/80 focus-within:ring-primary flex-shrink-0"
+                    style={{ backgroundColor: colorOf(o) }} title="Цвет тега — нажмите, чтобы выбрать">
+                    <input type="color" value={colorOf(o)} onChange={e => setColors(c => ({ ...c, [o]: e.target.value }))}
+                      aria-label={`Цвет тега «${o}»`} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  </span>
+                  {o}
+                  <button type="button" onClick={() => setOptions(x => x.filter(y => y !== o))} aria-label={`Убрать ${o}`}>
+                    <X className="w-3 h-3 opacity-70 hover:opacity-100" />
+                  </button>
+                </span>
+              ) : (
                 <span key={o} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-bg-subtle text-xs text-text-main">
                   {o}
                   <button type="button" onClick={() => setOptions(x => x.filter(y => y !== o))} aria-label={`Убрать ${o}`}>
@@ -90,6 +113,7 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
                 </span>
               ))}
             </div>
+            {tags && options.length > 0 && <p className="text-[11px] text-text-muted mt-1.5">Цвет — кружок в теге. По умолчанию цвета идут по порядку вариантов.</p>}
           </div>
         )}
         <div className="flex items-center gap-2 pt-1">
@@ -105,7 +129,17 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
           <div className="ml-auto flex gap-2">
             <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
             <button type="button" disabled={!valid}
-              onClick={() => { onSave({ id: initial?.id ?? newId("own"), name: name.trim(), type, options: withOptions ? options : [], wrap: type === "text" ? wrap : undefined }); onClose(); }}
+              onClick={() => {
+                // Цвета храним только для оставшихся вариантов — у удалённых они не нужны.
+                const kept = Object.fromEntries(Object.entries(colors).filter(([o]) => options.includes(o)));
+                onSave({
+                  id: initial?.id ?? newId("own"), name: name.trim(), type, options: withOptions ? options : [],
+                  wrap: type === "text" ? wrap : undefined,
+                  tags: withOptions ? tags : undefined,
+                  colors: withOptions && tags && Object.keys(kept).length ? kept : undefined,
+                });
+                onClose();
+              }}
               className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {initial ? "Сохранить" : "Создать поле"}
             </button>

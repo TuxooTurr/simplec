@@ -16,15 +16,16 @@ import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
+import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFECTS_COL, SPEND_COLS, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFECTS_COL, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState,
-  type ColCtx, type Issue, type OwnField, type TaskList, type ToolState,
+  type ColCtx, type Issue, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
-import { makeStageResolver } from "@/lib/jiraStages";
+import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic } from "@/lib/jiraStages";
 import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKeys, relatedIssues } from "@/lib/jiraToolApi";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
@@ -35,7 +36,14 @@ import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKe
    Шапка списка — проект и действия с задачами; всё, что настраивает вид списка
    (колонки, группировка, папки, свои поля, поиск), — в левой колонке. */
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages"
+/**
+ * Импорт структуры выключен: плагин Structure в Jira Сбера отвечает 403 на REST этого токена.
+ * Код (бэкенд /api/jira/tool/structures и окно ImportStructureModal) оставлен — включить здесь,
+ * когда доступ появится.
+ */
+const STRUCTURE_ENABLED = false;
+
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -171,8 +179,28 @@ export default function JiraToolSection() {
 
   const allIssues = useMemo(() => [...Object.values(cache), ...(state?.created ?? [])], [cache, state?.created]);
   const byKey = useMemo(() => new Map(allIssues.map(i => [i.key, i])), [allIssues]);
-  const stageOf = useMemo(() => makeStageResolver(allIssues, state?.mapping ?? {}), [allIssues, state?.mapping]);
-  const defectsOf = useMemo(() => makeDefectsOf(defectIndex(allIssues)), [allIssues]);
+  const defectIdx = useMemo(() => defectIndex(allIssues), [allIssues]);
+  const byEpic = useMemo(() => storiesByEpic(allIssues), [allIssues]);
+  // Свои названия и цвета статусов (st) — до расчёта этапов: от названия зависят группы и сортировка.
+  const stageStyles = state?.stageStyles;
+  const stageOf = useMemo(() => {
+    applyStageStyles(stageStyles ?? {});
+    return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx);
+  }, [allIssues, state?.mapping, defectIdx, stageStyles]);
+  /**
+   * Дефекты задачи — свои (Epic Link и связи) плюс блокирующие, которые она наследует: у эпика —
+   * от его сторей, у стори — от её эпика. Так дефект, из-за которого задача «Заблокирована»,
+   * всегда виден в «Дефекты (st)» — других мест показа дефектов нет.
+   */
+  const defectsOf = useMemo(() => {
+    const own = makeDefectsOf(defectIdx);
+    return (i: Issue): Issue[] | null => {
+      const d = own(i);
+      if (d === null) return null;
+      const inherited = blockingDefects(i, defectIdx, byEpic).filter(x => !d.includes(x));
+      return inherited.length ? [...d, ...inherited] : d;
+    };
+  }, [defectIdx, byEpic]);
   const list = state?.lists.find(l => l.id === activeId) ?? null;
 
   // Задачи списка, которых ещё нет, — из Jira; у загруженных — связанные (один раз).
@@ -221,7 +249,7 @@ export default function JiraToolSection() {
                                      hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
     // Поля, которые считает SimpleTest, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
-    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...SPEND_COLS, ...(hasFolders ? [FOLDER_COL] : [])]
+    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, ...(hasFolders ? [FOLDER_COL] : [])]
       .map(c => ({ value: c, label: colLabel(c, list), group: "Поля SimpleTest", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
   ] : [];
@@ -625,7 +653,7 @@ export default function JiraToolSection() {
                   </div>
                 </div>
 
-                {list.structure && (
+                {STRUCTURE_ENABLED && list.structure && (
                   <div className="text-[11px] text-text-muted flex items-start gap-1.5 border-t border-border-main pt-2">
                     <FolderTree className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
                     <span className="flex-1">Из структуры «{list.structure.name}» · {list.structure.importedAt}</span>
@@ -651,6 +679,11 @@ export default function JiraToolSection() {
                 ))}
               </div>
             </div>
+
+            {list && (
+              <LoadPanel list={list} participants={state.participants}
+                onRange={load => updateList(l => ({ ...l, load }))} />
+            )}
 
             <button type="button" onClick={() => setModal("stages")}
               className="flex items-center gap-2 bg-bg-card border border-border-main rounded-xl px-3 py-2.5 text-sm text-text-main hover:border-primary/40 text-left">
@@ -732,10 +765,12 @@ export default function JiraToolSection() {
                     title="Перечитать задачи списка из Jira" className="p-2 rounded-lg border border-border-main text-text-muted hover:text-primary disabled:opacity-40">
                     <RefreshCw className={`w-4 h-4 ${busy > 0 ? "animate-spin" : ""}`} />
                   </button>
-                  <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
-                    <FolderTree className="w-4 h-4" /> Структура
-                  </button>
+                  {STRUCTURE_ENABLED && (
+                    <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
+                      <FolderTree className="w-4 h-4" /> Структура
+                    </button>
+                  )}
                   <button type="button" onClick={() => setModal("add")} disabled={jira.state !== "ok"}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
                     <Plus className="w-4 h-4" /> Добавить задачи
@@ -786,12 +821,14 @@ export default function JiraToolSection() {
               <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                 {list.keys.length === 0 ? (
                   <div className="flex-1 flex flex-col items-center justify-center gap-3 border-2 border-dashed border-border-main rounded-xl text-text-muted">
-                    <p className="text-sm">Список пуст. Добавьте задачи проекта {list.project} из Jira, импортируйте структуру или создайте задачу.</p>
+                    <p className="text-sm">Список пуст. Добавьте задачи проекта {list.project} из Jira или создайте задачу.</p>
                     <div className="flex gap-2">
                       <button type="button" onClick={() => setModal("add")} disabled={jira.state !== "ok"}
                         className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">Добавить задачи</button>
-                      <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"}
-                        className="px-4 py-2 rounded-lg border border-border-main text-sm text-text-main disabled:opacity-40">Импорт структуры</button>
+                      {STRUCTURE_ENABLED && (
+                        <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"}
+                          className="px-4 py-2 rounded-lg border border-border-main text-sm text-text-main disabled:opacity-40">Импорт структуры</button>
+                      )}
                     </div>
                   </div>
                 ) : listIssues.length === 0 && !q ? (
@@ -843,7 +880,13 @@ export default function JiraToolSection() {
                       const p = l.pinned ?? [];
                       return { ...l, pinned: p.includes(col) ? p.filter(c => c !== col) : [...p, col] };
                     })}
-                    onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))} />
+                    onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))}
+                    onOpenStage={issue => setModal({ stageFor: issue })}
+                    roleNames={state.roleNames}
+                    onRole={(key, fid, patch) => updateList(l => ({
+                      ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
+                    }))}
+                    onRoleNames={(fid, names) => update(s => ({ ...s, roleNames: { ...s.roleNames, [fid]: names } }))} />
                 )}
               </div>
             </>
@@ -866,7 +909,10 @@ export default function JiraToolSection() {
         <IssueFormModal open project={projectKeyOfIssue(modal.draft.key)} participants={state.participants}
           initial={draftOf(modal.draft)} onSave={d => saveDraft(modal.draft, d)} onClose={() => setModal(null)} />
       )}
-      {modal === "import" && list && (
+      {modal && typeof modal === "object" && "stageFor" in modal && (
+        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} onClose={() => setModal(null)} />
+      )}
+      {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
       )}
       {modal === "participants" && (
@@ -883,8 +929,8 @@ export default function JiraToolSection() {
       )}
       {modal === "stages" && (
         <StageMappingModal open project={list?.project ?? "SBER911"} projects={state.lists.map(l => l.project)}
-          mapping={state.mapping} onClose={() => setModal(null)}
-          onSave={mapping => update(s => ({ ...s, mapping }))} />
+          mapping={state.mapping} styles={state.stageStyles} onClose={() => setModal(null)}
+          onSave={(mapping, stageStyles) => update(s => ({ ...s, mapping, stageStyles }))} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} onClose={() => setModal(null)} />
@@ -895,6 +941,68 @@ export default function JiraToolSection() {
       )}
       <JiraSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); connect(true); }} />
     </Shell>
+  );
+}
+
+/**
+ * Нагрузка по списку: у каждого участника — сумма «Траты план (st)» его задач в этом списке против
+ * нормы за выбранный период (будни × 7 ч: 9:00–18:00 минус обед и утренние встречи). Превышение — красным.
+ * Период свой у каждого списка.
+ */
+function LoadPanel({ list, participants, onRange }: {
+  list: TaskList;
+  participants: Participant[];
+  onRange: (r: { from: string; to: string }) => void;
+}) {
+  const range = list.load ?? defaultLoadRange();
+  const rows = listLoad(list, participants, range);
+  const days = workdaysBetween(range.from, range.to);
+  const dateCls = "min-w-0 flex-1 text-xs border border-border-main rounded-md px-1.5 py-1 bg-[var(--color-input-bg)] text-text-main " +
+    "focus:outline-none focus:ring-2 focus:ring-primary/30";
+  return (
+    <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-2">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка по списку</p>
+      <div className="flex items-center gap-1">
+        <input type="date" value={range.from} max={range.to} onChange={e => e.target.value && onRange({ ...range, from: e.target.value })}
+          aria-label="Нагрузка: с даты" className={dateCls} />
+        <span className="text-xs text-text-muted">—</span>
+        <input type="date" value={range.to} min={range.from} onChange={e => e.target.value && onRange({ ...range, to: e.target.value })}
+          aria-label="Нагрузка: по дату" className={dateCls} />
+      </div>
+      <p className="text-[11px] text-text-muted" title="Будни 9:00–18:00 минус час обеда и час утренних встреч. Праздники не учитываются.">
+        Рабочих дней: {days} · норма {fmtMinutes(days * LOAD_DAY_MINUTES)} (по {LOAD_DAY_MINUTES / 60} ч в день)
+      </p>
+      {participants.length === 0 ? (
+        <p className="text-xs text-text-muted">Добавьте участников и назначьте их на задачи — здесь появится их нагрузка.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {rows.map(r => {
+            const pct = r.capacity ? Math.min(100, Math.round((r.planned / r.capacity) * 100)) : r.planned ? 100 : 0;
+            return (
+              <li key={r.participant.id} title={`Задач в списке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}`}>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.participant.color }} />
+                  <span className="min-w-0 flex-1 truncate text-text-main">{r.participant.name}</span>
+                  <span className={`whitespace-nowrap tabular-nums ${r.over ? "text-red-600 dark:text-red-400 font-semibold" : "text-text-muted"}`}>
+                    {fmtMinutes(r.planned)} / {fmtMinutes(r.capacity)}
+                  </span>
+                </div>
+                <div className="mt-1 h-1.5 rounded-full bg-bg-subtle overflow-hidden" aria-hidden>
+                  <div className={`h-full rounded-full ${r.over ? "bg-red-500" : "bg-primary/70"}`} style={{ width: `${pct}%` }} />
+                </div>
+                {(r.over || r.unplanned > 0) && (
+                  <p className="mt-0.5 text-[10px] text-text-muted">
+                    {r.over && <span className="text-red-600 dark:text-red-400">перегрузка {fmtMinutes(r.planned - r.capacity)}</span>}
+                    {r.over && r.unplanned > 0 && " · "}
+                    {r.unplanned > 0 && <>без плана: {r.unplanned}</>}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 

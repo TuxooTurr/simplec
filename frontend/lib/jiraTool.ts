@@ -12,10 +12,10 @@
  */
 
 import {
-  DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isResolvedDefect,
+  DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isClosedDefect, isResolvedDefect,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
-import { STAGES, STAGE_LABEL, stageText, type StageInfo, type StageMapping } from "./jiraStages";
+import { STAGES, STAGE_LABEL, stageText, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
@@ -38,6 +38,21 @@ export interface OwnField {
   options: string[];
   /** Свободный ввод: true — переносить и показывать весь текст, иначе — обрезать многоточием. */
   wrap?: boolean;
+  /** Список и множественный выбор: показывать значения цветными тегами. */
+  tags?: boolean;
+  /** Цвет тега по варианту («#rrggbb»); нет — цвет из палитры по порядку варианта. */
+  colors?: Record<string, string>;
+}
+
+/** Палитра тегов по умолчанию — по порядку вариантов. */
+export const TAG_COLORS = ["#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0d9488", "#db2777", "#64748b", "#ea580c", "#0891b2"];
+
+/** Цвет тега варианта: свой или из палитры по порядку. */
+export function tagColor(field: OwnField, option: string): string {
+  const own = field.colors?.[option];
+  if (own && /^#[0-9a-f]{6}$/i.test(own)) return own;
+  const i = Math.max(0, field.options.indexOf(option));
+  return TAG_COLORS[i % TAG_COLORS.length];
 }
 
 export interface Participant {
@@ -74,7 +89,70 @@ export const END_COL: ColRef = "test_end";
 export const FACT_COL: ColRef = "fact";
 export const SPEND_COLS: ColRef[] = [PLAN_COL, START_COL, END_COL, FACT_COL];
 
-export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...SPEND_COLS, FOLDER_COL];
+/**
+ * Поля направлений (st): кто ведёт задачу в аналитике, дизайне, бэке и т.д. и в каком она там состоянии.
+ * В ячейке — фамилия (список фамилий у каждого поля свой, общий на все списки) и цвет состояния.
+ */
+export const ROLE_FIELDS: { id: string; label: string }[] = [
+  { id: "analytics", label: "Analytics" },
+  { id: "design", label: "Design" },
+  { id: "back", label: "Back" },
+  { id: "front", label: "Front" },
+  { id: "mobile", label: "Mobile" },
+  { id: "dev", label: "Dev" },
+  { id: "sup", label: "Sup" },
+];
+export const roleCol = (id: string): ColRef => `role:${id}`;
+export const ROLE_COLS: ColRef[] = ROLE_FIELDS.map(f => roleCol(f.id));
+export const isRoleCol = (ref: ColRef) => ref.startsWith("role:");
+
+/** Состояние работы по направлению: серый — не взят, жёлтый — в работе, зелёный — выполнен. */
+export type RoleState = "todo" | "doing" | "done";
+export const ROLE_STATES: RoleState[] = ["todo", "doing", "done"];
+export const ROLE_STATE_LABEL: Record<RoleState, string> = { todo: "Не взят в работу", doing: "В работе", done: "Выполнен" };
+export interface RoleValue { name?: string; state?: RoleState }
+
+export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, FOLDER_COL];
+
+/**
+ * Норма для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч — 7 часов в день.
+ * Праздники пока не учитываются. Меняется здесь.
+ */
+export const LOAD_DAY_MINUTES = 7 * 60;
+
+/** Рабочие дни (пн–пт) между датами включительно; даты — «ГГГГ-ММ-ДД». */
+export function workdaysBetween(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00`), b = Date.parse(`${to}T00:00`);
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return 0;
+  let n = 0;
+  for (const d = new Date(a); d.getTime() <= b; d.setDate(d.getDate() + 1)) {
+    const wd = d.getDay();
+    if (wd !== 0 && wd !== 6) n++;
+  }
+  return n;
+}
+
+/** Период нагрузки по умолчанию: две недели с сегодняшнего дня. */
+export function defaultLoadRange(now = new Date()): { from: string; to: string } {
+  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const to = new Date(now); to.setDate(to.getDate() + 13);
+  return { from: iso(now), to: iso(to) };
+}
+
+export interface LoadRow { participant: Participant; planned: number; tasks: number; unplanned: number; capacity: number; over: boolean }
+
+/** Нагрузка участников по списку: сумма «Траты план (st)» их задач против нормы за период. */
+export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string }): LoadRow[] {
+  const capacity = workdaysBetween(range.from, range.to) * LOAD_DAY_MINUTES;
+  return participants.map(p => {
+    const keys = list.keys.filter(k => list.assignees[k] === p.id);
+    const planned = keys.reduce((n, k) => n + (list.spend?.[k]?.plan ?? 0), 0);
+    return {
+      participant: p, planned, tasks: keys.length, capacity, over: planned > capacity,
+      unplanned: keys.filter(k => list.spend?.[k]?.plan == null).length,
+    };
+  }).sort((a, b) => (b.capacity ? b.planned / b.capacity : 0) - (a.capacity ? a.planned / a.capacity : 0) || b.planned - a.planned);
+}
 
 /** Трудозатраты задачи в списке: план в минутах, начало и конец теста — «ГГГГ-ММ-ДДTчч:мм». */
 export interface Spend { plan?: number; start?: string; end?: string }
@@ -193,6 +271,10 @@ export interface TaskList {
   pinned?: ColRef[];
   /** трудозатраты по задачам: план, начало и конец теста */
   spend?: Record<string, Spend>;
+  /** поля направлений (st): ключ задачи → поле → фамилия и состояние */
+  roles?: Record<string, Record<string, RoleValue>>;
+  /** период для расчёта нагрузки, «ГГГГ-ММ-ДД» */
+  load?: { from: string; to: string };
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -208,6 +290,10 @@ export interface ToolState {
   nextKey: number;
   /** Сопоставление статусов с этапами; пусто — черновик по названиям статусов. */
   mapping: StageMapping;
+  /** Фамилии для полей направлений (st): поле → список. Общие на все списки. */
+  roleNames: Record<string, string[]>;
+  /** Свои названия и цвета статусов (st); пусто — по умолчанию. */
+  stageStyles: StageStyles;
 }
 
 export const DEFAULT_COLUMNS: ColRef[] = ["jira:summary", "jira:issuetype", "jira:status", STAGE_COL, "jira:priority", PARTICIPANT_COL];
@@ -231,7 +317,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {} };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {} };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -254,6 +340,8 @@ export function loadState(): ToolState {
           created: s.created ?? [],
           nextKey: s.nextKey ?? 1,
           mapping: s.mapping ?? {},
+          roleNames: s.roleNames ?? {},
+          stageStyles: s.stageStyles ?? {},
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);
@@ -318,6 +406,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
       values: remap(l.values) ?? {},
       folders: remap(l.folders),
       spend: remap(l.spend),
+      roles: remap(l.roles),
     })),
   };
 }
@@ -338,9 +427,13 @@ export function makeDefectsOf(index: Map<string, Issue[]>) {
   return (issue: Issue): Issue[] | null => (categoryOf(issue) === "defect" ? null : index.get(issue.key) ?? []);
 }
 
-/** Неустранённый дефект: всё, кроме «Подтверждено исправление» и «Закрыт». */
+/**
+ * Неустранённый дефект: всё, кроме «Подтверждено исправление» и «Закрыт». Блокирующий — строже:
+ * неустранён, пока не «Закрыт» (как и «Заблокирован» в статусе (st)), чтобы дефект, который держит
+ * задачу заблокированной, всегда был виден в «Дефекты (st)» и «Блок (st)».
+ */
 export function isOpenDefect(d: Issue): boolean {
-  return !isResolvedDefect(d);
+  return !isResolvedDefect(d) || (isBlocker(d) && !isClosedDefect(d));
 }
 
 /** Неустранённые блокирующие дефекты задачи. */
@@ -358,6 +451,7 @@ export function colLabel(ref: ColRef, list: TaskList): string {
   if (ref === START_COL) return "Начало теста (st)";
   if (ref === END_COL) return "Конец теста (st)";
   if (ref === FACT_COL) return "Траты факт (st)";
+  if (isRoleCol(ref)) return `${ROLE_FIELDS.find(f => roleCol(f.id) === ref)?.label ?? ref.slice(5)} (st)`;
   if (ref.startsWith("jira:")) return FIELD_BY_ID[ref.slice(5)]?.name ?? ref.slice(5);
   if (ref.startsWith("own:")) return list.ownFields.find(f => f.id === ref.slice(4))?.name ?? "Удалённое поле";
   return ref;
@@ -388,6 +482,8 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
     v = f == null ? null : String(f);
   } else if (ref === START_COL || ref === END_COL) {
     v = ctx.list.spend?.[issue.key]?.[ref === START_COL ? "start" : "end"] ?? null;
+  } else if (isRoleCol(ref)) {
+    v = ctx.list.roles?.[issue.key]?.[ref.slice(5)]?.name ?? null;
   } else if (ref.startsWith("jira:")) {
     v = issue.fields[ref.slice(5)];
   } else if (ref.startsWith("own:")) {
@@ -403,7 +499,8 @@ export function orderIndex(ref: ColRef, value: string): number {
   if (ref === "jira:priority") return PRIORITIES.indexOf(value);
   if (ref === STAGE_COL) {
     const i = STAGES.findIndex(s => STAGE_LABEL[s] === value);
-    return i >= 0 ? i : value === "Нет сторей" ? -2 : -1;
+    // «Заблокирован» и «Нет сторей» — первыми: это то, что требует внимания.
+    return i >= 0 ? i : value === STAGE_LABEL.blocked ? -3 : value === "Нет сторей" ? -2 : -1;
   }
   return -1;
 }

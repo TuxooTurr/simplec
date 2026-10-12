@@ -76,3 +76,20 @@ export function taskChecklist(body: { key: string; summary: string; requirement_
     body: JSON.stringify(body),
   });
 }
+
+export interface ReleaseData {
+  release: Issue;
+  /** Связи релиза: ключ задачи и подпись связи («включает», «relates to»…). */
+  links: { key: string; link: string }[];
+  issues: Issue[];
+  /** Эпики, к которым привязаны задачи релиза (через Epic Link), если их самих нет в составе. */
+  epics: Issue[];
+  epic_link: string;
+  /** Связанные задачи, которые Jira не отдала (удалены или нет прав). */
+  missing: string[];
+}
+
+/** Состав релиза (задача типа «Релиз»): связанные задачи и их эпики. */
+export function getRelease(key: string): Promise<ReleaseData> {
+  return fetchJson(`/api/jira/tool/release?key=${encodeURIComponent(key)}`);
+}

@@ -249,3 +249,51 @@ def test_нет_плагина_структуры(jira):
     with pytest.raises(HTTPException) as e:
         JT.structures(db=None)
     assert "Structure" in e.value.detail
+
+
+# ── Релиз ────────────────────────────────────────────────────────────────────
+
+def test_связи_релиза_с_подписями():
+    issue = {"fields": {"issuelinks": [
+        {"type": {"name": "Release", "outward": "включает", "inward": "входит в"}, "outwardIssue": {"key": "SBER911-2"}},
+        {"type": {"name": "Relates", "outward": "relates to", "inward": "relates to"}, "inwardIssue": {"key": "SBER911-3"}},
+        {"type": {"name": "Release", "outward": "включает"}, "outwardIssue": {"key": "SBER911-2"}},
+    ]}}
+    assert JT.release_links(issue) == [{"key": "SBER911-2", "link": "включает"}, {"key": "SBER911-3", "link": "relates to"}]
+
+
+def test_состав_релиза_и_эпики(jira):
+    def issue(m, path, params, b):
+        return {"key": "SBER911-100", "fields": {"summary": "Релиз 16/10", "issuetype": {"name": "Релиз"},
+                "issuelinks": [{"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-2"}},
+                               {"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-3"}},
+                               {"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-4"}}]}}
+
+    def search(m, p, params, b):
+        if "SBER911-50" in params["jql"]:
+            return {"total": 1, "issues": [_issue("SBER911-50", summary="Эпик", issuetype={"name": "Epic"})]}
+        return {"total": 2, "issues": [
+            _issue("SBER911-2", summary="Стори", issuetype={"name": "История"}, customfield_10006="SBER911-50"),
+            _issue("SBER911-3", summary="Дефект", issuetype={"name": "Дефект"}),
+        ]}
+
+    fake = jira({
+        "/rest/api/2/field": lambda *a: [{"id": "customfield_10006", "name": "Epic Link",
+                                          "schema": {"custom": "com.pyxis.greenhopper.jira:gh-epic-link"}}],
+        "/rest/api/2/status": lambda *a: [], "/rest/api/2/priority": lambda *a: [],
+        "/rest/api/2/resolution": lambda *a: [],
+        "/rest/api/2/issue/": issue, "/rest/api/2/search": search,
+    })
+    res = JT.release("sber911-100", db=None)
+    assert res["release"]["fields"]["summary"] == "Релиз 16/10"
+    assert [i["key"] for i in res["issues"]] == ["SBER911-2", "SBER911-3"]
+    assert [e["key"] for e in res["epics"]] == ["SBER911-50"]
+    assert res["missing"] == ["SBER911-4"]
+    assert res["links"][0] == {"key": "SBER911-2", "link": "включает"}
+
+
+def test_релиз_плохой_ключ(jira):
+    jira({})
+    with pytest.raises(HTTPException) as e:
+        JT.release("мусор", db=None)
+    assert e.value.status_code == 422

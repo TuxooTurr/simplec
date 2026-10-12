@@ -156,7 +156,10 @@ SimpleTest/
 - `st_autotest_project` — привязанный проект (персистентно)
 - `st_projects`, `st_teams`, `st_ke` — списки для ExportPanel
 - `st_gen_history` — история генераций
-- `st_jira_epics` — сохранённый список эпиков Jira по проекту (обновляется кнопкой в панели регистрации)
+- `st_jira_epics` — **sessionStorage**: выгруженный список эпиков Jira по проекту до конца сессии вкладки
+  (выгружается сам при первом открытии формы задачи, обновляется кнопкой в выборе эпика)
+- `st_jira_tool_cache` — **sessionStorage**: кэш задач Jira tool на сессию (задачи из Jira, связанные, ненайденные);
+  основная копия — в памяти модуля `frontend/lib/jiraToolCache.ts`, фоновое обновление раз в 30 минут
 
 ### Авторизация
 Bearer-токен (токен в localStorage на фронте, проверяется `AuthMiddleware` в `backend/main.py`).

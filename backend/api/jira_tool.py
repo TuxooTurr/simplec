@@ -20,6 +20,7 @@ Jira tool: данные настоящей Jira для списков плани
   GET  /api/jira/tool/statuses               — статусы проекта по типам задач
   POST /api/jira/tool/transitions            — какие переходы доступны задачам
   POST /api/jira/tool/transition             — выполнить переходы
+  GET  /api/jira/tool/release                — состав релиза (задача «Релиз»): связанные задачи и их эпики
   GET  /api/jira/tool/structures             — структуры (плагин Structure)
   GET  /api/jira/tool/structures/{id}        — дерево структуры: папки и задачи
 """
@@ -447,6 +448,53 @@ def apply_transitions(body: TransitionBody, db: Session = Depends(get_db)) -> di
 
     results = _parallel(one, changes)
     return {"results": results, "done": sum(1 for r in results if r["ok"])}
+
+
+# ── Релиз (тип задачи «Релиз», не «Release 2.0») ─────────────────────────────
+
+def release_links(issue: dict) -> list[dict]:
+    """Связи задачи-релиза → [{key, link}]: ключ связанной задачи и подпись связи с её стороны
+    («включает», «входит в»…). По подписи человек отключит в предпросмотре лишние связи."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for link in (issue.get("fields") or {}).get("issuelinks") or []:
+        t = link.get("type") or {}
+        if link.get("outwardIssue"):
+            key, label = link["outwardIssue"].get("key"), t.get("outward") or t.get("name") or ""
+        elif link.get("inwardIssue"):
+            key, label = link["inwardIssue"].get("key"), t.get("inward") or t.get("name") or ""
+        else:
+            continue
+        if key and key not in seen:
+            seen.add(key)
+            out.append({"key": key, "link": label})
+    return out
+
+
+@router.get("/api/jira/tool/release")
+def release(key: str, db: Session = Depends(get_db)) -> dict:
+    """Состав релиза: связанные с задачей-релизом задачи (все поля) и эпики, к которым они привязаны
+    через Epic Link, — чтобы на фронтенде стори и дефекты эпика собрать под эпиком."""
+    rk = (_clean_keys([key]) or [""])[0]
+    if not rk:
+        raise HTTPException(422, f"Некорректный ключ релиза: «{key}»")
+    cfg = _load_cfg(db)
+    raw = _jira_request(cfg, "GET", f"/rest/api/2/issue/{rk}", params={"fields": "summary,issuetype,status,issuelinks"})
+    links = release_links(raw)
+    linked = [norm_issue(i, cfg["base_url"]) for i in _by_keys(cfg, [x["key"] for x in links][:MAX_ISSUES])]
+    epic_field = catalog(db=db).get("epic_link", _DEFAULT_EPIC_LINK)
+    have = {i["key"] for i in linked}
+    epic_keys = sorted({i["fields"][epic_field] for i in linked
+                        if isinstance(i["fields"].get(epic_field), str) and i["fields"][epic_field] not in have})
+    epics = [norm_issue(i, cfg["base_url"]) for i in _by_keys(cfg, epic_keys)] if epic_keys else []
+    return {
+        "release": norm_issue(raw, cfg["base_url"]),
+        "links": links,
+        "issues": linked,
+        "epics": epics,
+        "epic_link": epic_field,
+        "missing": [x["key"] for x in links if x["key"] not in have],
+    }
 
 
 # ── Structure (ALM Works) ────────────────────────────────────────────────────

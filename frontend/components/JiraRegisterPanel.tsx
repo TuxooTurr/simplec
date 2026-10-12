@@ -37,17 +37,16 @@ const PRIORITY_SYNONYMS: Record<string, string[]> = {
   "низкий":      ["низк", "low", "minor", "trivial"],
 };
 
-/* Список эпиков сохраняется между генерациями и перезагрузками страницы.
-   Панель размонтируется на каждой новой генерации отчёта, и раньше список
-   пропадал вместе с ней — приходилось выгружать заново перед каждым дефектом.
-   Эпики меняются редко, поэтому обновление — только по кнопке. */
+/* Выгруженный список эпиков живёт до конца сессии вкладки (sessionStorage): не пропадает между
+   формами и перезагрузками, но и не устаревает неделями — новая сессия выгружает заново.
+   В течение сессии обновление — по кнопке. Раньше список лежал в localStorage бессрочно. */
 const EPICS_CACHE_KEY = "st_jira_epics";
 
 export type EpicsCache = { epics: JiraEpic[]; loadedAt: number };
 
 export function readEpicsCache(project: string): EpicsCache | null {
   try {
-    const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
+    const all = JSON.parse(sessionStorage.getItem(EPICS_CACHE_KEY) || "{}");
     const c = all[project];
     return c && Array.isArray(c.epics) ? c : null;
   } catch { return null; }
@@ -56,8 +55,9 @@ export function readEpicsCache(project: string): EpicsCache | null {
 export function writeEpicsCache(project: string, epics: JiraEpic[]): EpicsCache {
   const entry = { epics, loadedAt: Date.now() };
   try {
-    const all = JSON.parse(localStorage.getItem(EPICS_CACHE_KEY) || "{}");
-    localStorage.setItem(EPICS_CACHE_KEY, JSON.stringify({ ...all, [project]: entry }));
+    const all = JSON.parse(sessionStorage.getItem(EPICS_CACHE_KEY) || "{}");
+    sessionStorage.setItem(EPICS_CACHE_KEY, JSON.stringify({ ...all, [project]: entry }));
+    localStorage.removeItem(EPICS_CACHE_KEY);   // бессрочная копия из прежних версий больше не нужна
   } catch { /* кэш не критичен: список останется в памяти панели */ }
   return entry;
 }

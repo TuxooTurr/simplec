@@ -1,16 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { Hash, Loader2, Search, X } from "lucide-react";
+import { Hash, Loader2, Rocket, Search, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { jqlExamples, parseKeys, type Issue } from "@/lib/jiraTool";
+import { jqlExamples, parseKeys, type Issue, type ListSource } from "@/lib/jiraTool";
 import { issuesByKeys, searchIssues } from "@/lib/jiraToolApi";
+import ReleaseTab, { type ReleasePick } from "./ReleaseTab";
+
+/** Источник, из которого взяты задачи корзины: JQL-запрос или релиз — со снимком состава. */
+export type PickedSource = Omit<ListSource, "id" | "checkedAt">;
+
+/** Потолок JQL-выборки: больше — состав не отслеживаем (снимок был бы неполным). */
+const JQL_LIMIT = 1000;
 
 /**
  * Добавление задач в список. Выбранные задачи копятся в «корзине» между поисками:
  * нашли по номеру — выбрали — ищете следующую, выбранное не теряется, пока не нажмёте «Сохранить».
  * По номеру принимается ключ (SBER911-12345), голый номер (12345) или ссылка на задачу.
  * Поиск идёт в настоящую Jira; найденные задачи уходят в список вместе с их полями.
+ * Задачи из JQL-фильтра и релиза запоминают источник: при обновлении его состав сверяется со списком.
  */
 export default function AddIssuesModal({ open, project, onClose, inList, onAdd }: {
   open: boolean;
@@ -18,9 +26,15 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
   project: string;
   onClose: () => void;
   inList: Set<string>;
-  onAdd: (issues: Issue[]) => void;
+  /** issues — в список; sources — источники задач корзины; extra — задачи для кэша (состав релиза). */
+  onAdd: (issues: Issue[], sources: PickedSource[], extra: Issue[]) => void;
 }) {
-  const [tab, setTab] = useState<"keys" | "jql">("keys");
+  const [tab, setTab] = useState<"keys" | "jql" | "release">("keys");
+  /** Источники по ключу задачи в корзине: из какого запроса или релиза она пришла. */
+  const [sources, setSources] = useState<Map<string, PickedSource>>(new Map());
+  const [origin, setOrigin] = useState<Record<string, string>>({});
+  const [extra, setExtra] = useState<Issue[]>([]);
+  const [jqlRun, setJqlRun] = useState<{ query: string; keys: string[]; truncated: boolean } | null>(null);
   const [jql, setJql] = useState("");
   const [keysText, setKeysText] = useState("");
   const [found, setFound] = useState<Issue[] | null>(null);
@@ -33,15 +47,30 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
   const [total, setTotal] = useState(0);
 
   const inBasket = new Set(basket.map(i => i.key));
-  const put = (items: Issue[]) => setBasket(b => [...b, ...items.filter(i => !inList.has(i.key) && !b.some(x => x.key === i.key))]);
-  const toggle = (i: Issue) => (inBasket.has(i.key) ? setBasket(b => b.filter(x => x.key !== i.key)) : put([i]));
+  const put = (items: Issue[], from?: PickedSource) => {
+    setBasket(b => [...b, ...items.filter(i => !inList.has(i.key) && !b.some(x => x.key === i.key))]);
+    if (from) {
+      const id = `${from.kind}:${from.query}`;
+      setSources(m => new Map(m).set(id, from));
+      setOrigin(o => ({ ...o, ...Object.fromEntries(items.map(i => [i.key, id])) }));
+    }
+  };
+  /** Источник текущей JQL-выборки (если она полная — иначе состав не отследить). */
+  const jqlSource = (): PickedSource | undefined =>
+    jqlRun && !jqlRun.truncated ? { kind: "jql", query: jqlRun.query, name: jqlRun.query, keys: jqlRun.keys } : undefined;
+  const putRelease = (p: ReleasePick) => {
+    put(p.picked, { kind: "release", query: p.source.key, name: p.source.name, keys: p.source.keys });
+    setExtra(x => [...x, ...p.all]);
+  };
+  const toggle = (i: Issue) => (inBasket.has(i.key) ? setBasket(b => b.filter(x => x.key !== i.key)) : put([i], tab === "jql" ? jqlSource() : undefined));
 
   const runJql = async () => {
     if (!jql.trim() || busy) return;
     setErr(""); setMissing([]); setNote(""); setBusy(true);
     try {
-      const r = await searchIssues(jql.trim(), 200);
+      const r = await searchIssues(jql.trim(), JQL_LIMIT);
       setFound(r.issues); setTotal(r.total);
+      setJqlRun({ query: jql.trim(), keys: r.issues.map(i => i.key), truncated: r.truncated });
     } catch (e) { setFound(null); setErr((e as Error).message); }
     setBusy(false);
   };
@@ -83,9 +112,13 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
             className={tabCls(tab === "keys")}><Hash className="w-4 h-4" /> По номеру или ссылке</button>
           <button type="button" role="tab" aria-selected={tab === "jql"} onClick={() => { setTab("jql"); setFound(null); setErr(""); setNote(""); }}
             className={tabCls(tab === "jql")}><Search className="w-4 h-4" /> JQL-фильтр</button>
+          <button type="button" role="tab" aria-selected={tab === "release"} onClick={() => { setTab("release"); setFound(null); setErr(""); setNote(""); }}
+            className={tabCls(tab === "release")}><Rocket className="w-4 h-4" /> Из релиза</button>
         </div>
 
-        {tab === "keys" ? (
+        {tab === "release" ? (
+          <ReleaseTab project={project} inList={new Set([...inList, ...basket.map(i => i.key)])} onPut={putRelease} />
+        ) : tab === "keys" ? (
           <div className="space-y-2">
             <div className="flex gap-2">
               <input value={keysText} onChange={e => setKeysText(e.target.value)} autoFocus
@@ -137,10 +170,13 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
             <div className="flex items-center gap-3 px-3 py-2 bg-bg-subtle text-xs text-text-muted">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={allOn} disabled={!fresh.length}
-                  onChange={() => (allOn ? setBasket(b => b.filter(x => !fresh.some(f => f.key === x.key))) : put(fresh))} />
+                  onChange={() => (allOn ? setBasket(b => b.filter(x => !fresh.some(f => f.key === x.key))) : put(fresh, jqlSource()))} />
                 Найдено: {total > found.length ? `${total}, показаны первые ${found.length}` : found.length}
                 {found.length - fresh.length > 0 && ` · уже в списке: ${found.length - fresh.length}`}
               </label>
+              <span className="ml-auto text-[11px]" title="При обновлении из Jira фильтр перезапускается: новые задачи придут с «n», выпавшие пометятся «У»">
+                {jqlRun?.truncated ? `больше ${JQL_LIMIT} — состав фильтра не отслеживается` : "состав фильтра будет сверяться при обновлении"}
+              </span>
             </div>
             <div className="max-h-64 overflow-y-auto scrollbar-thin divide-y divide-border-main">
               {found.length === 0 && <p className="text-sm text-text-muted p-4">Ничего не нашлось.</p>}
@@ -189,7 +225,12 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
           <button type="button" onClick={onClose}
             className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
           <button type="button" disabled={!basket.length}
-            onClick={() => { onAdd(basket); onClose(); }}
+            onClick={() => {
+              // Источники — только те, из которых в корзине что-то осталось.
+              const used = new Set(basket.map(i => origin[i.key]).filter(Boolean));
+              onAdd(basket, [...sources.entries()].filter(([id]) => used.has(id)).map(([, s]) => s), extra);
+              onClose();
+            }}
             className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
             Сохранить{basket.length ? ` (${basket.length})` : ""}
           </button>

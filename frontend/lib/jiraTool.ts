@@ -323,6 +323,13 @@ export interface TaskList {
   noLoad?: Record<string, boolean>;
   /** false — не исключать автоматически задачи в «Готово к релизу» и дальше (по умолчанию исключаем) */
   loadAuto?: boolean;
+  /**
+   * Источники задач — JQL-фильтр или релиз, из которых задачи добавлены в список. При обновлении кэша
+   * их состав сверяется со снимком: новые задачи встают в список с отметкой «n», выпавшие — помечаются «У».
+   */
+  sources?: ListSource[];
+  /** Отметки состава: «new» — пришла из источника (снимается переносом в папку), «removed» — выпала из источника. */
+  marks?: Record<string, "new" | "removed">;
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -643,11 +650,67 @@ export function folderSections(list: TaskList, issues: Issue[]): { name: string 
   ];
 }
 
-/** Положить задачу в папку (null — вынуть из папки). */
+/** Положить задачу в папку (null — вынуть из папки). Новая задача из источника, положенная в папку, — уже разобрана: «n» снимается. */
 export function setFolder(list: TaskList, key: string, folder: string | null): TaskList {
   const f = { ...list.folders };
   if (folder) f[key] = folder; else delete f[key];
-  return { ...list, folders: f };
+  const out: TaskList = { ...list, folders: f };
+  if (folder && list.marks?.[key] === "new") out.marks = withoutMark(list.marks, key);
+  return out;
+}
+
+export function withoutMark(marks: TaskList["marks"], key: string): TaskList["marks"] {
+  if (!marks || !(key in marks)) return marks;
+  const { [key]: _drop, ...rest } = marks;
+  return rest;
+}
+
+/* ── Источники задач: JQL и релиз ──────────────────────────────────────── */
+
+export interface ListSource {
+  id: string;
+  kind: "jql" | "release";
+  /** JQL-запрос или ключ релиза. */
+  query: string;
+  /** Подпись: запрос или «SBER911-100 · Релиз 16/10». */
+  name: string;
+  /** Состав на момент последней сверки: ключи, которые источник отдавал (для релиза — эпики и задачи без эпика). */
+  keys: string[];
+  checkedAt: string;
+}
+
+/** Источник с тем же запросом уже есть — объединяем снимки, а не заводим второй. */
+export function upsertSource(list: TaskList, src: ListSource): TaskList {
+  const cur = list.sources ?? [];
+  const same = cur.find(x => x.kind === src.kind && x.query.trim() === src.query.trim());
+  return {
+    ...list,
+    sources: same
+      ? cur.map(x => (x === same ? { ...x, name: src.name, keys: Array.from(new Set([...x.keys, ...src.keys])), checkedAt: src.checkedAt } : x))
+      : [...cur, src],
+  };
+}
+
+/**
+ * Сверка источника с новым составом. Новые задачи (не было в снимке) встают в список с «n» — в «Без папки»;
+ * задачи списка, выпавшие из источника, помечаются «У»; вернувшиеся — отметка снимается.
+ * truncated — Jira отдала не всё (потолок выборки): выпавшими тогда никого не считаем, нельзя быть уверенными.
+ */
+export function applySourceCheck(list: TaskList, sourceId: string, fresh: string[], truncated: boolean, now: string): TaskList {
+  const src = list.sources?.find(x => x.id === sourceId);
+  if (!src) return list;
+  const old = new Set(src.keys), cur = new Set(fresh), inList = new Set(list.keys);
+  const added = fresh.filter(k => !old.has(k) && !inList.has(k));
+  const marks = { ...list.marks };
+  for (const k of added) marks[k] = "new";
+  if (!truncated) for (const k of src.keys) if (!cur.has(k) && inList.has(k)) marks[k] = "removed";
+  for (const k of fresh) if (marks[k] === "removed") delete marks[k];
+  return {
+    ...list,
+    keys: [...list.keys, ...added],
+    marks,
+    sources: (list.sources ?? []).map(x => (x.id === sourceId ? { ...x, keys: fresh, checkedAt: now } : x)),
+  };
 }
 
 /* ── Группировка до 3 уровней ──────────────────────────────────────────── */
@@ -826,4 +889,46 @@ export function checklistReport(sections: ReportSection[], checks: Record<string
     }
   }
   return out.join("\n").trimEnd();
+}
+
+/* ── Состав релиза → задачи списка ─────────────────────────────────────── */
+
+export interface ReleaseGroup {
+  /** Эпик — если задачи привязаны к нему (Epic Link) или он сам в составе релиза. */
+  epic?: Issue;
+  /** Задачи релиза под эпиком; у задачи без эпика — она сама, одна. */
+  members: Issue[];
+}
+
+/**
+ * Состав релиза → что ставить в список. Задача с эпиком (стори, дефект и т.д.) — показываем эпик,
+ * несколько задач одного эпика собираются под ним; задача без эпика — сама; эпик из состава — сам эпик
+ * (с задачами релиза под ним, если они есть). Порядок — как в составе релиза.
+ */
+export function composeRelease(issues: Issue[], epics: Issue[], epicField: string): ReleaseGroup[] {
+  const epicByKey = new Map<string, Issue>([...epics, ...issues.filter(i => categoryOf(i) === "epic")].map(e => [e.key, e]));
+  const groups: ReleaseGroup[] = [];
+  const byEpic = new Map<string, ReleaseGroup>();
+  const epicGroup = (key: string) => {
+    let g = byEpic.get(key);
+    if (!g) {
+      // Эпика нет в ответе Jira (нет прав) — всё равно группируем по ключу, список попробует его загрузить.
+      g = { epic: epicByKey.get(key) ?? { key, fields: {} }, members: [] };
+      byEpic.set(key, g);
+      groups.push(g);
+    }
+    return g;
+  };
+  for (const i of issues) {
+    if (categoryOf(i) === "epic") { epicGroup(i.key); continue; }
+    const e = i.fields[epicField];
+    if (typeof e === "string" && e) epicGroup(e).members.push(i);
+    else groups.push({ members: [i] });
+  }
+  return groups;
+}
+
+/** Ключи, которые попадут в список: эпик группы или сама задача без эпика. */
+export function releaseKeys(groups: ReleaseGroup[]): string[] {
+  return groups.map(g => g.epic?.key ?? g.members[0]?.key).filter((k): k is string => !!k);
 }

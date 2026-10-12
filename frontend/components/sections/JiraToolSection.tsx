@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, ClipboardCheck, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, ClipboardCheck, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 
@@ -12,7 +12,7 @@ import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAss
 import type { ReqOption } from "@/components/jiratool/ListCells";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
-import AddIssuesModal from "@/components/jiratool/AddIssuesModal";
+import AddIssuesModal, { type PickedSource } from "@/components/jiratool/AddIssuesModal";
 import OwnFieldModal from "@/components/jiratool/OwnFieldModal";
 import ParticipantsModal, { initials } from "@/components/jiratool/ParticipantsModal";
 import IssueFormModal, { type IssueDraft } from "@/components/jiratool/IssueFormModal";
@@ -23,7 +23,7 @@ import DefectsModal from "@/components/jiratool/DefectsModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, applySourceCheck, composeRelease, newId, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -31,7 +31,8 @@ import {
   type ColCtx, type Issue, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic } from "@/lib/jiraStages";
-import { getCatalog, getProjectFields, getProjects, getStructureTree, issuesByKeys, relatedIssues, taskChecklist } from "@/lib/jiraToolApi";
+import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist } from "@/lib/jiraToolApi";
+import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
@@ -107,9 +108,18 @@ export default function JiraToolSection() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [projects, setProjects] = useState<{ key: string; name: string }[]>([]);
   const [projectFieldIds, setProjectFieldIds] = useState<Record<string, string[]>>({});
-  /** Задачи из Jira: списка и связанные (стори эпиков, дефекты). Не сохраняются — читаются заново. */
+  /**
+   * Задачи из Jira: списка и связанные (стори эпиков, дефекты). Держатся в кэше сессии (lib/jiraToolCache):
+   * вернулись в раздел или переключили список — данные сразу, свежие подтягиваются фоном раз в 30 минут.
+   */
   const [cache, setCache] = useState<Record<string, Issue>>({});
-  const [missing, setMissing] = useState<Set<string>>(new Set());
+  const [missing, setMissingState] = useState<Set<string>>(new Set());
+  const [refreshedAt, setRefreshedAt] = useState(0);
+  const setMissing = (fn: (m: Set<string>) => Set<string>) => setMissingState(m => {
+    const n = fn(m);
+    const c = issueCache(); c.missing = n; persistCache();
+    return n;
+  });
   const [busy, setBusy] = useState(0);
   const [loadErr, setLoadErr] = useState("");
   const [projectInput, setProjectInput] = useState("");
@@ -122,6 +132,9 @@ export default function JiraToolSection() {
     const s = loadState();
     setState(s);
     setActiveId(s.lists[0]?.id ?? null);
+    const c = issueCache();
+    setCache({ ...c.issues }); setMissingState(new Set(c.missing)); setRefreshedAt(c.refreshedAt);
+    relatedDone.current = c.related;
     try { setCollapsed(localStorage.getItem(ASIDE_KEY) === "1"); } catch { /* развёрнута по умолчанию */ }
   }, []);
 
@@ -130,6 +143,8 @@ export default function JiraToolSection() {
     getCatalog(refresh)
       .then(c => {
         setCatalog(c);
+        const store = bindCacheTo(c.base_url);       // сменили сервер Jira — кэш от старого сбрасывается
+        setCache({ ...store.issues }); setMissingState(new Set(store.missing)); relatedDone.current = store.related;
         setJira({ state: "ok", baseUrl: c.base_url });
         getProjects().then(r => setProjects(r.projects)).catch(() => setProjects([]));
       })
@@ -137,11 +152,19 @@ export default function JiraToolSection() {
   };
   useEffect(() => { connect(); }, []);
 
-  const mergeIssues = (items: Issue[]) => setCache(c => {
+  const mergeIssues = (items: Issue[], drop: string[] = []) => setCache(c => {
     const n = { ...c };
     for (const i of items) n[i.key] = i;
+    for (const k of drop) delete n[k];            // задачи, которых больше нет в Jira
+    const store = issueCache(); store.issues = n; persistCache();
     return n;
   });
+  // Первые данные из Jira в сессии (загрузка, релиз) — тоже «свежие»: иначе при возврате в раздел
+  // сразу пошло бы полное обновление. Отметку ставим вне функции-обновления состояния.
+  const markFresh = () => {
+    const store = issueCache();
+    if (!store.refreshedAt) { store.refreshedAt = Date.now(); persistCache(); setRefreshedAt(store.refreshedAt); }
+  };
 
   /**
    * Подтянуть из Jira задачи need (по ключам) и связанные задачи для них и для withRelated:
@@ -157,10 +180,12 @@ export default function JiraToolSection() {
       if (need.length) {
         const r = await issuesByKeys(need);
         fresh = r.issues;
-        mergeIssues(fresh);
+        mergeIssues(fresh, r.missing);
+        markFresh();
         setMissing(m => { const n = new Set(m); need.forEach(k => n.delete(k)); r.missing.forEach(k => n.add(k)); return n; });
         fresh.forEach(i => relatedDone.current.add(i.key));
         need.forEach(k => inflight.current.delete(k));
+
       }
       const base = [...fresh, ...withRelated];
       const epics = base.filter(i => categoryOf(i) === "epic").map(i => i.key);
@@ -251,10 +276,36 @@ export default function JiraToolSection() {
   const refreshFromJira = () => {
     if (!list || !state) return;
     inflight.current.clear(); relatedDone.current.clear();
-    setMissing(new Set());
+    setMissing(() => new Set());
     const drafts = new Set(state.created.map(i => i.key));
-    void sync(list.keys.filter(k => !drafts.has(k)), []);
+    const id = list.id;
+    void sync(list.keys.filter(k => !drafts.has(k)), []).then(() => checkSources([id]));
   };
+
+  /**
+   * Фоновое обновление кэша: все задачи всех списков и связанные — раз в 30 минут, пока раздел открыт,
+   * и сразу при открытии, если кэш старше 30 минут. На экране остаются данные из кэша, пока идёт загрузка.
+   */
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const refreshAll = async () => {
+    const st = stateRef.current;
+    if (!st) return;
+    const drafts = new Set(st.created.map(i => i.key));
+    const keys = Array.from(new Set(st.lists.flatMap(l => l.keys))).filter(k => !drafts.has(k));
+    if (!keys.length) return;
+    relatedDone.current.clear();
+    await sync(keys, []);
+    await checkSources(st.lists.map(l => l.id));
+    const c = issueCache(); c.refreshedAt = Date.now(); persistCache();
+    setRefreshedAt(c.refreshedAt);
+  };
+  useEffect(() => {
+    if (jira.state !== "ok") return;
+    if (Date.now() - issueCache().refreshedAt > REFRESH_MS && Object.keys(issueCache().issues).length) void refreshAll();
+    const t = setInterval(() => void refreshAll(), REFRESH_MS);
+    return () => clearInterval(t);
+  }, [jira.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const usage = useMemo(() => {
     const u: Record<string, number> = {};
@@ -343,6 +394,8 @@ export default function JiraToolSection() {
   /** Задача из формы «Создать задачу»: созданная в Jira — с настоящим ключом, иначе — черновик SimpleTest. */
   const saveIssue = (d: IssueDraft) => {
     if (!list) return;
+    // Создали в Jira без галочки «Добавить в список» — в списке ничего не меняем.
+    if (d.jira && d.addToList === false) return;
     const now = nowStamp();
     const key = d.jira?.key ?? draftKey(list.project, state.nextKey);
     if (d.jira) addJiraIssue(key, { key, url: d.jira.url, fields: { ...formFields(d), created: now, updated: now } });
@@ -427,6 +480,35 @@ export default function JiraToolSection() {
       .then(r => importStructure({ structure: { id: st.id, name: st.name }, items: flattenStructure(r.root), target: "current" }))
       .catch(e => setLoadErr(`Структура «${st.name}» не прочиталась: ${(e as Error).message}`))
       .finally(() => setBusy(b => b - 1));
+  };
+
+  /**
+   * Сверка источников (JQL-фильтров и релизов) списков с Jira: новые задачи встают с «n» в «Без папки»,
+   * выпавшие помечаются «У». Идёт вместе с обновлением кэша — фоновым и по кнопке «Обновить из Jira».
+   */
+  const checkSources = async (listIds: string[]) => {
+    const st = stateRef.current;
+    if (!st) return;
+    const errors: string[] = [];
+    for (const l of st.lists.filter(x => listIds.includes(x.id))) {
+      for (const src of l.sources ?? []) {
+        try {
+          let keys: string[], truncated = false;
+          if (src.kind === "jql") {
+            const r = await searchIssues(src.query, 1000);
+            mergeIssues(r.issues);
+            keys = r.issues.map(i => i.key); truncated = r.truncated;
+          } else {
+            const d = await getRelease(src.query);
+            mergeIssues([...d.issues, ...d.epics]);
+            keys = releaseKeys(composeRelease(d.issues, d.epics, d.epic_link));
+          }
+          const now = nowStamp();
+          update(s => ({ ...s, lists: s.lists.map(x => (x.id === l.id ? applySourceCheck(x, src.id, keys, truncated, now) : x)) }));
+        } catch (e) { errors.push(`${src.kind === "jql" ? "фильтр" : "релиз"} «${src.name.slice(0, 60)}»: ${(e as Error).message}`); }
+      }
+    }
+    if (errors.length) setLoadErr(`Состав источников не сверен — ${errors.join("; ")}`);
   };
 
   const commitProject = () => {
@@ -850,6 +932,29 @@ export default function JiraToolSection() {
                   </div>
                 </div>
 
+                {!!list.sources?.length && (
+                  <div className="border-t border-border-main pt-2">
+                    <p className="text-xs font-semibold text-text-main mb-1"
+                      title="При обновлении из Jira (по кнопке и фоном раз в 30 минут) состав сверяется: новые — «n», выпавшие — «У»">
+                      Источники · сверка состава
+                    </p>
+                    <div className="flex flex-col gap-0.5">
+                      {list.sources.map(src => (
+                        <span key={src.id} className="group/src flex items-start gap-1.5 text-[11px] text-text-muted py-0.5"
+                          title={`${src.kind === "jql" ? "JQL" : "Релиз"}: ${src.name}\nЗадач в составе: ${src.keys.length} · сверено ${src.checkedAt}`}>
+                          {src.kind === "jql" ? <Search className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" /> : <Rocket className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />}
+                          <span className={`flex-1 min-w-0 truncate text-text-main ${src.kind === "jql" ? "font-mono" : ""}`}>{src.name}</span>
+                          <span className="flex-shrink-0">{src.keys.length}</span>
+                          <button type="button" aria-label={`Не отслеживать: ${src.name}`} title="Не отслеживать состав (задачи останутся в списке)"
+                            onClick={() => updateList(l => ({ ...l, sources: (l.sources ?? []).filter(x => x.id !== src.id) }))}
+                            className="hidden group-hover/src:inline-flex focus-visible:inline-flex p-0.5 rounded hover:text-red-500">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {STRUCTURE_ENABLED && list.structure && (
                   <div className="text-[11px] text-text-muted flex items-start gap-1.5 border-t border-border-main pt-2">
                     <FolderTree className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
@@ -952,6 +1057,11 @@ export default function JiraToolSection() {
                   <p className="text-[11px] text-text-muted truncate">задач: {list.keys.length}
                     {foreign > 0 && <span title="Поля этих задач берутся из их проектов"> · из других проектов: {foreign}</span>}
                     {pending > 0 && busy > 0 && <> · загружаю из Jira: {pending}</>}
+                    {refreshedAt > 0 && (
+                      <span title="Задачи берутся из кэша сессии и обновляются из Jira фоном раз в 30 минут">
+                        {" "}· данные Jira: {new Date(refreshedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    )}
                     {q && <> · найдено: {listIssues.length}</>}
                     {sort && (
                       <> · сортировка: {colLabel(sort.col, list)} {sort.dir === 1 ? "↑" : "↓"}{" "}
@@ -1000,7 +1110,10 @@ export default function JiraToolSection() {
                   </span>
                   <button type="button" onClick={() => setModal("bulk")} disabled={!selected.size}
                     className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
-                  <button type="button" onClick={() => { updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)) })); setSelected(new Set()); }}
+                  <button type="button" onClick={() => {
+                    updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)), marks: [...selected].reduce((m, k) => withoutMark(m, k), l.marks) }));
+                    setSelected(new Set());
+                  }}
                     disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Убрать из списка</button>
                   <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
@@ -1056,7 +1169,8 @@ export default function JiraToolSection() {
                       if (id) a[key] = id; else delete a[key];
                       return { ...l, assignees: a };
                     })}
-                    onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
+                    onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key), marks: withoutMark(l.marks, key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
+                    onClearMark={key => updateList(l => ({ ...l, marks: withoutMark(l.marks, key) }))}
                     onOpenDefects={issue => setModal({ defectsFor: issue })}
                     onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
                     onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
@@ -1134,13 +1248,18 @@ export default function JiraToolSection() {
 
       {modal === "add" && list && (
         <AddIssuesModal open project={list.project} onClose={() => setModal(null)} inList={new Set(list.keys)}
-          onAdd={issues => {
-            mergeIssues(issues);
-            updateList(l => ({ ...l, keys: [...l.keys, ...issues.map(i => i.key).filter(k => !l.keys.includes(k))] }));
+          onAdd={(issues, sources: PickedSource[], extra) => {
+            mergeIssues([...extra, ...issues]);
+            markFresh();
+            const now = nowStamp();
+            updateList(l => sources.reduce(
+              (acc, src) => upsertSource(acc, { ...src, id: newId("src"), checkedAt: now }),
+              { ...l, keys: [...l.keys, ...issues.map(i => i.key).filter(k => !l.keys.includes(k))] } as TaskList,
+            ));
           }} />
       )}
       {modal === "create" && list && (
-        <IssueFormModal open project={list.project} participants={state.participants}
+        <IssueFormModal open project={list.project} participants={state.participants} listName={list.name}
           onSave={saveIssue} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "draft" in modal && list && (

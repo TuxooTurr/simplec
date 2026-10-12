@@ -68,7 +68,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -119,6 +119,8 @@ export default function ListTable({
   reqLinks: Record<string, string[]>;
   reqOptions: ReqOption[];
   onReqs: (key: string, ids: string[]) => void;
+  /** Снять отметку «n» (если папок в списке нет — переложить задачу некуда). */
+  onClearMark: (key: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const { list, participants } = ctx;
@@ -137,7 +139,8 @@ export default function ListTable({
   const colW = (c: ColRef) => (live?.col === c ? live.w : list.widths?.[c] ?? defaultWidth(c, ctx));
   // Ключ не должен обрезаться: ширина столбца — под самый глубокий уровень вложенности (папка + 3 группы).
   const depthMax = (sections ? 1 : 0) + list.groupBy.length;
-  const KEY_W = 150 + depthMax * INDENT;
+  // Отметки «n»/«У» стоят перед ключом — под них место, чтобы ключ не обрезался.
+  const KEY_W = 150 + depthMax * INDENT + (Object.keys(list.marks ?? {}).length ? 22 : 0);
   const tableW = SELECT_W + KEY_W + REMOVE_W + cols.reduce((n, c) => n + colW(c), 0);
   /** Отступ слева закреплённой колонки: выбор + ключ + закреплённые до неё. */
   const leftOf = (c: ColRef) => {
@@ -361,6 +364,18 @@ export default function ListTable({
         </td>
         <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
           style={{ ...stick(SELECT_W), paddingLeft: 12 + depth * INDENT }}>
+          {list.marks?.[issue.key] === "removed" && (
+            <span role="img" aria-label="Выпала из источника" title="Задачи больше нет в источнике (JQL-фильтр или релиз) — решите, оставить ли её в списке"
+              className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-red-600 text-white text-[9px] font-bold align-middle">У</span>
+          )}
+          {list.marks?.[issue.key] === "new" && (sections ? (
+            <span role="img" aria-label="Новая из источника" title="Новая задача из источника (JQL-фильтр или релиз). Переложите в папку — отметка исчезнет"
+              className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle">n</span>
+          ) : (
+            <button type="button" onClick={() => onClearMark(issue.key)} aria-label="Новая из источника — отметить просмотренной"
+              title="Новая задача из источника (JQL-фильтр или релиз). Папок в списке нет — нажмите, чтобы снять отметку"
+              className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle hover:ring-2 hover:ring-blue-300">n</button>
+          ))}
           {issue.url ? (
             <a href={issue.url} target="_blank" rel="noreferrer" title="Открыть в Jira" className="font-mono text-xs text-primary hover:underline">{issue.key} ↗</a>
           ) : issue.local ? (

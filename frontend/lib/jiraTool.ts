@@ -330,6 +330,13 @@ export interface TaskList {
   sources?: ListSource[];
   /** Отметки состава: «new» — пришла из источника (снимается переносом в папку), «removed» — выпала из источника. */
   marks?: Record<string, "new" | "removed">;
+  /**
+   * Представления — разные наборы колонок одного списка. Действующее хранится в самих полях списка
+   * (columns, pinned, widths); остальные — здесь. Папки, порядок задач, группировка и данные — общие.
+   */
+  views?: ListView[];
+  /** id действующего представления (если представлений больше одного). */
+  activeView?: string;
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -931,4 +938,53 @@ export function composeRelease(issues: Issue[], epics: Issue[], epicField: strin
 /** Ключи, которые попадут в список: эпик группы или сама задача без эпика. */
 export function releaseKeys(groups: ReleaseGroup[]): string[] {
   return groups.map(g => g.epic?.key ?? g.members[0]?.key).filter((k): k is string => !!k);
+}
+
+/* ── Представления списка: наборы колонок ──────────────────────────────── */
+
+export interface ListView {
+  id: string;
+  name: string;
+  columns: ColRef[];
+  pinned?: ColRef[];
+  widths?: Record<string, number>;
+}
+
+/** Колонки нового представления: ключ виден всегда, плюс тип и тема. */
+export const VIEW_BASE_COLUMNS: ColRef[] = ["jira:issuetype", "jira:summary"];
+
+/** Представления списка с учётом действующего (его колонки — из полей списка). Без представлений — одно «Основное». */
+export function listViews(list: TaskList): ListView[] {
+  const live = (v: ListView): ListView => ({ ...v, columns: list.columns, pinned: list.pinned, widths: list.widths });
+  if (!list.views?.length) return [live({ id: "main", name: "Основное", columns: [] })];
+  return list.views.map(v => (v.id === list.activeView ? live(v) : v));
+}
+
+/** Переключить представление: колонки действующего — в его запись, колонки выбранного — в поля списка. */
+export function switchView(list: TaskList, id: string): TaskList {
+  const views = listViews(list);
+  const target = views.find(v => v.id === id);
+  if (!target || id === (list.activeView ?? views[0].id)) return list;
+  return { ...list, views, activeView: id, columns: [...target.columns], pinned: target.pinned, widths: target.widths };
+}
+
+/** Новое представление: только ключ, тип и тема — дальше набираются любые поля. Сразу становится действующим. */
+export function addView(list: TaskList, name: string): TaskList {
+  const view: ListView = { id: newId("view"), name, columns: [...VIEW_BASE_COLUMNS] };
+  return switchView({ ...list, views: [...listViews(list), view], activeView: list.activeView ?? "main" }, view.id);
+}
+
+export function renameView(list: TaskList, id: string, name: string): TaskList {
+  return { ...list, views: listViews(list).map(v => (v.id === id ? { ...v, name } : v)), activeView: list.activeView ?? "main" };
+}
+
+/** Удалить представление (последнее не удаляется); удалили действующее — переключаемся на первое. */
+export function deleteView(list: TaskList, id: string): TaskList {
+  const views = listViews(list);
+  if (views.length < 2) return list;
+  const active = list.activeView ?? views[0].id;
+  const rest = views.filter(v => v.id !== id);
+  if (id !== active) return { ...list, views: rest };
+  const next = rest[0];
+  return { ...list, views: rest, activeView: next.id, columns: [...next.columns], pinned: next.pinned, widths: next.widths };
 }

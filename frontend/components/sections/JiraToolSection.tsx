@@ -9,6 +9,7 @@ import {
 import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker";
 import ListTable, { sortIssues, type SortState } from "@/components/jiratool/ListTable";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
+import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import type { ReqOption } from "@/components/jiratool/ListCells";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
@@ -23,7 +24,7 @@ import DefectsModal from "@/components/jiratool/DefectsModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, applySourceCheck, composeRelease, newId, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -1044,8 +1045,13 @@ export default function JiraToolSection() {
             </div>
           ) : (
             <>
-              {/* Шапка: проект и действия с задачами; на узком окне кнопки уходят строкой ниже */}
+              {/* Шапка: представления, проект и действия с задачами; на узком окне кнопки уходят строкой ниже */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <ViewSwitcher views={listViews(list)} active={list.activeView ?? listViews(list)[0].id}
+                  onSwitch={id => updateList(l => switchView(l, id))}
+                  onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
+                  onRename={(id, name) => updateList(l => renameView(l, id, name))}
+                  onDelete={id => updateList(l => deleteView(l, id))} />
                 <input value={projectInput} onChange={e => setProjectInput(e.target.value.toUpperCase())} list="jt-projects"
                   onBlur={commitProject} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setProjectInput(list.project); }}
                   aria-label="Проект списка" spellCheck={false}

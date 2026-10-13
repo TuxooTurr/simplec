@@ -14,6 +14,9 @@ type Verdict = { issue: Issue; kind: "go" | "same" | "no-transition" | "epic" | 
  * прав токена), и показываем, сколько задач перейдёт и почему остальные — нет.
  * Выбранный эпик сам статус не меняет: переводятся все его стори (по Epic Link) —
  * так эпик двигается через свой состав, а статус (st) эпика пересчитается по сторям.
+ *
+ * После перевода окно не закрывается: переходы запрашиваются заново уже из новых статусов,
+ * и можно сделать следующий шаг — так задачи из разных статусов доводятся до одного.
  */
 export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClose }: {
   open: boolean;
@@ -22,7 +25,8 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
   storiesOf: (epicKey: string) => Issue[];
   /** Переходы выполнены: ключи задач, которые надо перечитать из Jira. */
   onDone: (keys: string[]) => void;
-  onClose: () => void;
+  /** moved — хоть одна задача сменила статус (тогда выбор в списке сбрасывается). */
+  onClose: (moved: boolean) => void;
 }) {
   const [target, setTarget] = useState("");
   const [resolution, setResolution] = useState("");
@@ -30,6 +34,12 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
   const [loadErr, setLoadErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<{ key: string; error?: string }[]>([]);
+  /** Шаг перевода: после него переходы запрашиваются заново. */
+  const [round, setRound] = useState(0);
+  /** Новый статус задач, переведённых в этом окне (список подтянется из Jira позже). */
+  const [moved, setMoved] = useState<Record<string, string>>({});
+  /** Сделанные шаги — чтобы было видно, что уже выполнено. */
+  const [steps, setSteps] = useState<{ to: string; n: number }[]>([]);
 
   // Эпик → его стори; дубли (стори выбрана и сама, и через эпик) — один раз.
   const epics = issues.filter(i => categoryOf(i) === "epic");
@@ -43,10 +53,21 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
 
   useEffect(() => {
     if (!movableKeys) return;
-    getTransitions(movableKeys.split(",")).then(r => setAvail(r.issues)).catch(e => setLoadErr((e as Error).message));
-  }, [movableKeys]);
+    let live = true;
+    setAvail(null); setLoadErr("");
+    getTransitions(movableKeys.split(","))
+      .then(r => { if (live) setAvail(r.issues); })
+      .catch(e => { if (live) setLoadErr((e as Error).message); });
+    return () => { live = false; };
+  }, [movableKeys, round]);
 
   const trOf = (i: Issue) => avail?.[i.key]?.transitions ?? [];
+  const statusOf = (i: Issue) => moved[i.key] ?? String(i.fields.status ?? "");
+
+  // Где задачи сейчас — по этой сводке видно, сколько шагов осталось до одного статуса.
+  const now = new Map<string, number>();
+  for (const i of movable) now.set(statusOf(i), (now.get(statusOf(i)) ?? 0) + 1);
+  const nowList = [...now.entries()].sort((a, b) => b[1] - a[1]);
 
   // Куда можно перевести и сколько задач туда перейдёт (по статусу назначения перехода).
   const counts = new Map<string, number>();
@@ -56,7 +77,7 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
   const verdicts: Verdict[] = movable.map(issue => {
     if (avail?.[issue.key]?.error) return { issue, kind: "error" };
     if (!target) return { issue, kind: "no-transition" };
-    if (issue.fields.status === target) return { issue, kind: "same" };
+    if (statusOf(issue) === target) return { issue, kind: "same" };
     const tr = trOf(issue).find(t => t.to === target);
     return tr ? { issue, kind: "go", tr } : { issue, kind: "no-transition" };
   });
@@ -78,7 +99,7 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
   // Почему нельзя: группируем по исходному статусу — так видно, какой переход отсутствует.
   const blocked = new Map<string, number>();
   for (const v of verdicts) if (target && v.kind === "no-transition") {
-    const s = String(v.issue.fields.status ?? "");
+    const s = statusOf(v.issue);
     blocked.set(s, (blocked.get(s) ?? 0) + 1);
   }
 
@@ -86,16 +107,22 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
     setBusy(true); setFailed([]);
     try {
       const r = await applyTransitions(go.map(v => ({ key: v.issue.key, transition_id: v.tr!.id, resolution: needRes ? resolution : "" })));
+      const ok = new Set(r.results.filter(x => x.ok).map(x => x.key));
+      const to = target;
+      setMoved(m => ({ ...m, ...Object.fromEntries([...ok].map(k => [k, to])) }));
+      if (ok.size) setSteps(s => [...s, { to, n: ok.size }]);
+      setFailed(r.results.filter(x => !x.ok));
       onDone(go.map(v => v.issue.key));
-      const bad = r.results.filter(x => !x.ok);
-      if (bad.length) setFailed(bad); else onClose();
+      // Остаёмся в окне: из новых статусов будут другие переходы.
+      setTarget(""); setResolution(""); setRound(n => n + 1);
     } catch (e) { setFailed([{ key: "—", error: (e as Error).message }]); }
     setBusy(false);
   };
+  const close = () => onClose(steps.length > 0);
   const field = "w-full text-sm border border-border-main rounded-lg px-3 py-2 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
-    <Modal open={open} onClose={onClose} title={`Сменить статус в Jira: задач ${movable.length}`} size="max-w-2xl">
+    <Modal open={open} onClose={close} title={`Сменить статус в Jira: задач ${movable.length}`} size="max-w-2xl">
       <div className="space-y-4">
         {epics.length > 0 && (
           <div className="rounded-lg bg-bg-subtle px-3 py-2 text-xs text-text-muted space-y-0.5">
@@ -120,8 +147,22 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
           <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Спрашиваю у Jira доступные переходы…</p>
         ) : (
           <>
+            <div className="rounded-lg bg-bg-subtle px-3 py-2 text-xs space-y-1">
+              <p className="flex flex-wrap items-center gap-1.5">
+                <span className="font-semibold text-text-main">Сейчас:</span>
+                {nowList.map(([s, n]) => (
+                  <span key={s} className="px-2 py-0.5 rounded-md border border-border-main bg-[var(--color-modal-bg)] text-text-main">{s} · {n}</span>
+                ))}
+                {nowList.length === 1 && <span className="text-emerald-700 dark:text-emerald-300 font-medium">— все в одном статусе</span>}
+              </p>
+              {steps.length > 0 && (
+                <p className="text-text-muted">
+                  Сделано: {steps.map((st, i) => <span key={i}>{i > 0 && " → "}«{st.to}» ({st.n})</span>)}
+                </p>
+              )}
+            </div>
             <div>
-              <p className="text-xs font-semibold text-text-muted mb-1.5">Перевести в статус</p>
+              <p className="text-xs font-semibold text-text-muted mb-1.5">{steps.length ? "Следующий шаг — перевести в статус" : "Перевести в статус"}</p>
               <div className="flex flex-wrap gap-1.5">
                 {targets.length === 0 && <span className="text-sm text-text-muted">Из текущих статусов переходов нет.</span>}
                 {targets.map(([t, n]) => (
@@ -188,8 +229,8 @@ export default function BulkStatusModal({ open, issues, storiesOf, onDone, onClo
 
         <div className="flex items-center gap-2 pt-1">
           <div className="ml-auto flex gap-2">
-            <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">
-              {failed.length ? "Закрыть" : "Отмена"}
+            <button type="button" onClick={close} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">
+              {steps.length ? "Готово" : failed.length ? "Закрыть" : "Отмена"}
             </button>
             <button type="button" onClick={apply} disabled={busy || !go.length || (needRes && !resolution)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">

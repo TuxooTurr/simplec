@@ -66,7 +66,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs, onClearMark,
 }: {
@@ -86,6 +86,8 @@ export default function ListTable({
   onParticipant: (key: string, id: string) => void;
   onRemove: (key: string) => void;
   onOpenDefects: (issue: Issue) => void;
+  /** Клик по «Теме» задачи из Jira: окно с описанием, автором и исполнителем. */
+  onOpenIssue: (issue: Issue) => void;
   /** Ручной порядок строк: переставить key перед/после target. */
   onMoveRow: (key: string, target: string, place: Place) => void;
   /** Порядок колонок: переставить col перед/после target. */
@@ -416,6 +418,11 @@ export default function ListTable({
                 onChange={patch => onRole(issue.key, c.slice(5), patch)} onNames={names => onRoleNames(c.slice(5), names)} />
             ) : c === FOLDER_COL ? (
               <span className="block truncate text-xs text-text-muted">{list.folders?.[issue.key] ?? "—"}</span>
+            ) : c === "jira:summary" && !issue.local ? (
+              <button type="button" onClick={() => onOpenIssue(issue)} title="Открыть описание задачи"
+                className="block w-full text-left break-words hover:text-primary hover:underline">
+                {String(issue.fields.summary ?? "—")}
+              </button>
             ) : c.startsWith("jira:") ? (
               <JiraCell id={c.slice(5)} issue={issue} />
             ) : ownById[c.slice(4)] ? (

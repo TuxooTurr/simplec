@@ -21,6 +21,7 @@ import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
+import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
@@ -51,7 +52,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
 const STRUCTURE_ENABLED = false;
 
 type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | { stageFor: Issue }
-  | { own: OwnField | null } | { defectsFor: Issue } | { draft: Issue };
+  | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
@@ -675,10 +676,8 @@ export default function JiraToolSection() {
   };
 
   /** Статусы сменены в Jira — перечитываем эти задачи (и связанные: этап эпика мог сдвинуться). */
-  const afterTransitions = (keys: string[]) => {
-    void sync(keys, []);
-    setSelected(new Set());
-  };
+  // Выбор не сбрасываем: окно остаётся открытым для следующего шага. Сброс — при закрытии окна.
+  const afterTransitions = (keys: string[]) => { void sync(keys, []); };
 
   const saveOwn = (f: OwnField) => updateList(l => {
     const exists = l.ownFields.some(x => x.id === f.id);
@@ -1244,6 +1243,7 @@ export default function JiraToolSection() {
                     onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key), marks: withoutMark(l.marks, key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
                     onClearMark={key => updateList(l => ({ ...l, marks: withoutMark(l.marks, key) }))}
                     onOpenDefects={issue => setModal({ defectsFor: issue })}
+                    onOpenIssue={issue => setModal({ issueFor: issue })}
                     onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
                     onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
                     onMoveToGroup={(key, changes, target, place) => updateList(l => {
@@ -1358,12 +1358,15 @@ export default function JiraToolSection() {
           onApply={(ids, mode) => setReqs([...selected], ids, mode)} />
       )}
       {modal === "bulk" && (
-        <BulkStatusModal open issues={selectedIssues} storiesOf={k => byEpic.get(k) ?? []} onClose={() => setModal(null)} onDone={afterTransitions} />
+        <BulkStatusModal open issues={selectedIssues} storiesOf={k => byEpic.get(k) ?? []} onClose={moved => { setModal(null); if (moved) setSelected(new Set()); }} onDone={afterTransitions} />
       )}
       {modal === "stages" && (
         <StageMappingModal open project={list?.project ?? "SBER911"} projects={state.lists.map(l => l.project)}
           mapping={state.mapping} styles={state.stageStyles} custom={state.customStages} onClose={() => setModal(null)}
           onSave={(mapping, stageStyles, customStages) => update(s => ({ ...s, mapping, stageStyles, customStages }))} />
+      )}
+      {modal && typeof modal === "object" && "issueFor" in modal && (
+        <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} onClose={() => setModal(null)} />

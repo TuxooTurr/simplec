@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Globe, Layers, Pencil, Plus, X, Zap } from "lucide-react";
+import dynamic from "next/dynamic";
+import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
+import { parseCellIcon, useIcons } from "@/lib/cellIcon";
+
+// Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
+const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
   FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
@@ -135,34 +140,91 @@ export function StageBadge({ info }: { info: StageInfo }) {
  * либо переносится и показывается целиком (wrap=true) — это настройка поля.
  * По клику — поле редактирования на несколько строк; Enter — сохранить, Shift+Enter — новая строка.
  */
-function TextCell({ value, wrap, onChange }: { value: string; wrap?: boolean; onChange: (v: string) => void }) {
+/** Ярлычок ячейки: цветная иконка или эмодзи. Пока набор иконок грузится — пустое место того же размера. */
+export function CellIconView({ code, className = "w-4 h-4" }: { code?: string; className?: string }) {
+  const c = parseCellIcon(code);
+  const icons = useIcons();
+  if (!c) return null;
+  if (c.kind === "emoji") return <span className="inline-flex items-center justify-center w-4 h-4 text-sm leading-none flex-shrink-0" aria-hidden>{c.emoji}</span>;
+  const I = icons?.[c.name];
+  return I ? <I className={`${className} flex-shrink-0 text-text-main`} style={c.color ? { color: c.color } : undefined} strokeWidth={2.2} aria-hidden />
+    : <span className={`${className} inline-block flex-shrink-0`} aria-hidden />;
+}
+
+function TextCell({ value, wrap, icon, onChange, onIcon }: {
+  value: string;
+  wrap?: boolean;
+  /** Ярлычок ячейки (код из lib/cellIcon.ts). */
+  icon?: string;
+  onChange: (v: string) => void;
+  onIcon: (code: string | null) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
+  const [picker, setPicker] = useState<DOMRect | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const wrapBox = useRef<HTMLDivElement>(null);
+  const pickerBox = useRef<HTMLDivElement>(null);
   useEffect(() => setDraft(value), [value]);
+  const fit = (t: HTMLTextAreaElement) => { t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; };
   useEffect(() => {
     const t = ref.current;
-    if (editing && t) { t.focus(); t.style.height = "auto"; t.style.height = `${t.scrollHeight}px`; }
+    // Курсор — в конец текста: обычно дописывают после уже написанного.
+    if (editing && t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); fit(t); }
   }, [editing]);
-  const commit = () => { setEditing(false); if (draft !== value) onChange(draft); };
+  const commit = () => { setEditing(false); setPicker(null); if (draft !== value) onChange(draft); };
+  // Окно ярлычков висит поверх таблицы (fixed): прокрутили таблицу — оно бы отстало от ячейки, закрываем.
+  useEffect(() => {
+    if (!picker) return;
+    const close = (e: Event) => { if (!pickerBox.current?.contains(e.target as Node)) setPicker(null); };
+    window.addEventListener("scroll", close, true);
+    return () => window.removeEventListener("scroll", close, true);
+  }, [picker]);
+
+  /** Ярлычок выбран (или убран) — сохраняем сразу, текст продолжаем редактировать. */
+  const pickIcon = (code: string | null) => {
+    onIcon(code);
+    setPicker(null);
+    requestAnimationFrame(() => ref.current?.focus());
+  };
 
   if (editing) {
     return (
-      <textarea ref={ref} value={draft} rows={1}
-        onChange={e => { setDraft(e.target.value); e.target.style.height = "auto"; e.target.style.height = `${e.target.scrollHeight}px`; }}
-        onBlur={commit}
-        onKeyDown={e => {
-          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
-          if (e.key === "Escape") { setDraft(value); setEditing(false); }
-        }}
-        className="w-full resize-none bg-[var(--color-input-bg)] px-1 py-0.5 rounded border border-primary/40 focus:outline-none text-sm text-text-main" />
+      <div ref={wrapBox} className="relative"
+        // Фокус ушёл за пределы поля и окна ярлычков — сохраняем (события из портала тоже приходят сюда).
+        onBlur={e => {
+          const to = e.relatedTarget as Node | null;
+          if (to && (wrapBox.current?.contains(to) || pickerBox.current?.contains(to))) return;
+          commit();
+        }}>
+        <textarea ref={ref} value={draft} rows={1}
+          onChange={e => { setDraft(e.target.value); fit(e.target); }}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
+            if (e.key === "Escape") {
+              if (picker) { setPicker(null); return; }
+              setDraft(value); setEditing(false);
+            }
+          }}
+          className="w-full resize-none bg-[var(--color-input-bg)] pl-1 pr-8 py-0.5 rounded border border-primary/40 focus:outline-none text-sm text-text-main" />
+        <button type="button" onMouseDown={e => e.preventDefault()} aria-label="Ярлычок: иконка или эмодзи" title="Ярлычок" aria-expanded={!!picker}
+          onClick={() => setPicker(p => (p ? null : wrapBox.current?.getBoundingClientRect() ?? null))}
+          className={`absolute right-1 top-0.5 p-0.5 rounded hover:bg-bg-subtle ${picker ? "ring-1 ring-primary/50" : ""}`}>
+          {icon ? <CellIconView code={icon} /> : <Smile className="w-4 h-4 text-text-muted" />}
+        </button>
+        {picker && (
+          <IconPicker anchor={picker} value={icon} boxRef={pickerBox} onPick={pickIcon}
+            onClose={() => { setPicker(null); ref.current?.focus(); }} />
+        )}
+      </div>
     );
   }
   return (
     <button type="button" onClick={() => setEditing(true)} title={!wrap && value ? value : "Нажмите, чтобы изменить"}
-      className={`w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm
-        ${wrap ? "whitespace-pre-wrap break-words" : "truncate"} ${value ? "text-text-main" : "text-text-muted/50"}`}>
-      {value || "—"}
+      className={`w-full flex items-start gap-1.5 text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm
+        ${value ? "text-text-main" : "text-text-muted/50"}`}>
+      {icon && <span className="mt-0.5"><CellIconView code={icon} /></span>}
+      <span className={`min-w-0 flex-1 ${wrap ? "whitespace-pre-wrap break-words" : "truncate"}`}>{value || (icon ? "" : "—")}</span>
     </button>
   );
 }
@@ -306,7 +368,14 @@ function TagCell({ field, value, onChange }: { field: OwnField; value: string | 
   );
 }
 
-export function OwnCell({ field, value, onChange }: { field: OwnField; value: string | string[] | undefined; onChange: (v: string | string[]) => void }) {
+export function OwnCell({ field, value, icon, onChange, onIcon }: {
+  field: OwnField;
+  value: string | string[] | undefined;
+  /** Ярлычок ячейки — только у свободного ввода. */
+  icon?: string;
+  onChange: (v: string | string[]) => void;
+  onIcon: (code: string | null) => void;
+}) {
   if (field.tags && (field.type === "select" || field.type === "multiselect")) return <TagCell field={field} value={value} onChange={onChange} />;
   const cls = "bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:border-primary/40 " +
     "focus:outline-none focus:bg-[var(--color-input-bg)] text-sm text-text-main";
@@ -322,7 +391,7 @@ export function OwnCell({ field, value, onChange }: { field: OwnField; value: st
     );
     case "multiselect": return <MultiCell field={field} value={Array.isArray(value) ? value : []} onChange={onChange} />;
     case "link": return <LinkCell value={s} label={field.name} onChange={onChange} />;
-    default: return <TextCell value={s} wrap={field.wrap} onChange={onChange} />;
+    default: return <TextCell value={s} wrap={field.wrap} icon={icon} onChange={onChange} onIcon={onIcon} />;
   }
 }
 

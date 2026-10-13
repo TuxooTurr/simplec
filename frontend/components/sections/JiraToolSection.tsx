@@ -1235,6 +1235,11 @@ export default function JiraToolSection() {
                     selected={selected}
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
                     onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
+                    onIcon={(key, fid, code) => updateList(l => {
+                      const row = { ...l.icons?.[key] };
+                      if (code) row[fid] = code; else delete row[fid];
+                      return { ...l, icons: { ...l.icons, [key]: row } };
+                    })}
                     onParticipant={(key, id) => updateList(l => {
                       const a = { ...l.assignees };
                       if (id) a[key] = id; else delete a[key];

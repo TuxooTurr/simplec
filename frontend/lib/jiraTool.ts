@@ -303,6 +303,8 @@ export interface TaskList {
   values: Record<string, Record<string, string | string[]>>;
   /** участник задачи в этом списке: ключ задачи → id участника */
   assignees: Record<string, string>;
+  /** ярлычки ячеек своих текстовых полей (иконка с цветом или эмодзи, см. lib/cellIcon.ts): ключ → id поля → код */
+  icons?: Record<string, Record<string, string>>;
   /** папка задачи из импортированной структуры: ключ → путь */
   folders?: Record<string, string>;
   /**
@@ -515,6 +517,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
       keys: l.keys.map(k => (k === draftKey ? issue.key : k)),
       assignees: remap(l.assignees) ?? {},
       values: remap(l.values) ?? {},
+      icons: remap(l.icons),
       folders: remap(l.folders),
       spend: remap(l.spend),
       roles: remap(l.roles),
@@ -1088,7 +1091,7 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
   const lists = f.lists.map(l0 => {
     const l: TaskList = {
       ...l0, keys: l0.keys.map(rk), assignees: remapKeys(l0.assignees) ?? {}, values: remapKeys(l0.values) ?? {},
-      folders: remapKeys(l0.folders), spend: remapKeys(l0.spend), roles: remapKeys(l0.roles),
+      icons: remapKeys(l0.icons), folders: remapKeys(l0.folders), spend: remapKeys(l0.spend), roles: remapKeys(l0.roles),
       noLoad: remapKeys(l0.noLoad), marks: remapKeys(l0.marks),
     };
     const name = taken.has(l.name) ? `${l.name} (импорт)` : l.name;

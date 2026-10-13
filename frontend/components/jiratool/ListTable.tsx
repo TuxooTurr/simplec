@@ -66,7 +66,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs, onClearMark,
 }: {
@@ -83,6 +83,8 @@ export default function ListTable({
   selected: Set<string>;
   onSelect: (keys: string[], on: boolean) => void;
   onValue: (key: string, fieldId: string, v: string | string[]) => void;
+  /** Ярлычок ячейки своего текстового поля; null — убрать. */
+  onIcon: (key: string, fieldId: string, code: string | null) => void;
   onParticipant: (key: string, id: string) => void;
   onRemove: (key: string) => void;
   onOpenDefects: (issue: Issue) => void;
@@ -426,8 +428,8 @@ export default function ListTable({
             ) : c.startsWith("jira:") ? (
               <JiraCell id={c.slice(5)} issue={issue} />
             ) : ownById[c.slice(4)] ? (
-              <OwnCell field={ownById[c.slice(4)]} value={list.values[issue.key]?.[c.slice(4)]}
-                onChange={v => onValue(issue.key, c.slice(4), v)} />
+              <OwnCell field={ownById[c.slice(4)]} value={list.values[issue.key]?.[c.slice(4)]} icon={list.icons?.[issue.key]?.[c.slice(4)]}
+                onChange={v => onValue(issue.key, c.slice(4), v)} onIcon={code => onIcon(issue.key, c.slice(4), code)} />
             ) : <span className="text-text-muted/50">—</span>}
           </td>
         ))}

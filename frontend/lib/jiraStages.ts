@@ -142,6 +142,31 @@ export function stageText(info: StageInfo): string {
   }
 }
 
+/**
+ * Цветной кружок статуса (st) для текста в чат. Встроенные — по смыслу (разработка синяя, тестирование
+ * жёлтое, готово к релизу зелёное), свои статусы — по ближайшему к их цвету кружку.
+ */
+const STAGE_DOT: Record<string, string> = {
+  dev: "🔵", test: "🟡", release: "🟢", done: "✅", excluded: "⚪", blocked: "🔴",
+};
+const HUE_DOTS: [number, string][] = [[0, "🔴"], [30, "🟠"], [55, "🟡"], [130, "🟢"], [215, "🔵"], [280, "🟣"], [360, "🔴"]];
+
+function dotByColor(hex: string): string {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const sat = d / (1 - Math.abs(max + min - 1) || 1);
+  if (sat < 0.25) return max > 0.5 ? "⚪" : "⚫";          // серые оттенки
+  const h = max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const hue = h * 60;
+  return HUE_DOTS.reduce((best, x) => (Math.abs(x[0] - hue) < Math.abs(best[0] - hue) ? x : best))[1];
+}
+
+export function stageDot(info: StageInfo): string {
+  if (info.kind === "blocked") return STAGE_DOT.blocked;
+  if (info.kind !== "stage" && info.kind !== "epic") return "⚪";
+  return STAGE_DOT[info.stage] ?? dotByColor(STAGE_COLOR[info.stage] ?? "#64748b");
+}
+
 /** Стори по эпикам (через Epic Link) — из всех загруженных задач, не только из списка. */
 export function storiesByEpic(allIssues: Issue[]): Map<string, Issue[]> {
   const out = new Map<string, Issue[]>();

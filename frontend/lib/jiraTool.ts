@@ -16,7 +16,7 @@ import {
   projectKeyOfIssue,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
-import { STAGES, STAGE_LABEL, isReleaseOrLater, stageText, type CustomStage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
+import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
@@ -849,26 +849,30 @@ export function jqlExamples(project: string): string[] {
 export type ReportSection = { folder: string | null; issues: Issue[] };
 
 /**
- * «Скопировать в чат»: по фиче — код, наименование, статус (st), дефекты, участник; под фичей —
- * её неустранённые дефекты (номер, наименование, статус, приоритет); между фичами — пустая строка.
+ * «Скопировать в чат» (Сберчат: *жирный*). Сверху «Статус — <название списка>», дальше разделы по папкам через пустую строку:
+ *   *Папка*
+ *   *(SBER911-1) Тема* — 🟢 Готово к релизу
+ *   Дефекты:
+ *   (SBER911-2) Тема дефекта. Приоритет: Высокий
+ * Под фичей — только её неустранённые дефекты.
  */
 export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
-  const out: string[] = [];
+  const name = ctx.list.name.trim();
+  const out: string[] = [name ? `*Статус — ${name}*` : "*Статус*"];
   for (const sec of sections) {
     if (!sec.issues.length) continue;
+    out.push("");
     if (sec.folder !== null) out.push(`*${sec.folder}*`);
     for (const i of sec.issues) {
-      const defects = ctx.defectsOf(i);
-      const open = defects?.filter(isOpenDefect) ?? [];
-      const p = ctx.participants.find(x => x.id === ctx.list.assignees[i.key]);
-      const parts = [`*${i.key}*`, String(i.fields.summary ?? ""), stageText(ctx.stageOf(i))];
-      if (defects !== null) parts.push(open.length ? `дефектов: ${open.length}` : "дефектов нет");
-      parts.push(p ? p.name : "участник не назначен");
-      out.push(parts.join(" — "));
-      for (const d of open) {
-        out.push(`    • ${d.key} ${String(d.fields.summary ?? "")} — ${String(d.fields.status ?? "—")} — ${String(d.fields.priority ?? "—")}`);
+      const info = ctx.stageOf(i);
+      out.push(`*(${i.key}) ${String(i.fields.summary ?? "").trim()}* — ${stageDot(info)} ${stageText(info)}`);
+      const open = ctx.defectsOf(i)?.filter(isOpenDefect) ?? [];
+      if (open.length) {
+        out.push("Дефекты:");
+        for (const d of open) {
+          out.push(`(${d.key}) ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
+        }
       }
-      out.push("");
     }
   }
   return out.join("\n").trimEnd();

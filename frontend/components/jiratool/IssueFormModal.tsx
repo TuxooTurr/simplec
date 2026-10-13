@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BookOpen, Bug, CheckCircle2, CheckSquare, ExternalLink, Loader2, Paperclip, Search, Send, Settings2, Sparkles, X,
+  BookOpen, Bug, CheckCircle2, CheckSquare, ExternalLink, Loader2, Paperclip, RefreshCw, Search, Send, Settings2, Sparkles, X,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import EpicPicker from "./EpicPicker";
@@ -353,7 +353,17 @@ export default function IssueFormModal({ open, project, participants, listName, 
                 </div>
               ) : <div />}
               <div className="col-span-2">
-                <label htmlFor="if-epic" className={LBL}>Эпик</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label htmlFor="if-epic" className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Эпик</label>
+                  {jiraReady && (
+                    <button type="button" onClick={loadEpics} disabled={epicsLoading}
+                      title="Выгрузить список эпиков из Jira заново"
+                      className="flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50">
+                      <RefreshCw className={`w-3 h-3 ${epicsLoading ? "animate-spin" : ""}`} />
+                      {epicsCache ? `выгрузить заново · ${formatLoadedAt(epicsCache.loadedAt)}` : "выгрузить эпики из Jira"}
+                    </button>
+                  )}
+                </div>
                 <EpicPicker id="if-epic" value={epicKey} options={epicOptions} onChange={setEpicKey}
                   loading={epicsLoading} loadedAt={epicsCache ? formatLoadedAt(epicsCache.loadedAt) : null}
                   canLoad={jiraReady} onReload={loadEpics} />

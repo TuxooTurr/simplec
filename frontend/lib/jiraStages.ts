@@ -17,16 +17,37 @@
 import type React from "react";
 import { categoryOf, epicLinkId, isBlocker, isClosedDefect, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
 
-export type Stage = "dev" | "test" | "release" | "done" | "excluded";
+/**
+ * Этап (st): встроенные dev / test / release / done / excluded и свои, добавленные человеком
+ * (id вида «custom-…»). Свои встают в порядок продвижения после выбранного этапа.
+ */
+export type Stage = string;
+export type BuiltinStage = "dev" | "test" | "release" | "done" | "excluded";
+export const BUILTIN_PROGRESS: BuiltinStage[] = ["dev", "test", "release", "done"];
 
-export const STAGES: Stage[] = ["dev", "test", "release", "done", "excluded"];
+/** Свой статус (st): название, цвет и после какого этапа он стоит в продвижении («start» — первым). */
+export interface CustomStage { id: string; label: string; color: string; after: string }
+
+/** Порядок продвижения со своими статусами: каждый свой — сразу после своего «after», по порядку добавления. */
+export function stageOrder(custom: CustomStage[]): Stage[] {
+  const out: Stage[] = [];
+  const place = (anchor: string) => custom.filter(c => c.after === anchor).forEach(c => { out.push(c.id); place(c.id); });
+  place("start");
+  for (const b of BUILTIN_PROGRESS) { out.push(b); place(b); }
+  // «after» указывает на удалённый статус — такие в конец продвижения, чтобы не потерялись.
+  custom.filter(c => !out.includes(c.id)).forEach(c => out.push(c.id));
+  return out;
+}
+
+/** Действующий порядок: этапы продвижения (со своими) и «Исключено» последним. Меняется на месте. */
+export const STAGES: Stage[] = [...BUILTIN_PROGRESS, "excluded"];
 
 /** Статус (st) с оформлением: этапы + «Заблокирован». */
 export type StageKey = Stage | "blocked";
 export const STAGE_KEYS: StageKey[] = [...STAGES, "blocked"];
 
 /** Названия и цвета по умолчанию. Человек меняет их в «Статус (st)» — см. applyStageStyles. */
-export const DEFAULT_STAGE_STYLE: Record<StageKey, { label: string; color: string }> = {
+export const DEFAULT_STAGE_STYLE: Record<string, { label: string; color: string }> = {
   dev:      { label: "Разработка",      color: "#0284c7" },
   test:     { label: "Тестирование",    color: "#7c3aed" },
   release:  { label: "Готово к релизу", color: "#0d9488" },
@@ -35,7 +56,7 @@ export const DEFAULT_STAGE_STYLE: Record<StageKey, { label: string; color: strin
   blocked:  { label: "Заблокирован",    color: "#7f1d1d" },
 };
 
-/** Свои названия и цвета статусов (st); пусто — по умолчанию. Хранятся в ToolState. */
+/** Свои названия и цвета встроенных статусов (st); пусто — по умолчанию. Хранятся в ToolState. */
 export type StageStyles = Partial<Record<StageKey, { label?: string; color?: string }>>;
 
 /**
@@ -49,12 +70,23 @@ const STAGE_COLOR: Record<StageKey, string> = Object.fromEntries(
 
 const HEX_RE = /^#[0-9a-f]{6}$/i;
 
-export function applyStageStyles(styles: StageStyles): void {
-  for (const k of STAGE_KEYS) {
+export function applyStageStyles(styles: StageStyles, custom: CustomStage[] = []): void {
+  for (const k of Object.keys(DEFAULT_STAGE_STYLE)) {
     STAGE_LABEL[k] = styles[k]?.label?.trim() || DEFAULT_STAGE_STYLE[k].label;
     const c = styles[k]?.color ?? "";
     STAGE_COLOR[k] = HEX_RE.test(c) ? c : DEFAULT_STAGE_STYLE[k].color;
   }
+  for (const c of custom) {
+    STAGE_LABEL[c.id] = c.label.trim() || "Без названия";
+    STAGE_COLOR[c.id] = HEX_RE.test(c.color) ? c.color : "#64748b";
+  }
+  STAGES.splice(0, STAGES.length, ...stageOrder(custom), "excluded");
+  STAGE_KEYS.splice(0, STAGE_KEYS.length, ...STAGES, "blocked");
+}
+
+/** Место в продвижении (0 — самый ранний); «Исключено» и неизвестные — -1. */
+export function stageRankOf(stage: Stage): number {
+  return stage === "excluded" ? -1 : STAGES.indexOf(stage);
 }
 
 /** Цвет текста на заливке: белый на тёмном, почти чёрный на светлом (по яркости цвета). */
@@ -65,12 +97,9 @@ export function textOn(hex: string): string {
 }
 
 /** Оформление метки статуса (st): заливка цветом статуса, «Исключено» — зачёркнуто. */
-export function stageStyle(k: StageKey, color = STAGE_COLOR[k]): React.CSSProperties {
+export function stageStyle(k: StageKey, color = STAGE_COLOR[k] ?? "#64748b"): React.CSSProperties {
   return { backgroundColor: color, color: textOn(color), textDecoration: k === "excluded" ? "line-through" : undefined };
 }
-
-/** Порядок продвижения: эпик получает минимальный этап из своих сторей. */
-const RANK: Record<Exclude<Stage, "excluded">, number> = { dev: 0, test: 1, release: 2, done: 3 };
 
 /** Сопоставление: проект → группа → статус Jira → этап. */
 export type StageMapping = Record<string, Partial<Record<Exclude<Category, "epic">, Record<string, Stage>>>>;
@@ -100,7 +129,8 @@ export type StageInfo =
 /** Задача на этапе «Готово к релизу» или дальше (готово, исключено); у заблокированной — по этапу без блокировки. */
 export function isReleaseOrLater(info: StageInfo): boolean {
   const base = info.kind === "blocked" ? info.base : info;
-  return (base.kind === "stage" || base.kind === "epic") && ["release", "done", "excluded"].includes(base.stage);
+  if (base.kind !== "stage" && base.kind !== "epic") return false;
+  return base.stage === "excluded" || stageRankOf(base.stage) >= stageRankOf("release");
 }
 
 export function stageText(info: StageInfo): string {
@@ -176,9 +206,10 @@ export function makeStageResolver(allIssues: Issue[], mapping: StageMapping, def
         info = { kind: "no-stories" };
       } else {
         // Несопоставленная стори считается отстающей: так эпик не «проскочит» вперёд.
-        const ranks = stories.map(s => (s.kind === "stage" ? RANK[s.stage as Exclude<Stage, "excluded">] : 0));
+        // Эпик получает минимальный этап своих сторей по порядку продвижения (свои статусы — тоже).
+        const ranks = stories.map(s => (s.kind === "stage" ? Math.max(0, stageRankOf(s.stage)) : 0));
         const min = Math.min(...ranks);
-        const stage = (Object.keys(RANK) as (keyof typeof RANK)[]).find(k => RANK[k] === min)!;
+        const stage = STAGES[min];
         info = { kind: "epic", stage, total: stories.length, behind: ranks.filter(r => r === min).length,
                  unmapped: stories.filter(s => s.kind === "unmapped").length };
       }

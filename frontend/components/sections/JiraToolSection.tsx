@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, ClipboardCheck, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, ClipboardCheck, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Trash2, Users, X,
 } from "lucide-react";
 
@@ -24,7 +24,7 @@ import DefectsModal from "@/components/jiratool/DefectsModal";
 import StageModal from "@/components/jiratool/StageModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -83,6 +83,11 @@ export default function JiraToolSection() {
   const [panel, setPanel] = useState<Panel>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
+  /* ── Экспорт и импорт списков файлом ── */
+  const [exportMenu, setExportMenu] = useState(false);
+  const [ioNote, setIoNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const importInput = useRef<HTMLInputElement>(null);
+
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
   const [newTpl, setNewTpl] = useState("");
   const [tplName, setTplName] = useState<string | null>(null);
@@ -233,10 +238,11 @@ export default function JiraToolSection() {
   const byEpic = useMemo(() => storiesByEpic(allIssues), [allIssues]);
   // Свои названия и цвета статусов (st) — до расчёта этапов: от названия зависят группы и сортировка.
   const stageStyles = state?.stageStyles;
+  const customStages = state?.customStages;
   const stageOf = useMemo(() => {
-    applyStageStyles(stageStyles ?? {});
+    applyStageStyles(stageStyles ?? {}, customStages ?? []);
     return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx);
-  }, [allIssues, state?.mapping, defectIdx, stageStyles]);
+  }, [allIssues, state?.mapping, defectIdx, stageStyles, customStages]);
   /**
    * Дефекты задачи — свои (Epic Link и связи) плюс блокирующие, которые она наследует: у эпика —
    * от его сторей, у стори — от её эпика. Так дефект, из-за которого задача «Заблокирована»,
@@ -363,6 +369,38 @@ export default function JiraToolSection() {
     const l = tpl ? listFromTemplate(name, list?.project ?? DEFAULT_PROJECT, tpl) : emptyList(name, list?.project);
     update(s => ({ ...s, lists: [...s.lists, l] }));
     openList(l.id); setNewList(null); setNewTpl("");
+  };
+
+  /** Списки → файл .json: скачивается браузером, его можно переслать коллеге. */
+  const exportToFile = (ids: string[]) => {
+    if (!state || !ids.length) return;
+    const data = exportLists(state, ids);
+    const one = ids.length === 1 ? state.lists.find(l => l.id === ids[0])?.name ?? "список" : "списки";
+    const safe = one.replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 60) || "список";
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `SimpleTest — ${safe} — ${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    setExportMenu(false);
+    setIoNote({ ok: true, text: ids.length === 1 ? `Список «${one}» сохранён в файл` : `Списков в файле: ${ids.length}` });
+  };
+
+  /** Файл → списки добавляются новыми; ничего у получателя не затирается. */
+  const importFromFile = async (file: File) => {
+    try {
+      const f = parseExportFile(await file.text());
+      const cur = stateRef.current;
+      if (!cur) return;
+      // Считаем один раз (у импортированных списков новые id) и подставляем готовое состояние.
+      const r = importLists(cur, f);
+      update(() => r.state);
+      openList(r.state.lists[r.state.lists.length - f.lists.length].id);
+      setIoNote({ ok: true, text: `Добавлено списков: ${f.lists.length} — ${f.lists.map(l => `«${l.name}»`).join(", ")}` });
+    } catch (e) {
+      setIoNote({ ok: false, text: e instanceof ImportError ? e.message : `Файл не прочитался: ${(e as Error).message}` });
+    }
   };
 
   /** Структура текущего списка → шаблон. Шаблон с тем же названием перезаписывается. */
@@ -500,9 +538,9 @@ export default function JiraToolSection() {
             mergeIssues(r.issues);
             keys = r.issues.map(i => i.key); truncated = r.truncated;
           } else {
-            const d = await getRelease(src.query);
+            const d = await getRelease(src.query, l.project);
             mergeIssues([...d.issues, ...d.epics]);
-            keys = releaseKeys(composeRelease(d.issues, d.epics, d.epic_link));
+            keys = releaseKeys(composeRelease(d.issues, d.epics, d.epic_link)); truncated = d.truncated;
           }
           const now = nowStamp();
           update(s => ({ ...s, lists: s.lists.map(x => (x.id === l.id ? applySourceCheck(x, src.id, keys, truncated, now) : x)) }));
@@ -746,10 +784,32 @@ export default function JiraToolSection() {
                 ))}
               </div>
               {newList === null ? (
-                <button type="button" onClick={() => setNewList("")}
-                  className="flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-text-muted hover:text-primary">
-                  <Plus className="w-4 h-4" /> Новый список
-                </button>
+                <div className="relative flex items-center">
+                  <button type="button" onClick={() => setNewList("")}
+                    className="flex-1 flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-text-muted hover:text-primary">
+                    <Plus className="w-4 h-4" /> Новый список
+                  </button>
+                  <input ref={importInput} type="file" accept=".json,application/json" className="hidden" aria-hidden tabIndex={-1}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) void importFromFile(f); e.target.value = ""; }} />
+                  <button type="button" onClick={() => importInput.current?.click()} aria-label="Импорт списков из файла"
+                    title="Импорт: загрузить списки из файла .json (добавятся новыми, ваши не затрутся)"
+                    className="p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Upload className="w-4 h-4" /></button>
+                  <button type="button" onClick={() => setExportMenu(m => !m)} aria-label="Экспорт списков в файл" aria-expanded={exportMenu}
+                    disabled={!state.lists.length} title="Экспорт: сохранить список в файл .json, чтобы переслать или не потерять"
+                    className="p-1.5 mr-0.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle disabled:opacity-40"><Download className="w-4 h-4" /></button>
+                  {exportMenu && (
+                    <div className="absolute z-30 right-0 top-full mt-1 w-56 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+                      <button type="button" onClick={() => list && exportToFile([list.id])} disabled={!list}
+                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40 truncate">
+                        Текущий список{list ? ` «${list.name}»` : ""}
+                      </button>
+                      <button type="button" onClick={() => exportToFile(state.lists.map(l => l.id))}
+                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle">
+                        Все списки ({state.lists.length})
+                      </button>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="mx-1 flex flex-col gap-1.5 py-1">
                   <input autoFocus value={newList} onChange={e => setNewList(e.target.value)}
@@ -770,6 +830,12 @@ export default function JiraToolSection() {
                       className="px-2.5 py-1 rounded-md border border-border-main text-xs text-text-muted">Отмена</button>
                   </div>
                 </div>
+              )}
+              {ioNote && (
+                <p role="status" className={`mx-2 my-1 text-[11px] ${ioNote.ok ? "text-emerald-700 dark:text-emerald-300" : "text-red-600"}`}>
+                  {ioNote.text}
+                  <button type="button" onClick={() => setIoNote(null)} aria-label="Скрыть" className="ml-1.5 text-text-muted hover:text-text-main">×</button>
+                </p>
               )}
               {state.templates.length > 0 && (
                 <div className="border-t border-border-main mt-1 pt-1.5 px-2">
@@ -1292,12 +1358,12 @@ export default function JiraToolSection() {
           onApply={(ids, mode) => setReqs([...selected], ids, mode)} />
       )}
       {modal === "bulk" && (
-        <BulkStatusModal open issues={selectedIssues} onClose={() => setModal(null)} onDone={afterTransitions} />
+        <BulkStatusModal open issues={selectedIssues} storiesOf={k => byEpic.get(k) ?? []} onClose={() => setModal(null)} onDone={afterTransitions} />
       )}
       {modal === "stages" && (
         <StageMappingModal open project={list?.project ?? "SBER911"} projects={state.lists.map(l => l.project)}
-          mapping={state.mapping} styles={state.stageStyles} onClose={() => setModal(null)}
-          onSave={(mapping, stageStyles) => update(s => ({ ...s, mapping, stageStyles }))} />
+          mapping={state.mapping} styles={state.stageStyles} custom={state.customStages} onClose={() => setModal(null)}
+          onSave={(mapping, stageStyles, customStages) => update(s => ({ ...s, mapping, stageStyles, customStages }))} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} onClose={() => setModal(null)} />

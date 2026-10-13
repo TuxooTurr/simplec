@@ -52,8 +52,13 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, model_bench, requirements,
-    datagen, webconnect, hub_tiles,
+    datagen, hub_tiles,
 )
+
+# Веб-коннекторы (Playwright), анализатор логов на них и MCP-сервер для GigaCode временно отключены
+# (13.10.2026): тяжёлые зависимости, функционал пока не нужен. Код сохранён в webconnect/, mcp_server/,
+# backend/api/webconnect.py. Вернуть: True здесь, зависимости в requirements.txt, флаг во frontend/lib/features.ts.
+WEB_CONNECTORS_ENABLED = False
 from db.postgres import init_db
 
 # Инициализировать таблицы PostgreSQL (идемпотентно)
@@ -96,11 +101,12 @@ async def lifespan(app_: FastAPI):
     except Exception:
         pass
     # Окна веб-коннекторов: сохранить сессии и закрыть браузеры.
-    try:
-        from webconnect.browser import windows
-        await windows.close_all()
-    except Exception:
-        pass
+    if WEB_CONNECTORS_ENABLED:
+        try:
+            from webconnect.browser import windows
+            await windows.close_all()
+        except Exception:
+            pass
 
 
 app = FastAPI(
@@ -179,7 +185,9 @@ app.include_router(app_settings.router)
 app.include_router(jira_defects.router)
 app.include_router(jira_views.router)
 app.include_router(jira_tool.router)
-app.include_router(webconnect.router)
+if WEB_CONNECTORS_ENABLED:
+    from backend.api import webconnect
+    app.include_router(webconnect.router)
 app.include_router(hub_tiles.router)
 app.include_router(testdata.router)
 app.include_router(jobs.router)

@@ -236,6 +236,18 @@ def test_если_поле_недоступно_пользователь_вид�
     texts = " ".join(res["warnings"])
     assert "ИТ-услуга" in texts and "не проставилась" in texts
     assert "КЭ" in texts
+    # Причину не выдумываем: показываем ответ Jira как есть
+    assert "ответ Jira: поле недоступно" in texts
+
+
+def test_без_createmeta_не_утверждаем_что_поля_нет_на_экране(fake_jira, monkeypatch):
+    """createmeta у нас 403: есть ли поле на экране, неизвестно — не пишем «отсутствует на экране»."""
+    fake_jira(edit_ok=False)
+    monkeypatch.setattr(JD, "_resolve_fields", lambda cfg, project, issuetype: {})
+    res = JD.create_defect(_create(), db=None)
+    texts = " ".join(res["warnings"])
+    assert "не проставилась" in texts
+    assert "на экране" not in texts and "Jira не приняла значение" in texts
 
 
 def test_уже_заполненные_поля_не_трогаем(fake_jira):
@@ -261,3 +273,19 @@ def test_кандидаты_без_дублей():
     for schema in ("array", "option", "string", ""):
         forms = JD._reference_candidates(JC.IT_SERVICE, schema)
         assert len(forms) == len({json.dumps(f, sort_keys=True, ensure_ascii=False) for f in forms})
+
+
+def test_в_переборе_есть_голый_id_и_название_с_id():
+    """Jira Сбера показывает КЭ как «название (id)» — такие формы тоже пробуем, после привычных."""
+    forms = JD._reference_candidates(JC.KE, "")
+    assert [JC.KE["id"]] in forms and JC.KE["id"] in forms
+    assert f"{JC.KE['value']} ({JC.KE['id']})" in forms
+    assert forms[0] == [dict(JC.KE)]          # порядок прежних вариантов не изменился
+
+
+def test_подбирается_форма_название_с_id(fake_jira):
+    labelled = [f"{JC.IT_SERVICE['value']} ({JC.IT_SERVICE['id']})"]
+    jira = fake_jira(accepts=labelled)
+    res = JD.create_defect(_create(), db=None)
+    assert jira.stored[IT_SERVICE_FIELD] == labelled
+    assert not [w for w in res["warnings"] if "ИТ-услуга" in w]

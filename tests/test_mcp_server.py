@@ -8,9 +8,13 @@
 import asyncio
 
 import pytest
-from mcp import Client
 
-import mcp_server.server as S
+# MCP-сервер временно отключён, пакет mcp из requirements.txt убран: без него тест пропускается.
+pytest.importorskip("mcp")
+
+from mcp import Client  # noqa: E402
+
+import mcp_server.server as S  # noqa: E402
 from mcp_server.dropup import ConsoleError, NotLoggedIn, parse_pods, parse_workloads, selector_to_query
 from mcp_server.simpletest_api import SimpleTestError
 

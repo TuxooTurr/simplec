@@ -421,6 +421,10 @@ def transitions(body: KeysBody, db: Session = Depends(get_db)) -> dict:
                 "name": t.get("name", ""),
                 "to": (t.get("to") or {}).get("name", "") or t.get("name", ""),
                 "resolution_required": bool(res.get("required")),
+                # Решения, которые Jira разрешает именно на этом переходе (общий справочник шире:
+                # «Исправлен» из него Jira на переходе отвергает — «Некорректное имя резолюции»).
+                "resolutions": [{"id": str(v.get("id", "")), "name": v.get("name", "")}
+                                for v in res.get("allowedValues") or [] if v.get("id")],
             })
         return key, {"transitions": items}
 
@@ -436,8 +440,10 @@ def apply_transitions(body: TransitionBody, db: Session = Depends(get_db)) -> di
 
     def one(c: TransitionChange) -> dict:
         payload: dict[str, Any] = {"transition": {"id": c.transition_id.strip()}}
-        if c.resolution.strip():
-            payload["fields"] = {"resolution": {"name": c.resolution.strip()}}
+        r = c.resolution.strip()
+        if r:
+            # id решения из allowedValues перехода — надёжно; название — запасной путь (старые клиенты).
+            payload["fields"] = {"resolution": {"id": r} if r.isdigit() else {"name": r}}
         try:
             _jira_request(cfg, "POST", f"/rest/api/2/issue/{c.key.strip().upper()}/transitions", json_body=payload)
             return {"key": c.key, "ok": True}
@@ -450,50 +456,62 @@ def apply_transitions(body: TransitionBody, db: Session = Depends(get_db)) -> di
     return {"results": results, "done": sum(1 for r in results if r["ok"])}
 
 
-# ── Релиз (тип задачи «Релиз», не «Release 2.0») ─────────────────────────────
+# ── Релиз = версия Jira («Исправить в версиях», fixVersion) ──────────────────
 
-def release_links(issue: dict) -> list[dict]:
-    """Связи задачи-релиза → [{key, link}]: ключ связанной задачи и подпись связи с её стороны
-    («включает», «входит в»…). По подписи человек отключит в предпросмотре лишние связи."""
-    out: list[dict] = []
-    seen: set[str] = set()
-    for link in (issue.get("fields") or {}).get("issuelinks") or []:
-        t = link.get("type") or {}
-        if link.get("outwardIssue"):
-            key, label = link["outwardIssue"].get("key"), t.get("outward") or t.get("name") or ""
-        elif link.get("inwardIssue"):
-            key, label = link["inwardIssue"].get("key"), t.get("inward") or t.get("name") or ""
-        else:
-            continue
-        if key and key not in seen:
-            seen.add(key)
-            out.append({"key": key, "link": label})
-    return out
+_VERSION_URL_RE = re.compile(r"/projects/([A-Za-z][A-Za-z0-9_]*)/versions/(\d+)")
+
+
+def parse_version_ref(ref: str) -> tuple[str, str]:
+    """Ссылка на версию, её id или название → (id, ключ проекта из ссылки). Название → ("", "")."""
+    v = (ref or "").strip()
+    m = _VERSION_URL_RE.search(v)
+    if m:
+        return m.group(2), m.group(1).upper()
+    m = re.search(r"/versions/(\d+)", v)
+    if m:
+        return m.group(1), ""
+    return (v, "") if v.isdigit() else ("", "")
 
 
 @router.get("/api/jira/tool/release")
-def release(key: str, db: Session = Depends(get_db)) -> dict:
-    """Состав релиза: связанные с задачей-релизом задачи (все поля) и эпики, к которым они привязаны
-    через Epic Link, — чтобы на фронтенде стори и дефекты эпика собрать под эпиком."""
-    rk = (_clean_keys([key]) or [""])[0]
-    if not rk:
-        raise HTTPException(422, f"Некорректный ключ релиза: «{key}»")
+def release(version: str, project: str = "", db: Session = Depends(get_db)) -> dict:
+    """Состав релиза — задачи с этой версией в «Исправить в версиях» (fixVersion) и эпики, к которым
+    они привязаны через Epic Link, — чтобы на фронтенде стори и дефекты эпика собрать под эпиком.
+    version — ссылка вида …/projects/SBER911/versions/2568004, id версии или её название (тогда нужен project)."""
     cfg = _load_cfg(db)
-    raw = _jira_request(cfg, "GET", f"/rest/api/2/issue/{rk}", params={"fields": "summary,issuetype,status,issuelinks"})
-    links = release_links(raw)
-    linked = [norm_issue(i, cfg["base_url"]) for i in _by_keys(cfg, [x["key"] for x in links][:MAX_ISSUES])]
+    vid, pk = parse_version_ref(version)
+    if not vid:
+        name = (version or "").strip()
+        if not name:
+            raise HTTPException(422, "Вставьте ссылку на релиз (…/versions/12345) или его название")
+        pk = _project_key(project or "")
+        versions = _jira_request(cfg, "GET", f"/rest/api/2/project/{pk}/versions") or []
+        hit = next((x for x in versions if str(x.get("name", "")).strip().lower() == name.lower()), None)
+        if not hit:
+            raise HTTPException(404, f"В проекте {pk} нет версии «{name}»")
+        vid = str(hit["id"])
+    info = _jira_request(cfg, "GET", f"/rest/api/2/version/{vid}")
+    found, total = _search(cfg, f"fixVersion = {vid}", limit=MAX_ISSUES)
+    issues = [norm_issue(i, cfg["base_url"]) for i in found]
     epic_field = catalog(db=db).get("epic_link", _DEFAULT_EPIC_LINK)
-    have = {i["key"] for i in linked}
-    epic_keys = sorted({i["fields"][epic_field] for i in linked
+    have = {i["key"] for i in issues}
+    epic_keys = sorted({i["fields"][epic_field] for i in issues
                         if isinstance(i["fields"].get(epic_field), str) and i["fields"][epic_field] not in have})
     epics = [norm_issue(i, cfg["base_url"]) for i in _by_keys(cfg, epic_keys)] if epic_keys else []
+    pk = pk or (issues[0]["key"].split("-")[0] if issues else (project or "").upper())
     return {
-        "release": norm_issue(raw, cfg["base_url"]),
-        "links": links,
-        "issues": linked,
+        "release": {
+            "id": vid,
+            "name": info.get("name") or vid,
+            "released": bool(info.get("released")),
+            "release_date": info.get("releaseDate") or "",
+            "project": pk,
+            "url": f"{cfg['base_url']}/projects/{pk}/versions/{vid}" if pk else "",
+        },
+        "issues": issues,
         "epics": epics,
         "epic_link": epic_field,
-        "missing": [x["key"] for x in links if x["key"] not in have],
+        "truncated": total > len(issues),
     }
 
 

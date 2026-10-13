@@ -61,16 +61,25 @@ print(sys.prefix + "|" + hashlib.sha256(open("requirements.txt", "rb").read()).h
 PY
 )"
 if ! python -c "import fastapi" &>/dev/null || [ "$(cat .deps-installed 2>/dev/null)" != "$DEPS_STAMP" ]; then
-    info "Устанавливаю/обновляю зависимости Python (может занять несколько минут)..."
-    pip install -q -r requirements.txt || err "pip install не прошёл. В корпоративной сети проверьте прокси/зеркало PyPI и повторите: pip install -r requirements.txt"
+    info "Устанавливаю/обновляю зависимости Python. Первый раз — 3–10 минут (около 150 МБ), дальше — секунды."
+    # Прогресс видно: раньше установка шла молча (-q) и выглядела зависшей.
+    # --prefer-binary — только готовые сборки, без долгой компиляции из исходников.
+    pip install --prefer-binary --progress-bar on -r requirements.txt \
+        || err "pip install не прошёл. В корпоративной сети проверьте прокси/зеркало PyPI и повторите: pip install -r requirements.txt"
     echo "$DEPS_STAMP" > .deps-installed
     ok "Зависимости Python установлены"
 fi
 
 # ── Зависимости Node.js ───────────────────────────────────────
-if [ ! -d "frontend/node_modules" ]; then
-    info "Устанавливаю зависимости Node.js..."
-    npm install --prefix frontend --silent
+# Отметка = хэш package-lock.json: изменился (обновили проект) — доставляем, иначе не трогаем.
+# npm ci — точно по lock-файлу и быстрее npm install; --no-audit/--no-fund убирают лишние
+# запросы в интернет, которые в корпоративной сети висят до таймаута.
+NODE_STAMP="$(shasum -a 256 frontend/package-lock.json 2>/dev/null | cut -d' ' -f1)"
+if [ ! -d "frontend/node_modules" ] || [ "$(cat frontend/.deps-installed 2>/dev/null)" != "$NODE_STAMP" ]; then
+    info "Устанавливаю зависимости Node.js. Первый раз — 1–5 минут (около 370 МБ), дальше — секунды."
+    npm ci --prefix frontend --no-audit --no-fund --loglevel=error \
+        || err "npm ci не прошёл. В корпоративной сети проверьте прокси/зеркало npm и повторите: npm ci --prefix frontend"
+    echo "$NODE_STAMP" > frontend/.deps-installed
     ok "Node.js зависимости установлены"
 fi
 

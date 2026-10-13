@@ -48,15 +48,28 @@ export function getProjectStatuses(project: string): Promise<{ project: string; 
   return fetchJson(`/api/jira/tool/statuses?project=${encodeURIComponent(project)}`);
 }
 
-export interface Transition { id: string; name: string; to: string; resolution_required: boolean }
-
-export function getTransitions(keys: string[]): Promise<{ issues: Record<string, { transitions?: Transition[]; error?: string }> }> {
-  return post("/api/jira/tool/transitions", { keys });
+export interface Transition {
+  id: string; name: string; to: string; resolution_required: boolean;
+  /** Решения, которые Jira разрешает на этом переходе (id + название). */
+  resolutions?: { id: string; name: string }[];
 }
 
-export function applyTransitions(changes: { key: string; transition_id: string; resolution?: string }[]):
+/** Сервер берёт до 200 задач за раз (эпик со всеми сторями бывает больше) — режем на пачки. */
+export async function getTransitions(keys: string[]): Promise<{ issues: Record<string, { transitions?: Transition[]; error?: string }> }> {
+  const issues: Record<string, { transitions?: Transition[]; error?: string }> = {};
+  for (let i = 0; i < keys.length; i += 200) {
+    Object.assign(issues, (await post<{ issues: typeof issues }>("/api/jira/tool/transitions", { keys: keys.slice(i, i + 200) })).issues);
+  }
+  return { issues };
+}
+
+export async function applyTransitions(changes: { key: string; transition_id: string; resolution?: string }[]):
   Promise<{ results: { key: string; ok: boolean; error?: string }[]; done: number }> {
-  return post("/api/jira/tool/transition", { changes });
+  const results: { key: string; ok: boolean; error?: string }[] = [];
+  for (let i = 0; i < changes.length; i += 200) {
+    results.push(...(await post<{ results: typeof results }>("/api/jira/tool/transition", { changes: changes.slice(i, i + 200) })).results);
+  }
+  return { results, done: results.filter(r => r.ok).length };
 }
 
 export function getStructures(): Promise<{ structures: StructureInfo[] }> {
@@ -78,18 +91,17 @@ export function taskChecklist(body: { key: string; summary: string; requirement_
 }
 
 export interface ReleaseData {
-  release: Issue;
-  /** Связи релиза: ключ задачи и подпись связи («включает», «relates to»…). */
-  links: { key: string; link: string }[];
+  /** Релиз — версия Jira: задачи привязаны к ней полем «Исправить в версиях» (fixVersion). */
+  release: { id: string; name: string; released: boolean; release_date: string; project: string; url: string };
   issues: Issue[];
-  /** Эпики, к которым привязаны задачи релиза (через Epic Link), если их самих нет в составе. */
+  /** Эпики, к которым привязаны задачи релиза (через Epic Link), если их самих нет в релизе. */
   epics: Issue[];
   epic_link: string;
-  /** Связанные задачи, которые Jira не отдала (удалены или нет прав). */
-  missing: string[];
+  /** В релизе больше 1000 задач — отдана только часть. */
+  truncated: boolean;
 }
 
-/** Состав релиза (задача типа «Релиз»): связанные задачи и их эпики. */
-export function getRelease(key: string): Promise<ReleaseData> {
-  return fetchJson(`/api/jira/tool/release?key=${encodeURIComponent(key)}`);
+/** Состав релиза: ссылка на версию (…/projects/SBER911/versions/2568004), её id или название (тогда нужен проект). */
+export function getRelease(version: string, project = ""): Promise<ReleaseData> {
+  return fetchJson(`/api/jira/tool/release?version=${encodeURIComponent(version)}&project=${encodeURIComponent(project)}`);
 }

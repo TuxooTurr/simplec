@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, RotateCcw } from "lucide-react";
+import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { CATEGORY_LABEL, STORY_TYPES, typeCategory, type Category } from "@/lib/jiraTool";
+import { CATEGORY_LABEL, STORY_TYPES, newId, typeCategory, type Category } from "@/lib/jiraTool";
 import {
-  DEFAULT_STAGE_STYLE, STAGES, STAGE_KEYS, defaultMapping, stageStyle,
-  type Stage, type StageKey, type StageMapping, type StageStyles,
+  DEFAULT_STAGE_STYLE, defaultMapping, stageOrder, stageStyle,
+  type CustomStage, type Stage, type StageKey, type StageMapping, type StageStyles,
 } from "@/lib/jiraStages";
 import { getProjectStatuses } from "@/lib/jiraToolApi";
 
@@ -24,14 +24,16 @@ const RESERVED = ["нет сторей", "не сопоставлен"];
  * Статусы группы — из workflow проекта в Jira: все статусы её типов задач.
  * Вкладка «Названия и цвета» — свои названия и цвета статусов (st), общие на все списки.
  */
-export default function StageMappingModal({ open, project, projects, mapping, styles, onSave, onClose }: {
+export default function StageMappingModal({ open, project, projects, mapping, styles, custom, onSave, onClose }: {
   open: boolean;
   project: string;
   /** Проекты списков — между ними переключается таблица. */
   projects: string[];
   mapping: StageMapping;
   styles: StageStyles;
-  onSave: (next: StageMapping, styles: StageStyles) => void;
+  /** Свои статусы (st), добавленные к встроенным. */
+  custom: CustomStage[];
+  onSave: (next: StageMapping, styles: StageStyles, custom: CustomStage[]) => void;
   onClose: () => void;
 }) {
   const [draft, setDraft] = useState<StageMapping>(() => structuredClone(mapping));
@@ -39,13 +41,23 @@ export default function StageMappingModal({ open, project, projects, mapping, st
   const [tab, setTab] = useState<Tab>("story");
   const cat: Cat = tab === "look" ? "story" : tab;
   const [look, setLook] = useState<StageStyles>(() => structuredClone(styles));
-  const lbl = (k: StageKey) => look[k]?.label ?? DEFAULT_STAGE_STYLE[k].label;
-  const col = (k: StageKey) => look[k]?.color ?? DEFAULT_STAGE_STYLE[k].color;
-  const setLookOf = (k: StageKey, p: { label?: string; color?: string }) => setLook(l => ({ ...l, [k]: { ...l[k], ...p } }));
+  const [cust, setCust] = useState<CustomStage[]>(() => structuredClone(custom));
+  const isCustom = (k: StageKey) => cust.some(c => c.id === k);
+  const lbl = (k: StageKey) => cust.find(c => c.id === k)?.label ?? look[k]?.label ?? DEFAULT_STAGE_STYLE[k]?.label ?? k;
+  const col = (k: StageKey) => cust.find(c => c.id === k)?.color ?? look[k]?.color ?? DEFAULT_STAGE_STYLE[k]?.color ?? "#64748b";
+  const setLookOf = (k: StageKey, p: { label?: string; color?: string }) => {
+    if (isCustom(k)) setCust(cs => cs.map(c => (c.id === k ? { ...c, ...p } : c)));
+    else setLook(l => ({ ...l, [k]: { ...l[k], ...p } }));
+  };
   const resetLook = (k: StageKey) => setLook(l => { const n = { ...l }; delete n[k]; return n; });
+  // Порядок продвижения по черновику (со своими статусами) — для таблицы и кнопок сопоставления.
+  const progress = stageOrder(cust);
+  const ORDER: Stage[] = [...progress, "excluded"];
+  const LOOK_KEYS: StageKey[] = [...ORDER, "blocked"];
+  const addCustom = () => setCust(cs => [...cs, { id: newId("custom"), label: "Новый статус", color: "#64748b", after: "test" }]);
 
   // Названия должны быть разными: по названию статус (st) группируется и сортируется.
-  const names = STAGE_KEYS.map(k => lbl(k).trim().toLowerCase());
+  const names = LOOK_KEYS.map(k => lbl(k).trim().toLowerCase());
   const lookErr = names.some(n => !n) ? "Название статуса не может быть пустым"
     : names.some((n, i) => names.indexOf(n) !== i) ? "Названия статусов (st) должны различаться"
     : names.some(n => RESERVED.includes(n)) ? "«Нет сторей» и «Не сопоставлен» — служебные подписи, выберите другое название" : "";
@@ -104,31 +116,54 @@ export default function StageMappingModal({ open, project, projects, mapping, st
         {tab === "look" ? (
           <>
             <div className="rounded-xl bg-bg-subtle p-3 text-xs text-text-muted leading-relaxed">
-              Название и цвет каждого статуса (st) — общие для всех списков и проектов. Смысл статуса не меняется:
-              эпик по-прежнему берёт самую отстающую стори, «Заблокирован» ставится по блокирующему дефекту.
+              Название и цвет каждого статуса (st) — общие для всех списков и проектов. Порядок сверху вниз — порядок
+              продвижения задачи: эпик берёт самую отстающую стори. Свой статус ставится после выбранного; его можно
+              сопоставить со статусами Jira на вкладках групп. «Заблокирован» ставится по блокирующему дефекту.
             </div>
             <div className="border border-border-main rounded-xl divide-y divide-border-main">
-              {STAGE_KEYS.map(k => (
+              {LOOK_KEYS.map(k => (
                 <div key={k} className="flex items-center gap-3 px-3 py-2">
                   <input type="color" value={col(k)} onChange={e => setLookOf(k, { color: e.target.value })}
                     aria-label={`Цвет статуса «${lbl(k)}»`} title="Цвет"
                     className="w-8 h-8 flex-shrink-0 rounded-md border border-border-main bg-transparent cursor-pointer p-0.5" />
                   <input value={lbl(k)} onChange={e => setLookOf(k, { label: e.target.value })} maxLength={40}
-                    aria-label={`Название статуса (по умолчанию «${DEFAULT_STAGE_STYLE[k].label}»)`}
+                    aria-label={isCustom(k) ? "Название своего статуса" : `Название статуса (по умолчанию «${DEFAULT_STAGE_STYLE[k]?.label}»)`}
                     className="min-w-0 flex-1 text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
                   <span className="w-36 flex-shrink-0">
                     <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-medium align-middle"
                       style={stageStyle(k, col(k))}>{lbl(k) || "—"}</span>
                   </span>
-                  <span className="w-20 flex-shrink-0 text-[10px] text-text-muted">
-                    {k === "blocked" ? "блок. дефект" : k === "excluded" ? "не считается" : "этап"}
-                  </span>
-                  <button type="button" onClick={() => resetLook(k)} disabled={!look[k]} title={`Вернуть «${DEFAULT_STAGE_STYLE[k].label}» и цвет по умолчанию`}
-                    aria-label={`Вернуть по умолчанию: ${DEFAULT_STAGE_STYLE[k].label}`}
-                    className="p-1.5 rounded-md text-text-muted hover:text-text-main disabled:opacity-30"><RotateCcw className="w-3.5 h-3.5" /></button>
+                  {isCustom(k) ? (
+                    <>
+                      <select value={cust.find(c => c.id === k)?.after ?? "test"} aria-label={`«${lbl(k)}» стоит после`}
+                        onChange={e => setCust(cs => cs.map(c => (c.id === k ? { ...c, after: e.target.value } : c)))}
+                        title="После какого статуса стоит в продвижении"
+                        className="w-28 flex-shrink-0 text-[11px] border border-border-main rounded-md px-1.5 py-1 bg-[var(--color-input-bg)] text-text-main">
+                        <option value="start">в начале</option>
+                        {progress.filter(x => x !== k).map(x => <option key={x} value={x}>после «{lbl(x)}»</option>)}
+                      </select>
+                      <button type="button" onClick={() => setCust(cs => cs.filter(c => c.id !== k).map(c => (c.after === k ? { ...c, after: cust.find(x => x.id === k)?.after ?? "test" } : c)))}
+                        title="Удалить статус. Статусы Jira, сопоставленные с ним, станут «Не сопоставлен»"
+                        aria-label={`Удалить статус ${lbl(k)}`}
+                        className="p-1.5 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="w-28 flex-shrink-0 text-[10px] text-text-muted">
+                        {k === "blocked" ? "блок. дефект" : k === "excluded" ? "не считается" : "встроенный"}
+                      </span>
+                      <button type="button" onClick={() => resetLook(k)} disabled={!look[k]} title={`Вернуть «${DEFAULT_STAGE_STYLE[k]?.label}» и цвет по умолчанию`}
+                        aria-label={`Вернуть по умолчанию: ${DEFAULT_STAGE_STYLE[k]?.label}`}
+                        className="p-1.5 rounded-md text-text-muted hover:text-text-main disabled:opacity-30"><RotateCcw className="w-3.5 h-3.5" /></button>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
+            <button type="button" onClick={addCustom}
+              className="flex items-center gap-1.5 text-sm text-primary hover:underline self-start">
+              <Plus className="w-4 h-4" /> Добавить статус (st)
+            </button>
             {lookErr && <p className="text-xs text-red-600" role="alert">{lookErr}</p>}
           </>
         ) : (
@@ -156,7 +191,7 @@ export default function StageMappingModal({ open, project, projects, mapping, st
                   <div key={s} className="grid grid-cols-[1fr_auto] gap-x-4 items-center px-3 py-1.5">
                     <span className="text-sm text-text-main">{s}</span>
                     <div className="flex gap-1" role="radiogroup" aria-label={`Этап для «${s}»`}>
-                      {STAGES.map(st => (
+                      {ORDER.map(st => (
                         <button key={st} type="button" role="radio" aria-checked={table[s] === st} onClick={() => set(s, st)}
                           style={table[s] === st ? stageStyle(st, col(st)) : undefined}
                           className={`px-2 py-1 rounded-md text-[11px] transition-colors
@@ -184,14 +219,19 @@ export default function StageMappingModal({ open, project, projects, mapping, st
               onClick={() => {
                 // Названия — без пробелов по краям; совпадающее с умолчанием не храним.
                 const clean: StageStyles = {};
-                for (const k of STAGE_KEYS) {
+                for (const k of Object.keys(DEFAULT_STAGE_STYLE)) {
                   const label = lbl(k).trim(), color = col(k);
                   const v: { label?: string; color?: string } = {};
                   if (label !== DEFAULT_STAGE_STYLE[k].label) v.label = label;
                   if (color.toLowerCase() !== DEFAULT_STAGE_STYLE[k].color) v.color = color;
                   if (v.label || v.color) clean[k] = v;
                 }
-                onSave(draft, clean); onClose();
+                // Сопоставления с удалёнными своими статусами снимаем — такие статусы Jira станут «Не сопоставлен».
+                const valid = new Set<string>(ORDER);
+                const mapping: StageMapping = Object.fromEntries(Object.entries(draft).map(([p, cats]) => [p,
+                  Object.fromEntries(Object.entries(cats ?? {}).map(([c, t]) => [c,
+                    Object.fromEntries(Object.entries(t ?? {}).filter(([, st]) => valid.has(st)))]))]));
+                onSave(mapping, clean, cust.map(c => ({ ...c, label: c.label.trim() }))); onClose();
               }}
               className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сохранить</button>
           </div>

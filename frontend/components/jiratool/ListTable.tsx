@@ -497,7 +497,7 @@ export default function ListTable({
   /** Содержимое папки (или всего списка): группы или строки по ручному порядку. */
   const content = (items: Issue[], prefix: string, folder: FolderKey, depth: number) =>
     list.groupBy.length
-      ? groupIssues(items, list.groupBy, ctx, prefix, true).map(g => group(g, depth, [], folder))
+      ? groupIssues(items, list.groupBy, ctx, prefix).map(g => group(g, depth, [], folder))
       : sortIssues(items, sort, ctx).map((i, n, arr) => row(i, depth, prefix, [], folder, arr[n - 1]?.key, arr[n + 1]?.key));
 
   /** Заголовок папки: перенос задач внутрь, перестановка папок, переименование, удаление. */

@@ -45,15 +45,35 @@ else
 fi
 
 # 3. Dependencies
-echo "Устанавливаю зависимости..."
+echo "Устанавливаю зависимости Python (около 150 МБ, 3–10 минут; прогресс ниже)..."
 pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+# --prefer-binary — только готовые сборки, без компиляции из исходников.
+pip install --prefer-binary --progress-bar on -r requirements.txt
 # Та же отметка, что проверяет start.sh: при следующем запуске повторно ставить не будет.
 python - > .deps-installed <<'PY'
 import hashlib, sys
 print(sys.prefix + "|" + hashlib.sha256(open("requirements.txt", "rb").read()).hexdigest())
 PY
-echo "Зависимости: установлены"
+echo "Зависимости Python: установлены"
+
+# 3a. Зависимости фронтенда — здесь же, чтобы первый start.sh не ставил их сам.
+if command -v npm &>/dev/null; then
+    echo "Устанавливаю зависимости фронтенда (около 370 МБ, 1–5 минут)..."
+    npm ci --prefix frontend --no-audit --no-fund --loglevel=error
+    shasum -a 256 frontend/package-lock.json | cut -d' ' -f1 > frontend/.deps-installed
+    echo "Зависимости фронтенда: установлены"
+else
+    echo "ВНИМАНИЕ: npm не найден — зависимости фронтенда поставит start.sh после установки Node.js 20."
+fi
+
+# 3b. Модель для поиска похожих эталонов (~80 МБ). Без этого шага она скачается при первой
+# генерации, и та будет долго «висеть». Сеть закрыта — не страшно: скачается позже сама.
+echo "Скачиваю модель для поиска по эталонам (около 80 МБ)..."
+python - <<'PY' || echo "ВНИМАНИЕ: модель не скачалась (сеть?) — скачается при первом использовании «Данных»."
+from chromadb.utils import embedding_functions
+embedding_functions.DefaultEmbeddingFunction()(["проверка"])
+print("Модель поиска: готова")
+PY
 
 # 4. .env setup
 if [ ! -f ".env" ]; then

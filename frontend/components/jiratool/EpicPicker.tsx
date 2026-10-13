@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Loader2, RefreshCw, Search, Zap } from "lucide-react";
 
 export interface EpicOption { key: string; summary: string }
@@ -82,7 +83,9 @@ export default function EpicPicker({ id, value, options, loading, loadedAt, canL
         <ChevronDown className={`w-4 h-4 ml-auto text-text-muted flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {pos && (
+      {/* Список — в отдельном слое у body: окно формы анимируется сдвигом (transform), и fixed-элемент
+          внутри него считал бы координаты от окна, а не от экрана — уезжал бы в угол интерфейса. */}
+      {pos && createPortal(
         <div ref={box} style={{ position: "fixed", left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, zIndex: 70 }}
           className="rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-lg animate-fade-in">
           <label className="flex items-center gap-2 px-3 py-2 border-b border-border-main">
@@ -141,7 +144,8 @@ export default function EpicPicker({ id, value, options, loading, loadedAt, canL
               </button>
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

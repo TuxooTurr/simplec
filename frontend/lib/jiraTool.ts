@@ -13,9 +13,10 @@
 
 import {
   DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isClosedDefect, isResolvedDefect,
+  projectKeyOfIssue,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
-import { STAGES, STAGE_LABEL, isReleaseOrLater, stageText, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
+import { STAGES, STAGE_LABEL, isReleaseOrLater, stageText, type CustomStage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
@@ -356,6 +357,8 @@ export interface ToolState {
   roleNames: Record<string, string[]>;
   /** Свои названия и цвета статусов (st); пусто — по умолчанию. */
   stageStyles: StageStyles;
+  /** Свои статусы (st), добавленные к встроенным. */
+  customStages: CustomStage[];
   /** Шаблоны списков: только структура — порядок колонок, свои поля и папки. */
   templates: ListTemplate[];
   /**
@@ -421,7 +424,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, templates: [], reqLinks: {} };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {} };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -446,6 +449,7 @@ export function loadState(): ToolState {
           mapping: s.mapping ?? {},
           roleNames: s.roleNames ?? {},
           stageStyles: s.stageStyles ?? {},
+          customStages: s.customStages ?? [],
           templates: s.templates ?? [],
           reqLinks: s.reqLinks ?? {},
         };
@@ -784,7 +788,7 @@ export interface GroupNode {
  * Задача с несколькими значениями (компоненты, метки) попадает в группу
  * каждого значения — как в доске Jira «по компонентам».
  */
-export function groupIssues(issues: Issue[], levels: ColRef[], ctx: ColCtx, parentPath = "", top = true): GroupNode[] {
+export function groupIssues(issues: Issue[], levels: ColRef[], ctx: ColCtx, parentPath = ""): GroupNode[] {
   if (!levels.length) return [];
   const [ref, ...rest] = levels;
   const buckets = new Map<string, Issue[]>();
@@ -795,13 +799,7 @@ export function groupIssues(issues: Issue[], levels: ColRef[], ctx: ColCtx, pare
       buckets.get(v)!.push(issue);
     }
   }
-  // Первый уровень по участнику или своему списку — показываем и пустые группы:
-  // иначе задачу не перетащить на участника, у которого ещё нет задач.
-  if (top) {
-    const known = ref === PARTICIPANT_COL ? ctx.participants.map(p => p.name)
-      : ref.startsWith("own:") ? (ctx.list.ownFields.find(f => f.id === ref.slice(4))?.options ?? []) : [];
-    for (const v of known) if (!buckets.has(v)) buckets.set(v, []);
-  }
+  // Группы — только по значениям, у которых в списке есть задачи: участник без задач группой не показывается.
   const order = (a: string, b: string) => {
     if (a === EMPTY_GROUP) return 1;
     if (b === EMPTY_GROUP) return -1;
@@ -812,7 +810,7 @@ export function groupIssues(issues: Issue[], levels: ColRef[], ctx: ColCtx, pare
   return [...buckets.keys()].sort(order).map(label => {
     const path = `${parentPath}/${ref}=${label}`;
     const items = buckets.get(label)!;
-    return { label, field: colLabel(ref, ctx.list), ref, path, issues: items, children: groupIssues(items, rest, ctx, path, false) };
+    return { label, field: colLabel(ref, ctx.list), ref, path, issues: items, children: groupIssues(items, rest, ctx, path) };
   });
 }
 
@@ -987,4 +985,128 @@ export function deleteView(list: TaskList, id: string): TaskList {
   if (id !== active) return { ...list, views: rest };
   const next = rest[0];
   return { ...list, views: rest, activeView: next.id, columns: [...next.columns], pinned: next.pinned, widths: next.widths };
+}
+
+/* ── Экспорт и импорт списков (файл .json) ─────────────────────────────── */
+
+export const EXPORT_FORMAT = "simpletest.jira-tool";
+export const EXPORT_VERSION = 1;
+
+/**
+ * Файл обмена списками: сами списки (задачи, папки, колонки, представления, значения своих полей,
+ * трудозатраты, отметки источников) и всё, на что они ссылаются, — участники, фамилии направлений,
+ * привязки требований, черновики, свои статусы (st). Получатель видит список так же, как автор.
+ */
+export interface ExportFile {
+  format: typeof EXPORT_FORMAT;
+  version: number;
+  exportedAt: string;
+  lists: TaskList[];
+  participants: Participant[];
+  roleNames: Record<string, string[]>;
+  reqLinks: Record<string, string[]>;
+  drafts: Issue[];
+  customStages: CustomStage[];
+  stageStyles: StageStyles;
+}
+
+export function exportLists(s: ToolState, listIds: string[]): ExportFile {
+  const lists = s.lists.filter(l => listIds.includes(l.id));
+  const keys = new Set(lists.flatMap(l => l.keys));
+  const usedParticipants = new Set(lists.flatMap(l => Object.values(l.assignees)));
+  return {
+    format: EXPORT_FORMAT,
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    lists,
+    participants: s.participants.filter(p => usedParticipants.has(p.id)),
+    roleNames: s.roleNames,
+    reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
+    drafts: s.created.filter(i => keys.has(i.key)),
+    customStages: s.customStages,
+    stageStyles: s.stageStyles,
+  };
+}
+
+export class ImportError extends Error {}
+
+/** Разбор файла: это наш формат и его версию мы понимаем — иначе понятная ошибка, а не тихий мусор. */
+export function parseExportFile(text: string): ExportFile {
+  let raw: unknown;
+  try { raw = JSON.parse(text); } catch { throw new ImportError("Это не файл списков SimpleTest: внутри не JSON"); }
+  const f = raw as Partial<ExportFile>;
+  if (!f || f.format !== EXPORT_FORMAT) throw new ImportError("Это не файл списков SimpleTest (нет отметки формата)");
+  if (typeof f.version !== "number" || f.version > EXPORT_VERSION) {
+    throw new ImportError("Файл создан более новой версией SimpleTest — обновите проект и повторите");
+  }
+  if (!Array.isArray(f.lists) || !f.lists.every(l => l && typeof l.name === "string" && Array.isArray(l.keys) && Array.isArray(l.columns))) {
+    throw new ImportError("В файле повреждён список задач");
+  }
+  return {
+    format: EXPORT_FORMAT, version: f.version, exportedAt: f.exportedAt ?? "",
+    lists: f.lists, participants: f.participants ?? [], roleNames: f.roleNames ?? {}, reqLinks: f.reqLinks ?? {},
+    drafts: f.drafts ?? [], customStages: f.customStages ?? [], stageStyles: f.stageStyles ?? {},
+  };
+}
+
+/**
+ * Импорт: списки добавляются новыми (свой id; одноимённый — с пометкой «(импорт)»), чужое ничего не затирает.
+ * Участник с тем же ФИО — тот же человек (не дублируем), иначе добавляется. Фамилии направлений и свои статусы —
+ * объединяются; привязки требований и черновики — только те, которых у получателя ещё нет.
+ */
+export function importLists(s: ToolState, f: ExportFile): { state: ToolState; names: string[] } {
+  const participants = [...s.participants];
+  const pidMap: Record<string, string> = {};
+  for (const p of f.participants) {
+    const same = participants.find(x => x.name.trim().toLowerCase() === p.name.trim().toLowerCase());
+    if (same) pidMap[p.id] = same.id;
+    else {
+      const id = participants.some(x => x.id === p.id) ? newId("ptc") : p.id;
+      participants.push({ ...p, id, role: normRole(p.role ?? "") });
+      pidMap[p.id] = id;
+    }
+  }
+  // Черновик с таким же ключом у получателя уже есть (своя нумерация) — даём импортированному новый номер.
+  const draftKeys = new Set(s.created.map(i => i.key));
+  let nextKey = s.nextKey;
+  const keyMap: Record<string, string> = {};
+  const drafts = f.drafts.map(d => {
+    if (!draftKeys.has(d.key)) return d;
+    const nk = draftKey(projectKeyOfIssue(d.key), nextKey++);
+    keyMap[d.key] = nk;
+    return { ...d, key: nk };
+  });
+  const rk = (k: string) => keyMap[k] ?? k;
+  const remapKeys = <T,>(m: Record<string, T> | undefined) => (m ? Object.fromEntries(Object.entries(m).map(([k, v]) => [rk(k), v])) : m);
+
+  const taken = new Set(s.lists.map(l => l.name));
+  const names: string[] = [];
+  const lists = f.lists.map(l0 => {
+    const l: TaskList = {
+      ...l0, keys: l0.keys.map(rk), assignees: remapKeys(l0.assignees) ?? {}, values: remapKeys(l0.values) ?? {},
+      folders: remapKeys(l0.folders), spend: remapKeys(l0.spend), roles: remapKeys(l0.roles),
+      noLoad: remapKeys(l0.noLoad), marks: remapKeys(l0.marks),
+    };
+    const name = taken.has(l.name) ? `${l.name} (импорт)` : l.name;
+    taken.add(name); names.push(name);
+    const assignees = Object.fromEntries(Object.entries(l.assignees ?? {})
+      .map(([k, pid]) => [k, pidMap[pid] ?? ""]).filter(([, pid]) => pid));
+    return migrateList({ ...l, id: newId("lst"), name, assignees, values: l.values ?? {}, ownFields: l.ownFields ?? [], groupBy: l.groupBy ?? [] });
+  });
+  const roleNames = { ...s.roleNames };
+  for (const [fid, ns] of Object.entries(f.roleNames)) roleNames[fid] = Array.from(new Set([...(roleNames[fid] ?? []), ...ns]));
+  return {
+    names,
+    state: {
+      ...s,
+      lists: [...s.lists, ...lists],
+      participants,
+      roleNames,
+      reqLinks: { ...remapKeys(f.reqLinks), ...s.reqLinks },
+      created: [...s.created, ...drafts],
+      nextKey,
+      customStages: [...s.customStages, ...f.customStages.filter(c => !s.customStages.some(x => x.id === c.id))],
+      stageStyles: { ...f.stageStyles, ...s.stageStyles },
+    },
+  };
 }

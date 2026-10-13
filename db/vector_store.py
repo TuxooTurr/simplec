@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 import chromadb
+from chromadb.config import Settings
 from chromadb.utils import embedding_functions
 
 
@@ -37,7 +38,8 @@ class VectorStore:
 
     def __init__(self, persist_dir: Optional[Path] = None):
         self.persist_dir = str(persist_dir or CHROMA_DIR)
-        self.client = chromadb.PersistentClient(path=self.persist_dir)
+        # Телеметрия ChromaDB (posthog) в корпоративной сети только стучится в закрытый интернет — выключаем.
+        self.client = chromadb.PersistentClient(path=self.persist_dir, settings=Settings(anonymized_telemetry=False))
         self.ef = embedding_functions.DefaultEmbeddingFunction()
         self._init_collections()
 

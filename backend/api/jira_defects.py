@@ -574,6 +574,10 @@ def _reference_candidates(item: dict, schema: str) -> list[Any]:
         # Схемы нет (поле не на экране создания либо createmeta недоступен).
         # Начинаем с формы из выгрузки реальных дефектов SBER911.
         forms = [[obj], obj, item["value"], [{"id": item["id"]}]]
+    # Поля Сбера типа «КЭ» (sbtconfigurationitemmulticftype) Jira показывает как «название (id)» —
+    # пробуем и голый id, и такую строку: лишний вариант Jira просто отклонит.
+    labelled = f"{item['value']} ({item['id']})"
+    forms += [[item["id"]], item["id"], [labelled], labelled]
     # Без дублей, порядок сохраняем
     seen, uniq = set(), []
     for f in forms:
@@ -622,12 +626,14 @@ def _ensure_reference_fields(cfg: dict, key: str, resolved: dict,
         )
 
         filled = False
+        last_error = ""
         for candidate in _reference_candidates(item, schema):
             try:
                 _jira_request(cfg, "PUT", f"/rest/api/2/issue/{key}",
                               json_body={"fields": {fid: candidate}})
             except HTTPException as e:
                 logger.info("Jira create: %s формат для %s не принят (%s)", key, label, e.detail)
+                last_error = str(e.detail)
                 continue
             # Приняли запрос — убеждаемся, что значение действительно легло
             try:
@@ -643,10 +649,14 @@ def _ensure_reference_fields(cfg: dict, key: str, resolved: dict,
                 break
 
         if not filled:
+            # Есть ли поле на экране, мы знаем только из createmeta — а он у нас часто 403.
+            # Поэтому не гадаем о причине, а показываем ответ Jira как есть.
+            known = bool(resolved.get("_by_id"))
+            where = ("есть на экране создания, но Jira не приняла значение" if on_screen
+                     else "нет на экране создания" if known else "Jira не приняла значение")
             warnings.append(
-                f"«{label}» не проставилась в {key}: поле "
-                + ("есть на экране создания, но Jira его не приняла"
-                   if on_screen else "отсутствует на экране создания и редактирования")
+                f"«{label}» не проставилась в {key}: {where}"
+                + (f" (ответ Jira: {last_error[:300]})" if last_error else "")
                 + ". Проставьте вручную и покажите это сообщение администратору Jira."
             )
 

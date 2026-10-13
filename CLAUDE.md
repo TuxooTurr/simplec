@@ -120,8 +120,8 @@ SimpleTest/
 │   └── lib/
 │       ├── api.ts           # HTTP клиент к бэкенду
 │       └── useGeneration.ts # Реэкспорт из GenerationContext
-├── webconnect/              # Веб-коннекторы: запись действий под сессией, шаблоны, повтор
-├── mcp_server/              # Локальный MCP-сервер (GigaCode): SimpleTest, dropup, разбор логов
+├── webconnect/              # Веб-коннекторы (ОТКЛЮЧЕНЫ, код сохранён — см. WEB_CONNECTORS_ENABLED)
+├── mcp_server/              # MCP-сервер для GigaCode (ОТКЛЮЧЁН вместе с коннекторами, код сохранён)
 ├── agents/
 │   ├── llm_client.py        # Универсальный LLM клиент (все провайдеры)
 │   ├── layered_generator.py # 4-слойный генератор тест-кейсов
@@ -140,6 +140,13 @@ SimpleTest/
 ```
 
 ---
+
+## Временно отключено
+
+Веб-коннекторы (Playwright), раздел «Логи» (анализатор на коннекторах) и MCP-сервер для GigaCode
+отключены 13.10.2026, код сохранён. Вернуть:
+1. `WEB_CONNECTORS_ENABLED = True` в `backend/main.py` и `frontend/lib/features.ts`;
+2. раскомментировать `mcp`, `playwright`, `cryptography` в `requirements.txt`.
 
 ## Ключевые паттерны
 

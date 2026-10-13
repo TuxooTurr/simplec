@@ -174,13 +174,14 @@ def test_переходы_и_обязательное_решение(jira):
         return {"transitions": [
             {"id": "11", "name": "В работу", "to": {"name": "В работе"}},
             {"id": "31", "name": "Выполнить", "to": {"name": "Выполнен"},
-             "fields": {"resolution": {"required": True}}},
+             "fields": {"resolution": {"required": True, "allowedValues": [{"id": "10000", "name": "Готово"}]}}},
         ]}
 
     jira({"/rest/api/2/issue/": tr})
     res = JT.transitions(JT.KeysBody(keys=["SBER911-1", "SBER911-2"]), db=None)["issues"]
     assert res["SBER911-1"]["transitions"][1] == {"id": "31", "name": "Выполнить", "to": "Выполнен",
-                                                  "resolution_required": True}
+                                                  "resolution_required": True,
+                                                  "resolutions": [{"id": "10000", "name": "Готово"}]}
     assert "нет прав" in res["SBER911-2"]["error"]
 
 
@@ -192,13 +193,14 @@ def test_выполнение_переходов_с_решением(jira):
 
     fake = jira({"/rest/api/2/issue/": do})
     res = JT.apply_transitions(JT.TransitionBody(changes=[
-        JT.TransitionChange(key="SBER911-1", transition_id="31", resolution="Исправлен"),
+        JT.TransitionChange(key="SBER911-1", transition_id="31", resolution="10000"),
         JT.TransitionChange(key="SBER911-2", transition_id="31"),
     ]), db=None)
     assert res["done"] == 1
     assert res["results"][1]["ok"] is False
     body = next(c[3] for c in fake.calls if "SBER911-1" in c[1])
-    assert body == {"transition": {"id": "31"}, "fields": {"resolution": {"name": "Исправлен"}}}
+    # Решение уходит id из allowedValues перехода, а не названием
+    assert body == {"transition": {"id": "31"}, "fields": {"resolution": {"id": "10000"}}}
 
 
 # ── Структура ────────────────────────────────────────────────────────────────
@@ -251,49 +253,56 @@ def test_нет_плагина_структуры(jira):
     assert "Structure" in e.value.detail
 
 
-# ── Релиз ────────────────────────────────────────────────────────────────────
+# ── Релиз = версия Jira (fixVersion) ─────────────────────────────────────────
 
-def test_связи_релиза_с_подписями():
-    issue = {"fields": {"issuelinks": [
-        {"type": {"name": "Release", "outward": "включает", "inward": "входит в"}, "outwardIssue": {"key": "SBER911-2"}},
-        {"type": {"name": "Relates", "outward": "relates to", "inward": "relates to"}, "inwardIssue": {"key": "SBER911-3"}},
-        {"type": {"name": "Release", "outward": "включает"}, "outwardIssue": {"key": "SBER911-2"}},
-    ]}}
-    assert JT.release_links(issue) == [{"key": "SBER911-2", "link": "включает"}, {"key": "SBER911-3", "link": "relates to"}]
+@pytest.mark.parametrize("ref, expected", [
+    ("https://jira.sberbank.ru/projects/SBER911/versions/2568004", ("2568004", "SBER911")),
+    ("https://jira.sberbank.ru/projects/SBER911/versions/2568004?selectedTab=issues", ("2568004", "SBER911")),
+    ("2568004", ("2568004", "")),
+    ("Релиз 16/10. БС", ("", "")),
+])
+def test_ссылка_на_версию(ref, expected):
+    assert JT.parse_version_ref(ref) == expected
 
 
-def test_состав_релиза_и_эпики(jira):
-    def issue(m, path, params, b):
-        return {"key": "SBER911-100", "fields": {"summary": "Релиз 16/10", "issuetype": {"name": "Релиз"},
-                "issuelinks": [{"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-2"}},
-                               {"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-3"}},
-                               {"type": {"outward": "включает"}, "outwardIssue": {"key": "SBER911-4"}}]}}
-
-    def search(m, p, params, b):
-        if "SBER911-50" in params["jql"]:
-            return {"total": 1, "issues": [_issue("SBER911-50", summary="Эпик", issuetype={"name": "Epic"})]}
-        return {"total": 2, "issues": [
-            _issue("SBER911-2", summary="Стори", issuetype={"name": "История"}, customfield_10006="SBER911-50"),
-            _issue("SBER911-3", summary="Дефект", issuetype={"name": "Дефект"}),
-        ]}
-
-    fake = jira({
+def _catalog_routes():
+    return {
         "/rest/api/2/field": lambda *a: [{"id": "customfield_10006", "name": "Epic Link",
                                           "schema": {"custom": "com.pyxis.greenhopper.jira:gh-epic-link"}}],
         "/rest/api/2/status": lambda *a: [], "/rest/api/2/priority": lambda *a: [],
         "/rest/api/2/resolution": lambda *a: [],
-        "/rest/api/2/issue/": issue, "/rest/api/2/search": search,
-    })
-    res = JT.release("sber911-100", db=None)
-    assert res["release"]["fields"]["summary"] == "Релиз 16/10"
+    }
+
+
+def test_состав_релиза_по_fix_version(jira):
+    def search(m, p, params, b):
+        if params["jql"].startswith("fixVersion"):
+            return {"total": 2, "issues": [
+                _issue("SBER911-2", summary="Стори", issuetype={"name": "История"}, customfield_10006="SBER911-50"),
+                _issue("SBER911-3", summary="Дефект", issuetype={"name": "Дефект"}),
+            ]}
+        return {"total": 1, "issues": [_issue("SBER911-50", summary="Эпик", issuetype={"name": "Epic"})]}
+
+    fake = jira({**_catalog_routes(),
+                 "/rest/api/2/version/2568004": lambda *a: {"id": "2568004", "name": "Релиз 16/10. БС", "released": False,
+                                                            "releaseDate": "2026-10-16"},
+                 "/rest/api/2/search": search})
+    res = JT.release("https://jira.sberbank.ru/projects/SBER911/versions/2568004", db=None)
+    assert res["release"]["name"] == "Релиз 16/10. БС"
+    assert res["release"]["url"] == "https://jira/projects/SBER911/versions/2568004"
     assert [i["key"] for i in res["issues"]] == ["SBER911-2", "SBER911-3"]
     assert [e["key"] for e in res["epics"]] == ["SBER911-50"]
-    assert res["missing"] == ["SBER911-4"]
-    assert res["links"][0] == {"key": "SBER911-2", "link": "включает"}
+    jqls = [c[2]["jql"] for c in fake.calls if c[1] == "/rest/api/2/search"]
+    assert jqls[0] == "fixVersion = 2568004"
 
 
-def test_релиз_плохой_ключ(jira):
-    jira({})
+def test_релиз_по_названию_версии(jira):
+    jira({**_catalog_routes(),
+          "/rest/api/2/project/SBER911/versions": lambda *a: [{"id": "100", "name": "Релиз 16/10. БС"}],
+          "/rest/api/2/version/100": lambda *a: {"id": "100", "name": "Релиз 16/10. БС"},
+          "/rest/api/2/search": lambda *a: {"total": 0, "issues": []}})
+    res = JT.release("релиз 16/10. бс", project="SBER911", db=None)
+    assert res["release"]["id"] == "100"
     with pytest.raises(HTTPException) as e:
-        JT.release("мусор", db=None)
-    assert e.value.status_code == 422
+        JT.release("Нет такого", project="SBER911", db=None)
+    assert e.value.status_code == 404

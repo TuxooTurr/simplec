@@ -16,6 +16,7 @@ import WhatsNewModal from "./WhatsNewModal";
 import { LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 
 const NAV: {
   id: SectionId;
@@ -29,7 +30,7 @@ const NAV: {
   { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
   // Бывшие «Дефекты»: списки задач Jira для планирования и назначения + генератор дефектов.
   { id: "bugs",        href: "/bugs",        label: "Jira tool",               Icon: LayoutList,  ai: true },
-  // Логи вернулись анализатором: источник — сценарий веб-коннектора (локальный MCP web).
+  // Логи — анализатор на сценарии веб-коннектора. Пока коннекторы отключены (lib/features.ts) — скрыт.
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },
   // Хаб генераторов: Метрики ОД, ТКС, Jobs и папки алертов — плитками внутри.
@@ -41,6 +42,9 @@ const NAV: {
   { id: "etalons",     href: "/etalons",     label: "Данные",                  Icon: BookOpen,    superuserOnly: true },
   { id: "model_bench", href: "/model-bench", label: "Тестирование моделей LLM", Icon: SplitSquareHorizontal, ai: true },
 ];
+
+/** Раздел «Логи» работает только через веб-коннекторы — пока они отключены, раздела в меню нет. */
+const NAV_VISIBLE = NAV.filter(n => n.id !== "logs" || WEB_CONNECTORS_ENABLED);
 
 const ORDER_KEY = "st_nav_order";
 const HIDDEN_KEY = "st_nav_hidden";
@@ -97,7 +101,7 @@ export default function Sidebar() {
   };
 
   const baseNav = useMemo(
-    () => NAV.filter((item) => !(item.superuserOnly && !isSuperuser)),
+    () => NAV_VISIBLE.filter((item) => !(item.superuserOnly && !isSuperuser)),
     [isSuperuser],
   );
 

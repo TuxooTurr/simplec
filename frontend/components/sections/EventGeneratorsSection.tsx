@@ -11,6 +11,7 @@ import MetricsSection from "./MetricsSection";
 import TcsGeneratorSection from "./TcsGeneratorSection";
 import JobsSection from "./JobsSection";
 import WebConnectorsSection from "./WebConnectorsSection";
+import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 import AlertsSection from "./AlertsSection";
 import { useAlertsScheduler } from "@/contexts/AlertsSchedulerContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -60,7 +61,8 @@ const GENERATORS: Generator[] = [
     Component: TcsGeneratorSection,
     superuserOnly: true,
   },
-  {
+  // Веб-коннекторы отключены (lib/features.ts): плитка скрыта, код раздела сохранён.
+  ...(WEB_CONNECTORS_ENABLED ? [{
     id: "webconnect",
     title: "Веб-коннекторы",
     subtitle: "Запись действий на сайте под вашей сессией и повтор: выгрузка логов и данных по сервису",
@@ -68,7 +70,7 @@ const GENERATORS: Generator[] = [
     color: "pink",
     Component: WebConnectorsSection,
     superuserOnly: true,
-  },
+  } satisfies Generator] : []),
   {
     id: "jobs",
     title: "Jobs",

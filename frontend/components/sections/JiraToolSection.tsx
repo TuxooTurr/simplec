@@ -32,7 +32,7 @@ import {
   projectKeyOfIssue, saveState,
   type ColCtx, type Issue, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
-import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic } from "@/lib/jiraStages";
+import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
 import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist } from "@/lib/jiraToolApi";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 
@@ -242,8 +242,8 @@ export default function JiraToolSection() {
   const customStages = state?.customStages;
   const stageOf = useMemo(() => {
     applyStageStyles(stageStyles ?? {}, customStages ?? []);
-    return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx);
-  }, [allIssues, state?.mapping, defectIdx, stageStyles, customStages]);
+    return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx, state?.stageManual ?? {});
+  }, [allIssues, state?.mapping, defectIdx, stageStyles, customStages, state?.stageManual]);
   /**
    * Дефекты задачи — свои (Epic Link и связи) плюс блокирующие, которые она наследует: у эпика —
    * от его сторей, у стори — от её эпика. Так дефект, из-за которого задача «Заблокирована»,
@@ -676,6 +676,13 @@ export default function JiraToolSection() {
   };
 
   /** Статусы сменены в Jira — перечитываем эти задачи (и связанные: этап эпика мог сдвинуться). */
+  /** Статус (st) руками; null — вернуть расчёт по Jira. */
+  const setStageManual = (key: string, st: Stage | null) => update(s => {
+    const m = { ...s.stageManual };
+    if (st) m[key] = st; else delete m[key];
+    return { ...s, stageManual: m };
+  });
+
   // Выбор не сбрасываем: окно остаётся открытым для следующего шага. Сброс — при закрытии окна.
   const afterTransitions = (keys: string[]) => { void sync(keys, []); };
 
@@ -1235,6 +1242,8 @@ export default function JiraToolSection() {
                     selected={selected}
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
                     onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
+                    stageManual={state.stageManual}
+                    onStageManual={setStageManual}
                     onIcon={(key, fid, code) => updateList(l => {
                       const row = { ...l.icons?.[key] };
                       if (code) row[fid] = code; else delete row[fid];

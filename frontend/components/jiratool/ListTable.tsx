@@ -7,7 +7,7 @@ import {
   LOAD_COL, REQ_COL, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
 } from "@/lib/jiraTool";
-import { stageText } from "@/lib/jiraStages";
+import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
 import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
 
@@ -66,7 +66,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs, onClearMark,
 }: {
@@ -83,6 +83,10 @@ export default function ListTable({
   selected: Set<string>;
   onSelect: (keys: string[], on: boolean) => void;
   onValue: (key: string, fieldId: string, v: string | string[]) => void;
+  /** Статусы (st), поставленные руками: ключ → этап. */
+  stageManual: Record<string, Stage>;
+  /** Поставить статус (st) руками; null — вернуть расчёт по Jira. */
+  onStageManual: (key: string, stage: Stage | null) => void;
   /** Ярлычок ячейки своего текстового поля; null — убрать. */
   onIcon: (key: string, fieldId: string, code: string | null) => void;
   onParticipant: (key: string, id: string) => void;
@@ -399,7 +403,8 @@ export default function ListTable({
             {c === PARTICIPANT_COL ? (
               <ParticipantCell value={list.assignees[issue.key] ?? ""} participants={participants} onChange={pid => onParticipant(issue.key, pid)} />
             ) : c === STAGE_COL ? (
-              <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined} />
+              <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined}
+                manual={stageManual[issue.key]} onManual={st => onStageManual(issue.key, st)} />
             ) : c === DEFECTS_COL ? (
               <DefectsCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
             ) : c === BLOCK_COL ? (

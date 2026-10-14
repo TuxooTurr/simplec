@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle, Ban, Bookmark, Bug, CheckSquare, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
+import { createPortal } from "react-dom";
+import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Hand, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
 import { parseCellIcon, useIcons } from "@/lib/cellIcon";
 
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
@@ -11,7 +12,7 @@ import {
   FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
-import { STAGE_LABEL, stageStyle, stageText, textOn, type StageInfo } from "@/lib/jiraStages";
+import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
 
 /* Ячейки таблицы Jira tool. Ширину задаёт колонка (её можно растягивать), поэтому
    у содержимого нет своих минимальных ширин — текст переносится или обрезается. */
@@ -86,13 +87,87 @@ export function BlockCell({ defects, onOpen }: { defects: Issue[] | null; onOpen
 }
 
 /** Статус (st). onOpen есть только у эпика: клик — окно со сторями эпика. */
-export function StageCell({ info, onOpen }: { info: StageInfo; onOpen?: () => void }) {
-  if (!onOpen) return <StageBadge info={info} />;
+/**
+ * Статус (st) в строке. Клик по статусу эпика — его стори. Стрелка рядом — поставить статус руками:
+ * он держится, пока этап по Jira не станет выше (ниже Jira выбрать нельзя — ничего бы не изменилось).
+ */
+export function StageCell({ info, onOpen, manual, onManual }: {
+  info: StageInfo;
+  onOpen?: () => void;
+  /** Ручной статус задачи (даже если Jira его уже обогнала). */
+  manual?: Stage;
+  onManual: (stage: Stage | null) => void;
+}) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const place = () => {
+    const r = btn.current?.getBoundingClientRect();
+    return r ? { left: Math.min(r.left, window.innerWidth - 248), top: r.bottom + 4 } : null;
+  };
+  const opened = !!pos;
+  useEffect(() => {
+    if (!opened) return;
+    const close = (e: MouseEvent) => {
+      if (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node)) return;
+      setPos(null);
+    };
+    // Меню поверх таблицы (fixed): при прокрутке едет за кнопкой. Закрывать нельзя — фокус на кнопке
+    // сам подкручивает таблицу, и меню закрывалось бы сразу после открытия.
+    const follow = (e: Event) => { if (!box.current?.contains(e.target as Node)) setPos(place()); };
+    document.addEventListener("mousedown", close);
+    window.addEventListener("scroll", follow, true);
+    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", follow, true); };
+  }, [opened]);
+
+  const jira = jiraStageOf(info);
+  const jiraRank = jiraRankOf(info);
+  const progress = STAGES.filter(st => st !== "excluded");
+  const set = (st: Stage | null) => { onManual(st); setPos(null); };
+  const open = () => setPos(p => (p ? null : place()));
+
   return (
-    <button type="button" onClick={onOpen} className="max-w-full text-left rounded-md hover:ring-2 hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/40"
-      aria-label={`Статус (st): ${stageText(info)} — подробнее`}>
-      <StageBadge info={info} />
-    </button>
+    <span className="group/st inline-flex items-center gap-0.5 max-w-full">
+      {onOpen ? (
+        <button type="button" onClick={onOpen} className="max-w-full text-left rounded-md hover:ring-2 hover:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/40"
+          aria-label={`Статус (st): ${stageText(info)} — подробнее`}>
+          <StageBadge info={info} />
+        </button>
+      ) : <StageBadge info={info} />}
+      <button ref={btn} type="button" onClick={open} aria-haspopup="menu" aria-expanded={!!pos} aria-label="Поставить статус (st) вручную"
+        title="Поставить статус (st) вручную"
+        className={`p-0.5 rounded text-text-muted hover:text-primary hover:bg-bg-subtle focus-visible:opacity-100
+          ${pos || manual ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 group-hover/st:opacity-100"}`}>
+        <ChevronDown className="w-3.5 h-3.5" />
+      </button>
+      {pos && createPortal(
+        <div ref={box} role="menu" aria-label="Статус (st) вручную" style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+          className="w-60 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+          <p className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted leading-snug">
+            По Jira: <b className="text-text-main font-medium">{stageText(jira)}</b>. Ручной держится, пока Jira не покажет статус выше.
+          </p>
+          {progress.map(st => {
+            const below = stageRankOf(st) <= jiraRank;
+            const on = manual === st;
+            return (
+              <button key={st} type="button" role="menuitemradio" aria-checked={on} disabled={below} onClick={() => set(st)}
+                title={below ? "Не выше статуса по Jira — ручной ничего бы не изменил" : undefined}
+                className="w-full flex items-center gap-2 px-2 py-1 rounded text-sm text-left hover:bg-bg-subtle disabled:opacity-40 disabled:hover:bg-transparent">
+                <span className="px-1.5 py-0.5 rounded text-[11px] font-medium" style={stageStyle(st)}>{STAGE_LABEL[st]}</span>
+                {on && <Check className="ml-auto w-3.5 h-3.5 text-primary" />}
+              </button>
+            );
+          })}
+          {manual && (
+            <button type="button" onClick={() => set(null)}
+              className="w-full mt-1 pt-1.5 border-t border-border-main px-2 pb-1 text-left text-sm text-text-muted hover:text-text-main">
+              Сбросить — как в Jira
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+    </span>
   );
 }
 
@@ -107,14 +182,23 @@ export function StageBadge({ info }: { info: StageInfo }) {
         </span>
       );
     case "stage":
-      return <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}>{STAGE_LABEL[info.stage]}</span>;
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}
+          title={info.manual ? `Поставлен вручную. По Jira — «${stageText(info.manual)}»` : undefined}>
+          {info.manual && <Hand className="w-3 h-3" aria-label="вручную" />}{STAGE_LABEL[info.stage]}
+        </span>
+      );
     case "epic":
       return (
         <span className="inline-flex items-center gap-1.5 whitespace-nowrap"
-          title={`Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
-            + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
-          <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>{STAGE_LABEL[info.stage]}</span>
-          <span className="text-[10px] text-text-muted">{info.behind}/{info.total}</span>
+          title={info.manual
+            ? `Поставлен вручную. По сторям эпика — «${stageText(info.manual)}»`
+            : `Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
+              + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>
+            {info.manual && <Hand className="w-3 h-3" aria-label="вручную" />}{STAGE_LABEL[info.stage]}
+          </span>
+
           {info.unmapped > 0 && <AlertTriangle className="w-3 h-3 text-amber-500" />}
         </span>
       );

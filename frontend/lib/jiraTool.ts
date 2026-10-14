@@ -16,7 +16,7 @@ import {
   projectKeyOfIssue,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
-import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
+import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type Stage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
@@ -368,6 +368,11 @@ export interface ToolState {
    * одна фича бывает в нескольких списках, требования у неё одни.
    */
   reqLinks: Record<string, string[]>;
+  /**
+   * Статус (st), выставленный руками: ключ → этап. Нижняя планка — действует, пока Jira не покажет
+   * этап выше (см. makeStageResolver). На уровне SimpleTest: реальность у задачи одна во всех списках.
+   */
+  stageManual: Record<string, Stage>;
 }
 
 /**
@@ -426,7 +431,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {} };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, stageManual: {} };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -454,6 +459,7 @@ export function loadState(): ToolState {
           customStages: s.customStages ?? [],
           templates: s.templates ?? [],
           reqLinks: s.reqLinks ?? {},
+          stageManual: s.stageManual ?? {},
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);
@@ -511,6 +517,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
   return {
     ...s,
     reqLinks: remap(s.reqLinks) ?? {},
+    stageManual: remap(s.stageManual) ?? {},
     created: s.created.map(i => (i.key === draftKey ? issue : i)),
     lists: s.lists.map(l => ({
       ...l,
@@ -1012,6 +1019,8 @@ export interface ExportFile {
   participants: Participant[];
   roleNames: Record<string, string[]>;
   reqLinks: Record<string, string[]>;
+  /** Ручные статусы (st) задач файла; в старых файлах нет. */
+  stageManual?: Record<string, Stage>;
   drafts: Issue[];
   customStages: CustomStage[];
   stageStyles: StageStyles;
@@ -1029,6 +1038,7 @@ export function exportLists(s: ToolState, listIds: string[]): ExportFile {
     participants: s.participants.filter(p => usedParticipants.has(p.id)),
     roleNames: s.roleNames,
     reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
+    stageManual: Object.fromEntries(Object.entries(s.stageManual).filter(([k]) => keys.has(k))),
     drafts: s.created.filter(i => keys.has(i.key)),
     customStages: s.customStages,
     stageStyles: s.stageStyles,
@@ -1052,6 +1062,7 @@ export function parseExportFile(text: string): ExportFile {
   return {
     format: EXPORT_FORMAT, version: f.version, exportedAt: f.exportedAt ?? "",
     lists: f.lists, participants: f.participants ?? [], roleNames: f.roleNames ?? {}, reqLinks: f.reqLinks ?? {},
+    stageManual: f.stageManual ?? {},
     drafts: f.drafts ?? [], customStages: f.customStages ?? [], stageStyles: f.stageStyles ?? {},
   };
 }
@@ -1110,6 +1121,8 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
       participants,
       roleNames,
       reqLinks: { ...remapKeys(f.reqLinks), ...s.reqLinks },
+      // Свой ручной статус важнее чужого: у себя человек видит задачу ближе.
+      stageManual: { ...remapKeys(f.stageManual), ...s.stageManual },
       created: [...s.created, ...drafts],
       nextKey,
       customStages: [...s.customStages, ...f.customStages.filter(c => !s.customStages.some(x => x.id === c.id))],

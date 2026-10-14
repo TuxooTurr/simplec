@@ -9,6 +9,10 @@
  * - Заблокирован: у задачи есть блокирующий дефект, который ещё не закрыт. Дефект считается,
  *   если он связан с задачей, с эпиком стори (стори привязана к эпику) или — для эпика — с любой
  *   его сторей. Статус держится, пока дефект не перейдёт в «Закрыт».
+ * - Ручной статус (st): человек ставит этап руками — Jira часто двигают только в конце. Это нижняя планка:
+ *   действует, пока этап по Jira не выше; Jira обогнала — показываем Jira (ручной ниже её ничего не меняет).
+ *   «Исключено» по Jira (отменена) важнее ручного, «Заблокирован» — поверх любого. У эпика ручные
+ *   статусы сторей входят в расчёт, а свой ручной у эпика — такая же планка поверх расчёта.
  * - Пока таблица группы не сохранена, этап угадывается по названию статуса (guessStage).
  *   В сохранённой таблице статус, которого в ней нет, — «не сопоставлен», а не тихо
  *   «Разработка»: иначе новый статус незаметно испортит расчёт эпиков.
@@ -119,12 +123,34 @@ export function defaultMapping(statuses: string[]): Record<string, Stage> {
   return Object.fromEntries(statuses.map(s => [s, guessStage(s)]));
 }
 
+/** manual — этап поставлен руками и он выше расчётного; внутри — что показала бы Jira. */
 export type StageInfo =
   | { kind: "blocked"; by: Issue[]; base: StageInfo }
-  | { kind: "stage"; stage: Stage }
+  | { kind: "stage"; stage: Stage; manual?: StageInfo }
   | { kind: "unmapped"; status: string }
   | { kind: "no-stories" }
-  | { kind: "epic"; stage: Stage; total: number; behind: number; unmapped: number };
+  | { kind: "epic"; stage: Stage; total: number; behind: number; unmapped: number; manual?: StageInfo };
+
+/** Этап по Jira (без ручного): для подсказок и меню ручного статуса. */
+export function jiraStageOf(info: StageInfo): StageInfo {
+  const base = info.kind === "blocked" ? info.base : info;
+  return (base.kind === "stage" || base.kind === "epic") && base.manual ? base.manual : base;
+}
+
+/** Место этапа по Jira в продвижении; без этапа (не сопоставлен, нет сторей) — -1. */
+export function jiraRankOf(info: StageInfo): number {
+  const j = jiraStageOf(info);
+  return j.kind === "stage" || j.kind === "epic" ? stageRankOf(j.stage) : -1;
+}
+
+/** Ручной этап как нижняя планка над расчётным. */
+function withManual(info: StageInfo, manual: Stage | undefined): StageInfo {
+  if (!manual || !STAGES.includes(manual) || manual === "excluded") return info;
+  if ((info.kind === "stage" || info.kind === "epic") && info.stage === "excluded") return info;   // отменена в Jira
+  const rank = info.kind === "stage" || info.kind === "epic" ? stageRankOf(info.stage) : -1;
+  if (stageRankOf(manual) <= rank) return info;                                                // Jira не ниже — по Jira
+  return info.kind === "epic" ? { ...info, stage: manual, manual: info } : { kind: "stage", stage: manual, manual: info };
+}
 
 /** Задача на этапе «Готово к релизу» или дальше (готово, исключено); у заблокированной — по этапу без блокировки. */
 export function isReleaseOrLater(info: StageInfo): boolean {
@@ -205,16 +231,21 @@ export function blockingDefects(issue: Issue, defects: Map<string, Issue[]>, sto
  * Считает этапы задач. Стори — все загруженные (не только из списка):
  * этап эпика не должен зависеть от того, какие стори человек добавил в список.
  */
-export function makeStageResolver(allIssues: Issue[], mapping: StageMapping, defects: Map<string, Issue[]> = new Map()) {
+export function makeStageResolver(allIssues: Issue[], mapping: StageMapping, defects: Map<string, Issue[]> = new Map(),
+                                  manual: Record<string, Stage> = {}) {
   const byEpic = storiesByEpic(allIssues);
 
   const mapped = (issue: Issue): StageInfo => {
     const cat = categoryOf(issue) as Exclude<Category, "epic">;
     const status = String(issue.fields.status ?? "");
     const table = mapping[projectKeyOfIssue(issue.key)]?.[cat];
-    if (!status) return { kind: "unmapped", status };
-    const st = table ? table[status] : guessStage(status);
-    return st ? { kind: "stage", stage: st } : { kind: "unmapped", status };
+    let info: StageInfo;
+    if (!status) info = { kind: "unmapped", status };
+    else {
+      const st = table ? table[status] : guessStage(status);
+      info = st ? { kind: "stage", stage: st } : { kind: "unmapped", status };
+    }
+    return withManual(info, manual[issue.key]);
   };
 
   const cache = new Map<string, StageInfo>();
@@ -238,6 +269,7 @@ export function makeStageResolver(allIssues: Issue[], mapping: StageMapping, def
         info = { kind: "epic", stage, total: stories.length, behind: ranks.filter(r => r === min).length,
                  unmapped: stories.filter(s => s.kind === "unmapped").length };
       }
+      info = withManual(info, manual[issue.key]);
     }
     const by = blockingDefects(issue, defects, byEpic);
     if (by.length) info = { kind: "blocked", by, base: info };

@@ -17,6 +17,7 @@ function stageRank(info: StageInfo): number {
  * Окно по клику на «Статус (st)» эпика: его стори — тип, номер со ссылкой в Jira, название,
  * статус Jira, статус (st), исполнитель. Дефекты здесь не показываются — они только в «Дефекты (st)»,
  * включая блокирующие, из-за которых эпик «Заблокирован».
+ * Только просмотр: статус (st) меняется стрелкой в строке списка.
  */
 export default function StageModal({ open, issue, stories, stageOf, onClose }: {
   open: boolean;

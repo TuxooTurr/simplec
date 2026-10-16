@@ -140,10 +140,31 @@ export const REQ_COL: ColRef = "reqs";
 export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, FOLDER_COL];
 
 /**
- * Норма для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч — 7 часов в день.
- * Праздники пока не учитываются. Меняется здесь.
+ * Норма по умолчанию для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч —
+ * 7 часов в день. Праздники пока не учитываются. Человек меняет норму в настройке нагрузки (LoadSettings).
  */
 export const LOAD_DAY_MINUTES = 7 * 60;
+
+/**
+ * Резерв — время, которое каждый рабочий день уходит не на задачи списка: например, час на автотесты.
+ * Вычитается из нормы дня. participants пусто — резерв у всех участников.
+ */
+export interface LoadReserve { id: string; name: string; minutes: number; participants: string[] }
+
+/** Настройка нагрузки — общая для всех списков: норма и резервы относятся к людям, а не к спискам. */
+export interface LoadSettings { dayMinutes: number; reserves: LoadReserve[] }
+
+export const DEFAULT_LOAD_SETTINGS: LoadSettings = { dayMinutes: LOAD_DAY_MINUTES, reserves: [] };
+
+/** Резервы участника (общие и его личные). */
+export function reservesOf(settings: LoadSettings, participantId: string): LoadReserve[] {
+  return settings.reserves.filter(r => r.minutes > 0 && (!r.participants.length || r.participants.includes(participantId)));
+}
+
+/** Сколько минут в день у участника остаётся на задачи: норма минус его резервы (не меньше нуля). */
+export function netDayMinutes(settings: LoadSettings, participantId: string): number {
+  return Math.max(0, settings.dayMinutes - reservesOf(settings, participantId).reduce((n, r) => n + r.minutes, 0));
+}
 
 /** Рабочие дни (пн–пт) между датами включительно; даты — «ГГГГ-ММ-ДД». */
 export function workdaysBetween(from: string, to: string): number {
@@ -166,6 +187,8 @@ export function defaultLoadRange(now = new Date()): { from: string; to: string }
 
 export interface LoadRow {
   participant: Participant; planned: number; tasks: number; unplanned: number; capacity: number; over: boolean;
+  /** Резервы участника и сколько они забрали за период, мин. */
+  reserves: LoadReserve[]; reserved: number;
   /** Задачи участника, не учтённые в нагрузке (вручную или по статусу). */
   skipped: number;
 }
@@ -186,14 +209,17 @@ export function loadSkip(list: TaskList, issue: Issue | undefined, stageOf: (i: 
 
 /** Нагрузка участников по списку: сумма «Траты план (st)» их учитываемых задач против нормы за период. */
 export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string },
-                         skip: (key: string) => LoadSkip = () => null): LoadRow[] {
-  const capacity = workdaysBetween(range.from, range.to) * LOAD_DAY_MINUTES;
+                         skip: (key: string) => LoadSkip = () => null, settings: LoadSettings = DEFAULT_LOAD_SETTINGS): LoadRow[] {
+  const days = workdaysBetween(range.from, range.to);
   return participants.map(p => {
+    const capacity = days * netDayMinutes(settings, p.id);
+    const reserves = reservesOf(settings, p.id);
     const all = list.keys.filter(k => list.assignees[k] === p.id);
     const keys = all.filter(k => !skip(k));
     const planned = keys.reduce((n, k) => n + (list.spend?.[k]?.plan ?? 0), 0);
     return {
       participant: p, planned, tasks: keys.length, capacity, over: planned > capacity, skipped: all.length - keys.length,
+      reserves, reserved: days * settings.dayMinutes - capacity,
       unplanned: keys.filter(k => list.spend?.[k]?.plan == null).length,
     };
   }).sort((a, b) => (b.capacity ? b.planned / b.capacity : 0) - (a.capacity ? a.planned / a.capacity : 0) || b.planned - a.planned);
@@ -373,6 +399,8 @@ export interface ToolState {
    * этап выше (см. makeStageResolver). На уровне SimpleTest: реальность у задачи одна во всех списках.
    */
   stageManual: Record<string, Stage>;
+  /** Норма дня и резервы для нагрузки — общие для всех списков. */
+  loadSettings: LoadSettings;
 }
 
 /**
@@ -431,7 +459,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, stageManual: {} };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -460,12 +488,23 @@ export function loadState(): ToolState {
           templates: s.templates ?? [],
           reqLinks: s.reqLinks ?? {},
           stageManual: s.stageManual ?? {},
+          loadSettings: normLoadSettings(s.loadSettings),
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);
     }
   } catch { /* приватный режим или битые данные — начинаем заново */ }
   return initialState();
+}
+
+/** Настройка нагрузки из хранилища или файла: битые значения — к умолчаниям. */
+export function normLoadSettings(raw: Partial<LoadSettings> | undefined): LoadSettings {
+  const day = Number(raw?.dayMinutes);
+  return {
+    dayMinutes: Number.isFinite(day) && day > 0 && day <= 24 * 60 ? Math.round(day) : LOAD_DAY_MINUTES,
+    reserves: (raw?.reserves ?? []).filter(r => r && typeof r.name === "string" && Number(r.minutes) >= 0)
+      .map(r => ({ id: r.id || newId("rsv"), name: r.name, minutes: Math.round(Number(r.minutes)), participants: Array.isArray(r.participants) ? r.participants : [] })),
+  };
 }
 
 /** Демо-участники из итерации на моках — при переходе на настоящую Jira убираем. */
@@ -1021,6 +1060,8 @@ export interface ExportFile {
   reqLinks: Record<string, string[]>;
   /** Ручные статусы (st) задач файла; в старых файлах нет. */
   stageManual?: Record<string, Stage>;
+  /** Резервы нагрузки участников файла; в старых файлах нет. */
+  loadReserves?: LoadReserve[];
   drafts: Issue[];
   customStages: CustomStage[];
   stageStyles: StageStyles;
@@ -1039,6 +1080,8 @@ export function exportLists(s: ToolState, listIds: string[]): ExportFile {
     roleNames: s.roleNames,
     reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
     stageManual: Object.fromEntries(Object.entries(s.stageManual).filter(([k]) => keys.has(k))),
+    // Резервы — только общие и тех участников, что уходят в файл.
+    loadReserves: s.loadSettings.reserves.filter(r => !r.participants.length || r.participants.some(id => usedParticipants.has(id))),
     drafts: s.created.filter(i => keys.has(i.key)),
     customStages: s.customStages,
     stageStyles: s.stageStyles,
@@ -1063,6 +1106,7 @@ export function parseExportFile(text: string): ExportFile {
     format: EXPORT_FORMAT, version: f.version, exportedAt: f.exportedAt ?? "",
     lists: f.lists, participants: f.participants ?? [], roleNames: f.roleNames ?? {}, reqLinks: f.reqLinks ?? {},
     stageManual: f.stageManual ?? {},
+    loadReserves: f.loadReserves ?? [],
     drafts: f.drafts ?? [], customStages: f.customStages ?? [], stageStyles: f.stageStyles ?? {},
   };
 }
@@ -1123,6 +1167,18 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
       reqLinks: { ...remapKeys(f.reqLinks), ...s.reqLinks },
       // Свой ручной статус важнее чужого: у себя человек видит задачу ближе.
       stageManual: { ...remapKeys(f.stageManual), ...s.stageManual },
+      // Резервы файла, которых у нас нет (по id), — с участниками, переведёнными на наших. Норму дня не трогаем.
+      loadSettings: {
+        ...s.loadSettings,
+        reserves: [
+          ...s.loadSettings.reserves,
+          ...normLoadSettings({ reserves: f.loadReserves ?? [] }).reserves
+            .filter(r => !s.loadSettings.reserves.some(x => x.id === r.id))
+            .map(r => ({ ...r, participants: r.participants.map(id => pidMap[id]).filter(Boolean) as string[], had: r.participants.length }))
+            // Личный резерв, чьих участников у нас нет, не должен стать общим («пусто — всем»).
+            .filter(r => !r.had || r.participants.length).map(({ had: _had, ...r }) => r),
+        ],
+      },
       created: [...s.created, ...drafts],
       nextKey,
       customStages: [...s.customStages, ...f.customStages.filter(c => !s.customStages.some(x => x.id === c.id))],

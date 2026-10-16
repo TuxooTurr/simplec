@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Hand, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
+import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
 import { parseCellIcon, useIcons } from "@/lib/cellIcon";
 
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
@@ -137,7 +137,7 @@ export function StageCell({ info, onOpen, manual, onManual }: {
       <button ref={btn} type="button" onClick={open} aria-haspopup="menu" aria-expanded={!!pos} aria-label="Поставить статус (st) вручную"
         title="Поставить статус (st) вручную"
         className={`p-0.5 rounded text-text-muted hover:text-primary hover:bg-bg-subtle focus-visible:opacity-100
-          ${pos || manual ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 group-hover/st:opacity-100"}`}>
+          ${pos ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 group-hover/st:opacity-100"}`}>
         <ChevronDown className="w-3.5 h-3.5" />
       </button>
       {pos && createPortal(
@@ -183,9 +183,9 @@ export function StageBadge({ info }: { info: StageInfo }) {
       );
     case "stage":
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}
+        <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}
           title={info.manual ? `Поставлен вручную. По Jira — «${stageText(info.manual)}»` : undefined}>
-          {info.manual && <Hand className="w-3 h-3" aria-label="вручную" />}{STAGE_LABEL[info.stage]}
+          {STAGE_LABEL[info.stage]}
         </span>
       );
     case "epic":
@@ -195,8 +195,8 @@ export function StageBadge({ info }: { info: StageInfo }) {
             ? `Поставлен вручную. По сторям эпика — «${stageText(info.manual)}»`
             : `Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
               + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>
-            {info.manual && <Hand className="w-3 h-3" aria-label="вручную" />}{STAGE_LABEL[info.stage]}
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>
+            {STAGE_LABEL[info.stage]}
           </span>
 
           {info.unmapped > 0 && <AlertTriangle className="w-3 h-3 text-amber-500" />}

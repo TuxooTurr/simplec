@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle, ChevronDown, ClipboardCheck, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
-  PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Trash2, Users, X,
+  PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
 import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker";
@@ -23,14 +23,15 @@ import ImportStructureModal, { type StructureImport } from "@/components/jiratoo
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
+import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
-  type ReportSection, listFromTemplate, templateOf, LOAD_DAY_MINUTES, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState,
-  type ColCtx, type Issue, type OwnField, type Participant, type TaskList, type ToolState,
+  type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
 import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist } from "@/lib/jiraToolApi";
@@ -51,7 +52,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "load" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -1056,7 +1057,7 @@ export default function JiraToolSection() {
             </div>
 
             {list && (
-              <LoadPanel list={list} participants={state.participants}
+              <LoadPanel list={list} participants={state.participants} settings={state.loadSettings} onSettings={() => setModal("load")}
                 skip={key => loadSkip(list, byKey.get(key), stageOf)}
                 onRange={load => updateList(l => ({ ...l, load }))}
                 onAuto={on => updateList(l => ({ ...l, loadAuto: on ? undefined : false }))} />
@@ -1379,6 +1380,10 @@ export default function JiraToolSection() {
           mapping={state.mapping} styles={state.stageStyles} custom={state.customStages} onClose={() => setModal(null)}
           onSave={(mapping, stageStyles, customStages) => update(s => ({ ...s, mapping, stageStyles, customStages }))} />
       )}
+      {modal === "load" && (
+        <LoadSettingsModal open settings={state.loadSettings} participants={state.participants} onClose={() => setModal(null)}
+          onSave={loadSettings => update(s => ({ ...s, loadSettings }))} />
+      )}
       {modal && typeof modal === "object" && "issueFor" in modal && (
         <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
       )}
@@ -1396,25 +1401,34 @@ export default function JiraToolSection() {
 
 /**
  * Нагрузка по списку: у каждого участника — сумма «Траты план (st)» его задач в этом списке против
- * нормы за выбранный период (будни × 7 ч: 9:00–18:00 минус обед и утренние встречи). Превышение — красным.
- * Период свой у каждого списка.
+ * нормы за выбранный период (будни × норма дня минус резервы участника). Превышение — красным.
+ * Период свой у каждого списка; норма и резервы — общие (шестерёнка).
  */
-function LoadPanel({ list, participants, skip, onRange, onAuto }: {
+function LoadPanel({ list, participants, settings, onSettings, skip, onRange, onAuto }: {
   list: TaskList;
   participants: Participant[];
+  settings: LoadSettings;
+  onSettings: () => void;
   skip: (key: string) => ReturnType<typeof loadSkip>;
   onRange: (r: { from: string; to: string }) => void;
   onAuto: (on: boolean) => void;
 }) {
   const range = list.load ?? defaultLoadRange();
-  const rows = listLoad(list, participants, range, skip);
+  const rows = listLoad(list, participants, range, skip, settings);
+  // Резервы у всех — в общую строку нормы; личные — в подсказке и под строкой участника.
+  const common = settings.reserves.filter(r => r.minutes > 0 && !r.participants.length);
+  const commonMin = common.reduce((n, r) => n + r.minutes, 0);
   const skippedAll = list.keys.filter(k => skip(k)).length;
   const days = workdaysBetween(range.from, range.to);
   const dateCls = "min-w-0 flex-1 text-xs border border-border-main rounded-md px-1.5 py-1 bg-[var(--color-input-bg)] text-text-main " +
     "focus:outline-none focus:ring-2 focus:ring-primary/30";
   return (
     <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-2">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка по списку</p>
+      <div className="flex items-center justify-between">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка по списку</p>
+        <button type="button" onClick={onSettings} aria-label="Настройка нагрузки: норма дня и резервы" title="Норма дня и резервы (автотесты, дежурства…)"
+          className="p-1 -m-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-3.5 h-3.5" /></button>
+      </div>
       <div className="flex items-center gap-1">
         <input type="date" value={range.from} max={range.to} onChange={e => e.target.value && onRange({ ...range, from: e.target.value })}
           aria-label="Нагрузка: с даты" className={dateCls} />
@@ -1422,8 +1436,9 @@ function LoadPanel({ list, participants, skip, onRange, onAuto }: {
         <input type="date" value={range.to} min={range.from} onChange={e => e.target.value && onRange({ ...range, to: e.target.value })}
           aria-label="Нагрузка: по дату" className={dateCls} />
       </div>
-      <p className="text-[11px] text-text-muted" title="Будни 9:00–18:00 минус час обеда и час утренних встреч. Праздники не учитываются.">
-        Рабочих дней: {days} · норма {fmtMinutes(days * LOAD_DAY_MINUTES)} (по {LOAD_DAY_MINUTES / 60} ч в день)
+      <p className="text-[11px] text-text-muted" title="Будни; праздники не учитываются. Норму дня и резервы — шестерёнкой.">
+        Рабочих дней: {days} · в день {fmtMinutes(settings.dayMinutes)}
+        {commonMin > 0 && <> − {common.map(r => `${r.name} ${fmtMinutes(r.minutes)}`).join(", ")} = <b className="font-medium text-text-main">{fmtMinutes(Math.max(0, settings.dayMinutes - commonMin))}</b></>}
       </p>
       <label className="flex items-start gap-1.5 text-[11px] text-text-main cursor-pointer select-none">
         <input type="checkbox" className="mt-0.5" checked={list.loadAuto !== false} onChange={e => onAuto(e.target.checked)} />
@@ -1441,7 +1456,8 @@ function LoadPanel({ list, participants, skip, onRange, onAuto }: {
           {rows.map(r => {
             const pct = r.capacity ? Math.min(100, Math.round((r.planned / r.capacity) * 100)) : r.planned ? 100 : 0;
             return (
-              <li key={r.participant.id} title={`Задач в нагрузке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}${r.skipped ? `, не учтено: ${r.skipped}` : ""}`}>
+              <li key={r.participant.id} title={`Задач в нагрузке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}${r.skipped ? `, не учтено: ${r.skipped}` : ""}`
+                + (r.reserves.length ? `\nРезервы: ${r.reserves.map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")} — за период ${fmtMinutes(r.reserved)}` : "")}>
                 <div className="flex items-center gap-1.5 text-xs">
                   <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.participant.color }} />
                   <span className="min-w-0 flex-1 truncate text-text-main">{r.participant.name}</span>
@@ -1452,6 +1468,11 @@ function LoadPanel({ list, participants, skip, onRange, onAuto }: {
                 <div className="mt-1 h-1.5 rounded-full bg-bg-subtle overflow-hidden" aria-hidden>
                   <div className={`h-full rounded-full ${r.over ? "bg-red-500" : "bg-primary/70"}`} style={{ width: `${pct}%` }} />
                 </div>
+                {r.reserves.some(x => x.participants.length > 0) && (
+                  <p className="mt-0.5 text-[10px] text-text-muted">
+                    резерв: {r.reserves.filter(x => x.participants.length > 0).map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")}
+                  </p>
+                )}
                 {(r.over || r.unplanned > 0) && (
                   <p className="mt-0.5 text-[10px] text-text-muted">
                     {r.over && <span className="text-red-600 dark:text-red-400">перегрузка {fmtMinutes(r.planned - r.capacity)}</span>}

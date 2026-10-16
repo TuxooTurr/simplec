@@ -1297,7 +1297,12 @@ export default function JiraToolSection() {
                     }))}
                     onRoleNames={(fid, names) => update(s => ({ ...s, roleNames: { ...s.roleNames, [fid]: names } }))}
                     onNoLoad={(key, skip) => setNoLoad([key], skip)}
-                    reqLinks={state.reqLinks} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")} />
+                    reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
+                    onReqUrl={(key, u) => update(s => {
+                      const m = { ...s.reqUrls };
+                      if (u) m[key] = u; else delete m[key];
+                      return { ...s, reqUrls: m };
+                    })} />
                 )}
               </div>
 

@@ -2,9 +2,9 @@
 
 import React from "react";
 
-// ── Inline formatting: **bold**, *italic*, `code` ─────────────────────────────
+// ── Inline formatting: **bold**, *italic*, `code`, [ссылка](https://…) ──────────
 function renderInline(text: string): React.ReactNode {
-  const re = /(\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`)/g;
+  const re = /(\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))/g;
   const parts: React.ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
@@ -20,6 +20,10 @@ function renderInline(text: string): React.ReactNode {
         <code key={k++} className="px-1.5 py-0.5 rounded text-[11px] bg-bg-muted font-mono text-text-main border border-border-main">
           {m[4]}
         </code>
+      );
+    else if (m[5] !== undefined)
+      parts.push(
+        <a key={k++} href={m[6]} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{m[5]}</a>
       );
     last = m.index + m[0].length;
   }
@@ -76,6 +80,18 @@ function alignClass(separatorCell: string): string {
   if (value.startsWith(":") && value.endsWith(":")) return "text-center";
   if (value.endsWith(":")) return "text-right";
   return "text-left";
+}
+
+/**
+ * Похож ли текст на Markdown: заголовки, списки, таблица, блок кода, цитата, жирный или ссылка.
+ * Нужен там, где текст бывает и обычным (вытащен из PDF/DOCX), и размеченным (.md, вставка из редактора):
+ * обычный лучше показать как есть — с переносами строк, а размеченный — отрисовать.
+ */
+export function looksLikeMarkdown(text: string): boolean {
+  const lines = text.split("\n");
+  const marks = lines.filter(l => /^\s{0,3}(#{1,6} |[*\-+] |\d+\. |> |```|\|.*\|)/.test(l)).length;
+  const inline = /\*\*[^*\n]+\*\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|`[^`\n]+`/.test(text);
+  return /^\s{0,3}#{1,6} /m.test(text) || /^```/m.test(text) || marks >= 2 || (marks >= 1 && inline);
 }
 
 // ── NotionRenderer ────────────────────────────────────────────────────────────
@@ -253,6 +269,21 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
             </li>
           ))}
         </ol>
+      );
+      continue;
+    }
+
+    // ── Quote ────────────────────────────────────────────────────────
+    if (/^>\s?/.test(trimmed)) {
+      const quote: string[] = [];
+      while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+        quote.push(lines[i].trim().replace(/^>\s?/, ""));
+        i++;
+      }
+      nodes.push(
+        <blockquote key={k++} className="border-l-2 border-primary/40 pl-3 my-1 text-sm text-text-muted leading-relaxed">
+          {quote.map((q, n) => <p key={n}>{renderInline(q)}</p>)}
+        </blockquote>
       );
       continue;
     }

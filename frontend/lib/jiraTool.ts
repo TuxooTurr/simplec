@@ -394,6 +394,8 @@ export interface ToolState {
    * одна фича бывает в нескольких списках, требования у неё одни.
    */
   reqLinks: Record<string, string[]>;
+  /** Исходник требований по задаче (Confluence, Figma, Google Docs…): ключ → ссылка. Рядом с документами из «Данных». */
+  reqUrls: Record<string, string>;
   /**
    * Статус (st), выставленный руками: ключ → этап. Нижняя планка — действует, пока Jira не покажет
    * этап выше (см. makeStageResolver). На уровне SimpleTest: реальность у задачи одна во всех списках.
@@ -459,7 +461,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, reqUrls: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -487,6 +489,7 @@ export function loadState(): ToolState {
           customStages: s.customStages ?? [],
           templates: s.templates ?? [],
           reqLinks: s.reqLinks ?? {},
+          reqUrls: s.reqUrls ?? {},
           stageManual: s.stageManual ?? {},
           loadSettings: normLoadSettings(s.loadSettings),
         };
@@ -556,6 +559,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
   return {
     ...s,
     reqLinks: remap(s.reqLinks) ?? {},
+    reqUrls: remap(s.reqUrls) ?? {},
     stageManual: remap(s.stageManual) ?? {},
     created: s.created.map(i => (i.key === draftKey ? issue : i)),
     lists: s.lists.map(l => ({
@@ -1058,6 +1062,8 @@ export interface ExportFile {
   participants: Participant[];
   roleNames: Record<string, string[]>;
   reqLinks: Record<string, string[]>;
+  /** Ссылки на исходники требований; в старых файлах нет. */
+  reqUrls?: Record<string, string>;
   /** Ручные статусы (st) задач файла; в старых файлах нет. */
   stageManual?: Record<string, Stage>;
   /** Резервы нагрузки участников файла; в старых файлах нет. */
@@ -1079,6 +1085,7 @@ export function exportLists(s: ToolState, listIds: string[]): ExportFile {
     participants: s.participants.filter(p => usedParticipants.has(p.id)),
     roleNames: s.roleNames,
     reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
+    reqUrls: Object.fromEntries(Object.entries(s.reqUrls).filter(([k]) => keys.has(k))),
     stageManual: Object.fromEntries(Object.entries(s.stageManual).filter(([k]) => keys.has(k))),
     // Резервы — только общие и тех участников, что уходят в файл.
     loadReserves: s.loadSettings.reserves.filter(r => !r.participants.length || r.participants.some(id => usedParticipants.has(id))),
@@ -1105,6 +1112,7 @@ export function parseExportFile(text: string): ExportFile {
   return {
     format: EXPORT_FORMAT, version: f.version, exportedAt: f.exportedAt ?? "",
     lists: f.lists, participants: f.participants ?? [], roleNames: f.roleNames ?? {}, reqLinks: f.reqLinks ?? {},
+    reqUrls: f.reqUrls ?? {},
     stageManual: f.stageManual ?? {},
     loadReserves: f.loadReserves ?? [],
     drafts: f.drafts ?? [], customStages: f.customStages ?? [], stageStyles: f.stageStyles ?? {},
@@ -1165,6 +1173,7 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
       participants,
       roleNames,
       reqLinks: { ...remapKeys(f.reqLinks), ...s.reqLinks },
+      reqUrls: { ...remapKeys(f.reqUrls), ...s.reqUrls },
       // Свой ручной статус важнее чужого: у себя человек видит задачу ближе.
       stageManual: { ...remapKeys(f.stageManual), ...s.stageManual },
       // Резервы файла, которых у нас нет (по id), — с участниками, переведёнными на наших. Норму дня не трогаем.

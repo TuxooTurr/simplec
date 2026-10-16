@@ -7,7 +7,7 @@ import {
   Code2, Bug, FolderOpen, Upload, ClipboardList, Sparkles, AlertTriangle,
 } from "lucide-react";
 import { Select } from "@/components/ui";
-import NotionRenderer from "@/components/NotionRenderer";
+import NotionRenderer, { looksLikeMarkdown } from "@/components/NotionRenderer";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
@@ -29,7 +29,7 @@ const BTN_SECONDARY =
 
 type Tab = "testcases" | "autotests" | "defects" | "docs" | "requirements";
 
-const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt";
+const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.md,.markdown";
 
 /** Кнопка «Загрузить из файла» + чип с именем файла */
 function FileAttachRow({
@@ -1149,6 +1149,35 @@ function ContextDocsTab() {
 // Требования — исходник + сгенерированная QA-документация, локально, без Chroma
 // ══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * Исходник требования: размеченный (Markdown из .md или вставленный из редактора) — отрисованным,
+ * обычный текст (вытащен из PDF/DOCX) — как есть, с переносами строк. У размеченного — переключатель
+ * «Разметка / Текст»: иногда нужно увидеть или скопировать исходную разметку.
+ */
+function SourceText({ text }: { text: string }) {
+  const md = looksLikeMarkdown(text);
+  const [raw, setRaw] = useState(false);
+  const tab = (on: boolean) => `px-2 py-0.5 rounded text-[11px] ${on ? "bg-bg-subtle text-text-main font-medium" : "text-text-muted hover:text-text-main"}`;
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide">Исходник</p>
+        {md && (
+          <div className="flex gap-0.5" role="group" aria-label="Вид исходника">
+            <button type="button" onClick={() => setRaw(false)} aria-pressed={!raw} className={tab(!raw)}>Разметка</button>
+            <button type="button" onClick={() => setRaw(true)} aria-pressed={raw} className={tab(raw)}>Текст</button>
+          </div>
+        )}
+      </div>
+      <div className="max-h-[400px] overflow-y-auto">
+        {md && !raw ? <NotionRenderer text={text} /> : (
+          <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed">{text}</pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RequirementsTab() {
   const { provider } = useWorkspace();
 
@@ -1182,6 +1211,17 @@ function RequirementsTab() {
   };
 
   useEffect(() => { load(); }, [filterFeature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // «/etalons?req=<id>» — открыть конкретное требование (так его открывает Jira tool в новой вкладке):
+  // раскрываем и прокручиваем к нему, когда список загрузится. Один раз — дальше человек листает сам.
+  const [deepLink, setDeepLink] = useState<string | null>(null);
+  useEffect(() => { setDeepLink(new URLSearchParams(window.location.search).get("req")); }, []);
+  useEffect(() => {
+    if (!deepLink || !items.some(i => i.id === deepLink)) return;
+    setExpanded(deepLink);
+    requestAnimationFrame(() => document.getElementById(`req-${deepLink}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    setDeepLink(null);
+  }, [deepLink, items]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -1338,8 +1378,8 @@ function RequirementsTab() {
       ) : (
         <div className="space-y-2">
           {items.map((item, idx) => (
-            <div key={item.id}
-              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up"
+            <div key={item.id} id={`req-${item.id}`}
+              className="bg-bg-card border border-border-main rounded-xl overflow-hidden hover:shadow-sm transition-shadow duration-200 animate-slide-up scroll-mt-4"
               style={{ animationDelay: `${Math.min(idx * 30, 300)}ms` }}>
               <div className="flex items-center gap-3 px-4 py-3">
                 <button onClick={() => setExpanded(expanded === item.id ? null : item.id)}
@@ -1379,12 +1419,7 @@ function RequirementsTab() {
 
               {expanded === item.id && (
                 <div className="border-t border-border-main px-4 py-3 animate-fade-in space-y-4">
-                  <div>
-                    <p className="text-xs font-semibold text-emerald-500 uppercase tracking-wide mb-2">Исходник</p>
-                    <pre className="text-xs text-text-main whitespace-pre-wrap leading-relaxed max-h-[300px] overflow-y-auto">
-                      {item.text}
-                    </pre>
-                  </div>
+                  <SourceText text={item.text} />
 
                   <div className="border-t border-border-main pt-3">
                     <div className="flex items-center justify-between mb-2">

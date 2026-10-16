@@ -1,6 +1,6 @@
 """
 Парсер файлов с валидацией безопасности.
-Поддержка: PDF, Word, Excel, XML, изображения (OCR), TXT.
+Поддержка: PDF, Word, Excel, XML, изображения (OCR), TXT, Markdown.
 """
 
 import io
@@ -8,7 +8,7 @@ import io
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls",
-    ".xml", ".png", ".jpg", ".jpeg", ".txt", ".log"
+    ".xml", ".png", ".jpg", ".jpeg", ".txt", ".log", ".md", ".markdown"
 }
 
 
@@ -52,7 +52,7 @@ def parse_file(data: bytes, filename: str) -> str:
         return _parse_xml(data)
     elif ext in ("png", "jpg", "jpeg"):
         return _parse_image(data)
-    elif ext in ("txt", "log"):
+    elif ext in ("txt", "log", "md", "markdown"):   # Markdown — как есть: разметку отрисует интерфейс
         return _parse_txt(data)
     else:
         return data.decode("utf-8", errors="ignore")

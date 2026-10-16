@@ -68,7 +68,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqOptions, onReqs, onClearMark,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -125,6 +125,10 @@ export default function ListTable({
   onNoLoad: (key: string, skip: boolean) => void;
   /** Требования по задачам (ключ → id документов «Данных») и все документы для выбора. */
   reqLinks: Record<string, string[]>;
+  /** Ссылки на исходники требований: ключ → адрес. */
+  reqUrls: Record<string, string>;
+  /** Ссылка на исходник требований задачи; пусто — убрать. */
+  onReqUrl: (key: string, url: string) => void;
   reqOptions: ReqOption[];
   onReqs: (key: string, ids: string[]) => void;
   /** Снять отметку «n» (если папок в списке нет — переложить задачу некуда). */
@@ -417,7 +421,8 @@ export default function ListTable({
             ) : c === FACT_COL ? (
               <FactCell spend={list.spend?.[issue.key]} />
             ) : c === REQ_COL ? (
-              <ReqCell value={reqLinks[issue.key] ?? []} options={reqOptions} onChange={ids => onReqs(issue.key, ids)} />
+              <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
+                onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />
             ) : c === LOAD_COL ? (
               <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />
             ) : isRoleCol(c) ? (

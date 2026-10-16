@@ -501,7 +501,8 @@ export function ParticipantCell({ value, participants, onChange }: { value: stri
       <select value={value} onChange={e => onChange(e.target.value)} aria-label="Участник"
         className="min-w-0 flex-1 bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:outline-none text-sm text-text-main truncate">
         <option value="">— не назначен</option>
-        {participants.map(x => <option key={x.id} value={x.id}>{x.role ? `${x.name} · ${x.role}` : x.name}</option>)}
+        {/* Должность не дописываем: она уже в цветной метке слева. */}
+        {participants.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
       </select>
     </span>
   );
@@ -613,70 +614,137 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
 
 export interface ReqOption { id: string; name: string; feature?: string }
 
+/** Адрес требования в SimpleTest: раздел «Данные» сам раскроет его и прокрутит к нему. */
+export const reqDocHref = (id: string) => `/etalons?req=${encodeURIComponent(id)}`;
+
 /**
- * Требования задачи: названия документов; клик — список с поиском и галочками (поверх таблицы,
- * fixed — внутри ячейки его обрезала бы прокрутка; при прокрутке закрывается).
+ * Требования задачи — двойное поле: документы из «Данных» и ссылка на исходник (Confluence, Figma…).
+ * Можно только документы, только ссылку или всё вместе. Документ и значок исходника открываются
+ * в новой вкладке; карандаш (и пустая ячейка) — редактирование: ссылка сверху, документы с галочками ниже.
+ * Окно поверх таблицы (fixed): внутри ячейки его обрезала бы прокрутка; при прокрутке таблицы закрывается.
  */
-export function ReqCell({ value, options, onChange }: { value: string[]; options: ReqOption[]; onChange: (ids: string[]) => void }) {
+export function ReqCell({ value, url, options, onChange, onUrl }: {
+  value: string[];
+  url: string;
+  options: ReqOption[];
+  onChange: (ids: string[]) => void;
+  onUrl: (url: string) => void;
+}) {
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [q, setQ] = useState("");
-  const btn = useRef<HTMLButtonElement>(null);
+  const [draftUrl, setDraftUrl] = useState(url);
+  const anchor = useRef<HTMLSpanElement>(null);
   const box = useRef<HTMLDivElement>(null);
+  const saveUrl = () => { if (draftUrl.trim() !== url) onUrl(draftUrl.trim()); };
+  const close = () => { saveUrl(); setPos(null); };
+  const place = () => {
+    const r = anchor.current?.getBoundingClientRect();
+    return r ? { left: Math.min(r.left, window.innerWidth - 300), top: r.bottom + 4 } : null;
+  };
   useEffect(() => {
     if (!pos) return;
-    const close = (e: Event) => {
-      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
-      if (e.type === "scroll" && box.current?.contains(e.target as Node)) return;   // прокрутка самого списка
-      setPos(null);
+    const onDown = (e: MouseEvent) => {
+      if (box.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node)) return;
+      close();
     };
-    document.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
-  }, [pos]);
+    // Прокрутка таблицы — окно едет за ячейкой. Закрывать нельзя: фокус на кнопке сам подкручивает
+    // таблицу, и окно закрывалось бы сразу после открытия.
+    const onScroll = (e: Event) => { if (!box.current?.contains(e.target as Node)) setPos(place()); };
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("scroll", onScroll, true); };
+  });   // без зависимостей: close должен видеть свежий draftUrl
+  const open = () => {
+    if (pos) { close(); return; }
+    setQ(""); setDraftUrl(url); setPos(place());
+  };
+
   const byId = new Map(options.map(o => [o.id, o]));
   const s = q.trim().toLowerCase();
   const shown = options.filter(o => !s || o.name.toLowerCase().includes(s) || (o.feature ?? "").toLowerCase().includes(s));
+  const href = linkHref(url);
+  const draftHref = linkHref(draftUrl);
+  const empty = !value.length && !url;
+
   return (
     <>
-      <button ref={btn} type="button" aria-expanded={!!pos} aria-haspopup="listbox" aria-label="Требования (st)"
-        onClick={() => {
-          if (pos) { setPos(null); return; }
-          const r = btn.current?.getBoundingClientRect();
-          if (r) { setQ(""); setPos({ left: r.left, top: r.bottom + 4 }); }
-        }}
-        className="flex flex-wrap gap-1 min-h-[24px] w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main">
-        {value.length ? value.map(id => (
-          <span key={id} className="max-w-full truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px]"
-            title={byId.get(id)?.name ?? "Документ удалён из «Данных»"}>
-            {byId.get(id)?.name ?? "удалён"}
-          </span>
-        )) : <span className="text-text-muted/50 text-sm">—</span>}
-      </button>
-      {pos && (
-        <div ref={box} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
-          className="w-72 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
-          <input autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="Найти требование" aria-label="Найти требование"
-            onKeyDown={e => { if (e.key === "Escape") setPos(null); }}
-            className="w-full mb-1 text-sm px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-          <div role="listbox" aria-multiselectable aria-label="Требования" className="max-h-60 overflow-y-auto scrollbar-thin">
-            {options.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">В разделе «Данные» пока нет требований.</p>}
-            {options.length > 0 && shown.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">Ничего не нашлось.</p>}
-            {shown.map(o => {
-              const on = value.includes(o.id);
-              return (
-                <button key={o.id} type="button" role="option" aria-selected={on}
-                  onClick={() => onChange(on ? value.filter(x => x !== o.id) : [...value, o.id])}
-                  className={`w-full flex items-start gap-2 px-2 py-1 rounded text-left hover:bg-bg-subtle ${on ? "bg-primary/10" : ""}`}>
-                  <input type="checkbox" readOnly checked={on} tabIndex={-1} aria-hidden className="mt-0.5" />
-                  <span className="min-w-0">
-                    <span className="block text-sm text-text-main truncate">{o.name}</span>
-                    {o.feature && <span className="block text-[10px] text-text-muted truncate">{o.feature}</span>}
-                  </span>
-                </button>
+      <span ref={anchor} className="group/rq flex items-start gap-1 min-h-[24px] w-full px-1 py-0.5">
+        {empty ? (
+          <button type="button" onClick={open} aria-expanded={!!pos} aria-label="Требования (st): добавить документ или ссылку"
+            className="flex-1 text-left text-text-muted/50 text-sm hover:text-primary">—</button>
+        ) : (
+          <span className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
+            {value.map(id => {
+              const doc = byId.get(id);
+              return doc ? (
+                <a key={id} href={reqDocHref(id)} target="_blank" rel="noopener" title={`${doc.name} — открыть в SimpleTest`}
+                  className="max-w-full truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] hover:bg-primary/20 hover:underline">
+                  {doc.name}
+                </a>
+              ) : (
+                <span key={id} title="Документ удалён из «Данных»" className="px-1.5 py-0.5 rounded bg-bg-subtle text-text-muted text-[11px] line-through">удалён</span>
               );
             })}
+            {url && (href ? (
+              <a href={href} target="_blank" rel="noopener noreferrer" title={`Исходник требований: ${href}`} aria-label={`Открыть исходник требований ${href}`}
+                className="inline-flex p-0.5 rounded-md text-primary hover:bg-primary/10"><Globe className="w-4 h-4" /></a>
+            ) : (
+              <span title={`Не похоже на ссылку: ${url}`} className="inline-flex p-0.5 text-text-muted/50"><Globe className="w-4 h-4" /></span>
+            ))}
+          </span>
+        )}
+        {!empty && (
+          <button type="button" onClick={open} aria-expanded={!!pos} aria-label="Требования (st): изменить" title="Изменить требования"
+            className={`p-0.5 rounded text-text-muted hover:text-text-main focus-visible:opacity-100 ${pos ? "opacity-100" : "opacity-0 group-hover/rq:opacity-100 group-hover/row:opacity-100"}`}>
+            <Pencil className="w-3 h-3" />
+          </button>
+        )}
+      </span>
+      {pos && createPortal(
+        <div ref={box} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
+          onKeyDown={e => { if (e.key === "Escape") close(); }}
+          className="w-[300px] rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1.5 space-y-1.5 animate-fade-in">
+          <div>
+            <p className="px-0.5 pb-1 text-[11px] font-semibold text-text-muted">Исходник — ссылка</p>
+            <label className="flex items-center gap-1.5 px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
+              <Globe className={`w-3.5 h-3.5 flex-shrink-0 ${draftHref ? "text-primary" : "text-text-muted"}`} />
+              <input value={draftUrl} onChange={e => setDraftUrl(e.target.value)} onBlur={saveUrl}
+                onKeyDown={e => { if (e.key === "Enter") { saveUrl(); setPos(null); } }}
+                placeholder="Confluence, Figma, Google Docs…" aria-label="Ссылка на исходник требований"
+                className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" />
+              {draftUrl && (
+                <button type="button" onClick={() => { setDraftUrl(""); onUrl(""); }} aria-label="Убрать ссылку" className="text-text-muted hover:text-red-500">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </label>
+            {draftUrl.trim() && !draftHref && <p className="px-0.5 pt-0.5 text-[10px] text-amber-600 dark:text-amber-400">Не похоже на ссылку</p>}
           </div>
-        </div>
+          <div className="border-t border-border-main pt-1.5">
+            <p className="px-0.5 pb-1 text-[11px] font-semibold text-text-muted">Документы из «Данных»</p>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти требование" aria-label="Найти требование"
+              className="w-full mb-1 text-sm px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+            <div role="listbox" aria-multiselectable aria-label="Требования" className="max-h-56 overflow-y-auto scrollbar-thin">
+              {options.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">В разделе «Данные» пока нет требований.</p>}
+              {options.length > 0 && shown.length === 0 && <p className="px-2 py-1.5 text-xs text-text-muted">Ничего не нашлось.</p>}
+              {shown.map(o => {
+                const on = value.includes(o.id);
+                return (
+                  <button key={o.id} type="button" role="option" aria-selected={on}
+                    onClick={() => onChange(on ? value.filter(x => x !== o.id) : [...value, o.id])}
+                    className={`w-full flex items-start gap-2 px-2 py-1 rounded text-left hover:bg-bg-subtle ${on ? "bg-primary/10" : ""}`}>
+                    <input type="checkbox" readOnly checked={on} tabIndex={-1} aria-hidden className="mt-0.5" />
+                    <span className="min-w-0">
+                      <span className="block text-sm text-text-main truncate">{o.name}</span>
+                      {o.feature && <span className="block text-[10px] text-text-muted truncate">{o.feature}</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>,
+        document.body,
       )}
     </>
   );

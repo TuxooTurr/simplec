@@ -9,6 +9,7 @@ import {
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
+import ColumnFilter, { type FilterOption } from "./ColumnFilter";
 import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
@@ -32,6 +33,11 @@ export function sortIssues(issues: Issue[], sort: SortState, ctx: ColCtx): Issue
 /* ── Ширина колонок ──────────────────────────────────────────────────────── */
 
 const SELECT_W = 56, REMOVE_W = 36, MIN_W = 60, INDENT = 12;
+/**
+ * Задачи в папке начинаются под названием папки, а не под стрелкой: так вложенность видна сразу.
+ * 42 = от края колонки ключа до начала названия папки (стрелка 16 + отступ 6 + значок 16 + отступ 8, минус 4 на поле ключа).
+ */
+const FOLDER_PAD = 42;
 
 /** Ширина по умолчанию — по смыслу колонки; пользователь растягивает её за край заголовка. */
 export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
@@ -66,7 +72,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
@@ -83,6 +89,11 @@ export default function ListTable({
   selected: Set<string>;
   onSelect: (keys: string[], on: boolean) => void;
   onValue: (key: string, fieldId: string, v: string | string[]) => void;
+  /** Фильтры в заголовках колонок: колонка → отмеченные значения. */
+  colFilters: Record<string, string[]>;
+  filterOptions: (col: ColRef) => FilterOption[];
+  /** null — снять фильтр колонки. */
+  onColFilter: (col: ColRef, values: string[] | null) => void;
   /** Статусы (st), поставленные руками: ключ → этап. */
   stageManual: Record<string, Stage>;
   /** Поставить статус (st) руками; null — вернуть расчёт по Jira. */
@@ -150,9 +161,10 @@ export default function ListTable({
   const resizing = useRef<{ col: ColRef; x: number; w: number } | null>(null);
   const colW = (c: ColRef) => (live?.col === c ? live.w : list.widths?.[c] ?? defaultWidth(c, ctx));
   // Ключ не должен обрезаться: ширина столбца — под самый глубокий уровень вложенности (папка + 3 группы).
-  const depthMax = (sections ? 1 : 0) + list.groupBy.length;
   // Отметки «n»/«У» стоят перед ключом — под них место, чтобы ключ не обрезался.
-  const KEY_W = 150 + depthMax * INDENT + (Object.keys(list.marks ?? {}).length ? 22 : 0);
+  const KEY_W = 150 + (sections ? FOLDER_PAD : 0) + list.groupBy.length * INDENT + (Object.keys(list.marks ?? {}).length ? 22 : 0);
+  /** Отступ уровня: в папке первый уровень — под названием папки, дальше по INDENT. */
+  const indent = (depth: number, folder: FolderKey) => (folder !== undefined ? FOLDER_PAD + Math.max(0, depth - 1) * INDENT : depth * INDENT);
   const tableW = SELECT_W + KEY_W + REMOVE_W + cols.reduce((n, c) => n + colW(c), 0);
   /** Отступ слева закреплённой колонки: выбор + ключ + закреплённые до неё. */
   const leftOf = (c: ColRef) => {
@@ -375,7 +387,7 @@ export default function ListTable({
           )}
         </td>
         <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
-          style={{ ...stick(SELECT_W), paddingLeft: 12 + depth * INDENT }}>
+          style={{ ...stick(SELECT_W), paddingLeft: 12 + indent(depth, folder) }}>
           {list.marks?.[issue.key] === "removed" && (
             <span role="img" aria-label="Выпала из источника" title="Задачи больше нет в источнике (JQL-фильтр или релиз) — решите, оставить ли её в списке"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-red-600 text-white text-[9px] font-bold align-middle">У</span>
@@ -487,7 +499,7 @@ export default function ListTable({
           <td colSpan={width - 1} className="py-1.5">
             {/* Подпись группы не уезжает при прокрутке вбок */}
             <button type="button" onClick={() => toggle(node.path)} aria-expanded={!shut}
-              style={{ position: "sticky", left: SELECT_W + 8 + depth * INDENT }}
+              style={{ position: "sticky", left: SELECT_W + 8 + indent(depth, folder) }}
               className="flex items-center gap-1.5 text-sm text-text-main w-max">
               <ChevronRight className={`w-4 h-4 text-text-muted transition-transform ${shut ? "" : "rotate-90"}`} />
               <span className="text-[11px] text-text-muted">{node.field}:</span>
@@ -506,7 +518,7 @@ export default function ListTable({
           ? node.children.map(ch => group(ch, depth + 1, levels, folder))
           : node.issues.length === 0
             ? <tr className="border-t border-border-main"><td colSpan={width} className="py-1.5 text-[11px] text-text-muted/70"
-                style={{ paddingLeft: 40 + depth * INDENT }}>пусто — перетащите сюда задачу</td></tr>
+                style={{ paddingLeft: 40 + indent(depth, folder) }}>пусто — перетащите сюда задачу</td></tr>
             : sortIssues(node.issues, sort, ctx).map((i, n, arr) =>
                 row(i, depth + 1, node.path, levels, folder, arr[n - 1]?.key, arr[n + 1]?.key)))}
       </Fragment>
@@ -677,6 +689,8 @@ export default function ListTable({
                       className={`ml-1 p-0.5 rounded flex-shrink-0 ${pinned.has(c) ? "text-primary" : "text-text-muted opacity-0 group-hover/th:opacity-100 hover:text-text-main"}`}>
                       {pinned.has(c) ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
                     </button>
+                    <ColumnFilter label={colLabel(c, list)} active={c in colFilters} selected={colFilters[c] ?? []}
+                      options={() => filterOptions(c)} onChange={vals => onColFilter(c, vals)} />
                     {ownById[c.slice(4)]?.type === "text" && (() => {
                       const wrap = !!ownById[c.slice(4)].wrap;
                       return (
@@ -699,7 +713,11 @@ export default function ListTable({
                       document.body.style.cursor = "col-resize";
                     }}
                     onDoubleClick={e => { e.stopPropagation(); onResizeColumn(c, null); }}
-                    className={`absolute top-0 right-0 h-full w-2 cursor-col-resize hover:bg-primary/30 ${live?.col === c ? "bg-primary/40" : ""}`} />
+                    className="group/rs absolute top-0 right-0 h-full w-3 cursor-col-resize flex justify-end">
+                    {/* Видимая черта-разделитель: всегда тонкая серая, под мышью и при растягивании — толще и цветная */}
+                    <span aria-hidden className={`my-1.5 rounded-full transition-all ${live?.col === c
+                      ? "w-[3px] bg-primary" : "w-px bg-text-muted/40 group-hover/rs:w-[3px] group-hover/rs:bg-primary/70"}`} />
+                  </span>
                 </th>
               );
             })}

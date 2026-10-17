@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle, ChevronDown, ClipboardCheck, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
-  PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
+  ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
 import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker";
 import ListTable, { sortIssues, type SortState } from "@/components/jiratool/ListTable";
+import type { FilterOption } from "@/components/jiratool/ColumnFilter";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import type { ReqOption } from "@/components/jiratool/ListCells";
@@ -75,6 +76,11 @@ export default function JiraToolSection() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [askDelete, setAskDelete] = useState(false);
   const [filter, setFilter] = useState("");
+  /**
+   * Фильтры в заголовках колонок: колонка → отмеченные значения ("" — пусто). На время работы со списком:
+   * сохранённый скрытый фильтр потом путал бы («куда делись задачи»). Сбрасываются при смене списка.
+   */
+  const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
   const [sort, setSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** Режим выбора задач: чекбоксы в таблице и панель действий. Выход — снимает выбор. */
@@ -351,18 +357,40 @@ export default function JiraToolSection() {
 
   /* ── Задачи текущего списка с фильтром ── */
   const q = filter.trim().toLowerCase();
-  const listIssues: Issue[] = list && ctx
+  const searched: Issue[] = list && ctx
     ? list.keys.map(k => byKey.get(k)).filter((i): i is Issue => !!i)
         .filter(i => !q || i.key.toLowerCase().includes(q) || list.columns.some(c => colValues(c, i, ctx).some(v =>
           v.toLowerCase().includes(q) || (jiraDateKind(c) !== null && fmtJiraDate(v).includes(q)))))
     : [];
+  // Фильтр колонки, которой больше нет в списке (убрали из колонок), не действует.
+  const activeFilters = Object.entries(colFilters).filter(([c]) => list?.columns.includes(c));
+  const passes = (i: Issue, except?: string) => !ctx || activeFilters.every(([c, vals]) => {
+    if (c === except) return true;
+    const v = colValues(c, i, ctx);
+    return v.length ? v.some(x => vals.includes(x)) : vals.includes("");
+  });
+  const listIssues: Issue[] = searched.filter(i => passes(i));
+  /** Варианты фильтра колонки — по задачам, прошедшим остальные фильтры (как в Excel). */
+  const filterOptions = (c: string): FilterOption[] => {
+    if (!ctx) return [];
+    const counts = new Map<string, number>();
+    for (const i of searched) {
+      if (!passes(i, c)) continue;
+      const vals = colValues(c, i, ctx);
+      for (const v of vals.length ? new Set(vals) : [""]) counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    const kind = jiraDateKind(c);
+    return [...counts.entries()]
+      .map(([value, count]) => ({ value, count, label: !value ? "(пусто)" : kind ? fmtJiraDate(value, kind === "datetime") : value }))
+      .sort((a, b) => (!a.value ? 1 : !b.value ? -1 : a.label.localeCompare(b.label, "ru", { numeric: true })));
+  };
   const foreign = list ? list.keys.filter(k => projectKeyOfIssue(k) !== list.project).length : 0;
   const selectedIssues = listIssues.filter(i => selected.has(i.key));
   const notFound = list ? list.keys.filter(k => missing.has(k) && !byKey.has(k)) : [];
   const pending = list ? list.keys.filter(k => !byKey.has(k) && !missing.has(k)).length : 0;
 
   /* ── Действия ── */
-  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null); };
+  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setColFilters({}); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null); };
 
   const createList = () => {
     const name = (newList ?? "").trim();
@@ -925,6 +953,13 @@ export default function JiraToolSection() {
                     className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
                   {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
                 </label>
+                {activeFilters.length > 0 && (
+                  <p className="flex items-center gap-1.5 px-1 text-[11px] text-primary">
+                    <ListFilter className="w-3.5 h-3.5" />
+                    Фильтр по колонкам: {activeFilters.map(([c]) => colLabel(c, list)).join(", ")}
+                    <button type="button" onClick={() => setColFilters({})} className="ml-auto text-text-muted hover:text-text-main underline">сбросить</button>
+                  </p>
+                )}
 
                 <Section icon={<Columns3 className="w-4 h-4" />} title="Колонки" note={`${list.columns.length}`}
                   open={panel === "columns"} onToggle={() => setPanel(p => (p === "columns" ? null : "columns"))}>
@@ -1243,6 +1278,12 @@ export default function JiraToolSection() {
                     selected={selected}
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
                     onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
+                    colFilters={colFilters} filterOptions={filterOptions}
+                    onColFilter={(c, vals) => setColFilters(f => {
+                      const next = { ...f };
+                      if (vals) next[c] = vals; else delete next[c];
+                      return next;
+                    })}
                     stageManual={state.stageManual}
                     onStageManual={setStageManual}
                     onIcon={(key, fid, code) => updateList(l => {

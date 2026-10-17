@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { createPortal } from "react-dom";
 import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
 import { parseCellIcon, useIcons } from "@/lib/cellIcon";
+import Floating from "./Floating";
 
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
@@ -98,33 +98,14 @@ export function StageCell({ info, onOpen, manual, onManual }: {
   manual?: Stage;
   onManual: (stage: Stage | null) => void;
 }) {
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
-  const box = useRef<HTMLDivElement>(null);
-  const place = () => {
-    const r = btn.current?.getBoundingClientRect();
-    return r ? { left: Math.min(r.left, window.innerWidth - 248), top: r.bottom + 4 } : null;
-  };
-  const opened = !!pos;
-  useEffect(() => {
-    if (!opened) return;
-    const close = (e: MouseEvent) => {
-      if (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node)) return;
-      setPos(null);
-    };
-    // Меню поверх таблицы (fixed): при прокрутке едет за кнопкой. Закрывать нельзя — фокус на кнопке
-    // сам подкручивает таблицу, и меню закрывалось бы сразу после открытия.
-    const follow = (e: Event) => { if (!box.current?.contains(e.target as Node)) setPos(place()); };
-    document.addEventListener("mousedown", close);
-    window.addEventListener("scroll", follow, true);
-    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", follow, true); };
-  }, [opened]);
 
   const jira = jiraStageOf(info);
   const jiraRank = jiraRankOf(info);
   const progress = STAGES.filter(st => st !== "excluded");
-  const set = (st: Stage | null) => { onManual(st); setPos(null); };
-  const open = () => setPos(p => (p ? null : place()));
+  const set = (st: Stage | null) => { onManual(st); setPos(false); };
+  const open = () => setPos(p => !p);
 
   return (
     <span className="group/st inline-flex items-center gap-0.5 max-w-full">
@@ -140,9 +121,8 @@ export function StageCell({ info, onOpen, manual, onManual }: {
           ${pos ? "opacity-100" : "opacity-0 group-hover/row:opacity-100 group-hover/st:opacity-100"}`}>
         <ChevronDown className="w-3.5 h-3.5" />
       </button>
-      {pos && createPortal(
-        <div ref={box} role="menu" aria-label="Статус (st) вручную" style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
-          className="w-60 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+      {pos && (
+        <Floating anchor={btn} onClose={() => setPos(false)} width={240} role="menu" ariaLabel="Статус (st) вручную" className="p-1">
           <p className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted leading-snug">
             По Jira: <b className="text-text-main font-medium">{stageText(jira)}</b>. Ручной держится, пока Jira не покажет статус выше.
           </p>
@@ -164,8 +144,7 @@ export function StageCell({ info, onOpen, manual, onManual }: {
               Сбросить — как в Jira
             </button>
           )}
-        </div>,
-        document.body,
+        </Floating>
       )}
     </span>
   );
@@ -315,22 +294,16 @@ function TextCell({ value, wrap, icon, onChange, onIcon }: {
 
 function MultiCell({ field, value, onChange }: { field: OwnField; value: string[]; onChange: (v: string[]) => void }) {
   const [open, setOpen] = useState(false);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [open]);
+  const btn = useRef<HTMLButtonElement>(null);
   return (
-    <div ref={box} className="relative">
-      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+    <>
+      <button ref={btn} type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-label={field.name}
         className="flex flex-wrap gap-1 min-h-[24px] w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main">
         {value.length ? value.map(x => <span key={x} className="px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px]">{x}</span>)
           : <span className="text-text-muted/50 text-sm">—</span>}
       </button>
       {open && (
-        <div className="absolute z-30 left-0 mt-1 w-48 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1">
+        <Floating anchor={btn} onClose={() => setOpen(false)} width={192} className="p-1" ariaLabel={field.name}>
           {field.options.map(o => (
             <label key={o} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-bg-subtle text-sm cursor-pointer">
               <input type="checkbox" checked={value.includes(o)}
@@ -338,9 +311,9 @@ function MultiCell({ field, value, onChange }: { field: OwnField; value: string[
               {o}
             </label>
           ))}
-        </div>
+        </Floating>
       )}
-    </div>
+    </>
   );
 }
 
@@ -403,27 +376,12 @@ export function Tag({ field, value }: { field: OwnField; value: string }) {
 function TagCell({ field, value, onChange }: { field: OwnField; value: string | string[] | undefined; onChange: (v: string | string[]) => void }) {
   const multi = field.type === "multiselect";
   const chosen = Array.isArray(value) ? value : value ? [value] : [];
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState(false);
   const btn = useRef<HTMLButtonElement>(null);
-  const box = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!pos) return;
-    const close = (e: Event) => {
-      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
-      setPos(null);
-    };
-    document.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
-  }, [pos]);
-  const toggleOpen = () => {
-    if (pos) { setPos(null); return; }
-    const r = btn.current?.getBoundingClientRect();
-    if (r) setPos({ left: r.left, top: r.bottom + 4 });
-  };
+  const toggleOpen = () => setPos(p => !p);
   const pick = (o: string) => {
     if (multi) onChange(chosen.includes(o) ? chosen.filter(x => x !== o) : [...chosen, o]);
-    else { onChange(chosen[0] === o ? "" : o); setPos(null); }
+    else { onChange(chosen[0] === o ? "" : o); setPos(false); }
   };
   return (
     <>
@@ -432,9 +390,7 @@ function TagCell({ field, value, onChange }: { field: OwnField; value: string | 
         {chosen.length ? chosen.map(x => <Tag key={x} field={field} value={x} />) : <span className="text-text-muted/50 text-sm">—</span>}
       </button>
       {pos && (
-        <div ref={box} role="listbox" aria-multiselectable={multi} aria-label={field.name}
-          style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
-          className="w-56 max-h-64 overflow-y-auto scrollbar-thin rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+        <Floating anchor={btn} onClose={() => setPos(false)} width={224} role="listbox" ariaLabel={field.name} className="p-1">
           {field.options.map(o => (
             <button key={o} type="button" role="option" aria-selected={chosen.includes(o)} onClick={() => pick(o)}
               className={`w-full flex items-center gap-2 px-2 py-1 rounded text-left hover:bg-bg-subtle ${chosen.includes(o) ? "bg-primary/10" : ""}`}>
@@ -443,10 +399,10 @@ function TagCell({ field, value, onChange }: { field: OwnField; value: string | 
             </button>
           ))}
           {!multi && chosen.length > 0 && (
-            <button type="button" onClick={() => { onChange(""); setPos(null); }}
+            <button type="button" onClick={() => { onChange(""); setPos(false); }}
               className="w-full text-left px-2 py-1 rounded text-sm text-text-muted hover:bg-bg-subtle">— снять</button>
           )}
-        </div>
+        </Floating>
       )}
     </>
   );
@@ -528,31 +484,10 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
   onNames: (names: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [draft, setDraft] = useState("");
   const btn = useRef<HTMLButtonElement>(null);
-  const box = useRef<HTMLDivElement>(null);
   const state = value?.state ?? "todo";
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: Event) => {
-      if (e.type === "mousedown" && (box.current?.contains(e.target as Node) || btn.current?.contains(e.target as Node))) return;
-      setOpen(false);
-    };
-    // Список рисуется поверх таблицы (fixed): при прокрутке он бы отстал от ячейки — закрываем.
-    document.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    return () => { document.removeEventListener("mousedown", close); window.removeEventListener("scroll", close, true); };
-  }, [open]);
-
-  const toggle = () => {
-    if (!open && btn.current) {
-      const r = btn.current.getBoundingClientRect();
-      setPos({ left: r.left, top: r.bottom + 4 });
-    }
-    setOpen(o => !o);
-  };
+  const toggle = () => setOpen(o => !o);
   const add = () => {
     const n = draft.trim();
     if (!n) return;
@@ -577,9 +512,8 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
         className="min-w-0 flex-1 text-left truncate px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm">
         {value?.name || <span className="text-text-muted/50">—</span>}
       </button>
-      {open && pos && (
-        <div ref={box} role="listbox" aria-label={`${label}: фамилии`} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
-          className="w-56 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+      {open && (
+        <Floating anchor={btn} onClose={() => setOpen(false)} width={224} role="listbox" ariaLabel={`${label}: фамилии`} className="p-1">
           <button type="button" role="option" aria-selected={!value?.name} onClick={() => { onChange({ ...value, name: "" }); setOpen(false); }}
             className="w-full text-left px-2 py-1 rounded text-sm text-text-muted hover:bg-bg-subtle">— не назначен</button>
           <div className="max-h-56 overflow-y-auto scrollbar-thin">
@@ -604,7 +538,7 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
             <button type="button" onClick={add} disabled={!draft.trim()} aria-label="Добавить фамилию"
               className="p-1.5 rounded bg-primary text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" /></button>
           </div>
-        </div>
+        </Floating>
       )}
     </span>
   );
@@ -630,33 +564,15 @@ export function ReqCell({ value, url, options, onChange, onUrl }: {
   onChange: (ids: string[]) => void;
   onUrl: (url: string) => void;
 }) {
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+  const [pos, setPos] = useState(false);
   const [q, setQ] = useState("");
   const [draftUrl, setDraftUrl] = useState(url);
   const anchor = useRef<HTMLSpanElement>(null);
-  const box = useRef<HTMLDivElement>(null);
   const saveUrl = () => { if (draftUrl.trim() !== url) onUrl(draftUrl.trim()); };
-  const close = () => { saveUrl(); setPos(null); };
-  const place = () => {
-    const r = anchor.current?.getBoundingClientRect();
-    return r ? { left: Math.min(r.left, window.innerWidth - 300), top: r.bottom + 4 } : null;
-  };
-  useEffect(() => {
-    if (!pos) return;
-    const onDown = (e: MouseEvent) => {
-      if (box.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node)) return;
-      close();
-    };
-    // Прокрутка таблицы — окно едет за ячейкой. Закрывать нельзя: фокус на кнопке сам подкручивает
-    // таблицу, и окно закрывалось бы сразу после открытия.
-    const onScroll = (e: Event) => { if (!box.current?.contains(e.target as Node)) setPos(place()); };
-    document.addEventListener("mousedown", onDown);
-    window.addEventListener("scroll", onScroll, true);
-    return () => { document.removeEventListener("mousedown", onDown); window.removeEventListener("scroll", onScroll, true); };
-  });   // без зависимостей: close должен видеть свежий draftUrl
+  const close = () => { saveUrl(); setPos(false); };
   const open = () => {
     if (pos) { close(); return; }
-    setQ(""); setDraftUrl(url); setPos(place());
+    setQ(""); setDraftUrl(url); setPos(true);
   };
 
   const byId = new Map(options.map(o => [o.id, o]));
@@ -700,16 +616,14 @@ export function ReqCell({ value, url, options, onChange, onUrl }: {
           </button>
         )}
       </span>
-      {pos && createPortal(
-        <div ref={box} style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 60 }}
-          onKeyDown={e => { if (e.key === "Escape") close(); }}
-          className="w-[300px] rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1.5 space-y-1.5 animate-fade-in">
+      {pos && (
+        <Floating anchor={anchor} onClose={close} width={300} className="p-1.5 space-y-1.5">
           <div>
             <p className="px-0.5 pb-1 text-[11px] font-semibold text-text-muted">Исходник — ссылка</p>
             <label className="flex items-center gap-1.5 px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
               <Globe className={`w-3.5 h-3.5 flex-shrink-0 ${draftHref ? "text-primary" : "text-text-muted"}`} />
               <input value={draftUrl} onChange={e => setDraftUrl(e.target.value)} onBlur={saveUrl}
-                onKeyDown={e => { if (e.key === "Enter") { saveUrl(); setPos(null); } }}
+                onKeyDown={e => { if (e.key === "Enter") { saveUrl(); setPos(false); } }}
                 placeholder="Confluence, Figma, Google Docs…" aria-label="Ссылка на исходник требований"
                 className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" />
               {draftUrl && (
@@ -743,8 +657,7 @@ export function ReqCell({ value, url, options, onChange, onUrl }: {
               })}
             </div>
           </div>
-        </div>,
-        document.body,
+        </Floating>
       )}
     </>
   );

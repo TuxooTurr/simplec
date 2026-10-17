@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BookOpen, Bug, CheckCircle2, CheckSquare, ExternalLink, Loader2, Paperclip, RefreshCw, Search, Send, Settings2, Sparkles, X,
+  BookOpen, Bug, CheckCircle2, CheckSquare, ExternalLink, Loader2, RefreshCw, Search, Send, Settings2, Sparkles, X,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import EpicPicker from "./EpicPicker";
+import AttachmentsField from "./AttachmentsField";
+import { PARSEABLE_RE, withUniqueNames } from "@/lib/attachments";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import { formatLoadedAt, matchPriority, readEpicsCache, writeEpicsCache, type EpicsCache } from "@/components/JiraRegisterPanel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -33,8 +35,8 @@ export interface IssueDraft {
 }
 
 const PLATFORMS = ["Back", "Front", "Mobile", "Analytics", "Design", "DevOps"];
-const ATTACH_ACCEPT = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.log";
-const IMAGE_RE = /\.(png|jpe?g)$/i;
+/** Картинки, по которым генерация пишет в описании !имя! (bugs._IMAGE_EXTS) — в том же порядке, что она их получила. */
+const GEN_IMAGE_RE = /\.(png|jpe?g)$/i;
 
 const INPUT = "w-full text-sm border border-border-main rounded-lg px-3 py-2 bg-[var(--color-input-bg)] text-text-main " +
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -73,14 +75,18 @@ export default function IssueFormModal({ open, project, participants, listName, 
   const [feature, setFeature] = useState("");
   const [raw, setRaw] = useState("");
   const [files, setFiles] = useState<File[]>([]);
-  const fileInput = useRef<HTMLInputElement>(null);
+  /**
+   * Имена, под которыми генерация сослалась на скриншоты в описании (!имя!): файл → имя.
+   * Привязка к самому файлу, а не к порядку — добавили или убрали файл после генерации, имена не съедут.
+   */
+  const [shotNames, setShotNames] = useState<Map<File, string>>(new Map());
+  const addFiles = (added: File[]) => { if (added.length) setFiles(f => [...f, ...withUniqueNames(f, added)]); };
   const [reqs, setReqs] = useState<Requirement[]>([]);
   const [reqIds, setReqIds] = useState<string[]>([]);
   const [reqQuery, setReqQuery] = useState("");
   const [reqOpen, setReqOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genNote, setGenNote] = useState("");
-  const [screenshotNames, setScreenshotNames] = useState<string[]>([]);
 
   /* ── Поля задачи ── */
   const [summary, setSummary] = useState(initial?.summary ?? "");
@@ -145,13 +151,16 @@ export default function IssueFormModal({ open, project, participants, listName, 
     try {
       // Своими словами не написано — генерируем из названия: кнопка активна и в этом случае.
       const text = raw.trim() || summary.trim();
+      // ИИ получает только то, что умеет прочитать; видео, архивы и прочее уйдут лишь вложениями в Jira.
+      const readable = files.filter(f => PARSEABLE_RE.test(f.name));
       const res = isDefect
-        ? await formatBug({ platform, feature, description: text, provider, files, requirementIds: reqIds })
-        : await formatTask({ feature, description: text, provider, files, requirementIds: reqIds });
+        ? await formatBug({ platform, feature, description: text, provider, files: readable, requirementIds: reqIds })
+        : await formatTask({ feature, description: text, provider, files: readable, requirementIds: reqIds });
       setSummary(res.title || summary);
       setDescription(res.description || res.report);
       if (isDefect && res.priority) setPriority(p => matchPriority(res.priority, priorities) || p);
-      setScreenshotNames(res.screenshots ?? []);
+      const shots = readable.filter(f => GEN_IMAGE_RE.test(f.name));
+      setShotNames(new Map(shots.map((f, i) => [f, res.screenshots?.[i] ?? f.name])));
       setGenNote(`Сгенерировано${reqIds.length ? ` с учётом требований: ${reqIds.length}` : ""}. Проверьте название и описание.`);
     } catch (e) {
       // Без подстановки шаблона: выдуманный текст легко отправить в Jira, не заметив.
@@ -173,13 +182,13 @@ export default function IssueFormModal({ open, project, participants, listName, 
         assignee: "", ke: "", environment: "", stand_type: isDefect ? standType : "", issuetype: type,
       });
       const warnings = [...res.warnings];
-      const shots = files.filter(f => IMAGE_RE.test(f.name));
-      if (isDefect && shots.length && screenshotNames.length) {
+      // Все вложения — и у дефекта, и у задачи, с генерацией и без; скриншоты — под именем из описания.
+      if (files.length) {
         try {
-          const att = await attachJiraFiles(res.key, shots, screenshotNames);
+          const att = await attachJiraFiles(res.key, files, files.map(f => shotNames.get(f) ?? f.name));
           warnings.push(...att.warnings);
         } catch (e) {
-          warnings.push(`Создано, но скриншоты не приложились: ${String(e)}. Приложите их в Jira вручную.`);
+          warnings.push(`${res.key} создана, но вложения не приложились: ${(e as Error).message}. Приложите их в Jira вручную.`);
         }
       }
       setCreated({ key: res.key, url: res.url, warnings });
@@ -218,7 +227,13 @@ export default function IssueFormModal({ open, project, participants, listName, 
   return (
     <Modal open={open} onClose={onClose} size="max-w-6xl"
       title={initial ? `Черновик ${initial.key}` : `Создать задачу · ${project}`}>
-      <div className="space-y-4">
+      {/* ⌘V / Ctrl+V со скриншотом или файлом — в любом месте формы; обычный текст вставляется как всегда. */}
+      <div className="space-y-4" onPaste={e => {
+        const pasted = Array.from(e.clipboardData.files);
+        if (!pasted.length) return;
+        e.preventDefault();
+        addFiles(pasted);
+      }}>
         {/* Тип */}
         <div className="flex items-center gap-2" role="radiogroup" aria-label="Тип задачи">
           {CREATE_TYPES.map(({ type: t, hint }) => {
@@ -256,24 +271,6 @@ export default function IssueFormModal({ open, project, participants, listName, 
               <label htmlFor="if-raw" className={LBL}>{isDefect ? "Что случилось — своими словами" : "Что нужно сделать — своими словами"}</label>
               <textarea id="if-raw" value={raw} onChange={e => setRaw(e.target.value)} rows={6} className={`${INPUT} resize-y`}
                 placeholder={isDefect ? "Что делали, что получили, что ожидали. Можно кусок лога или JSON." : "Цель, что сделать, к какому сроку."} />
-            </div>
-            <div>
-              <span className={LBL}>Вложения</span>
-              <input ref={fileInput} type="file" multiple accept={ATTACH_ACCEPT} className="hidden"
-                onChange={e => { setFiles(f => [...f, ...Array.from(e.target.files ?? [])]); e.target.value = ""; }} />
-              <div className="flex flex-wrap items-center gap-1.5">
-                <button type="button" onClick={() => fileInput.current?.click()}
-                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-card">
-                  <Paperclip className="w-3.5 h-3.5" /> Приложить файл
-                </button>
-                {files.map((f, i) => (
-                  <span key={`${f.name}-${i}`} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-bg-card border border-border-main text-xs text-text-main max-w-[180px]">
-                    <span className="truncate">{f.name}</span>
-                    <button type="button" onClick={() => setFiles(x => x.filter((_, j) => j !== i))} aria-label={`Убрать ${f.name}`}><X className="w-3 h-3 text-text-muted hover:text-red-500" /></button>
-                  </span>
-                ))}
-              </div>
-              {files.length > 0 && <p className="text-[11px] text-text-muted mt-1">Текст файлов уйдёт в контекст; скриншоты дефекта — ещё и вложениями в Jira.</p>}
             </div>
             <div>
               <span className={LBL}>Источник для ИИ — документы из «Данных»</span>
@@ -334,6 +331,17 @@ export default function IssueFormModal({ open, project, participants, listName, 
               <label htmlFor="if-desc" className={LBL}>Описание</label>
               <textarea id="if-desc" value={description} onChange={e => setDescription(e.target.value)} rows={9}
                 className={`${INPUT} resize-y font-mono text-[13px]`} placeholder="Заполните сами или нажмите «Сгенерировать» слева" />
+            </div>
+            <div>
+              <span className={LBL}>Вложения{files.length ? ` · ${files.length}` : ""}</span>
+              <AttachmentsField files={files} onAdd={addFiles}
+                onRemove={i => setFiles(x => x.filter((_, j) => j !== i))} />
+              {files.length > 0 && (
+                <p className="text-[11px] text-text-muted mt-1">
+                  Уйдут вложениями в Jira при создании. Документы и скриншоты ещё и читает генерация.
+                  {(initial || addToList) && " В черновике SimpleTest вложения не сохраняются."}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

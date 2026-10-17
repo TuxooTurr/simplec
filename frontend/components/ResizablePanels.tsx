@@ -10,6 +10,7 @@ const SECTION_LABELS: Record<string, string> = {
   generation: "Генерация",
   etalons: "Данные",
   bugs: "Jira tool",
+  zephyr: "Zephyr Tool",
   alerts: "Алерты",
   metrics: "Метрики",
   revisor: "Ревизор",

@@ -100,6 +100,7 @@ SimpleTest/
 │   │   ├── kernel.py        # Jupyter ядра для алертов
 │   │   ├── etalons.py       # Эталонные примеры (RAG)
 │   │   ├── revisor.py       # Ревизия тест-кейсов
+│   │   ├── zephyr.py        # Zephyr Tool: Zephyr Scale (кейсы, папки, прогоны); этап 1 — чтение + проверка API
 │   │   └── app_settings.py  # Настройки приложения
 │   └── schemas.py           # Pydantic схемы
 ├── frontend/
@@ -108,6 +109,7 @@ SimpleTest/
 │   │   ├── sections/        # Основные секции UI
 │   │   │   ├── GenerationSection.tsx   # «Тестовая модель»: генерация тест-кейсов
 │   │   │   ├── BugsSection.tsx         # Баг-трекер
+│   │   │   ├── ZephyrSection.tsx       # Zephyr Tool: дерево папок, кейсы, прогоны (components/zephyr/)
 │   │   │   ├── EventGeneratorsSection.tsx # Хаб: Метрики, ТКС, Jobs, папки алертов
 │   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)
 │   │   │   ├── AutoModelSection.tsx    # Автотесты (Java) — скрыт, код сохранён
@@ -165,6 +167,8 @@ SimpleTest/
 - `st_gen_history` — история генераций
 - `st_jira_epics` — **sessionStorage**: выгруженный список эпиков Jira по проекту до конца сессии вкладки
   (выгружается сам при первом открытии формы задачи, обновляется кнопкой в выборе эпика)
+- `st_zephyr_project` — проект Zephyr Tool (по умолчанию SBER911); `st_zephyr_crit` — условия отбора крит регресса;
+  `st_zephyr_staging:<проект>` — черновик новой модели (раскладка до «Применить»); sessionStorage `st_zephyr_import` — XML из генерации
 - `st_cell_icon_recent`, `st_cell_icon_color` — недавние ярлычки ячеек и выбранный цвет иконок (удобство одного браузера)
 - `st_jira_tool_cache` — **sessionStorage**: кэш задач Jira tool на сессию (задачи из Jira, связанные, ненайденные);
   основная копия — в памяти модуля `frontend/lib/jiraToolCache.ts`, фоновое обновление раз в 30 минут

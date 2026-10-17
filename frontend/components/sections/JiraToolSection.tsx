@@ -1266,11 +1266,11 @@ export default function JiraToolSection() {
                       )}
                     </div>
                   </div>
-                ) : listIssues.length === 0 && !q ? (
+                ) : searched.length === 0 && !q ? (
                   <p className="text-sm text-text-muted p-4">
                     {busy > 0 ? "Загружаю задачи из Jira…" : jira.state === "ok" ? "Задачи списка не загрузились — нажмите «Обновить из Jira»." : "Задачи списка хранятся в Jira — подключите её, чтобы их увидеть."}
                   </p>
-                ) : listIssues.length === 0 ? (
+                ) : searched.length === 0 ? (
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
                 ) : (
                   <ListTable key={list.id} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
@@ -1279,6 +1279,7 @@ export default function JiraToolSection() {
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
                     onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
                     colFilters={colFilters} filterOptions={filterOptions}
+                    onResetFilters={activeFilters.length ? () => setColFilters({}) : undefined}
                     onColFilter={(c, vals) => setColFilters(f => {
                       const next = { ...f };
                       if (vals) next[c] = vals; else delete next[c];

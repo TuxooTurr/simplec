@@ -51,7 +51,7 @@ from backend.api import (
     auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
-    testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, model_bench, requirements,
+    testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, model_bench, requirements,
     datagen, hub_tiles,
 )
 
@@ -194,6 +194,7 @@ app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(kafka_explorer.router)
 app.include_router(model_bench.router)
+app.include_router(zephyr.router)
 app.include_router(datagen.router)
 app.include_router(requirements.router)
 

@@ -50,8 +50,14 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
  * Дальше выбор: «Создать в SimpleTest» (черновик в списке) или сразу «Создать в Jira».
  * С initial — это уже черновик из списка: его можно поправить и сохранить или отправить в Jira.
  */
-export default function IssueFormModal({ open, project, participants, listName, initial, onSave, onClose }: {
+export default function IssueFormModal({ open, project, participants, listName, initial, prefill, jiraOnly, files: initialFiles, onSave, onClose }: {
   open: boolean;
+  /** Новая задача с заранее заполненными полями (например, дефект из упавшего шага в Zephyr Tool). */
+  prefill?: Partial<Pick<IssueDraft, "type" | "summary" | "description" | "priority" | "labels">>;
+  /** Только создание в Jira: без списка SimpleTest — ни галочки «Добавить в список», ни черновика. */
+  jiraOnly?: boolean;
+  /** Вложения с самого начала (например, скриншоты из плеера). */
+  files?: File[];
   /** Название текущего списка — для галочки «Добавить в список». */
   listName?: string;
   /** Черновик из списка (его ключ и поля) — форма открывается заполненной. */
@@ -62,7 +68,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
   onClose: () => void;
 }) {
   const { provider } = useWorkspace();
-  const [type, setType] = useState<string>(initial?.type === "Задача" ? "Задача" : "Дефект");
+  const [type, setType] = useState<string>((initial?.type ?? prefill?.type) === "Задача" ? "Задача" : "Дефект");
   const isDefect = type === "Дефект";
   /**
    * Добавить созданную задачу в текущий список (по умолчанию — да). Без галочки задача только уходит в Jira,
@@ -74,7 +80,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
   const [platform, setPlatform] = useState("Back");
   const [feature, setFeature] = useState("");
   const [raw, setRaw] = useState("");
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>(initialFiles ?? []);
   /**
    * Имена, под которыми генерация сослалась на скриншоты в описании (!имя!): файл → имя.
    * Привязка к самому файлу, а не к порядку — добавили или убрали файл после генерации, имена не съедут.
@@ -89,10 +95,10 @@ export default function IssueFormModal({ open, project, participants, listName, 
   const [genNote, setGenNote] = useState("");
 
   /* ── Поля задачи ── */
-  const [summary, setSummary] = useState(initial?.summary ?? "");
-  const [description, setDescription] = useState(initial?.description ?? "");
-  const [priority, setPriority] = useState(initial?.priority ?? "");
-  const [labels, setLabels] = useState<string[]>(initial?.labels ?? []);
+  const [summary, setSummary] = useState(initial?.summary ?? prefill?.summary ?? "");
+  const [description, setDescription] = useState(initial?.description ?? prefill?.description ?? "");
+  const [priority, setPriority] = useState(initial?.priority ?? prefill?.priority ?? "");
+  const [labels, setLabels] = useState<string[]>(initial?.labels ?? prefill?.labels ?? []);
   const [newLabel, setNewLabel] = useState("");
   const [components, setComponents] = useState<string[]>(initial?.components ?? []);
   const [standType, setStandType] = useState(initial?.standType ?? "");
@@ -192,7 +198,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
         }
       }
       setCreated({ key: res.key, url: res.url, warnings });
-      onSave({ ...draft(), jira: { key: res.key, url: res.url }, addToList: initial ? true : addToList });
+      onSave({ ...draft(), jira: { key: res.key, url: res.url }, addToList: jiraOnly ? false : initial ? true : addToList });
     } catch (e) { setSendErr((e as Error).message); }
     setSending(false);
   };
@@ -210,7 +216,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm text-text-main">
             <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {type} <b>{created.key}</b> создан
-            {initial ? <> — черновик {initial.key} заменён на него в списке.</> : addToList ? " и добавлен в список." : " (в список не добавлен)."}
+            {jiraOnly ? "." : initial ? <> — черновик {initial.key} заменён на него в списке.</> : addToList ? " и добавлен в список." : " (в список не добавлен)."}
           </p>
           <a href={created.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
             Открыть в Jira <ExternalLink className="w-3.5 h-3.5" />
@@ -414,7 +420,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
         {sendErr && <p className="text-sm text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-2.5">{sendErr}</p>}
 
         <div className="flex items-center gap-3 border-t border-border-main pt-3 flex-wrap">
-          {!initial && (
+          {!initial && !jiraOnly && (
             <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer select-none"
               title="Без галочки задача только создаётся в Jira, в список не попадает">
               <input type="checkbox" checked={addToList} onChange={e => setAddToList(e.target.checked)} />
@@ -430,10 +436,10 @@ export default function IssueFormModal({ open, project, participants, listName, 
           </p>
           <div className="ml-auto flex gap-2 flex-shrink-0">
             <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
-            <button type="button" disabled={!summary.trim() || sending || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
+            {!jiraOnly && <button type="button" disabled={!summary.trim() || sending || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
               title={!initial && !addToList ? "Черновик живёт только в списке — включите «Добавить в список»" : "Черновик в списке — в Jira не уходит"}
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-              {initial ? "Сохранить черновик" : "Создать в SimpleTest"}</button>
+              {initial ? "Сохранить черновик" : "Создать в SimpleTest"}</button>}
             <button type="button" disabled={!summary.trim() || !jiraReady || sending} onClick={sendToJira}
               title={jiraReady ? `Создать ${type.toLowerCase()} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">

@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
   LogOut, User, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
@@ -30,6 +30,7 @@ const NAV: {
   { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
   // Бывшие «Дефекты»: списки задач Jira для планирования и назначения + генератор дефектов.
   { id: "bugs",        href: "/bugs",        label: "Jira tool",               Icon: LayoutList,  ai: true },
+  { id: "zephyr",      href: "/zephyr",      label: "Zephyr Tool",             Icon: FlaskConical },
   // Логи — анализатор на сценарии веб-коннектора. Пока коннекторы отключены (lib/features.ts) — скрыт.
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },

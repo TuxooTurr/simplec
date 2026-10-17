@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles, Copy, CheckCheck, X, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles, Copy, CheckCheck, X, ChevronDown, Plus, Trash2, FlaskConical } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { handoffXml } from "@/lib/zephyrStaging";
 import type { Case, ExportResult } from "@/lib/useGeneration";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
@@ -188,6 +190,7 @@ const loadAuthor = (): AuthorInfo => {
 
 export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack }: ExportPanelProps) {
   const { provider } = useWorkspace();
+  const router = useRouter();
   const [platform, setPlatform]     = useState<string[]>(["Web"]);
   const [project, setProject]       = useState(DEFAULT_PROJECT_KEY);
   const [system, setSystem]         = useState(DEFAULT_SYSTEM);
@@ -452,6 +455,12 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
         <div className="bg-bg-card border border-border-main rounded-xl p-5 animate-slide-up">
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">XML для Zephyr</p>
+            <div className="flex items-center gap-2">
+            {/* Новая модель — в Zephyr Tool: там её раскладывают по дереву проекта и применяют в Jira */}
+            <button type="button" onClick={() => { handoffXml(result.xml, "Генерация SimpleTest"); router.push("/zephyr"); }}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-primary/40 rounded-lg text-primary hover:bg-primary/5">
+              <FlaskConical className="w-3.5 h-3.5" /> Открыть в Zephyr Tool
+            </button>
             <button
               onClick={async () => {
                 await navigator.clipboard.writeText(result.xml);
@@ -467,6 +476,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
                 ? <><CheckCheck className="w-3.5 h-3.5" /> Скопировано!</>
                 : <><Copy className="w-3.5 h-3.5" /> Копировать XML</>}
             </button>
+            </div>
           </div>
           <pre className="text-xs font-mono text-text-main bg-bg-subtle rounded-lg p-3 overflow-x-auto max-h-72 overflow-y-auto leading-relaxed whitespace-pre-wrap">
             {result.xml}

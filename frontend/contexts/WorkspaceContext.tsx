@@ -7,6 +7,7 @@ export type SectionId =
   | "auto_model"
   | "test_data"
   | "bugs"
+  | "zephyr"
   | "logs"
   | "alerts"
   | "kafka"

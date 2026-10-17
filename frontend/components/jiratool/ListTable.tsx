@@ -72,7 +72,7 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
@@ -94,6 +94,8 @@ export default function ListTable({
   filterOptions: (col: ColRef) => FilterOption[];
   /** null — снять фильтр колонки. */
   onColFilter: (col: ColRef, values: string[] | null) => void;
+  /** Есть фильтры по колонкам — сбросить все (показывается, когда они скрыли все задачи). */
+  onResetFilters?: () => void;
   /** Статусы (st), поставленные руками: ключ → этап. */
   stageManual: Record<string, Stage>;
   /** Поставить статус (st) руками; null — вернуть расчёт по Jira. */
@@ -725,7 +727,18 @@ export default function ListTable({
           </tr>
         </thead>
         <tbody>
-          {sections
+          {/* Фильтры в заголовках скрыли все задачи — таблица (и воронки в заголовках) остаётся, чтобы фильтр можно было снять */}
+          {issues.length === 0 && onResetFilters ? (
+            <tr className="border-t border-border-main">
+              <td colSpan={width} className="py-6 text-sm text-text-muted">
+                {/* Таблица бывает шире экрана: по центру всей ширины надпись уехала бы за край — прижата слева и не уезжает */}
+                <span className="inline-flex flex-col items-start gap-1" style={{ position: "sticky", left: SELECT_W + 12 }}>
+                  <span>Фильтр по колонкам скрыл все задачи.</span>
+                  <button type="button" onClick={onResetFilters} className="text-primary font-medium hover:underline">Сбросить фильтры</button>
+                </span>
+              </td>
+            </tr>
+          ) : sections
             // «Без папки» — только когда в нём есть задачи; пока тянут задачу, он виден пустым,
             // чтобы её можно было вынуть из папки перетаскиванием.
             ? sections.filter(sec => sec.name !== null || sec.issues.length > 0 || dragRow).map(sec => {

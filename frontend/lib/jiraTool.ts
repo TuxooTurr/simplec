@@ -904,10 +904,10 @@ export type ReportSection = { folder: string | null; issues: Issue[] };
 /**
  * «Скопировать в чат» (Сберчат: *жирный*). Сверху «Статус — <название списка>», дальше разделы по папкам через пустую строку:
  *   *Папка*
- *   *(SBER911-1) Тема* — 🟢 Готово к релизу
+ *   • [*SBER911-1*] Тема — 🟢 Готово к релизу
  *   Дефекты:
- *   (SBER911-2) Тема дефекта. Приоритет: Высокий
- * Под фичей — только её неустранённые дефекты.
+ *   SBER911-2 Тема дефекта. Приоритет: Высокий
+ * Жирным — только номер фичи; точка «•» — перечисление фич. Под фичей — только её неустранённые дефекты, без точек и скобок.
  */
 export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
   const name = ctx.list.name.trim();
@@ -918,12 +918,12 @@ export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
     if (sec.folder !== null) out.push(`*${sec.folder}*`);
     for (const i of sec.issues) {
       const info = ctx.stageOf(i);
-      out.push(`*(${i.key}) ${String(i.fields.summary ?? "").trim()}* — ${stageDot(info)} ${stageText(info)}`);
+      out.push(`• [*${i.key}*] ${String(i.fields.summary ?? "").trim()} — ${stageDot(info)} ${stageText(info)}`);
       const open = ctx.defectsOf(i)?.filter(isOpenDefect) ?? [];
       if (open.length) {
         out.push("Дефекты:");
         for (const d of open) {
-          out.push(`(${d.key}) ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
+          out.push(`${d.key} ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
         }
       }
     }

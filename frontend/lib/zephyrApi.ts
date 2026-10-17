@@ -80,12 +80,24 @@ export interface ProbeReport { project: string; base_url: string; checkedAt: str
 const q = (o: Record<string, string>) => new URLSearchParams(o).toString();
 
 export const getTree = (project: string) =>
-  fetchJson<{ source: "foldertree" | "cases"; folders: ZFolder[]; total?: number; truncated?: boolean }>(`/api/zephyr/tree?${q({ project })}`);
+  fetchJson<{ source: string; folders: ZFolder[]; total?: number; loadedAt?: number }>(`/api/zephyr/tree?${q({ project })}`);
+
+/** Модель проекта (все кейсы без шагов) — кэш на сервере. refresh — перечитать целиком из Jira. */
+export const getIndex = (project: string, refresh = false) =>
+  fetchJson<{ total: number; loadedAt: number }>(`/api/zephyr/index?${q({ project, refresh: String(refresh) })}`);
+
+/** Перечитать из Jira только одну папку — без полной перезагрузки модели. */
+export const refreshFolder = (project: string, folder: string) =>
+  fetchJson<{ folder: string; total: number }>("/api/zephyr/index/folder", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, folder }),
+  });
 
 export const getCases = (project: string, folder: string, text = "") =>
   fetchJson<{ cases: ZCase[] }>(`/api/zephyr/cases?${q({ project, folder, text })}`);
 
-export const getCase = (key: string) => fetchJson<ZCaseFull>(`/api/zephyr/case/${encodeURIComponent(key)}`);
+/** Кейс целиком; с project — заодно освежает его запись в модели на сервере. */
+export const getCase = (key: string, project = "") =>
+  fetchJson<ZCaseFull>(`/api/zephyr/case/${encodeURIComponent(key)}${project ? `?${q({ project })}` : ""}`);
 
 export const getRuns = (project: string) => fetchJson<{ runs: ZRun[] }>(`/api/zephyr/runs?${q({ project })}`);
 
@@ -133,17 +145,18 @@ export interface CritCriteria {
 }
 
 export const DEFAULT_CRITERIA: CritCriteria = {
-  status: "Утверждено", crit_field: "Крит регресс", crit_value: "Да", type_field: "Тип тестирования", type_value: "Регресс", ke_field: "КЭ",
+  // Статус «Утверждено» = Approved в API; имена полей — как в выгрузках Zephyr SBER911 (точки и пробелы не важны).
+  status: "Утверждено", crit_field: "Крит. регресс", crit_value: "Да", type_field: "Вид тестирования", type_value: "Регресс", ke_field: "КЭ",
 };
 
 export interface CritCase extends ZCase { ke: string[] }
 
-export interface CritStats { checked: number; no_crit: number; no_type: number; no_ke: number }
+export interface CritStats { checked: number; no_status: number; no_crit: number; no_type: number; no_ke: number; fields: string[] }
 
 export const getRelease = (key: string) => fetchJson<ZRelease>(`/api/zephyr/release/${encodeURIComponent(key.trim())}`);
 
 export const findCritCases = (project: string, ke: string[], criteria: CritCriteria) =>
-  fetchJson<{ cases: CritCase[]; stats: CritStats; truncated: boolean }>("/api/zephyr/crit-cases", {
+  fetchJson<{ cases: CritCase[]; stats: CritStats; loadedAt: number }>("/api/zephyr/crit-cases", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, ke, criteria }),
   });
 
@@ -168,3 +181,33 @@ export const saveResults = (runKey: string, results: CaseResultIn[]) =>
   fetchJson<{ saved: number; errors: { testCaseKey: string; error: string }[] }>(`/api/zephyr/run/${encodeURIComponent(runKey)}/results`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ results }),
   });
+
+/* ── Правка структуры: папки и кейсы (запись в Jira сразу) ────────────────── */
+
+const post = <T,>(url: string, body: unknown, method = "POST") =>
+  fetchJson<T>(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+export const createFolder = (project: string, path: string) => post<{ path: string }>("/api/zephyr/folder", { project, path });
+
+/** Переименовать/переместить папку — переносом всех её кейсов в новый путь (id папок публичный API не отдаёт). */
+export const moveFolder = (project: string, source: string, target: string) =>
+  post<{ moved: number; errors: { key: string; error: string }[]; target: string }>("/api/zephyr/folder/move", { project, source, target });
+
+export const moveCases = (project: string, keys: string[], folder: string) =>
+  post<{ moved: number; errors: { key: string; error: string }[] }>("/api/zephyr/cases/move", { project, keys, folder });
+
+export interface CaseEditIn {
+  name?: string; folder?: string; objective?: string; precondition?: string; priority?: string; status?: string;
+  labels?: string[]; issueLinks?: string[]; steps?: { description: string; testData: string; expectedResult: string }[];
+}
+
+export const updateCase = (key: string, project: string, edit: CaseEditIn) =>
+  post<ZCaseFull>(`/api/zephyr/case/${encodeURIComponent(key)}`, { project, ...edit }, "PUT");
+
+export const createCase = (project: string, edit: CaseEditIn & { name: string }) => post<ZCaseFull>("/api/zephyr/case", { project, ...edit });
+
+export const deleteCase = (key: string, project: string) =>
+  fetchJson<{ deleted: string }>(`/api/zephyr/case/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });
+
+/** Тип данных при перетаскивании кейсов из списка в дерево. */
+export const DRAG_CASES = "application/x-zephyr-cases";

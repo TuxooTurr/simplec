@@ -9,11 +9,12 @@ CFG = {"base_url": "https://jira.example", "token": "t", "token_path": "", "ssl_
 
 
 @pytest.fixture
-def jira(monkeypatch):
-    """Подставная Jira: routes[путь] = ответ или HTTPException; calls — что спрашивали."""
+def jira(monkeypatch, tmp_path):
+    """Подставная Jira: routes[путь] = ответ или HTTPException; calls — что спрашивали. Индекс — во временной папке."""
     state = {"routes": {}, "calls": []}
     monkeypatch.setattr(z, "_load_cfg", lambda db: CFG)
-    z._working.clear(); z._project_ids.clear()
+    monkeypatch.setattr(z, "_INDEX_DIR", tmp_path / "zephyr_index")
+    z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear()
 
     def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
         state["calls"].append((path, params))
@@ -65,34 +66,79 @@ def test_дерево_из_внутреннего_foldertree():
     assert t[0]["path"] == "/A" and t[0]["count"] == 5 and t[0]["children"][0]["path"] == "/A/B"
 
 
-def test_дерево_без_foldertree_строится_из_кейсов(jira):
-    jira["routes"]["/rest/api/2/project/SBER911"] = {"id": "11000"}
-    jira["routes"]["/rest/atm/1.0/testcase/search"] = [{"key": "SBER911-T1", "folder": "/A"}, {"key": "SBER911-T2", "folder": "/A/B"}]
+def test_дерево_из_индекса_модели(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [{"key": "ICON-T1", "folder": "/A"}, {"key": "ICON-T2", "folder": "/A/B"}] if p["startAt"] == 0 else []
     out = z.tree(project="sber911", db=None)
-    assert out["source"] == "cases" and out["folders"][0]["count"] == 2
+    assert out["source"] == "index" and out["folders"][0]["count"] == 2
+    assert jira["calls"][0][1]["fields"] == z.INDEX_FIELDS            # без шагов — только нужные поля
 
 
-# ── Перебор вариантов ────────────────────────────────────────────────────────
-
-def test_вариант_из_документации_если_v1_нет_и_он_запоминается(jira):
-    jira["routes"]["/rest/atm/1.0/testcase/search/"] = {"results": [{"key": "SBER911-T9", "name": "Кейс"}]}
-    assert z.cases(project="SBER911", folder="", text="", db=None)["cases"][0]["key"] == "SBER911-T9"
-    jira["calls"].clear()
-    z.cases(project="SBER911", folder="", text="", db=None)
-    assert jira["calls"][0][0] == "/rest/atm/1.0/testcase/search/"   # сразу сработавший вариант
+def _paged(total: int, cap: int):
+    """Поиск, который отдаёт не больше cap кейсов за страницу, всего total."""
+    def r(p):
+        start, size = p["startAt"], min(p["maxResults"], cap)
+        return [{"key": f"ICON-T{i}", "folder": "/F", "name": f"Кейс {i}"} for i in range(start, min(start + size, total))]
+    return r
 
 
-def test_фильтр_по_папке_и_тексту_в_запросе(jira):
-    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: []
-    z.cases(project="SBER911", folder="/Авторизация", text='вход "био"', db=None)
-    q = jira["calls"][0][1]["query"]
-    assert q == 'projectKey = "SBER911" AND folder = "/Авторизация" AND name ~ "вход био"'
+def test_загрузка_определяет_предел_страницы_и_не_теряет_кейсы(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(3990, 200)
+    rows = z.fetch_all(CFG, "SBER911")
+    assert len(rows) == 3990 and len({r["key"] for r in rows}) == 3990
+    starts = sorted(c[1]["startAt"] for c in jira["calls"])
+    assert starts[:3] == [0, 200, 400] and all(c[1]["maxResults"] in (1000, 200) for c in jira["calls"])
+
+
+def test_загрузка_крупными_страницами_если_сервер_разрешает(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(2500, 1000)
+    assert len(z.fetch_all(CFG, "SBER911")) == 2500
+    assert len(jira["calls"]) <= 1 + z.WAVE
+
+
+def test_fields_не_принят_гружу_без_него(jira):
+    def r(p):
+        if "fields" in p:
+            raise HTTPException(400, "Jira: fields")
+        return [{"key": "ICON-T1", "folder": "/A"}] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = r
+    jira["routes"]["/rest/atm/1.0/testcase/search/"] = HTTPException(400, "Jira: Must provide a query parameter")
+    assert [x["key"] for x in z.fetch_all(CFG, "SBER911")] == ["ICON-T1"]
+
+
+def test_индекс_с_диска_без_запроса_в_jira(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(3, 1000)
+    z.get_index(CFG, "SBER911")
+    z._index.clear(); jira["calls"].clear()
+    idx = z.get_index(CFG, "SBER911")
+    assert len(idx["cases"]) == 3 and jira["calls"] == []
+
+
+def test_кейсы_папки_и_поиск_по_индексу(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "ICON-T10", "folder": "/A", "name": "Вход по паролю"}, {"key": "ICON-T2", "folder": "/A", "name": "Выход"},
+        {"key": "ICON-T3", "folder": "/B", "name": "Вход по биометрии"}] if p["startAt"] == 0 else []
+    assert [c["key"] for c in z.cases(project="SBER911", folder="/A", text="", db=None)["cases"]] == ["ICON-T2", "ICON-T10"]
+    assert [c["key"] for c in z.cases(project="SBER911", folder="", text="вход", db=None)["cases"]] == ["ICON-T3", "ICON-T10"]
+
+
+def test_обновить_папку_меняет_только_её(jira):
+    state = {"v": 1}
+    def r(p):
+        if "folder" in p["query"]:
+            return [{"key": "ICON-T1", "folder": "/A", "name": f"Новое имя {state['v']}"}] if p["startAt"] == 0 else []
+        return [{"key": "ICON-T1", "folder": "/A", "name": "Старое"}, {"key": "ICON-T2", "folder": "/A", "name": "Удалённый"},
+                {"key": "ICON-T3", "folder": "/B", "name": "Другая папка"}] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = r
+    z.get_index(CFG, "SBER911")
+    z.refresh_folder(z.FolderRefresh(project="SBER911", folder="/A"), db=None)
+    names = {k: c["name"] for k, c in z._index[(CFG["base_url"], "SBER911")]["cases"].items()}
+    assert names == {"ICON-T1": "Новое имя 1", "ICON-T3": "Другая папка"}
 
 
 def test_401_не_маскируется_перебором(jira):
     jira["routes"]["/rest/atm/1.0/testcase/search"] = HTTPException(401, "токен")
     with pytest.raises(HTTPException) as e:
-        z.cases(project="SBER911", folder="", text="", db=None)
+        z.get_index(CFG, "SBER911")
     assert e.value.status_code == 401
 
 
@@ -126,16 +172,18 @@ def test_совпадение_кэ_по_id_иначе_по_названию():
     assert not z.ke_match(z._ke_items("Другое (1)"), rel)
 
 
-def _case(key, crit="Да", typ="Регресс", ke="Управление приоритетными событиями (3521751)"):
-    return {"key": key, "name": key, "status": "Утверждено",
-            "customFields": {"Крит регресс": crit, "Тип тестирования": typ, "КЭ": ke}}
+def _case(key, crit="Да", typ="Регресс", ke="Управление приоритетными событиями (3521751)", status="Approved"):
+    # «Крит регресс» без точки — проверка, что имя поля сравнивается без точек и пробелов
+    return {"key": key, "name": key, "status": status,
+            "customFields": {"Крит регресс": crit, "Вид тестирования": typ, "КЭ": ke}}
 
 
 def test_отбор_крит_регресса_и_счётчики_отсева():
-    cases = [_case("T1"), _case("T2", crit="Нет"), _case("T3", typ="Смоук"), _case("T4", ke="Чужая (9)"), _case("T5", crit=True)]
+    cases = [_case("T1"), _case("T2", crit="Нет"), _case("T3", typ="Смоук"), _case("T4", ke="Чужая (9)"), _case("T5", crit=True),
+             _case("T6", status="Draft"), _case("T7", status="Утверждено")]
     out, stats = z.crit_filter(cases, z._ke_items(["3521751"]), z.CritCriteria())
-    assert [c["key"] for c in out] == ["T1", "T5"]
-    assert stats == {"checked": 5, "no_crit": 1, "no_type": 1, "no_ke": 1}
+    assert [c["key"] for c in out] == ["T1", "T5", "T7"]            # «Утверждено» = Approved
+    assert stats == {"checked": 6, "no_status": 1, "no_crit": 1, "no_type": 1, "no_ke": 1}
     assert out[0]["ke"] == ["Управление приоритетными событиями (3521751)"]
 
 
@@ -271,3 +319,101 @@ def test_кейс_в_несозданной_папке_не_отправляет
     r = z.apply_model(z.ApplyBody(project="SBER911", cases=[z.StagedCase(id="x0", name="Кейс", folder="/Новая")]), db=None)
     assert r["failed"] == 1 and "не создалась" in r["results"][0]["error"]
     assert not any(p.endswith("/testcase") for p in calls)
+
+
+def test_крит_регресс_по_индексу_и_список_полей(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [_case("ICON-T1"), _case("ICON-T2", crit="Нет")] if p["startAt"] == 0 else []
+    r = z.crit_cases(z.CritBody(project="SBER911", ke=["3521751"]), db=None)
+    assert [c["key"] for c in r["cases"]] == ["ICON-T1"]
+    assert set(r["stats"]["fields"]) == {"Крит регресс", "Вид тестирования", "КЭ"}
+
+
+def test_применить_дописывает_созданное_в_индекс(jira, monkeypatch):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(1, 1000)
+    z.get_index(CFG, "SBER911")
+    real = z._jira_request
+
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        if method == "POST" and path.endswith("/testcase"):
+            return {"key": "ICON-T777"}
+        if method == "POST":
+            return {"id": 1}
+        return real(cfg, method, path, params=params, json_body=json_body, timeout=timeout)
+    monkeypatch.setattr(z, "_jira_request", req)
+    z.apply_model(z.ApplyBody(project="SBER911", cases=[z.StagedCase(id="x0", name="Новый", folder="/Новая")]), db=None)
+    assert z._index[(CFG["base_url"], "SBER911")]["cases"]["ICON-T777"]["folder"] == "/Новая"
+
+
+# ── Правка структуры ─────────────────────────────────────────────────────────
+
+@pytest.fixture
+def model(jira, monkeypatch):
+    """Индекс из трёх кейсов + запись всех запросов записи (POST/PUT/DELETE)."""
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "ICON-T1", "folder": "/Авторизация", "name": "Вход"},
+        {"key": "ICON-T2", "folder": "/Авторизация/Негатив", "name": "Неверный пароль"},
+        {"key": "ICON-T3", "folder": "/Платежи", "name": "СБП"}] if p["startAt"] == 0 else []
+    z.get_index(CFG, "SBER911")
+    writes = []
+    real = z._jira_request
+
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        if method != "GET":
+            writes.append((method, path, json_body))
+            return {"key": "ICON-T50"} if path.endswith("/testcase") else {}
+        if path.startswith("/rest/atm/1.0/testcase/ICON-"):
+            k = path.rsplit("/", 1)[1]
+            c = dict(z._index[(CFG["base_url"], "SBER911")]["cases"].get(k) or {"key": k, "name": "Новый", "folder": "/Платежи"})
+            for m, p_, b in writes:
+                if p_.endswith(k) and b:
+                    c.update(b)
+            return c
+        return real(cfg, method, path, params=params, json_body=json_body, timeout=timeout)
+    monkeypatch.setattr(z, "_jira_request", req)
+    return writes
+
+
+def _cases():
+    return {k: c["folder"] for k, c in z._index[(CFG["base_url"], "SBER911")]["cases"].items()}
+
+
+def test_пустая_папка_видна_в_дереве(model):
+    z.create_folder(z.FolderCreate(project="SBER911", path="/Платежи/ /Новая "), db=None)
+    assert model == [("POST", "/rest/atm/1.0/folder", {"projectKey": "SBER911", "name": "/Платежи", "type": "TEST_CASE"}),
+                     ("POST", "/rest/atm/1.0/folder", {"projectKey": "SBER911", "name": "/Платежи/Новая", "type": "TEST_CASE"})]
+    tree = z.tree(project="SBER911", db=None)["folders"]
+    pay = next(f for f in tree if f["name"] == "Платежи")
+    assert pay["count"] == 1 and pay["children"][0] == {"name": "Новая", "path": "/Платежи/Новая", "count": 0, "children": []}
+
+
+def test_переименование_папки_переносит_кейсы_с_вложенными(model):
+    r = z.move_folder(z.FolderMove(project="SBER911", source="/Авторизация", target="/Вход в систему"), db=None)
+    assert r["moved"] == 2 and r["errors"] == []
+    assert ("PUT", "/rest/atm/1.0/testcase/ICON-T2", {"folder": "/Вход в систему/Негатив"}) in model
+    assert _cases() == {"ICON-T1": "/Вход в систему", "ICON-T2": "/Вход в систему/Негатив", "ICON-T3": "/Платежи"}
+    assert [f["name"] for f in z.tree(project="SBER911", db=None)["folders"]] == ["Вход в систему", "Платежи"]
+
+
+def test_папку_нельзя_внутрь_самой_себя(model):
+    with pytest.raises(HTTPException) as e:
+        z.move_folder(z.FolderMove(project="SBER911", source="/Авторизация", target="/Авторизация/Негатив/Х"), db=None)
+    assert e.value.status_code == 422 and model == []
+
+
+def test_перенос_кейсов_в_папку(model):
+    r = z.move_cases(z.CasesMove(project="SBER911", keys=["ICON-T1", "ICON-T3", "ICON-T3"], folder="/Платежи"), db=None)
+    assert r["moved"] == 1 and _cases()["ICON-T1"] == "/Платежи"         # T3 уже там — не трогаем
+
+
+def test_правка_кейса_только_переданные_поля_шаги_целиком(model):
+    out = z.update_case("icon-t1", z.CaseEdit(project="SBER911", name=" Вход по паролю ",
+                                              steps=[z.StagedStep(description="Открыть", expectedResult="Открыто")]), db=None)
+    put = [w for w in model if w[0] == "PUT"][0]
+    assert put == ("PUT", "/rest/atm/1.0/testcase/ICON-T1", {"name": "Вход по паролю", "testScript": {
+        "type": "STEP_BY_STEP", "steps": [{"description": "Открыть", "testData": "", "expectedResult": "Открыто"}]}})
+    assert out["name"] == "Вход по паролю"
+
+
+def test_удаление_кейса_убирает_из_модели(model):
+    z.delete_case("ICON-T3", project="SBER911", db=None)
+    assert ("DELETE", "/rest/atm/1.0/testcase/ICON-T3", None) in model and "ICON-T3" not in _cases()

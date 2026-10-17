@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Link2, Loader2, X } from "lucide-react";
-import { getCase, resultTone, zText, type ZCaseFull } from "@/lib/zephyrApi";
+import { ExternalLink, Link2, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { createCase, deleteCase, getCase, resultTone, updateCase, zText, type CaseEditIn, type ZCaseFull } from "@/lib/zephyrApi";
+import CaseEditor from "./CaseEditor";
 
 const TONE_CLS = {
   pass: "bg-green-600 text-white",
@@ -62,16 +63,39 @@ function Block({ title, text }: { title: string; text: string }) {
   );
 }
 
-/** Карточка кейса: цель, предусловие, шаги, метки, связи с Jira. Этап 1 — только просмотр. */
-export function CaseCard({ caseKey, baseUrl, onClose }: { caseKey: string; baseUrl: string; onClose: () => void }) {
+/**
+ * Карточка кейса: цель, предусловие, шаги, метки, связи с Jira. С editable — «Изменить» (редактор, в Jira уходят
+ * только изменённые поля) и «Удалить» (с подтверждением). onChanged — раздел обновляет дерево и список по модели.
+ */
+export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, onClose }: {
+  caseKey: string;
+  baseUrl: string;
+  project?: string;
+  editable?: boolean;
+  onChanged?: () => void;
+  onClose: () => void;
+}) {
   const [c, setC] = useState<ZCaseFull | null>(null);
   const [err, setErr] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
+  const [askDel, setAskDel] = useState(false);
+  const save = async (e: CaseEditIn) => {
+    setBusy(true); setSaveErr("");
+    try { setC(await updateCase(caseKey, project, e)); setEditing(false); onChanged?.(); } catch (x) { setSaveErr((x as Error).message); }
+    setBusy(false);
+  };
+  const remove = async () => {
+    setBusy(true); setSaveErr("");
+    try { await deleteCase(caseKey, project); onChanged?.(); onClose(); } catch (x) { setSaveErr((x as Error).message); setBusy(false); }
+  };
   useEffect(() => {
     let live = true;
-    setC(null); setErr("");
-    getCase(caseKey).then(x => live && setC(x)).catch(e => live && setErr((e as Error).message));
+    setC(null); setErr(""); setEditing(false); setAskDel(false); setSaveErr("");
+    getCase(caseKey, project).then(x => live && setC(x)).catch(e => live && setErr((e as Error).message));
     return () => { live = false; };
-  }, [caseKey]);
+  }, [caseKey, project]);
 
   return (
     <aside className="flex flex-col min-h-0 h-full border-l border-border-main bg-bg-card" aria-label={`Кейс ${caseKey}`}>
@@ -80,6 +104,14 @@ export function CaseCard({ caseKey, baseUrl, onClose }: { caseKey: string; baseU
           <p className="font-mono text-xs text-primary">{caseKey}</p>
           <p className="text-sm font-semibold text-text-main break-words">{c?.name ?? " "}</p>
         </div>
+        {editable && c && !editing && (
+          <>
+            <button type="button" onClick={() => setEditing(true)} title="Изменить кейс" aria-label="Изменить кейс"
+              className="p-1 rounded text-text-muted hover:text-primary"><Pencil className="w-4 h-4" /></button>
+            <button type="button" onClick={() => setAskDel(true)} title="Удалить кейс" aria-label="Удалить кейс"
+              className="p-1 rounded text-text-muted hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+          </>
+        )}
         {baseUrl && (
           <a href={`${baseUrl}/secure/Tests.jspa#/testCase/${caseKey}`} target="_blank" rel="noopener noreferrer" title="Открыть в Zephyr"
             className="p-1 rounded text-text-muted hover:text-primary"><ExternalLink className="w-4 h-4" /></a>
@@ -87,9 +119,19 @@ export function CaseCard({ caseKey, baseUrl, onClose }: { caseKey: string; baseU
         <button type="button" onClick={onClose} aria-label="Закрыть карточку" className="p-1 rounded text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-3 space-y-4">
+        {askDel && (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/40 px-3 py-2 text-sm">
+            <span className="text-red-700 dark:text-red-300">Удалить {caseKey} из Zephyr? Отменить будет нельзя.</span>
+            <button type="button" onClick={remove} disabled={busy} className="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-600 text-white font-semibold">
+              {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Удалить</button>
+            <button type="button" onClick={() => setAskDel(false)} className="px-2.5 py-1 rounded-md border border-border-main text-text-muted">Нет</button>
+          </div>
+        )}
+        {saveErr && !editing && <p className="text-sm text-red-600 dark:text-red-400">{saveErr}</p>}
+        {editing && c && <CaseEditor initial={c} busy={busy} error={saveErr} onSave={save} onCancel={() => { setEditing(false); setSaveErr(""); }} />}
         {err && <p className="text-sm text-red-600 dark:text-red-400">Кейс не загрузился: {err}</p>}
         {!c && !err && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p>}
-        {c && (
+        {c && !editing && (
           <>
             <div className="flex flex-wrap gap-1.5 text-[11px]">
               {c.status && <span className="px-2 py-0.5 rounded-md bg-bg-subtle border border-border-main text-text-main">{c.status}</span>}
@@ -121,6 +163,34 @@ export function CaseCard({ caseKey, baseUrl, onClose }: { caseKey: string; baseU
             </section>
           </>
         )}
+      </div>
+    </aside>
+  );
+}
+
+
+/** Новый кейс в папке: форма → «Создать в Jira» → открывается его карточка. */
+export function NewCaseCard({ project, folder, onCreated, onClose }: {
+  project: string;
+  folder: string;
+  onCreated: (key: string) => void;
+  onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async (e: CaseEditIn) => {
+    setBusy(true); setErr("");
+    try { const c = await createCase(project, { ...e, name: e.name ?? "", folder }); onCreated(c.key); } catch (x) { setErr((x as Error).message); }
+    setBusy(false);
+  };
+  return (
+    <aside className="flex flex-col min-h-0 h-full border-l border-border-main bg-bg-card" aria-label="Новый кейс">
+      <div className="flex items-start gap-2 px-4 py-3 border-b border-border-main">
+        <p className="min-w-0 flex-1 text-sm font-semibold text-text-main">Новый кейс</p>
+        <button type="button" onClick={onClose} aria-label="Закрыть" className="p-1 rounded text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-3">
+        <CaseEditor folder={folder} busy={busy} error={err} onSave={save} onCancel={onClose} />
       </div>
     </aside>
   );

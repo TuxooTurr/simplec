@@ -195,8 +195,13 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
             {findErr && <p className="text-sm text-red-600 dark:text-red-400">Кейсы не нашлись: {findErr}</p>}
             {stats && (
               <p className="text-xs text-text-muted">
-                Проверено кейсов в статусе «{crit.status}»: {stats.checked}. Отсеяно: без признака крит — {stats.no_crit},
-                другой тип — {stats.no_type}, КЭ не из релиза — {stats.no_ke}. <b className="text-text-main">Подходит: {cases?.length ?? 0}</b>.
+                Кейсов в статусе «{crit.status}»: {stats.checked} (другой статус — {stats.no_status}). Отсеяно: без признака крит — {stats.no_crit},
+                другой вид тестирования — {stats.no_type}, КЭ не из релиза — {stats.no_ke}. <b className="text-text-main">Подходит: {cases?.length ?? 0}</b>.
+              </p>
+            )}
+            {stats && !cases?.length && stats.fields.length > 0 && (
+              <p className="text-xs text-text-muted">
+                Пользовательские поля у кейсов: {stats.fields.join(", ")}. Если признак, вид тестирования или КЭ называются иначе — поправьте в «Условиях».
               </p>
             )}
             {cases && cases.length > 0 && (

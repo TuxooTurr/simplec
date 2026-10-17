@@ -17,10 +17,14 @@ Zephyr Tool — тест-кейсы, папки и прогоны Zephyr Scale (
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -192,9 +196,15 @@ def norm_result(x: dict) -> dict:
 
 # ── Дерево папок ─────────────────────────────────────────────────────────────
 
-def tree_from_paths(paths: list[str]) -> list[dict]:
-    """Пути кейсов «/A/B» → дерево [{name, path, count, children}] (count — кейсы в папке и вложенных)."""
+def tree_from_paths(paths: list[str], extra: Optional[list[str]] = None) -> list[dict]:
+    """Пути кейсов «/A/B» → дерево [{name, path, count, children}] (count — кейсы в папке и вложенных).
+    extra — пустые папки (созданы в SimpleTest, кейсов ещё нет): узлы есть, счётчик не растёт."""
     root: dict[str, Any] = {"children": {}}
+    for p in extra or []:
+        node, acc = root, ""
+        for part in [x for x in (p or "").split("/") if x]:
+            acc += "/" + part
+            node = node["children"].setdefault(part, {"name": part, "path": acc, "count": 0, "children": {}})
     for p in paths:
         node = root
         acc = ""
@@ -231,60 +241,204 @@ def tree_from_foldertree(data: Any, parent: str = "") -> list[dict]:
     return out
 
 
+# ── Индекс модели: все кейсы проекта без шагов — в памяти и на диске ─────────
+#
+# Внутренний foldertree на стенде закрыт (403), поэтому дерево строится из путей кейсов — а их ~4000.
+# Полная выгрузка дорогая, поэтому модель держится индексом: в памяти процесса и копией на диске
+# (data/zephyr_index — общий для всех пользователей сервера, переживает перезапуск). Дерево, кейсы папки и
+# отбор крит регресса считаются по индексу без похода в Jira. Обновление — целиком по кнопке, по папке
+# («Обновить папку») или по одному кейсу (открыли карточку); созданное через «Применить» дописывается сразу.
+
+_ROOT = Path(__file__).resolve().parents[2]
+_INDEX_DIR = _ROOT / "data" / "zephyr_index"
+INDEX_FIELDS = "key,name,folder,status,priority,owner,updatedOn,issueLinks,labels,customFields"
+FIRST_PAGE = 1000          # просим крупно; реальный предел страницы сервера определяется по ответу
+WAVE = 6                   # страниц параллельно — не больше, чтобы не нагружать Jira
+_index: dict[tuple[str, str], dict] = {}
+_locks: dict[tuple[str, str], threading.Lock] = {}
+_no_fields: set[str] = set()   # стенды, где параметр fields не принимается — грузим без него
+
+
+def _slim(c: dict) -> dict:
+    return {**norm_case(c), "customFields": c.get("customFields") if isinstance(c.get("customFields"), (dict, list)) else {}}
+
+
+def _index_file(base: str, project: str) -> Path:
+    tag = hashlib.sha1(base.encode()).hexdigest()[:8]
+    return _INDEX_DIR / f"{project}_{tag}.json"
+
+
+def _save_index(base: str, project: str, idx: dict) -> None:
+    try:
+        _INDEX_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = _index_file(base, project).with_suffix(".tmp")
+        tmp.write_text(json.dumps({"loadedAt": idx["loadedAt"], "cases": list(idx["cases"].values()),
+                                   "folders": sorted(idx.get("folders", set()))}, ensure_ascii=False), "utf-8")
+        tmp.replace(_index_file(base, project))
+    except OSError as e:
+        logger.warning("Zephyr: индекс не сохранился на диск: %s", e)
+
+
+def _page(cfg: dict, project: str, extra: str, start: int, size: int) -> list[dict]:
+    """Страница поиска кейсов с узким набором полей; стенд не принял fields — без него (и запоминаем)."""
+    base = cfg["base_url"]
+    fields = "" if base in _no_fields else INDEX_FIELDS
+    try:
+        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size, fields)))
+    except HTTPException as e:
+        if e.status_code != 400 or not fields:
+            raise
+        _no_fields.add(base)
+        logger.info("Zephyr: параметр fields не принят — гружу кейсы целиком")
+        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size)))
+
+
+def fetch_all(cfg: dict, project: str, extra: str = "") -> list[dict]:
+    """Все кейсы по запросу: первая страница крупно → реальный размер страницы → остальные волнами параллельно."""
+    first = _page(cfg, project, extra, 0, FIRST_PAGE)
+    if len(first) < FIRST_PAGE:
+        if not first:
+            return []
+        # Меньше, чем просили: либо кейсы кончились, либо у сервера свой предел страницы — проверяем.
+        nxt = _page(cfg, project, extra, len(first), FIRST_PAGE)
+        if not nxt:
+            return first
+        size, out, start = len(first), first + nxt, len(first) * 2
+        if len(nxt) < size:
+            return out
+    else:
+        size, out, start = FIRST_PAGE, first, FIRST_PAGE
+    with ThreadPoolExecutor(max_workers=WAVE) as pool:
+        while start < MAX_ALL:
+            offsets = [start + i * size for i in range(WAVE)]
+            pages = list(pool.map(lambda o: _page(cfg, project, extra, o, size), offsets))
+            for pg in pages:
+                out += pg
+                if len(pg) < size:
+                    return out
+            start += WAVE * size
+    return out
+
+
+MAX_ALL = 30000
+
+
+def get_index(cfg: dict, project: str, refresh: bool = False) -> dict:
+    """Индекс проекта: память → диск → Jira. Одновременные запросы ждут одну загрузку, а не грузят каждый свою."""
+    key = (cfg["base_url"], project)
+    lock = _locks.setdefault(key, threading.Lock())
+    with lock:
+        if not refresh:
+            if key in _index:
+                return _index[key]
+            f = _index_file(*key)
+            if f.exists():
+                try:
+                    raw = json.loads(f.read_text("utf-8"))
+                    _index[key] = {"loadedAt": raw.get("loadedAt", 0), "cases": {c["key"]: c for c in raw.get("cases", []) if c.get("key")},
+                                   "folders": set(raw.get("folders", []))}
+                    return _index[key]
+                except (OSError, ValueError) as e:
+                    logger.warning("Zephyr: индекс на диске повреждён (%s) — гружу из Jira", e)
+        t0 = time.time()
+        rows = fetch_all(cfg, project)
+        # Пустые папки, созданные в SimpleTest, в кейсах не видны — переносим их из прежнего индекса.
+        keep = (_index.get(key) or {}).get("folders", set())
+        idx = {"loadedAt": time.time(), "cases": {c["key"]: _slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
+        logger.info("Zephyr: модель %s загружена — %s кейсов за %.1f с", project, len(idx["cases"]), time.time() - t0)
+        _index[key] = idx
+        _save_index(*key, idx)
+        return idx
+
+
+def _index_put(cfg: dict, project: str, cases_: list[dict], drop_folder: Optional[str] = None,
+               remove: Optional[list[str]] = None, folders: Optional[list[str]] = None) -> None:
+    """Точечная правка индекса: заменить кейсы папки (drop_folder), добавить/обновить кейсы, убрать кейсы (remove),
+    запомнить пустые папки (folders)."""
+    key = (cfg["base_url"], project)
+    idx = _index.get(key)
+    if idx is None:
+        return
+    with _locks.setdefault(key, threading.Lock()):
+        if drop_folder is not None:
+            for k in [k for k, c in idx["cases"].items() if c.get("folder") == drop_folder]:
+                del idx["cases"][k]
+        for k in remove or []:
+            idx["cases"].pop(k, None)
+        for c in cases_:
+            if c.get("key"):
+                idx["cases"][c["key"]] = c
+        if folders:
+            idx.setdefault("folders", set()).update(folders)
+        _save_index(*key, idx)
+
+
 # ── Эндпоинты чтения ─────────────────────────────────────────────────────────
+
+@router.get("/api/zephyr/index")
+def index_info(project: str = Query(..., min_length=1), refresh: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Состояние модели: сколько кейсов и когда загружена. refresh=true — перечитать всё из Jira."""
+    cfg = _load_cfg(db)
+    idx = get_index(cfg, project.strip().upper(), refresh)
+    return {"total": len(idx["cases"]), "loadedAt": idx["loadedAt"]}
+
+
+class FolderRefresh(BaseModel):
+    project: str = Field(..., min_length=1)
+    folder: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/index/folder")
+def refresh_folder(body: FolderRefresh, db: Session = Depends(get_db)) -> dict:
+    """Перечитать из Jira кейсы одной папки (без вложенных) — без полной перезагрузки модели."""
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    get_index(cfg, project)
+    folder = body.folder.strip()
+    rows = fetch_all(cfg, project, f'folder = "{folder.replace(chr(34), "")}"')
+    _index_put(cfg, project, [_slim(c) for c in rows], drop_folder=folder)
+    return {"folder": folder, "total": len(rows)}
+
 
 @router.get("/api/zephyr/tree")
 def tree(project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
-    """Дерево папок кейсов: внутренний foldertree (с пустыми папками), иначе — из путей кейсов."""
+    """Дерево папок — из путей кейсов индекса (внутренний foldertree на стенде закрыт)."""
     cfg = _load_cfg(db)
-    project = project.strip().upper()
-    try:
-        pid = _project_id(cfg, project)
-        data = _jira_request(cfg, "GET", f"{TESTS}/project/{pid}/foldertree/testcase", params={"showEmptyFolders": "true"})
-        folders = tree_from_foldertree(data)
-        if folders:
-            return {"source": "foldertree", "folders": folders}
-    except HTTPException as e:
-        if e.status_code == 401:
-            raise
-        logger.info("Zephyr: foldertree недоступен (%s) — строю дерево из путей кейсов", e.detail)
-    paths: list[str] = []
-    for start in range(0, MAX_CASES, PAGE):
-        page = _items(_first_working(cfg, "testcase", _search_variants("testcase", project, "", start, PAGE, "key,folder")))
-        paths += [c.get("folder") or "" for c in page]
-        if len(page) < PAGE:
-            break
-    return {"source": "cases", "folders": tree_from_paths(paths), "total": len(paths),
-            "truncated": len(paths) >= MAX_CASES}
+    idx = get_index(cfg, project.strip().upper())
+    paths = [c.get("folder") or "" for c in idx["cases"].values()]
+    return {"source": "index", "folders": tree_from_paths(paths, sorted(idx.get("folders", set()))), "total": len(paths), "loadedAt": idx["loadedAt"]}
+
+
+def _key_num(k: str) -> tuple[str, int]:
+    m = re.match(r"^(.*?)(\d+)$", k)
+    return (m.group(1), int(m.group(2))) if m else (k, 0)
 
 
 @router.get("/api/zephyr/cases")
 def cases(project: str = Query(..., min_length=1), folder: str = "", text: str = "",
           db: Session = Depends(get_db)) -> dict:
-    """Кейсы папки (без вложенных) или поиск по названию."""
+    """Кейсы папки (без вложенных) или поиск по названию/ключу — по индексу, без запроса в Jira."""
     cfg = _load_cfg(db)
-    project = project.strip().upper()
-    extra = []
-    if folder:
-        extra.append(f'folder = "{folder.replace(chr(34), "")}"')
-    if text.strip():
-        extra.append(f'name ~ "{text.strip().replace(chr(34), "")}"')
-    out: list[dict] = []
-    for start in range(0, 2000, PAGE):
-        page = _items(_first_working(cfg, "testcase", _search_variants("testcase", project, " AND ".join(extra), start, PAGE)))
-        out += [norm_case(c) for c in page]
-        if len(page) < PAGE:
-            break
-    return {"cases": out}
+    idx = get_index(cfg, project.strip().upper())
+    t = text.strip().lower()
+    out = [c for c in idx["cases"].values()
+           if (not folder or c.get("folder") == folder) and (not t or t in c["name"].lower() or t in c["key"].lower())]
+    out.sort(key=lambda c: _key_num(c["key"]))
+    return {"cases": [{k: v for k, v in c.items() if k != "customFields"} for c in out[:2000]], "total": len(out)}
 
 
 @router.get("/api/zephyr/case/{key}")
-def case(key: str, db: Session = Depends(get_db)) -> dict:
+def case(key: str, project: str = "", db: Session = Depends(get_db)) -> dict:
+    """Кейс целиком (шаги) — и заодно освежает его запись в индексе."""
     cfg = _load_cfg(db)
     c = _jira_request(cfg, "GET", f"{ATM}/testcase/{key.strip().upper()}")
+    proj = (project or c.get("projectKey") or "").strip().upper()
+    if proj:
+        _index_put(cfg, proj, [_slim(c)])
     return {**norm_case(c), "objective": c.get("objective") or c.get("description") or "",
             "precondition": c.get("precondition") or "", "steps": norm_steps(c),
-            "estimatedTime": c.get("estimatedTime"), "component": _name(c.get("component"))}
+            "estimatedTime": c.get("estimatedTime"), "component": _name(c.get("component")),
+            "customFields": c.get("customFields") or {}}
 
 
 @router.get("/api/zephyr/runs")
@@ -446,21 +600,33 @@ def ke_match(case_ke: list[dict], wanted: list[dict]) -> bool:
 _YES = {"да", "yes", "true", "1", "истина"}
 
 
+def _fname(n: str) -> str:
+    """Имя поля для сравнения: без регистра, точек и пробелов — «Крит. регресс» = «Крит регресс»."""
+    return re.sub(r"[^0-9a-zа-яё]", "", str(n).lower())
+
+
 def _cf(case: dict, name: str) -> Any:
     """Пользовательское поле кейса по имени (Zephyr отдаёт customFields словарём «имя → значение»)."""
     cf = case.get("customFields") or {}
+    want = _fname(name)
     if isinstance(cf, dict):
-        if name in cf:
-            return cf[name]
-        low = name.lower()
         for k, v in cf.items():
-            if str(k).lower() == low:
+            if _fname(k) == want:
                 return v
     if isinstance(cf, list):   # другие версии: [{name, value}]
         for f in cf:
-            if isinstance(f, dict) and str(f.get("name", "")).lower() == name.lower():
+            if isinstance(f, dict) and _fname(f.get("name", "")) == want:
                 return f.get("value")
     return None
+
+
+# Статусы кейса: API отдаёт английские названия, в интерфейсе Zephyr — русские.
+_STATUS_SYN = [{"утверждено", "утвержден", "approved"}, {"черновик", "draft"}, {"устарел", "устарело", "deprecated"}]
+
+
+def status_match(actual: str, wanted: str) -> bool:
+    a, w = actual.strip().lower(), wanted.strip().lower()
+    return a == w or any(a in g and w in g for g in _STATUS_SYN)
 
 
 def _cf_texts(v: Any) -> list[str]:
@@ -475,10 +641,10 @@ def _cf_texts(v: Any) -> list[str]:
 
 class CritCriteria(BaseModel):
     """Условия отбора — по умолчанию как в процессе SBER911; названия полей Zephyr можно поправить в интерфейсе."""
-    status: str = "Утверждено"
-    crit_field: str = "Крит регресс"
+    status: str = "Утверждено"                # = Approved в API
+    crit_field: str = "Крит. регресс"         # так поле называется в выгрузках Zephyr SBER911
     crit_value: str = "Да"
-    type_field: str = "Тип тестирования"
+    type_field: str = "Вид тестирования"
     type_value: str = "Регресс"
     ke_field: str = "КЭ"
 
@@ -491,10 +657,14 @@ class CritBody(BaseModel):
 
 def crit_filter(cases: list[dict], wanted: list[dict], c: CritCriteria) -> tuple[list[dict], dict]:
     """Отбор крит регресса + счётчики отсева (чтобы было видно, на каком условии кейсы отвалились)."""
-    stats = {"checked": len(cases), "no_crit": 0, "no_type": 0, "no_ke": 0}
+    stats: dict[str, Any] = {"checked": 0, "no_status": 0, "no_crit": 0, "no_type": 0, "no_ke": 0}
     yes = c.crit_value.strip().lower()
     out = []
     for case in cases:
+        if c.status.strip() and not status_match(_name(case.get("status")), c.status):
+            stats["no_status"] += 1
+            continue
+        stats["checked"] += 1
         crit = _cf_texts(_cf(case, c.crit_field))
         if not any(x == yes or (yes in _YES and x in _YES) for x in crit):
             stats["no_crit"] += 1
@@ -535,21 +705,20 @@ def release(key: str, db: Session = Depends(get_db)) -> dict:
 
 @router.post("/api/zephyr/crit-cases")
 def crit_cases(body: CritBody, db: Session = Depends(get_db)) -> dict:
-    """Кейсы крит регресса по КЭ релиза. В поиск уходит только статус (его понимает любой вариант запроса),
-    пользовательские поля проверяются здесь — их синтаксис в запросе на разных версиях Zephyr разный."""
+    """Кейсы крит регресса по КЭ релиза — по индексу модели (без выгрузки кейсов из Jira).
+    В ответе — какие пользовательские поля есть у кейсов: по ним правят названия в «Условиях»."""
     cfg = _load_cfg(db)
-    project = body.project.strip().upper()
-    status = body.criteria.status.replace('"', "").strip()
-    extra = f'status = "{status}"' if status else ""
-    found: list[dict] = []
-    for start in range(0, MAX_CASES, PAGE):
-        page = _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, PAGE)))
-        found += page
-        if len(page) < PAGE:
-            break
-    wanted = [k for s in body.ke for k in _ke_items(s)]
-    cases_out, stats = crit_filter(found, wanted, body.criteria)
-    return {"cases": cases_out, "stats": stats, "truncated": len(found) >= MAX_CASES}
+    idx = get_index(cfg, body.project.strip().upper())
+    rows = list(idx["cases"].values())
+    wanted = [k for s_ in body.ke for k in _ke_items(s_)]
+    cases_out, stats = crit_filter(rows, wanted, body.criteria)
+    seen: dict[str, int] = {}
+    for c in rows:
+        cf = c.get("customFields") or {}
+        for k in (cf.keys() if isinstance(cf, dict) else [f.get("name", "") for f in cf if isinstance(f, dict)]):
+            seen[str(k)] = seen.get(str(k), 0) + 1
+    stats["fields"] = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:40]
+    return {"cases": cases_out, "stats": stats, "loadedAt": idx["loadedAt"]}
 
 
 def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str, Any]]) -> Any:
@@ -819,5 +988,205 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
             else:
                 row["error"] = str(e.detail)[:300]
         results.append(row)
+    # Созданное — сразу в индекс модели: дерево обновится без полной перезагрузки из Jira.
+    made = {r["id"]: r["key"] for r in results if r.get("key")}
+    if made:
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _index_put(cfg, project, [{
+            "key": made[c.id], "name": c.name, "status": c.status, "priority": c.priority, "folder": c.folder,
+            "labels": c.labels, "owner": "", "updated": now, "issueLinks": [], "customFields": c.customFields,
+        } for c in body.cases if c.id in made])
     return {"createdFolders": created_folders, "folderErrors": folder_errors, "results": results,
             "created": sum(1 for r in results if r.get("key")), "failed": sum(1 for r in results if r.get("error"))}
+
+
+# ── Правка структуры: папки и кейсы ──────────────────────────────────────────
+#
+# Публичный API v1: папку можно создать (POST /folder), кейс — создать, изменить (PUT /testcase/{key}), удалить.
+# id существующих папок v1 не отдаёт (внутренний foldertree на стенде закрыт, 403), поэтому «переименовать» и
+# «переместить» папку = перенести все её кейсы (с вложенными) в новый путь. Старая папка в Zephyr остаётся пустой —
+# удалить её можно только в интерфейсе Zephyr; в дереве SimpleTest (оно строится по кейсам) её не будет.
+
+def _create_folders(cfg: dict, project: str, paths: list[str]) -> dict[str, str]:
+    """Папки и их родители (родители раньше). «Уже есть» — не ошибка. Возвращает ошибки по путям."""
+    errors: dict[str, str] = {}
+    for path in sorted({a for p in paths if p for a in _ancestors(p)}, key=lambda p: (p.count("/"), p)):
+        try:
+            _jira_request(cfg, "POST", f"{ATM}/folder", json_body={"projectKey": project, "name": path, "type": "TEST_CASE"})
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            if not re.search(r"exist|существ|already|duplicate|дубл", str(e.detail), re.I):
+                errors[path] = str(e.detail)[:300]
+    return errors
+
+
+def _clean_path(p: str) -> str:
+    parts = [x.strip() for x in p.replace("\\", "/").split("/") if x.strip()]
+    return "/" + "/".join(parts) if parts else ""
+
+
+class FolderCreate(BaseModel):
+    project: str = Field(..., min_length=1)
+    path: str = Field(..., min_length=2)
+
+
+@router.post("/api/zephyr/folder")
+def create_folder(body: FolderCreate, db: Session = Depends(get_db)) -> dict:
+    cfg = _load_cfg(db)
+    project, path = body.project.strip().upper(), _clean_path(body.path)
+    if not path:
+        raise HTTPException(422, "Пустое имя папки")
+    errors = _create_folders(cfg, project, [path])
+    if errors:
+        raise HTTPException(502, "; ".join(f"{p}: {e}" for p, e in errors.items()))
+    _index_put(cfg, project, [], folders=[path])
+    return {"path": path}
+
+
+def _move_cases(cfg: dict, project: str, moves: list[tuple[dict, str]]) -> dict:
+    """Перенос кейсов: (запись индекса, новый путь). Сначала папки, потом PUT folder по каждому кейсу."""
+    folder_errors = _create_folders(cfg, project, [to for _, to in moves])
+    moved, errors = [], []
+    for c, to in moves:
+        bad = next((folder_errors[a] for a in _ancestors(to) if a in folder_errors), None)
+        if bad:
+            errors.append({"key": c["key"], "error": f"папка {to} не создалась: {bad}"})
+            continue
+        try:
+            _jira_request(cfg, "PUT", f"{ATM}/testcase/{c['key']}", json_body={"folder": to})
+            moved.append({**c, "folder": to})
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            errors.append({"key": c["key"], "error": str(e.detail)[:300]})
+    _index_put(cfg, project, moved)
+    return {"moved": len(moved), "errors": errors}
+
+
+class FolderMove(BaseModel):
+    project: str = Field(..., min_length=1)
+    source: str = Field(..., min_length=2)                 # папка, которую переносим/переименовываем
+    target: str = Field(..., min_length=2)                 # её новый полный путь
+
+
+@router.post("/api/zephyr/folder/move")
+def move_folder(body: FolderMove, db: Session = Depends(get_db)) -> dict:
+    """Переименовать или переместить папку — переносом всех её кейсов (и вложенных папок) в новый путь."""
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    src, dst = _clean_path(body.source), _clean_path(body.target)
+    if not dst or dst == src:
+        raise HTTPException(422, "Новый путь совпадает со старым")
+    if dst.startswith(src + "/"):
+        raise HTTPException(422, "Нельзя перенести папку внутрь самой себя")
+    idx = get_index(cfg, project)
+    moves = [(c, dst + c["folder"][len(src):]) for c in idx["cases"].values()
+             if c.get("folder") == src or (c.get("folder") or "").startswith(src + "/")]
+    empty = [dst + f[len(src):] for f in idx.get("folders", set()) if f == src or f.startswith(src + "/")]
+    out = _move_cases(cfg, project, moves) if moves else {"moved": 0, "errors": []}
+    if empty:
+        _create_folders(cfg, project, empty)
+    with _locks.setdefault((cfg["base_url"], project), threading.Lock()):
+        folders = idx.setdefault("folders", set())
+        if not out["errors"]:
+            for f in [f for f in folders if f == src or f.startswith(src + "/")]:
+                folders.discard(f)
+        folders.update(empty or [dst])
+        _save_index(cfg["base_url"], project, idx)
+    return {**out, "target": dst}
+
+
+class CasesMove(BaseModel):
+    project: str = Field(..., min_length=1)
+    keys: list[str] = Field(default_factory=list)
+    folder: str = Field(..., min_length=2)
+
+
+@router.post("/api/zephyr/cases/move")
+def move_cases(body: CasesMove, db: Session = Depends(get_db)) -> dict:
+    cfg = _load_cfg(db)
+    project, dst = body.project.strip().upper(), _clean_path(body.folder)
+    idx = get_index(cfg, project)
+    moves = [(idx["cases"][k], dst) for k in dict.fromkeys(body.keys) if k in idx["cases"] and idx["cases"][k].get("folder") != dst]
+    return _move_cases(cfg, project, moves)
+
+
+class CaseEdit(BaseModel):
+    project: str = Field(..., min_length=1)
+    name: Optional[str] = None
+    folder: Optional[str] = None
+    objective: Optional[str] = None
+    precondition: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+    labels: Optional[list[str]] = None
+    issueLinks: Optional[list[str]] = None
+    steps: Optional[list[StagedStep]] = None
+
+
+def _edit_payload(body: CaseEdit) -> dict:
+    p: dict[str, Any] = {}
+    for k in ("name", "objective", "precondition", "priority", "status", "labels", "issueLinks"):
+        v = getattr(body, k)
+        if v is not None:
+            p[k] = v.strip() if isinstance(v, str) else v
+    if body.folder is not None:
+        p["folder"] = _clean_path(body.folder)
+    if body.steps is not None:
+        p["testScript"] = {"type": "STEP_BY_STEP", "steps": [s.model_dump() for s in body.steps]}
+    return p
+
+
+@router.put("/api/zephyr/case/{key}")
+def update_case(key: str, body: CaseEdit, db: Session = Depends(get_db)) -> dict:
+    """Изменить кейс: уходят только переданные поля; шаги — целиком (testScript заменяется)."""
+    cfg = _load_cfg(db)
+    key, project = key.strip().upper(), body.project.strip().upper()
+    payload = _edit_payload(body)
+    if not payload:
+        raise HTTPException(422, "Нечего сохранять")
+    if payload.get("folder"):
+        errors = _create_folders(cfg, project, [payload["folder"]])
+        if errors:
+            raise HTTPException(502, "; ".join(f"{p}: {e}" for p, e in errors.items()))
+    _jira_request(cfg, "PUT", f"{ATM}/testcase/{key}", json_body=payload)
+    fresh = _jira_request(cfg, "GET", f"{ATM}/testcase/{key}")
+    _index_put(cfg, project, [_slim(fresh)])
+    return case(key, project, db)
+
+
+class CaseNew(CaseEdit):
+    name: str = Field(..., min_length=1)
+    folder: str = ""
+
+
+@router.post("/api/zephyr/case")
+def create_case(body: CaseNew, db: Session = Depends(get_db)) -> dict:
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    payload = {"projectKey": project, **_edit_payload(body)}
+    if payload.get("folder"):
+        errors = _create_folders(cfg, project, [payload["folder"]])
+        if errors:
+            raise HTTPException(502, "; ".join(f"{p}: {e}" for p, e in errors.items()))
+    data = _jira_request(cfg, "POST", f"{ATM}/testcase", json_body=payload)
+    key = (data or {}).get("key", "")
+    if not key:
+        raise HTTPException(502, f"Zephyr не вернул ключ кейса: {str(data)[:200]}")
+    return update_case_index_and_get(cfg, project, key, db)
+
+
+def update_case_index_and_get(cfg: dict, project: str, key: str, db: Session) -> dict:
+    fresh = _jira_request(cfg, "GET", f"{ATM}/testcase/{key}")
+    _index_put(cfg, project, [_slim(fresh)])
+    return case(key, project, db)
+
+
+@router.delete("/api/zephyr/case/{key}")
+def delete_case(key: str, project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
+    cfg = _load_cfg(db)
+    key, project = key.strip().upper(), project.strip().upper()
+    _jira_request(cfg, "DELETE", f"{ATM}/testcase/{key}")
+    _index_put(cfg, project, [], remove=[key])
+    return {"deleted": key}

@@ -73,6 +73,8 @@ export interface ProbeRow {
   shape?: unknown;
   sample?: string;
   ms?: number;
+  /** Пояснение к результату (страница модели: сколько кейсов отдал сервер, пришли ли шаги). */
+  note?: string;
 }
 
 export interface ProbeReport { project: string; base_url: string; checkedAt: string; ok: number; total: number; results: ProbeRow[] }

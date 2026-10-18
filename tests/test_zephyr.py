@@ -14,7 +14,7 @@ def jira(monkeypatch, tmp_path):
     state = {"routes": {}, "calls": []}
     monkeypatch.setattr(z, "_load_cfg", lambda db: CFG)
     monkeypatch.setattr(z, "_INDEX_DIR", tmp_path / "zephyr_index")
-    z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear()
+    z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear(); z._failed.clear()
 
     def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
         state["calls"].append((path, params))
@@ -81,18 +81,62 @@ def _paged(total: int, cap: int):
     return r
 
 
-def test_загрузка_определяет_предел_страницы_и_не_теряет_кейсы(jira):
-    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(3990, 200)
+def test_загрузка_страницами_по_200_и_не_теряет_кейсы(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(3990, 1000)
     rows = z.fetch_all(CFG, "SBER911")
     assert len(rows) == 3990 and len({r["key"] for r in rows}) == 3990
     starts = sorted(c[1]["startAt"] for c in jira["calls"])
-    assert starts[:3] == [0, 200, 400] and all(c[1]["maxResults"] in (1000, 200) for c in jira["calls"])
+    assert starts[:3] == [0, 200, 400] and all(c[1]["maxResults"] == 200 for c in jira["calls"])
 
 
-def test_загрузка_крупными_страницами_если_сервер_разрешает(jira):
-    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(2500, 1000)
-    assert len(z.fetch_all(CFG, "SBER911")) == 2500
-    assert len(jira["calls"]) <= 1 + z.WAVE
+def test_загрузка_определяет_предел_страницы_меньше_200(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = _paged(950, 100)
+    rows = z.fetch_all(CFG, "SBER911")
+    assert len(rows) == 950 and len({r["key"] for r in rows}) == 950
+
+
+def test_страница_модели_ждёт_дольше_обычного_запроса(jira):
+    seen = []
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        seen.append(timeout)
+        return []
+    z._jira_request = req   # monkeypatch фикстуры вернёт исходную функцию
+    z.fetch_all(CFG, "SBER911")
+    assert seen and all(t == z.PAGE_TIMEOUT for t in seen)
+
+
+def test_таймаут_основного_варианта_не_прячется_за_запасным(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = HTTPException(502, "Jira недоступна: Read timed out")
+    jira["routes"]["/rest/atm/1.0/testcase/search/"] = HTTPException(400, "Jira: Must provide a query parameter")
+    with pytest.raises(HTTPException) as e:
+        z.fetch_all(CFG, "SBER911")
+    assert e.value.status_code == 502 and "timed out" in e.value.detail
+    assert [c[0] for c in jira["calls"]] == ["/rest/atm/1.0/testcase/search"]   # запасной даже не спрашивали
+
+
+def test_оба_варианта_400_показываю_ошибку_основного(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = HTTPException(400, "Jira: maxResults слишком большой")
+    jira["routes"]["/rest/atm/1.0/testcase/search/"] = HTTPException(400, "Jira: Must provide a query parameter")
+    with pytest.raises(HTTPException) as e:
+        z.get_index(CFG, "SBER911")
+    assert "maxResults" in e.value.detail
+
+
+def test_ждущий_запрос_получает_ошибку_загрузки_а_не_грузит_заново(jira):
+    import threading
+    gate, started = threading.Event(), threading.Event()
+    def slow(p):
+        started.set(); gate.wait(5)
+        raise HTTPException(502, "Jira недоступна: Read timed out")
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = slow
+    errs: list = []
+    def call():
+        try: z.get_index(CFG, "SBER911")
+        except HTTPException as e: errs.append(e.status_code)
+    t1 = threading.Thread(target=call); t1.start(); started.wait(5)
+    t2 = threading.Thread(target=call); t2.start()
+    import time as _t; _t.sleep(0.05); gate.set(); t1.join(5); t2.join(5)
+    assert errs == [502, 502] and len(jira["calls"]) == 1
 
 
 def test_fields_не_принят_гружу_без_него(jira):

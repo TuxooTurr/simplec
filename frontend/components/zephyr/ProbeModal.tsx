@@ -69,6 +69,7 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
                         {r.skipped ? r.reason : `${r.method} ${r.path}`}
                       </span>
                       {r.error && <span className="block text-[11px] text-red-600 dark:text-red-400">{r.error}</span>}
+                      {r.note && <span className="block text-[11px] text-text-main">{r.note}</span>}
                     </span>
                     {!r.skipped && <span className="text-[11px] text-text-muted tabular-nums whitespace-nowrap">{r.status} · {r.ms} мс</span>}
                   </button>

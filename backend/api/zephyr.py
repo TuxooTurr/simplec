@@ -67,24 +67,32 @@ def _search_variants(kind: str, project: str, extra: str, start: int, limit: int
     return [(f"{ATM}/testrun/search", v1), (f"{ATM}/testcycle/search", doc)]
 
 
-def _first_working(cfg: dict, kind: str, variants: list[tuple[str, dict]]) -> Any:
-    """Пробует варианты, начиная с уже сработавшего. 401 — сразу наверх (токен), 404/400/405 — следующий."""
+_NEXT_VARIANT = (400, 404, 405)   # «такого запроса здесь нет / не в таком виде» — пробуем следующий вариант
+
+
+def _first_working(cfg: dict, kind: str, variants: list[tuple[str, dict]], timeout: int = 30) -> Any:
+    """
+    Пробует варианты, начиная с уже сработавшего. Следующий — только на 400/404/405; таймаут, 5xx, 401, 403 — сразу
+    наверх (другой вариант их не исправит). Не сработал ни один — показываем ошибку первого варианта, а не запасного:
+    у запасного она бесполезна («Must provide a query parameter» прятала настоящую причину).
+    """
     key = (cfg["base_url"], kind)
     order = list(range(len(variants)))
     if key in _working:
         order.remove(_working[key]); order.insert(0, _working[key])
-    last: Optional[HTTPException] = None
+    errors: list[HTTPException] = []
     for i in order:
         path, params = variants[i]
         try:
-            data = _jira_request(cfg, "GET", path, params=params)
+            data = _jira_request(cfg, "GET", path, params=params, timeout=timeout)
             _working[key] = i
             return data
         except HTTPException as e:
-            if e.status_code == 401:
+            if e.status_code not in _NEXT_VARIANT:
                 raise
-            last = e
-    raise last or HTTPException(502, "Zephyr: ни один вариант запроса не сработал")
+            errors.append(e)
+    real = next((e for e in errors if e.status_code not in (404, 405)), errors[-1] if errors else None)
+    raise real or HTTPException(502, "Zephyr: ни один вариант запроса не сработал")
 
 
 def _items(data: Any) -> list[dict]:
@@ -252,11 +260,13 @@ def tree_from_foldertree(data: Any, parent: str = "") -> list[dict]:
 _ROOT = Path(__file__).resolve().parents[2]
 _INDEX_DIR = _ROOT / "data" / "zephyr_index"
 INDEX_FIELDS = "key,name,folder,status,priority,owner,updatedOn,issueLinks,labels,customFields"
-FIRST_PAGE = 1000          # просим крупно; реальный предел страницы сервера определяется по ответу
+FIRST_PAGE = 200           # 1000 за раз стенд не успевал отдать за таймаут; реальный предел — по ответу
 WAVE = 6                   # страниц параллельно — не больше, чтобы не нагружать Jira
+PAGE_TIMEOUT = 90          # секунд на страницу модели: стенд медленный (3 прогона — 1,4 с)
 _index: dict[tuple[str, str], dict] = {}
 _locks: dict[tuple[str, str], threading.Lock] = {}
 _no_fields: set[str] = set()   # стенды, где параметр fields не принимается — грузим без него
+_failed: dict[tuple[str, str], tuple[float, HTTPException]] = {}   # последняя неудачная загрузка модели
 
 
 def _slim(c: dict) -> dict:
@@ -284,13 +294,13 @@ def _page(cfg: dict, project: str, extra: str, start: int, size: int) -> list[di
     base = cfg["base_url"]
     fields = "" if base in _no_fields else INDEX_FIELDS
     try:
-        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size, fields)))
+        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size, fields), PAGE_TIMEOUT))
     except HTTPException as e:
         if e.status_code != 400 or not fields:
             raise
         _no_fields.add(base)
         logger.info("Zephyr: параметр fields не принят — гружу кейсы целиком")
-        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size)))
+        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size), PAGE_TIMEOUT))
 
 
 def fetch_all(cfg: dict, project: str, extra: str = "") -> list[dict]:
@@ -324,10 +334,18 @@ MAX_ALL = 30000
 
 
 def get_index(cfg: dict, project: str, refresh: bool = False) -> dict:
-    """Индекс проекта: память → диск → Jira. Одновременные запросы ждут одну загрузку, а не грузят каждый свою."""
+    """
+    Индекс проекта: память → диск → Jira. Одновременные запросы ждут одну загрузку, а не грузят каждый свою.
+    Загрузка упала, пока запрос ждал, — он получает ту же ошибку, а не начинает загрузку заново (иначе дерево
+    и список кейсов грузили модель по очереди и не укладывались в таймаут прокси — «Internal Server Error»).
+    """
     key = (cfg["base_url"], project)
     lock = _locks.setdefault(key, threading.Lock())
+    arrived = time.time()
     with lock:
+        fail = _failed.get(key)
+        if fail and fail[0] >= arrived:
+            raise HTTPException(fail[1].status_code, fail[1].detail)
         if not refresh:
             if key in _index:
                 return _index[key]
@@ -341,7 +359,13 @@ def get_index(cfg: dict, project: str, refresh: bool = False) -> dict:
                 except (OSError, ValueError) as e:
                     logger.warning("Zephyr: индекс на диске повреждён (%s) — гружу из Jira", e)
         t0 = time.time()
-        rows = fetch_all(cfg, project)
+        try:
+            rows = fetch_all(cfg, project)
+        except HTTPException as e:
+            _failed[key] = (time.time(), e)
+            logger.error("Zephyr: модель %s не загрузилась за %.1f с: %s", project, time.time() - t0, e.detail)
+            raise
+        _failed.pop(key, None)
         # Пустые папки, созданные в SimpleTest, в кейсах не видны — переносим их из прежнего индекса.
         keep = (_index.get(key) or {}).get("folders", set())
         idx = {"loadedAt": time.time(), "cases": {c["key"]: _slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
@@ -498,7 +522,7 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
     results: list[dict] = []
 
     def check(cid: str, label: str, path: Callable[[], Optional[str]], params: Optional[dict] = None,
-              remember: Optional[Callable[[Any], None]] = None) -> None:
+              remember: Optional[Callable[[Any], None]] = None, timeout: int = 20) -> None:
         p = path()
         if p is None:
             results.append({"id": cid, "label": label, "skipped": True, "reason": "нет данных из предыдущих проверок"})
@@ -506,7 +530,7 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
         t0 = time.time()
         row: dict[str, Any] = {"id": cid, "label": label, "method": "GET", "path": p, "params": params or {}}
         try:
-            data = _jira_request(cfg, "GET", p, params=params, timeout=20)
+            data = _jira_request(cfg, "GET", p, params=params, timeout=timeout)
             row.update(ok=True, status=200, shape=_shape(data))
             if samples:
                 row["sample"] = json.dumps(data, ensure_ascii=False)[:SAMPLE_CHARS]
@@ -528,6 +552,13 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
           remember=lambda d: found.__setitem__("pid", str(d.get("id", ""))) if isinstance(d, dict) and d.get("id") else None)
     check("case-search-v1", "Поиск кейсов: query=projectKey (публичный v1)", lambda: f"{ATM}/testcase/search",
           {"query": _q_query(project), "maxResults": 3}, first_key("case"))
+    page: dict[str, Any] = {}
+    check("case-page", f"Страница модели: {FIRST_PAGE} кейсов, только нужные поля", lambda: f"{ATM}/testcase/search",
+          {"query": _q_query(project), "maxResults": FIRST_PAGE, "fields": INDEX_FIELDS},
+          lambda d: page.__setitem__("items", _items(d)), timeout=PAGE_TIMEOUT)
+    if "items" in page:   # сколько отдал сервер за раз и учёл ли fields (шаги в ответе = тяжёлая загрузка)
+        steps = any(isinstance(c.get("testScript"), dict) for c in page["items"])
+        results[-1]["note"] = f"кейсов: {len(page['items'])} · шаги в ответе: {'да — fields не учтён, ответ тяжелее' if steps else 'нет'}"
     check("case-search-doc", "Поиск кейсов: JQL=project (как в документации)", lambda: f"{ATM}/testcase/search/",
           {"JQL": f"project = {project}", "maxResult": 3}, first_key("case"))
     check("case-get", "Кейс целиком (шаги)", lambda: f"{ATM}/testcase/{found['case']}" if found.get("case") else None)

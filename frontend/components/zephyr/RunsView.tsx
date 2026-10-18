@@ -1,20 +1,39 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, PlayCircle, Search, X } from "lucide-react";
-import { getRun, getRuns, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
+import { Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
+import { getRun, getRuns, runKind, runKindLabel, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
 import { CaseCard, IssueLinks, ResultBar, ResultPill } from "./parts";
 import Player from "./Player";
+import CaseDialog from "./CaseDialog";
+import { Resizer, usePaneSize } from "./Resizer";
+
+/** Плашка вида прогона: НФ — фиолетовая, регресс — синяя, прочее — нейтральная. */
+export function RunTypeChip({ type }: { type: string }) {
+  if (!type) return null;
+  const k = runKind(type);
+  const cls = k === "nf" ? "bg-violet-500/10 text-violet-700 dark:text-violet-300" : k === "regress" ? "bg-sky-500/10 text-sky-700 dark:text-sky-300" : "bg-bg-subtle text-text-muted";
+  return <span title={type} className={`inline-block px-1.5 py-px rounded text-[10px] font-semibold whitespace-nowrap ${cls}`}>{runKindLabel(type)}</span>;
+}
 
 /**
  * Прогоны (тест-циклы): слева — список с прогрессом прохождения, справа — выбранный прогон:
  * задача Jira, к которой он привязан, и его кейсы со статусами. Клик по кейсу — карточка.
  */
-export default function RunsView({ project, baseUrl, reloadKey }: { project: string; baseUrl: string; reloadKey: number }) {
+export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
+  project: string; baseUrl: string; reloadKey: number;
+  /** Сразу открыть этот прогон (переход из строки релиза). */
+  openKey?: string | null;
+}) {
   const [runs, setRuns] = useState<ZRun[] | null>(null);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
-  const [sel, setSel] = useState<string | null>(null);
+  const [typeF, setTypeF] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [sel, setSel] = useState<string | null>(openKey ?? null);
+  const [minimized, setMinimized] = useState(false);
+  const listPane = usePaneSize("runs", 320, 240, 640);
+  useEffect(() => { if (openKey) setSel(openKey); }, [openKey]);
   const [run, setRun] = useState<ZRunFull | null>(null);
   const [runErr, setRunErr] = useState("");
   const [caseKey, setCaseKey] = useState<string | null>(null);
@@ -27,6 +46,11 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
     getRuns(project).then(r => live && setRuns(r.runs)).catch(e => live && setErr((e as Error).message));
     return () => { live = false; };
   }, [project, reloadKey]);
+  const refresh = async () => {
+    setRefreshing(true); setErr("");
+    try { setRuns((await getRuns(project, true)).runs); } catch (e) { setErr((e as Error).message); }
+    setRefreshing(false);
+  };
 
   useEffect(() => {
     if (!sel) return;
@@ -37,17 +61,30 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
   }, [sel, reloadKey, localReload]);
 
   const s = q.trim().toLowerCase();
-  const shown = useMemo(() => (runs ?? []).filter(r => !s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s)), [runs, s]);
+  const types = useMemo(() => [...new Set((runs ?? []).map(r => r.type).filter(Boolean))].sort(), [runs]);
+  const shown = useMemo(() => (runs ?? []).filter(r => (!typeF || r.type === typeF) && (!s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s))), [runs, s, typeF]);
 
   return (
     <div className="flex h-full min-h-0">
-      <div className="w-80 flex-shrink-0 flex flex-col min-h-0 border-r border-border-main p-3">
-        <label className="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
-          <Search className="w-3.5 h-3.5 text-text-muted" />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти прогон" aria-label="Найти прогон"
-            className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" />
-          {q && <button type="button" onClick={() => setQ("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
-        </label>
+      <div style={{ width: listPane.size }} className="flex-shrink-0 flex flex-col min-h-0 p-3">
+        <div className="flex items-center gap-1.5 mb-2">
+          <label className="min-w-0 flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
+            <Search className="w-3.5 h-3.5 text-text-muted" />
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти прогон" aria-label="Найти прогон"
+              className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" />
+            {q && <button type="button" onClick={() => setQ("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
+          </label>
+          <button type="button" onClick={refresh} disabled={refreshing} title="Перечитать прогоны из Jira" aria-label="Обновить прогоны"
+            className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /></button>
+        </div>
+        {types.length > 0 && (
+          <select value={typeF} onChange={e => setTypeF(e.target.value)} aria-label="Вид тестирования прогона"
+            className="mb-2 text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <option value="">Все виды тестирования</option>
+            {types.map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        )}
         {err && <p className="text-sm text-red-600 dark:text-red-400">Прогоны не загрузились: {err}</p>}
         {!runs && !err && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p>}
         {runs && shown.length === 0 && <p className="text-sm text-text-muted">{runs.length ? "Ничего не найдено." : "Прогонов в проекте нет."}</p>}
@@ -59,6 +96,7 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
                 <span className="flex items-center gap-1.5">
                   <PlayCircle className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
                   <span className="font-mono text-[11px] text-primary">{r.key}</span>
+                  <RunTypeChip type={r.type} />
                   {r.version && <span className="ml-auto text-[10px] text-text-muted truncate max-w-[110px]">{r.version}</span>}
                 </span>
                 <span className="block text-sm text-text-main truncate mt-0.5">{r.name}</span>
@@ -68,6 +106,7 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
           ))}
         </ul>
       </div>
+      <Resizer pane={listPane} label="Ширина списка прогонов" />
 
       <div className="flex-1 min-w-0 flex min-h-0">
         <div className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-4">
@@ -87,6 +126,7 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
                     <PlayCircle className="w-4 h-4" /> Пройти</button>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                  {run.type && <span>Вид тестирования: {run.type}</span>}
                   {run.status && <span>Статус: {run.status}</span>}
                   {run.version && <span>Версия: {run.version}</span>}
                   {run.owner && <span>Владелец: {run.owner}</span>}
@@ -107,7 +147,7 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
                   {run.items.length === 0 && <tr><td colSpan={5} className="px-3 py-4 text-center text-text-muted">В прогоне нет кейсов.</td></tr>}
                   {run.items.map((it, i) => (
                     <tr key={`${it.testCaseKey}-${i}`} className={`border-t border-border-main hover:bg-bg-subtle/60 cursor-pointer ${caseKey === it.testCaseKey ? "bg-primary/5" : ""}`}
-                      onClick={() => setCaseKey(it.testCaseKey)}>
+                      onClick={() => { setCaseKey(it.testCaseKey); setMinimized(false); }}>
                       <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{it.testCaseKey}</td>
                       <td className="px-3 py-1.5"><ResultPill status={it.status} /></td>
                       <td className="px-3 py-1.5 text-text-main">{it.executedBy || it.assignee || "—"}</td>
@@ -120,7 +160,12 @@ export default function RunsView({ project, baseUrl, reloadKey }: { project: str
             </div>
           )}
         </div>
-        {caseKey && <div className="w-[420px] flex-shrink-0 min-h-0"><CaseCard caseKey={caseKey} baseUrl={baseUrl} onClose={() => setCaseKey(null)} /></div>}
+        {caseKey && (
+          <CaseDialog label={`Кейс ${caseKey}`} title={caseKey} minimized={minimized}
+            onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setCaseKey(null)}>
+            <CaseCard caseKey={caseKey} baseUrl={baseUrl} onClose={() => setCaseKey(null)} onMinimize={() => setMinimized(true)} />
+          </CaseDialog>
+        )}
       </div>
       {playing && run && (
         <Player runKey={run.key} project={project} baseUrl={baseUrl} items={run.items}

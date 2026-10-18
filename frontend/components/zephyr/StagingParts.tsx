@@ -4,13 +4,16 @@ import { useState } from "react";
 import { AlertTriangle, CheckCircle2, FolderPlus, Loader2, Upload, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { zText } from "@/lib/zephyrApi";
+import { MinimizeBtn } from "./parts";
 import {
   applyStaging, folderPath, targetPath, usedFolders,
   type ApplyResult, type Staging,
 } from "@/lib/zephyrStaging";
 
 /** Карточка нового кейса из черновика: куда ляжет, поля, шаги. */
-export function StagedCaseCard({ staging, caseId, onClose }: { staging: Staging; caseId: string; onClose: () => void }) {
+export function StagedCaseCard({ staging, caseId, onClose, onMinimize }: {
+  staging: Staging; caseId: string; onClose: () => void; onMinimize?: () => void;
+}) {
   const c = staging.cases.find(x => x.id === caseId);
   if (!c) return null;
   const custom = Object.entries(c.customFields);
@@ -21,6 +24,7 @@ export function StagedCaseCard({ staging, caseId, onClose }: { staging: Staging;
           <p className="text-[11px] font-semibold text-violet-600 dark:text-violet-300">Новый кейс · ещё не в Jira</p>
           <p className="text-sm font-semibold text-text-main break-words">{c.name}</p>
         </div>
+        {onMinimize && <MinimizeBtn onClick={onMinimize} />}
         <button type="button" onClick={onClose} aria-label="Закрыть карточку" className="p-1 rounded text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-3 space-y-3 text-sm">

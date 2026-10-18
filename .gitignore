@@ -22,6 +22,7 @@ data/testdata_connections.json
 data/jdbc_drivers.json
 data/jdbc_drivers/
 data/kafka_explorer_connections.json
+data/zephyr_releases.json
 data/jira_views.json
 data/web_connectors.json
 data/log_services.json

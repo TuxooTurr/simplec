@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Link2, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { ExternalLink, Link2, Loader2, Minus, Pencil, Trash2, X } from "lucide-react";
 import { createCase, deleteCase, getCase, resultTone, updateCase, zText, type CaseEditIn, type ZCaseFull } from "@/lib/zephyrApi";
 import CaseEditor from "./CaseEditor";
 
@@ -67,13 +67,17 @@ function Block({ title, text }: { title: string; text: string }) {
  * Карточка кейса: цель, предусловие, шаги, метки, связи с Jira. С editable — «Изменить» (редактор, в Jira уходят
  * только изменённые поля) и «Удалить» (с подтверждением). onChanged — раздел обновляет дерево и список по модели.
  */
-export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, onClose }: {
+export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, onClose, onMinimize, onTitle }: {
   caseKey: string;
   baseUrl: string;
   project?: string;
   editable?: boolean;
   onChanged?: () => void;
   onClose: () => void;
+  /** Окно кейса: свернуть в плашку, не закрывая. */
+  onMinimize?: () => void;
+  /** Название загрузилось — для плашки свёрнутого окна. */
+  onTitle?: (name: string) => void;
 }) {
   const [c, setC] = useState<ZCaseFull | null>(null);
   const [err, setErr] = useState("");
@@ -93,7 +97,7 @@ export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, 
   useEffect(() => {
     let live = true;
     setC(null); setErr(""); setEditing(false); setAskDel(false); setSaveErr("");
-    getCase(caseKey, project).then(x => live && setC(x)).catch(e => live && setErr((e as Error).message));
+    getCase(caseKey, project).then(x => { if (live) { setC(x); onTitle?.(x.name); } }).catch(e => live && setErr((e as Error).message));
     return () => { live = false; };
   }, [caseKey, project]);
 
@@ -116,6 +120,7 @@ export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, 
           <a href={`${baseUrl}/secure/Tests.jspa#/testCase/${caseKey}`} target="_blank" rel="noopener noreferrer" title="Открыть в Zephyr"
             className="p-1 rounded text-text-muted hover:text-primary"><ExternalLink className="w-4 h-4" /></a>
         )}
+        {onMinimize && <MinimizeBtn onClick={onMinimize} />}
         <button type="button" onClick={onClose} aria-label="Закрыть карточку" className="p-1 rounded text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-3 space-y-4">
@@ -169,12 +174,21 @@ export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, 
 }
 
 
+/** «Свернуть» в шапке окна кейса. */
+export function MinimizeBtn({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} title="Свернуть (Esc)" aria-label="Свернуть окно"
+      className="p-1 rounded text-text-muted hover:text-text-main"><Minus className="w-4 h-4" /></button>
+  );
+}
+
 /** Новый кейс в папке: форма → «Создать в Jira» → открывается его карточка. */
-export function NewCaseCard({ project, folder, onCreated, onClose }: {
+export function NewCaseCard({ project, folder, onCreated, onClose, onMinimize }: {
   project: string;
   folder: string;
   onCreated: (key: string) => void;
   onClose: () => void;
+  onMinimize?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -187,6 +201,7 @@ export function NewCaseCard({ project, folder, onCreated, onClose }: {
     <aside className="flex flex-col min-h-0 h-full border-l border-border-main bg-bg-card" aria-label="Новый кейс">
       <div className="flex items-start gap-2 px-4 py-3 border-b border-border-main">
         <p className="min-w-0 flex-1 text-sm font-semibold text-text-main">Новый кейс</p>
+        {onMinimize && <MinimizeBtn onClick={onMinimize} />}
         <button type="button" onClick={onClose} aria-label="Закрыть" className="p-1 rounded text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin px-4 py-3">

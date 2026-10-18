@@ -38,6 +38,8 @@ export interface ZRun {
   version: string;
   /** Задача Jira, к которой привязан прогон (отслеживание). */
   issueKey: string;
+  /** Вид тестирования прогона (поле прогона): «Регресс», «Новый функционал»… */
+  type: string;
   owner: string;
   plannedStart: string;
   plannedEnd: string;
@@ -101,7 +103,9 @@ export const getCases = (project: string, folder: string, text = "") =>
 export const getCase = (key: string, project = "") =>
   fetchJson<ZCaseFull>(`/api/zephyr/case/${encodeURIComponent(key)}${project ? `?${q({ project })}` : ""}`);
 
-export const getRuns = (project: string) => fetchJson<{ runs: ZRun[] }>(`/api/zephyr/runs?${q({ project })}`);
+/** Все прогоны проекта — из индекса на сервере; refresh — перечитать из Jira. */
+export const getRuns = (project: string, refresh = false) =>
+  fetchJson<{ runs: ZRun[]; loadedAt: number }>(`/api/zephyr/runs?${q({ project, refresh: String(refresh) })}`);
 
 export const getRun = (key: string) => fetchJson<ZRunFull>(`/api/zephyr/run/${encodeURIComponent(key)}`);
 
@@ -134,7 +138,12 @@ export function resultTone(status: string): "pass" | "fail" | "blocked" | "progr
 
 export interface ZKe { id: string; name: string; label: string }
 
-export interface ZRelease { key: string; summary: string; status: string; issuetype: string; url: string; ke: ZKe[]; keSources: string[] }
+/** Задача, связанная с релизом (стори релиза — связи задачи релиза). */
+export interface ZLinked { key: string; summary: string; status: string; issuetype: string; link: string }
+
+export interface ZRelease {
+  key: string; summary: string; status: string; issuetype: string; url: string; ke: ZKe[]; keSources: string[]; stories: ZLinked[];
+}
 
 /** Условия отбора крит регресса — названия полей и значения Zephyr (по умолчанию — процесс SBER911). */
 export interface CritCriteria {
@@ -148,8 +157,58 @@ export interface CritCriteria {
 
 export const DEFAULT_CRITERIA: CritCriteria = {
   // Статус «Утверждено» = Approved в API; имена полей — как в выгрузках Zephyr SBER911 (точки и пробелы не важны).
-  status: "Утверждено", crit_field: "Крит. регресс", crit_value: "Да", type_field: "Вид тестирования", type_value: "Регресс", ke_field: "КЭ",
+  status: "Утверждено", crit_field: "Крит. регресс", crit_value: "Да", type_field: "Вид тестирования", type_value: "Регресс", ke_field: "АС",
 };
+
+/** Значения для выпадающих списков «Условий» — по модели проекта. */
+export const getFieldValues = (project: string) =>
+  fetchJson<{ statuses: string[]; fields: Record<string, string[]> }>(`/api/zephyr/field-values?${q({ project })}`);
+
+/* ── Релизы: строки с маркерами ───────────────────────────────────────────── */
+
+/** Релизы, которые ведём в SimpleTest, и прогоны, добавленные к ним вручную. */
+export interface ReleaseList { releases: string[]; links: Record<string, string[]> }
+
+export interface BoardRun extends ZRun {
+  /** issue — релиз в отслеживании прогона (Jira); simpletest — добавлен к релизу в SimpleTest. */
+  source: "issue" | "simpletest";
+  missing?: boolean;
+}
+
+export interface ReleaseBoard { release: ZRelease; runs: BoardRun[]; storyRuns: Record<string, ZRun[]>; runsLoadedAt: number }
+
+export const getReleases = (project: string) => fetchJson<ReleaseList>(`/api/zephyr/releases?${q({ project })}`);
+
+export const addRelease = (project: string, key: string) =>
+  fetchJson<ReleaseList>("/api/zephyr/releases", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, key }),
+  });
+
+export const removeRelease = (project: string, key: string) =>
+  fetchJson<ReleaseList>(`/api/zephyr/releases/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });
+
+export const getReleaseBoard = (project: string, key: string) =>
+  fetchJson<ReleaseBoard>(`/api/zephyr/release/${encodeURIComponent(key)}/board?${q({ project })}`);
+
+export const addReleaseRun = (project: string, key: string, runKey: string) =>
+  fetchJson<ReleaseList>(`/api/zephyr/release/${encodeURIComponent(key)}/runs`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, runKey }),
+  });
+
+export const removeReleaseRun = (project: string, key: string, runKey: string) =>
+  fetchJson<ReleaseList>(`/api/zephyr/release/${encodeURIComponent(key)}/runs/${encodeURIComponent(runKey)}?${q({ project })}`, { method: "DELETE" });
+
+/** Вид прогона по полю «Вид тестирования»: НФ (новый функционал), регресс или как есть. */
+export function runKind(type: string): "nf" | "regress" | "other" {
+  const t = type.trim().toLowerCase();
+  // \b в JS не видит границ кириллических слов — поэтому «нф» без буквы следом, а не ^нф\b.
+  if (/^нф(?![а-яё])|нов\S*\s+функц/.test(t)) return "nf";
+  if (/регресс|regress/.test(t)) return "regress";
+  return "other";
+}
+
+/** Короткая подпись вида прогона: «Новый функционал» → «НФ». */
+export const runKindLabel = (type: string) => (runKind(type) === "nf" ? "НФ" : type || "—");
 
 export interface CritCase extends ZCase { ke: string[] }
 

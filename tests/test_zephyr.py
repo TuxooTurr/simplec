@@ -14,6 +14,7 @@ def jira(monkeypatch, tmp_path):
     state = {"routes": {}, "calls": []}
     monkeypatch.setattr(z, "_load_cfg", lambda db: CFG)
     monkeypatch.setattr(z, "_INDEX_DIR", tmp_path / "zephyr_index")
+    monkeypatch.setattr(z, "_RELEASES_FILE", tmp_path / "zephyr_releases.json")
     z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear(); z._failed.clear()
 
     def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
@@ -216,10 +217,20 @@ def test_совпадение_кэ_по_id_иначе_по_названию():
     assert not z.ke_match(z._ke_items("Другое (1)"), rel)
 
 
+def test_кэ_кейса_в_поле_ас_с_кодом_ci_совпадает_с_кэ_релиза():
+    case_ke = z._ke_items("Рабочая группа [CI07841867]")
+    assert case_ke == [{"id": "CI07841867", "name": "Рабочая группа", "label": "Рабочая группа (CI07841867)"}]
+    # В релизе КЭ — опция Jira {id опции, value с кодом}: сравниваем по коду из текста, а не по id опции
+    assert z.ke_match(case_ke, z._ke_items({"id": "555", "value": "Рабочая группа [CI07841867]"}))
+    assert z.ke_match(case_ke, z._ke_items("ci07841867"))
+    assert z.ke_match(case_ke, z._ke_items("Рабочая группа"))
+    assert not z.ke_match(case_ke, z._ke_items("Другая группа [CI1]"))
+
+
 def _case(key, crit="Да", typ="Регресс", ke="Управление приоритетными событиями (3521751)", status="Approved"):
     # «Крит регресс» без точки — проверка, что имя поля сравнивается без точек и пробелов
     return {"key": key, "name": key, "status": status,
-            "customFields": {"Крит регресс": crit, "Вид тестирования": typ, "КЭ": ke}}
+            "customFields": {"Крит регресс": crit, "Вид тестирования": typ, "АС": ke}}
 
 
 def test_отбор_крит_регресса_и_счётчики_отсева():
@@ -241,15 +252,27 @@ def test_релиз_отдаёт_кэ_из_поля_sber911(jira):
     assert jira["calls"][0][1] == {"expand": "names", "fields": "*all"}
 
 
+def test_релиз_берёт_только_поле_кэ_без_кэ_дистрибутива(jira):
+    jira["routes"]["/rest/api/2/issue/SBER911-12345"] = {
+        "fields": {"summary": "Р", "customfield_2": "Рабочая группа [CI07841867]", "customfield_3": "Дистрибутив D-10.074.00 (12)"},
+        "names": {"customfield_2": "КЭ:", "customfield_3": "КЭ дистрибутива:"}}
+    r = z.release("SBER911-12345", db=None)
+    assert [k["id"] for k in r["ke"]] == ["CI07841867"] and r["keSources"] == ["КЭ: (customfield_2)"]
+
+
 def test_создание_прогона_с_отслеживанием_релиза(jira, monkeypatch):
     sent = {}
 
     def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        if method == "GET":   # после создания прогон перечитывается в индекс прогонов
+            return {"key": "SBER911-C77", "name": "Крит регресс", "issueKey": "SBER911-12345", "projectKey": "SBER911"}
         sent.update(method=method, path=path, body=json_body)
         return {"key": "SBER911-C77"}
     monkeypatch.setattr(z, "_jira_request", req)
+    z._index[(CFG["base_url"], z._runs_key("SBER911"))] = {"loadedAt": 0, "cases": {}, "folders": set()}
     r = z.create_run(z.RunCreate(project="sber911", name="Крит регресс", issueKey="sber911-12345", caseKeys=["T1", "T2", "T1"]), db=None)
     assert r["key"] == "SBER911-C77" and sent["method"] == "POST" and sent["path"] == "/rest/atm/1.0/testrun"
+    assert z._index[(CFG["base_url"], z._runs_key("SBER911"))]["cases"]["SBER911-C77"]["issueKey"] == "SBER911-12345"
     assert sent["body"] == {"projectKey": "SBER911", "name": "Крит регресс", "issueKey": "SBER911-12345",
                             "items": [{"testCaseKey": "T1"}, {"testCaseKey": "T2"}]}
 
@@ -369,7 +392,7 @@ def test_крит_регресс_по_индексу_и_список_полей(
     jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [_case("ICON-T1"), _case("ICON-T2", crit="Нет")] if p["startAt"] == 0 else []
     r = z.crit_cases(z.CritBody(project="SBER911", ke=["3521751"]), db=None)
     assert [c["key"] for c in r["cases"]] == ["ICON-T1"]
-    assert set(r["stats"]["fields"]) == {"Крит регресс", "Вид тестирования", "КЭ"}
+    assert set(r["stats"]["fields"]) == {"Крит регресс", "Вид тестирования", "АС"}
 
 
 def test_применить_дописывает_созданное_в_индекс(jira, monkeypatch):
@@ -461,3 +484,78 @@ def test_правка_кейса_только_переданные_поля_ша
 def test_удаление_кейса_убирает_из_модели(model):
     z.delete_case("ICON-T3", project="SBER911", db=None)
     assert ("DELETE", "/rest/atm/1.0/testcase/ICON-T3", None) in model and "ICON-T3" not in _cases()
+
+
+# ── Релизы: стори, прогоны, маркеры ──────────────────────────────────────────
+
+def _run(key, issue="", typ="Регресс"):
+    return {"key": key, "name": key, "issueKey": issue, "customFields": {"Вид тестирования": typ},
+            "items": [{"testCaseKey": "ICON-T1", "status": "Pass"}]}
+
+
+def _release_route(jira):
+    jira["routes"]["/rest/api/2/issue/SBER911-100"] = {
+        "fields": {"summary": "Релиз 26", "status": {"name": "Открыт"}, "customfield_2": "Рабочая группа [CI07841867]",
+                   "issuelinks": [
+                       {"type": {"name": "Relates", "outward": "включает", "inward": "входит в"},
+                        "outwardIssue": {"key": "SBER911-11", "fields": {"summary": "Стори А", "status": {"name": "Готово"}, "issuetype": {"name": "История"}}}},
+                       {"type": {"name": "Relates", "outward": "включает", "inward": "входит в"},
+                        "inwardIssue": {"key": "SBER911-12", "fields": {"summary": "Стори Б", "status": {"name": "В работе"}, "issuetype": {"name": "История"}}}}]},
+        "names": {"customfield_2": "КЭ"}}
+
+
+def test_прогон_знает_свой_вид_тестирования():
+    assert z.norm_run(_run("SBER911-C1", typ="Новый функционал"))["type"] == "Новый функционал"
+
+
+def test_стори_релиза_по_связям_задачи(jira):
+    _release_route(jira)
+    r = z.release("SBER911-100", db=None)
+    assert [(s["key"], s["summary"], s["link"]) for s in r["stories"]] == [("SBER911-11", "Стори А", "включает"),
+                                                                            ("SBER911-12", "Стори Б", "входит в")]
+
+
+def test_строка_релиза_прогоны_релиза_и_нф_прогоны_стори(jira):
+    _release_route(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [
+        _run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал"),
+        _run("SBER911-C3"), _run("SBER911-C4", "SBER911-999")] if p["startAt"] == 0 else []
+    z.release_add_run("SBER911-100", z.ReleaseRunLink(project="SBER911", runKey="sber911-c3"))
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert [(r["key"], r["source"]) for r in b["runs"]] == [("SBER911-C1", "issue"), ("SBER911-C3", "simpletest")]
+    assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C2"] and b["storyRuns"]["SBER911-12"] == []
+    assert b["storyRuns"]["SBER911-11"][0]["type"] == "Новый функционал"
+    assert z.releases_list(project="SBER911") == {"releases": ["SBER911-100"], "links": {"SBER911-100": ["SBER911-C3"]}}
+
+
+def test_релизы_в_simpletest_добавить_убрать(jira):
+    z.releases_add(z.ReleaseAdd(project="sber911", key="sber911-1"))
+    z.releases_add(z.ReleaseAdd(project="SBER911", key="SBER911-2"))
+    z.release_add_run("SBER911-1", z.ReleaseRunLink(project="SBER911", runKey="SBER911-C1"))
+    assert z.releases_list(project="SBER911")["releases"] == ["SBER911-2", "SBER911-1"]
+    z.release_remove_run("SBER911-1", "SBER911-C1", project="SBER911")
+    assert z.releases_list(project="SBER911")["links"]["SBER911-1"] == []
+    z.releases_remove("SBER911-1", project="SBER911")
+    assert z.releases_list(project="SBER911") == {"releases": ["SBER911-2"], "links": {}}
+    with pytest.raises(HTTPException):
+        z.releases_add(z.ReleaseAdd(project="SBER911", key="релиз"))
+
+
+def test_список_прогонов_из_индекса_новые_сверху(jira):
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [_run("SBER911-C2"), _run("SBER911-C10")] if p["startAt"] == 0 else []
+    assert [r["key"] for r in z.runs(project="SBER911", db=None)["runs"]] == ["SBER911-C10", "SBER911-C2"]
+    jira["calls"].clear()
+    z.runs(project="SBER911", db=None)
+    assert jira["calls"] == []                                       # второй раз — из индекса
+
+
+def test_значения_полей_для_выпадающих_списков(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "ICON-T1", "status": "Approved", "customFields": {"Крит. регресс": True, "Вид тестирования": "Регресс"}},
+        {"key": "ICON-T2", "status": "Approved", "customFields": {"Крит. регресс": False, "Вид тестирования": "Регресс"}},
+        {"key": "ICON-T3", "status": "Draft", "customFields": {"Вид тестирования": "Новый функционал", "Домен": ["Sigma", "Omega"]}},
+    ] if p["startAt"] == 0 else []
+    v = z.field_values(project="SBER911", db=None)
+    assert v["statuses"] == ["Approved", "Draft"]
+    assert v["fields"]["Вид тестирования"] == ["Регресс", "Новый функционал"]
+    assert set(v["fields"]["Крит. регресс"]) == {"Да", "Нет"} and v["fields"]["Домен"] == ["Omega", "Sigma"]

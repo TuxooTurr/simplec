@@ -11,6 +11,7 @@ import ListTable, { sortIssues, type SortState } from "@/components/jiratool/Lis
 import type { FilterOption } from "@/components/jiratool/ColumnFilter";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
+import ListsNav from "@/components/jiratool/ListsNav";
 import type { ReqOption } from "@/components/jiratool/ListCells";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
@@ -787,37 +788,20 @@ export default function JiraToolSection() {
                   <PanelLeftClose className="w-4 h-4" />
                 </button>
               </div>
-              <div className="max-h-56 overflow-y-auto scrollbar-thin flex flex-col gap-0.5">
-                {state.lists.map(l => askDeleteList === l.id ? (
-                  <div key={l.id} className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-red-50 dark:bg-red-950/40 text-xs">
-                    <span className="flex-1 min-w-0 truncate text-text-main">Удалить «{l.name}»?</span>
-                    <button type="button" onClick={() => {
-                      update(s => ({ ...s, lists: s.lists.filter(x => x.id !== l.id) }));
-                      if (l.id === activeId) openList(state.lists.find(x => x.id !== l.id)?.id ?? "");
-                      setAskDeleteList(null);
-                    }} className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Да</button>
-                    <button type="button" onClick={() => setAskDeleteList(null)} className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
-                  </div>
-                ) : (
-                  <div key={l.id} className={`group/li flex items-center rounded-lg transition-colors
-                    ${l.id === activeId ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
-                    <button type="button" onClick={() => openList(l.id)}
-                      className={`flex-1 min-w-0 flex items-center gap-2 px-2.5 py-2 text-left text-sm
-                        ${l.id === activeId ? "text-primary font-medium" : "text-text-main"}`}>
-                      {l.structure ? <FolderTree className="w-4 h-4 flex-shrink-0" /> : <LayoutList className="w-4 h-4 flex-shrink-0" />}
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate">{l.name}</span>
-                        <span className="block text-[10px] text-text-muted font-normal">{l.project}</span>
-                      </span>
-                      <span className="text-[11px] text-text-muted group-hover/li:hidden">{l.keys.length}</span>
-                    </button>
-                    <button type="button" onClick={() => setAskDeleteList(l.id)} aria-label={`Удалить список ${l.name}`} title="Удалить список"
-                      className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 mr-1 rounded-md text-text-muted hover:text-red-500">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+              <ListsNav
+                items={state.lists.map(l => ({ id: l.id, name: l.name, project: l.project, count: l.keys.length, structure: !!l.structure }))}
+                activeId={activeId} askDeleteId={askDeleteList}
+                onOpen={openList} onAskDelete={setAskDeleteList} onCancelDelete={() => setAskDeleteList(null)}
+                onConfirmDelete={id => {
+                  update(s => ({ ...s, lists: s.lists.filter(x => x.id !== id) }));
+                  if (id === activeId) openList(state.lists.find(x => x.id !== id)?.id ?? "");
+                  setAskDeleteList(null);
+                }}
+                onMove={(id, target, place) => update(s => {
+                  const byId = new Map(s.lists.map(x => [x.id, x]));
+                  const ids = moveItem(s.lists.map(x => x.id), id, target, place);
+                  return { ...s, lists: ids.map(x => byId.get(x)!) };
+                })} />
               {newList === null ? (
                 <div className="relative flex items-center">
                   <button type="button" onClick={() => setNewList("")}

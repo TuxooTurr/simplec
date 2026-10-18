@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCheck, ChevronDown, ExternalLink, Loader2, PlayCircle, Plus, Rocket, Search, SlidersHorizontal, X } from "lucide-react";
 import {
-  DEFAULT_CRITERIA, createRun, findCritCases, getRelease, saveResults,
+  DEFAULT_CRITERIA, createRun, findCritCases, getFieldValues, getRelease, saveResults,
   type CritCase, type CritCriteria, type CritStats, type ZRelease,
 } from "@/lib/zephyrApi";
 import Player from "./Player";
@@ -11,10 +11,17 @@ import Player from "./Player";
 const CRIT_KEY = "st_zephyr_crit";
 
 function readCriteria(): CritCriteria {
-  try { return { ...DEFAULT_CRITERIA, ...JSON.parse(localStorage.getItem(CRIT_KEY) ?? "{}") }; } catch { return DEFAULT_CRITERIA; }
+  try {
+    const saved = JSON.parse(localStorage.getItem(CRIT_KEY) ?? "{}") as Partial<CritCriteria>;
+    // Прежнее значение по умолчанию «КЭ» — у кейсов SBER911 КЭ лежит в поле «АС».
+    if (saved.ke_field === "КЭ") delete saved.ke_field;
+    return { ...DEFAULT_CRITERIA, ...saved };
+  } catch { return DEFAULT_CRITERIA; }
 }
 
 const today = () => new Date().toLocaleDateString("ru-RU");
+/** Имя поля без регистра, точек и пробелов — как сравнивает бэкенд («Крит. регресс» = «Крит регресс»). */
+const norm = (n: string) => n.toLowerCase().replace(/[^0-9a-zа-яё]/g, "");
 /** 1 кейс, 2 кейса, 5 кейсов. */
 const cases_ = (n: number) => `${n} ${n % 10 === 1 && n % 100 !== 11 ? "кейс" : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? "кейса" : "кейсов"}`;
 const INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -34,10 +41,16 @@ function Step({ n, title, done, children }: { n: number; title: string; done?: b
 /**
  * Крит регресс релиза: номер релиза → его КЭ → кейсы с признаком «Крит регресс», статусом «Утверждено»,
  * типом «Регресс» и КЭ релиза → прогон, привязанный к задаче релиза (отслеживание) → прохождение
- * в плеере или кнопкой «Пройти все».
+ * в плеере или кнопкой «Пройти все». С releaseKey — встроен в строку релиза: релиз загружается сам.
  */
-export default function CritRegressView({ project, baseUrl }: { project: string; baseUrl: string }) {
-  const [relKey, setRelKey] = useState("");
+export default function CritRegressView({ project, baseUrl, releaseKey, onRunCreated }: {
+  project: string;
+  baseUrl: string;
+  releaseKey?: string;
+  onRunCreated?: (key: string) => void;
+}) {
+  const embedded = !!releaseKey;
+  const [relKey, setRelKey] = useState(releaseKey ?? "");
   const [rel, setRel] = useState<ZRelease | null>(null);
   const [relBusy, setRelBusy] = useState(false);
   const [relErr, setRelErr] = useState("");
@@ -64,11 +77,18 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
   const [player, setPlayer] = useState(false);
   const [passed, setPassed] = useState<Record<string, string>>({});
 
+  const [values, setValues] = useState<{ statuses: string[]; fields: Record<string, string[]> } | null>(null);
+  const [valuesErr, setValuesErr] = useState("");
+
   useEffect(() => setCrit(readCriteria()), []);
   const saveCrit = (c: CritCriteria) => { setCrit(c); try { localStorage.setItem(CRIT_KEY, JSON.stringify(c)); } catch { /* не запомнится */ } };
+  useEffect(() => {
+    if (!critOpen || values) return;
+    getFieldValues(project).then(setValues).catch(e => setValuesErr((e as Error).message));
+  }, [critOpen, values, project]);
 
-  const loadRelease = async () => {
-    const k = relKey.trim().toUpperCase();
+  const loadRelease = async (keyArg?: string) => {
+    const k = (keyArg ?? relKey).trim().toUpperCase();
     if (!/^[A-Z][A-Z0-9_]*-\d+$/.test(k)) { setRelErr("Номер релиза — в формате SBER911-12345"); return; }
     setRelBusy(true); setRelErr(""); setRel(null); setCases(null); setStats(null); setRun(null); setPassNote("");
     try {
@@ -78,6 +98,7 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
     } catch (e) { setRelErr((e as Error).message); }
     setRelBusy(false);
   };
+  useEffect(() => { if (releaseKey) void loadRelease(releaseKey); }, [releaseKey]);
 
   const keList = rel ? [...rel.ke.map(x => x.label), ...[...keOn].filter(l => !rel.ke.some(x => x.label === l))] : [];
   const addKe = () => { const v = extraKe.trim(); if (v) { setKeOn(s => new Set(s).add(v)); setExtraKe(""); } };
@@ -101,7 +122,7 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
     try {
       const keys = (cases ?? []).filter(c => chosen.has(c.key)).map(c => c.key);
       const r = await createRun({ project, name: runName.trim(), issueKey: rel.key, caseKeys: keys });
-      setRun({ ...r, caseKeys: keys }); setConfirm(false); setPassed({});
+      setRun({ ...r, caseKeys: keys }); setConfirm(false); setPassed({}); onRunCreated?.(r.key);
     } catch (e) { setCreateErr((e as Error).message); }
     setCreating(false);
   };
@@ -117,33 +138,23 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
     setPassBusy(false); setPassAsk(false);
   };
 
-  const field = (k: keyof CritCriteria, label: string) => (
-    <label className="block text-xs text-text-muted">
-      {label}
-      <input value={crit[k]} onChange={e => saveCrit({ ...crit, [k]: e.target.value })} className={`${INPUT} w-full mt-1`} />
-    </label>
-  );
+  /** Выпадающий список: варианты — из модели проекта; текущее значение остаётся в списке, даже если его там нет. */
+  const select = (k: keyof CritCriteria, label: string, options: string[]) => {
+    const opts = crit[k] && !options.includes(crit[k]) ? [crit[k], ...options] : options;
+    return (
+      <label className="block text-xs text-text-muted">
+        {label}
+        <select value={crit[k]} onChange={e => saveCrit({ ...crit, [k]: e.target.value })} className={`${INPUT} w-full mt-1`}>
+          {opts.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </label>
+    );
+  };
+  const fieldNames = values ? Object.keys(values.fields) : [];
+  const valuesOf = (f: string) => values?.fields[Object.keys(values.fields).find(n => norm(n) === norm(f)) ?? ""] ?? [];
 
-  return (
-    <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="max-w-5xl mx-auto p-5 space-y-4">
-        <Step n={1} title="Релиз" done={!!rel}>
-          <div className="flex items-center gap-2">
-            <input value={relKey} onChange={e => setRelKey(e.target.value)} onKeyDown={e => e.key === "Enter" && loadRelease()}
-              placeholder="SBER911-12345" aria-label="Номер релиза" className={`${INPUT} w-48 font-mono`} />
-            <button type="button" onClick={loadRelease} disabled={relBusy || !relKey.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
-              {relBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Загрузить</button>
-            {rel && (
-              <a href={rel.url} target="_blank" rel="noopener noreferrer" className="ml-2 min-w-0 flex items-center gap-1.5 text-sm text-text-main hover:text-primary">
-                <span className="font-mono text-primary">{rel.key}</span><span className="truncate">{rel.summary}</span>
-                {rel.status && <span className="text-xs text-text-muted">· {rel.status}</span>}<ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
-              </a>
-            )}
-          </div>
-          {relErr && <p className="text-sm text-red-600 dark:text-red-400">{relErr}</p>}
-          {rel && (
-            <div className="space-y-2">
+  const keBlock = rel && (
+<div className="space-y-2">
               <p className="text-xs text-text-muted">
                 КЭ релиза{rel.keSources.length ? ` (поле: ${rel.keSources.join(", ")})` : ""} — снимите лишние или добавьте недостающие:
               </p>
@@ -164,11 +175,32 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
                 </span>
               </div>
             </div>
-          )}
-        </Step>
+  );
+
+  const body = (
+      <div className={embedded ? "space-y-4" : "max-w-5xl mx-auto p-5 space-y-4"}>
+        {!embedded && <Step n={1} title="Релиз" done={!!rel}>
+          <div className="flex items-center gap-2">
+            <input value={relKey} onChange={e => setRelKey(e.target.value)} onKeyDown={e => e.key === "Enter" && loadRelease()}
+              placeholder="SBER911-12345" aria-label="Номер релиза" className={`${INPUT} w-48 font-mono`} />
+            <button type="button" onClick={() => loadRelease()} disabled={relBusy || !relKey.trim()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
+              {relBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Загрузить</button>
+            {rel && (
+              <a href={rel.url} target="_blank" rel="noopener noreferrer" className="ml-2 min-w-0 flex items-center gap-1.5 text-sm text-text-main hover:text-primary">
+                <span className="font-mono text-primary">{rel.key}</span><span className="truncate">{rel.summary}</span>
+                {rel.status && <span className="text-xs text-text-muted">· {rel.status}</span>}<ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+              </a>
+            )}
+          </div>
+          {relErr && <p className="text-sm text-red-600 dark:text-red-400">{relErr}</p>}
+          {keBlock}
+        </Step>}
+        {embedded && relErr && <p className="text-sm text-red-600 dark:text-red-400">{relErr}</p>}
+        {embedded && relBusy && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю релиз…</p>}
 
         {rel && (
-          <Step n={2} title="Кейсы крит регресса" done={!!cases?.length}>
+          <Step n={embedded ? 1 : 2} title="Кейсы крит регресса" done={!!cases?.length}>
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs text-text-muted">
                 «{crit.crit_field}» = {crit.crit_value} · статус «{crit.status}» · «{crit.type_field}» = {crit.type_value} · «{crit.ke_field}» из релиза ({keOn.size})
@@ -180,14 +212,17 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
                 className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
                 {findBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Найти кейсы</button>
             </div>
-            {critOpen && (
+            {embedded && keBlock}
+            {critOpen && !values && !valuesErr && <p className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Собираю значения полей по модели…</p>}
+            {critOpen && valuesErr && <p className="text-xs text-red-600 dark:text-red-400">Значения полей не загрузились: {valuesErr}</p>}
+            {critOpen && values && (
               <div className="grid grid-cols-3 gap-3 rounded-lg bg-bg-subtle p-3">
-                {field("status", "Статус кейса")}
-                {field("crit_field", "Поле признака")}
-                {field("crit_value", "Значение признака")}
-                {field("type_field", "Поле типа тестирования")}
-                {field("type_value", "Тип тестирования")}
-                {field("ke_field", "Поле КЭ в кейсе")}
+                {select("status", "Статус кейса", values.statuses)}
+                {select("crit_field", "Поле признака", fieldNames)}
+                {select("crit_value", "Значение признака", valuesOf(crit.crit_field))}
+                {select("type_field", "Поле вида тестирования", fieldNames)}
+                {select("type_value", "Вид тестирования", valuesOf(crit.type_field))}
+                {select("ke_field", "Поле КЭ в кейсе", fieldNames)}
                 <button type="button" onClick={() => saveCrit(DEFAULT_CRITERIA)} className="col-span-3 justify-self-start text-xs text-text-muted hover:text-text-main underline">
                   Вернуть по умолчанию</button>
               </div>
@@ -238,7 +273,7 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
         )}
 
         {rel && cases && cases.length > 0 && (
-          <Step n={3} title="Прогон" done={!!run}>
+          <Step n={embedded ? 2 : 3} title="Прогон" done={!!run}>
             {!run ? (
               <>
                 <div className="flex items-center gap-2">
@@ -288,11 +323,13 @@ export default function CritRegressView({ project, baseUrl }: { project: string;
           </Step>
         )}
       </div>
-      {player && run && (
-        <Player runKey={run.key} project={project} baseUrl={baseUrl}
-          items={run.caseKeys.map(k => ({ testCaseKey: k, status: passed[k] ?? "Not Executed" }))}
-          onClose={() => setPlayer(false)} />
-      )}
-    </div>
   );
+
+  const player_ = player && run && (
+    <Player runKey={run.key} project={project} baseUrl={baseUrl}
+      items={run.caseKeys.map(k => ({ testCaseKey: k, status: passed[k] ?? "Not Executed" }))}
+      onClose={() => setPlayer(false)} />
+  );
+  if (embedded) return <>{body}{player_}</>;
+  return <div className="h-full overflow-y-auto scrollbar-thin">{body}{player_}</div>;
 }

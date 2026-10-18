@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FilePlus2, FileUp, FlaskConical, Info, ListChecks, Loader2, PlayCircle, RefreshCw, Search, ShieldCheck, Sparkles, Stethoscope, Upload, X } from "lucide-react";
+import { FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Upload, X } from "lucide-react";
 import FolderTree from "@/components/zephyr/FolderTree";
 import RunsView from "@/components/zephyr/RunsView";
-import CritRegressView from "@/components/zephyr/CritRegressView";
+import ReleasesView from "@/components/zephyr/ReleasesView";
+import CaseDialog from "@/components/zephyr/CaseDialog";
+import { Resizer, usePaneSize } from "@/components/zephyr/Resizer";
 import ProbeModal from "@/components/zephyr/ProbeModal";
 import { CaseCard, NewCaseCard } from "@/components/zephyr/parts";
 import Modal from "@/components/ui/Modal";
@@ -38,7 +40,13 @@ function readProject(): string {
 export default function ZephyrSection() {
   const [project, setProject] = useState("SBER911");
   const [projectDraft, setProjectDraft] = useState("SBER911");
-  const [tab, setTab] = useState<"cases" | "runs" | "crit">("crit");
+  const [tab, setTab] = useState<"cases" | "runs" | "release">("cases");
+  /** Прогон, который открыть на вкладке «Прогоны» (клик по прогону в строке релиза). */
+  const [openRun, setOpenRun] = useState<string | null>(null);
+  const treePane = usePaneSize("tree", 320, 220, 640);
+  /** Окно кейса свёрнуто в плашку. */
+  const [minimized, setMinimized] = useState(false);
+  const [dialogTitle, setDialogTitle] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [probeOpen, setProbeOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -73,6 +81,8 @@ export default function ZephyrSection() {
   const setStaging = (s: Staging | null) => { setStagingState(s); saveStaging(project, s); };
 
   useEffect(() => { const p = readProject(); setProject(p); setProjectDraft(p); }, []);
+  // Открыли другой кейс (или новый) — окно разворачивается.
+  useEffect(() => { setMinimized(false); setDialogTitle(""); }, [caseKey, newCaseIn, stagedPick]);
   useEffect(() => { setStagingState(loadStaging(project)); setStagedPick(null); }, [project]);
 
   const importXml = async (xml: string, source: string) => {
@@ -181,12 +191,12 @@ export default function ZephyrSection() {
           onKeyDown={e => e.key === "Enter" && applyProject()} aria-label="Проект Jira"
           className="w-28 text-sm font-mono border border-border-main rounded-lg px-2.5 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
         <div className="flex gap-1 ml-2" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === "crit"} onClick={() => setTab("crit")} className={tabCls(tab === "crit")}>
-            <ShieldCheck className="w-4 h-4" /> Крит регресс</button>
           <button type="button" role="tab" aria-selected={tab === "cases"} onClick={() => setTab("cases")} className={tabCls(tab === "cases")}>
             <ListChecks className="w-4 h-4" /> Кейсы</button>
           <button type="button" role="tab" aria-selected={tab === "runs"} onClick={() => setTab("runs")} className={tabCls(tab === "runs")}>
             <PlayCircle className="w-4 h-4" /> Прогоны</button>
+          <button type="button" role="tab" aria-selected={tab === "release"} onClick={() => setTab("release")} className={tabCls(tab === "release")}>
+            <Rocket className="w-4 h-4" /> Релиз</button>
         </div>
         <div className="ml-auto flex items-center gap-2">
           <button type="button" onClick={reloadModel} disabled={!!modelBusy} title="Перечитать модель из Jira целиком" aria-label="Обновить из Jira"
@@ -197,17 +207,12 @@ export default function ZephyrSection() {
             <Stethoscope className="w-4 h-4" /> Проверить API</button>
         </div>
       </div>
-      <div className="flex items-start gap-2 px-6 py-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900 text-xs text-amber-800 dark:text-amber-200">
-        <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-        <span>Запросы Zephyr на вашем стенде ещё не проверены: если что-то не загрузится или не сохранится — нажмите «Проверить API»
-          и пришлите отчёт. Правка кейсов, папок и прогонов — следующим этапом.</span>
-      </div>
 
       <div className="flex-1 min-h-0 overflow-hidden">
-        {tab === "crit" ? <CritRegressView key={project} project={project} baseUrl={baseUrl} />
-          : tab === "runs" ? <RunsView project={project} baseUrl={baseUrl} reloadKey={reloadKey} /> : (
+        {tab === "release" ? <ReleasesView key={project} project={project} baseUrl={baseUrl} onOpenRun={k => { setOpenRun(k); setTab("runs"); }} />
+          : tab === "runs" ? <RunsView project={project} baseUrl={baseUrl} reloadKey={reloadKey} openKey={openRun} /> : (
           <div className="flex h-full min-h-0">
-            <div className="w-80 flex-shrink-0 border-r border-border-main p-3 min-h-0 flex flex-col gap-2">
+            <div style={{ width: treePane.size }} className="flex-shrink-0 p-3 min-h-0 flex flex-col gap-2">
               <input ref={xmlInput} type="file" accept=".xml,application/xml,text/xml" className="hidden"
                 onChange={async e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) await importXml(await f.text(), f.name); }} />
               {staging ? (
@@ -263,6 +268,7 @@ export default function ZephyrSection() {
                     onMoveCase={moveCase} onMoveFolder={moveFolder} />}
               </div>
             </div>
+            <Resizer pane={treePane} label="Ширина дерева папок" />
 
             <div className="flex-1 min-w-0 flex flex-col min-h-0">
               <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border-main">
@@ -341,20 +347,24 @@ export default function ZephyrSection() {
               </div>
             </div>
 
-            {caseKey && (
-              <div className="w-[420px] flex-shrink-0 min-h-0">
-                <CaseCard caseKey={caseKey} baseUrl={baseUrl} project={project} editable onChanged={() => setReloadKey(k => k + 1)} onClose={() => setCaseKey(null)} />
-              </div>
-            )}
-            {newCaseIn !== null && !caseKey && (
-              <div className="w-[420px] flex-shrink-0 min-h-0">
-                <NewCaseCard project={project} folder={newCaseIn} onClose={() => setNewCaseIn(null)}
+            {caseKey ? (
+              <CaseDialog label={`Кейс ${caseKey}`} title={`${caseKey}${dialogTitle ? ` · ${dialogTitle}` : ""}`} minimized={minimized}
+                onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setCaseKey(null)}>
+                <CaseCard caseKey={caseKey} baseUrl={baseUrl} project={project} editable onChanged={() => setReloadKey(k => k + 1)}
+                  onClose={() => setCaseKey(null)} onMinimize={() => setMinimized(true)} onTitle={setDialogTitle} />
+              </CaseDialog>
+            ) : newCaseIn !== null ? (
+              <CaseDialog label="Новый кейс" title={`Новый кейс · ${newCaseIn || "корень"}`} minimized={minimized}
+                onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setNewCaseIn(null)}>
+                <NewCaseCard project={project} folder={newCaseIn} onClose={() => setNewCaseIn(null)} onMinimize={() => setMinimized(true)}
                   onCreated={k => { setNewCaseIn(null); setCaseKey(k); done(true, `Кейс ${k} создан.`); }} />
-              </div>
-            )}
-            {stagedPick && staging && !caseKey && (
-              <div className="w-[420px] flex-shrink-0 min-h-0"><StagedCaseCard staging={staging} caseId={stagedPick} onClose={() => setStagedPick(null)} /></div>
-            )}
+              </CaseDialog>
+            ) : stagedPick && staging ? (
+              <CaseDialog label="Новый кейс из черновика" title={staging.cases.find(c => c.id === stagedPick)?.name ?? "Кейс черновика"} minimized={minimized}
+                onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setStagedPick(null)}>
+                <StagedCaseCard staging={staging} caseId={stagedPick} onClose={() => setStagedPick(null)} onMinimize={() => setMinimized(true)} />
+              </CaseDialog>
+            ) : null}
           </div>
         )}
       </div>

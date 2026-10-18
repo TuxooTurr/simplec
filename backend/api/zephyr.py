@@ -165,6 +165,9 @@ def norm_steps(c: dict) -> list[dict]:
     return out
 
 
+RUN_TYPE_FIELD = "Вид тестирования"
+
+
 def norm_run(r: dict) -> dict:
     items = r.get("items") or r.get("testRunItems") or []
     counts: dict[str, int] = {}
@@ -181,6 +184,8 @@ def norm_run(r: dict) -> dict:
         "folder": r.get("folder") or "",
         "version": _name(r.get("version") or r.get("projectVersion")),
         "issueKey": r.get("issueKey") or "",
+        # Вид прогона (Регресс, Новый функционал…) — пользовательское поле прогона SBER911.
+        "type": _name((r.get("customFields") or {}).get(RUN_TYPE_FIELD)) if isinstance(r.get("customFields"), dict) else "",
         "owner": _name(r.get("owner")),
         "plannedStart": r.get("plannedStartDate") or "",
         "plannedEnd": r.get("plannedEndDate") or "",
@@ -289,9 +294,11 @@ def _save_index(base: str, project: str, idx: dict) -> None:
         logger.warning("Zephyr: индекс не сохранился на диск: %s", e)
 
 
-def _page(cfg: dict, project: str, extra: str, start: int, size: int) -> list[dict]:
-    """Страница поиска кейсов с узким набором полей; стенд не принял fields — без него (и запоминаем)."""
+def _page(cfg: dict, project: str, extra: str, start: int, size: int, kind: str = "testcase") -> list[dict]:
+    """Страница поиска кейсов (с узким набором полей; стенд не принял fields — без него, и запоминаем) или прогонов."""
     base = cfg["base_url"]
+    if kind != "testcase":
+        return _items(_first_working(cfg, kind, _search_variants(kind, project, extra, start, size), PAGE_TIMEOUT))
     fields = "" if base in _no_fields else INDEX_FIELDS
     try:
         return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size, fields), PAGE_TIMEOUT))
@@ -303,14 +310,14 @@ def _page(cfg: dict, project: str, extra: str, start: int, size: int) -> list[di
         return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size), PAGE_TIMEOUT))
 
 
-def fetch_all(cfg: dict, project: str, extra: str = "") -> list[dict]:
-    """Все кейсы по запросу: первая страница крупно → реальный размер страницы → остальные волнами параллельно."""
-    first = _page(cfg, project, extra, 0, FIRST_PAGE)
+def fetch_all(cfg: dict, project: str, extra: str = "", kind: str = "testcase") -> list[dict]:
+    """Все кейсы (или прогоны) по запросу: первая страница → реальный размер страницы → остальные волнами параллельно."""
+    first = _page(cfg, project, extra, 0, FIRST_PAGE, kind)
     if len(first) < FIRST_PAGE:
         if not first:
             return []
         # Меньше, чем просили: либо кейсы кончились, либо у сервера свой предел страницы — проверяем.
-        nxt = _page(cfg, project, extra, len(first), FIRST_PAGE)
+        nxt = _page(cfg, project, extra, len(first), FIRST_PAGE, kind)
         if not nxt:
             return first
         size, out, start = len(first), first + nxt, len(first) * 2
@@ -321,7 +328,7 @@ def fetch_all(cfg: dict, project: str, extra: str = "") -> list[dict]:
     with ThreadPoolExecutor(max_workers=WAVE) as pool:
         while start < MAX_ALL:
             offsets = [start + i * size for i in range(WAVE)]
-            pages = list(pool.map(lambda o: _page(cfg, project, extra, o, size), offsets))
+            pages = list(pool.map(lambda o: _page(cfg, project, extra, o, size, kind), offsets))
             for pg in pages:
                 out += pg
                 if len(pg) < size:
@@ -333,13 +340,22 @@ def fetch_all(cfg: dict, project: str, extra: str = "") -> list[dict]:
 MAX_ALL = 30000
 
 
-def get_index(cfg: dict, project: str, refresh: bool = False) -> dict:
+def _runs_key(project: str) -> str:
+    """Индекс прогонов живёт рядом с индексом кейсов под своим именем (файл SBER911~runs_<tag>.json)."""
+    return f"{project}~runs"
+
+
+def _slim_run(r: dict) -> dict:
+    return {**norm_run(r), "customFields": r.get("customFields") if isinstance(r.get("customFields"), dict) else {}}
+
+
+def get_index(cfg: dict, project: str, refresh: bool = False, kind: str = "testcase") -> dict:
     """
     Индекс проекта: память → диск → Jira. Одновременные запросы ждут одну загрузку, а не грузят каждый свою.
     Загрузка упала, пока запрос ждал, — он получает ту же ошибку, а не начинает загрузку заново (иначе дерево
     и список кейсов грузили модель по очереди и не укладывались в таймаут прокси — «Internal Server Error»).
     """
-    key = (cfg["base_url"], project)
+    key = (cfg["base_url"], project if kind == "testcase" else _runs_key(project))
     lock = _locks.setdefault(key, threading.Lock())
     arrived = time.time()
     with lock:
@@ -360,16 +376,19 @@ def get_index(cfg: dict, project: str, refresh: bool = False) -> dict:
                     logger.warning("Zephyr: индекс на диске повреждён (%s) — гружу из Jira", e)
         t0 = time.time()
         try:
-            rows = fetch_all(cfg, project)
+            rows = fetch_all(cfg, project, kind=kind)
         except HTTPException as e:
             _failed[key] = (time.time(), e)
-            logger.error("Zephyr: модель %s не загрузилась за %.1f с: %s", project, time.time() - t0, e.detail)
+            logger.error("Zephyr: %s %s не загрузились за %.1f с: %s", "кейсы" if kind == "testcase" else "прогоны",
+                         project, time.time() - t0, e.detail)
             raise
         _failed.pop(key, None)
         # Пустые папки, созданные в SimpleTest, в кейсах не видны — переносим их из прежнего индекса.
         keep = (_index.get(key) or {}).get("folders", set())
-        idx = {"loadedAt": time.time(), "cases": {c["key"]: _slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
-        logger.info("Zephyr: модель %s загружена — %s кейсов за %.1f с", project, len(idx["cases"]), time.time() - t0)
+        slim = _slim if kind == "testcase" else _slim_run
+        idx = {"loadedAt": time.time(), "cases": {c["key"]: slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
+        logger.info("Zephyr: %s %s загружены — %s за %.1f с", "кейсы" if kind == "testcase" else "прогоны",
+                    project, len(idx["cases"]), time.time() - t0)
         _index[key] = idx
         _save_index(*key, idx)
         return idx
@@ -466,16 +485,12 @@ def case(key: str, project: str = "", db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/api/zephyr/runs")
-def runs(project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
+def runs(project: str = Query(..., min_length=1), refresh: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Все прогоны проекта — из индекса прогонов (новые сверху); refresh=true — перечитать из Jira."""
     cfg = _load_cfg(db)
-    project = project.strip().upper()
-    out: list[dict] = []
-    for start in range(0, 1000, PAGE):
-        page = _items(_first_working(cfg, "testrun", _search_variants("testrun", project, "", start, PAGE)))
-        out += [norm_run(r) for r in page]
-        if len(page) < PAGE:
-            break
-    return {"runs": out}
+    idx = get_index(cfg, project.strip().upper(), refresh, kind="testrun")
+    out = sorted(idx["cases"].values(), key=lambda r: _key_num(r["key"]), reverse=True)
+    return {"runs": [{k: v for k, v in r.items() if k != "customFields"} for r in out], "loadedAt": idx["loadedAt"]}
 
 
 @router.get("/api/zephyr/run/{key}")
@@ -490,6 +505,8 @@ def run(key: str, db: Session = Depends(get_db)) -> dict:
         if e.status_code == 401:
             raise
         results = []
+    proj = str(r.get("projectKey") or key.split("-")[0]).upper()
+    _index_put(cfg, _runs_key(proj), [_slim_run(r)])     # прогресс прогона в списке — свежий
     items = r.get("items") or r.get("testRunItems") or []
     by_case = {x["testCaseKey"]: x for x in (norm_result(i) for i in results) if x["testCaseKey"]}
     rows = [by_case.get(i.get("testCaseKey") or "", norm_result(i)) for i in items if isinstance(i, dict)] or list(by_case.values())
@@ -596,34 +613,42 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
 # 400 значит «запрос есть, но не понравилось тело» — перебор остановится, чтобы не создать дубль.
 
 KE_FIELD_ID = "customfield_18300"      # КЭ в SBER911 (jira_constants.FIELD_KE)
-_KE_ID_RE = re.compile(r"\((\d+)\)\s*$")
+# Код КЭ в конце строки: «Рабочая группа [CI07841867]» (поле «АС» кейса) или «Название (3521751)».
+_KE_ID_RE = re.compile(r"[\(\[]\s*([A-Za-z]{0,4}\d+)\s*[\)\]]\s*$")
+_KE_BARE_RE = re.compile(r"^[A-Za-z]{0,4}\d+$")
+
+
+def _ke_split(s: str) -> tuple[str, str]:
+    """«Название [CI123]» → (CI123, Название); «CI123» / «777» → (код, ""); иначе ("", строка)."""
+    s = s.strip()
+    m = _KE_ID_RE.search(s)
+    if m:
+        return m.group(1).upper(), _KE_ID_RE.sub("", s).strip()
+    return (s.upper(), "") if _KE_BARE_RE.match(s) else ("", s)
 
 
 def _ke_items(v: Any) -> list[dict]:
-    """Значение поля КЭ → [{id, name, label}]: объекты {id, value}, строки «название (id)», голые id."""
+    """Значение поля КЭ → [{id, name, label}]: объекты {id, value}, строки «название (id)» / «название [CI…]», голые коды.
+    У объекта код берётся из текста значения, если он там есть, — id опции Jira лишь запасной вариант."""
     out: list[dict] = []
     for x in (v if isinstance(v, list) else [v] if v not in (None, "", [], {}) else []):
         if isinstance(x, dict):
-            name = str(x.get("value") or x.get("name") or x.get("displayName") or "").strip()
-            kid = str(x.get("id") or "").strip()
+            kid, name = _ke_split(str(x.get("value") or x.get("name") or x.get("displayName") or ""))
+            kid = kid or str(x.get("id") or "").strip().upper()
         else:
-            s = str(x).strip()
-            m = _KE_ID_RE.search(s)
-            kid = m.group(1) if m else (s if s.isdigit() else "")
-            name = _KE_ID_RE.sub("", s).strip() if m else ("" if s.isdigit() else s)
+            kid, name = _ke_split(str(x))
         if kid or name:
             out.append({"id": kid, "name": name, "label": f"{name} ({kid})" if name and kid else name or kid})
     return out
 
 
 def ke_match(case_ke: list[dict], wanted: list[dict]) -> bool:
-    """КЭ кейса совпадает с одной из КЭ релиза: по id, если он есть у обеих, иначе по названию без регистра."""
+    """КЭ кейса совпадает с одной из КЭ релиза: по коду (CI… или числовой id) или по названию без регистра."""
     for a in case_ke:
         for b in wanted:
-            if a["id"] and b["id"]:
-                if a["id"] == b["id"]:
-                    return True
-            elif a["name"] and b["name"] and a["name"].lower() == b["name"].lower():
+            if a["id"] and a["id"] == b["id"]:
+                return True
+            if a["name"] and b["name"] and a["name"].lower() == b["name"].lower():
                 return True
     return False
 
@@ -677,7 +702,7 @@ class CritCriteria(BaseModel):
     crit_value: str = "Да"
     type_field: str = "Вид тестирования"
     type_value: str = "Регресс"
-    ke_field: str = "КЭ"
+    ke_field: str = "АС"                      # КЭ кейса в SBER911 — поле «АС»: «Рабочая группа [CI07841867]»
 
 
 class CritBody(BaseModel):
@@ -723,7 +748,8 @@ def release(key: str, db: Session = Depends(get_db)) -> dict:
     sources: list[str] = []
     for fid, val in fields.items():
         title = str(names.get(fid, ""))
-        if fid == KE_FIELD_ID or title.strip().lower().startswith("кэ") or "конфигурационн" in title.lower():
+        # Только поле «КЭ»: в «КЭ дистрибутива» лежит версия, по ней кейсы не отбираются.
+        if _fname(title) == "кэ" or (fid == KE_FIELD_ID and not title):
             items = _ke_items(val)
             if items:
                 sources.append(f"{title or fid} ({fid})")
@@ -731,7 +757,26 @@ def release(key: str, db: Session = Depends(get_db)) -> dict:
     uniq = list({(k["id"] or k["name"].lower()): k for k in ke}.values())
     return {"key": key, "summary": fields.get("summary") or "", "status": _name(fields.get("status")),
             "issuetype": _name(fields.get("issuetype")), "url": f"{cfg['base_url']}/browse/{key}",
-            "ke": uniq, "keSources": sources}
+            "ke": uniq, "keSources": sources, "stories": linked_issues(fields.get("issuelinks"))}
+
+
+def linked_issues(links: Any) -> list[dict]:
+    """Связи задачи (issuelinks) → задачи по ним: стори релиза прикреплены к его задаче связями."""
+    out: dict[str, dict] = {}
+    for ln in links if isinstance(links, list) else []:
+        if not isinstance(ln, dict):
+            continue
+        other = ln.get("outwardIssue") or ln.get("inwardIssue")
+        if not isinstance(other, dict) or not other.get("key"):
+            continue
+        f = other.get("fields") or {}
+        t = ln.get("type") or {}
+        out.setdefault(other["key"], {
+            "key": other["key"], "summary": f.get("summary") or "", "status": _name(f.get("status")),
+            "issuetype": _name(f.get("issuetype")),
+            "link": str((t.get("outward") if ln.get("outwardIssue") else t.get("inward")) or t.get("name") or ""),
+        })
+    return sorted(out.values(), key=lambda x: _key_num(x["key"]))
 
 
 @router.post("/api/zephyr/crit-cases")
@@ -750,6 +795,165 @@ def crit_cases(body: CritBody, db: Session = Depends(get_db)) -> dict:
             seen[str(k)] = seen.get(str(k), 0) + 1
     stats["fields"] = [k for k, _ in sorted(seen.items(), key=lambda x: -x[1])][:40]
     return {"cases": cases_out, "stats": stats, "loadedAt": idx["loadedAt"]}
+
+
+@router.get("/api/zephyr/field-values")
+def field_values(project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
+    """Значения для выпадающих списков «Условий»: статусы кейсов и значения пользовательских полей — по модели."""
+    cfg = _load_cfg(db)
+    idx = get_index(cfg, project.strip().upper())
+    statuses: dict[str, int] = {}
+    fields: dict[str, dict[str, int]] = {}
+    for c in idx["cases"].values():
+        st = _name(c.get("status"))
+        if st:
+            statuses[st] = statuses.get(st, 0) + 1
+        cf = c.get("customFields") or {}
+        pairs = cf.items() if isinstance(cf, dict) else [(f.get("name", ""), f.get("value")) for f in cf if isinstance(f, dict)]
+        for name, v in pairs:
+            vals = fields.setdefault(str(name), {})
+            for x in (v if isinstance(v, list) else [v]):
+                t = ("Да" if x else "Нет") if isinstance(x, bool) else _name(x) if isinstance(x, dict) else "" if x is None else str(x).strip()
+                if t and len(vals) < 200:
+                    vals[t] = vals.get(t, 0) + 1
+    top = lambda d: [k for k, _ in sorted(d.items(), key=lambda x: (-x[1], x[0]))]
+    return {"statuses": top(statuses),
+            "fields": {k: top(v)[:100] for k, v in sorted(fields.items(), key=lambda x: -sum(x[1].values()))}}
+
+
+# ── Релизы: строки с маркерами, стори и их прогоны ───────────────────────────
+#
+# Публичный API Zephyr Server не умеет менять отслеживание существующего прогона (у прогона один issueKey,
+# изменения прогона — только во внутреннем API, на стенде 403). Поэтому «добавить прогон к релизу» хранит
+# связь в SimpleTest (data/zephyr_releases.json, общая для всех), а прогоны с релизом в issueKey подтягиваются сами.
+
+_RELEASES_FILE = _ROOT / "data" / "zephyr_releases.json"
+_releases_lock = threading.Lock()
+
+
+def _rel_load() -> dict:
+    try:
+        return json.loads(_RELEASES_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _rel_save(data: dict) -> None:
+    _RELEASES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _RELEASES_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+    tmp.replace(_RELEASES_FILE)
+
+
+def _rel_project(data: dict, project: str) -> dict:
+    return data.setdefault(project, {"releases": [], "links": {}})
+
+
+_ISSUE_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+
+
+def _issue_key(k: str, what: str = "Номер задачи") -> str:
+    k = k.strip().upper()
+    if not _ISSUE_RE.match(k):
+        raise HTTPException(422, f"{what} — в формате SBER911-12345")
+    return k
+
+
+@router.get("/api/zephyr/releases")
+def releases_list(project: str = Query(..., min_length=1)) -> dict:
+    """Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»), и прогоны, добавленные к ним вручную."""
+    with _releases_lock:
+        p = _rel_load().get(project.strip().upper()) or {"releases": [], "links": {}}
+    return p
+
+
+class ReleaseAdd(BaseModel):
+    project: str = Field(..., min_length=1)
+    key: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/releases")
+def releases_add(body: ReleaseAdd) -> dict:
+    key = _issue_key(body.key, "Номер релиза")
+    with _releases_lock:
+        data = _rel_load()
+        p = _rel_project(data, body.project.strip().upper())
+        if key not in p["releases"]:
+            p["releases"].insert(0, key)
+        _rel_save(data)
+    return p
+
+
+@router.delete("/api/zephyr/releases/{key}")
+def releases_remove(key: str, project: str = Query(..., min_length=1)) -> dict:
+    """Убрать строку релиза из SimpleTest (в Jira ничего не меняется)."""
+    key = key.strip().upper()
+    with _releases_lock:
+        data = _rel_load()
+        p = _rel_project(data, project.strip().upper())
+        p["releases"] = [k for k in p["releases"] if k != key]
+        p["links"].pop(key, None)
+        _rel_save(data)
+    return p
+
+
+class ReleaseRunLink(BaseModel):
+    project: str = Field(..., min_length=1)
+    runKey: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/release/{key}/runs")
+def release_add_run(key: str, body: ReleaseRunLink) -> dict:
+    key = _issue_key(key, "Номер релиза")
+    run_key = body.runKey.strip().upper()
+    with _releases_lock:
+        data = _rel_load()
+        p = _rel_project(data, body.project.strip().upper())
+        if key not in p["releases"]:
+            p["releases"].insert(0, key)
+        links = p["links"].setdefault(key, [])
+        if run_key not in links:
+            links.append(run_key)
+        _rel_save(data)
+    return p
+
+
+@router.delete("/api/zephyr/release/{key}/runs/{run_key}")
+def release_remove_run(key: str, run_key: str, project: str = Query(..., min_length=1)) -> dict:
+    key, run_key = key.strip().upper(), run_key.strip().upper()
+    with _releases_lock:
+        data = _rel_load()
+        p = _rel_project(data, project.strip().upper())
+        p["links"][key] = [k for k in p["links"].get(key, []) if k != run_key]
+        _rel_save(data)
+    return p
+
+
+@router.get("/api/zephyr/release/{key}/board")
+def release_board(key: str, project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
+    """
+    Строка релиза: задача релиза (КЭ, стори по связям), прогоны релиза — с релизом в отслеживании (issueKey)
+    и добавленные в SimpleTest, — и прогоны каждой стори (стори в отслеживании прогона).
+    """
+    cfg = _load_cfg(db)
+    project = project.strip().upper()
+    rel = release(key, db=db)
+    idx = get_index(cfg, project, kind="testrun")
+    with _releases_lock:
+        manual = set((_rel_load().get(project) or {}).get("links", {}).get(rel["key"], []))
+    by_issue: dict[str, list[dict]] = {}
+    for r in idx["cases"].values():
+        if r.get("issueKey"):
+            by_issue.setdefault(str(r["issueKey"]).upper(), []).append(r)
+    clean = lambda r: {k: v for k, v in r.items() if k != "customFields"}
+    runs_out = [{**clean(r), "source": "issue"} for r in by_issue.get(rel["key"], [])]
+    have = {r["key"] for r in runs_out}
+    for rk in sorted(manual - have, key=_key_num):
+        r = idx["cases"].get(rk)
+        runs_out.append({**clean(r), "source": "simpletest"} if r else
+                        {"key": rk, "name": "", "type": "", "status": "", "total": 0, "counts": {}, "source": "simpletest", "missing": True})
+    story_runs = {s["key"]: [clean(r) for r in by_issue.get(s["key"], [])] for s in rel["stories"]}
+    return {"release": rel, "runs": runs_out, "storyRuns": story_runs, "runsLoadedAt": idx["loadedAt"]}
 
 
 def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str, Any]]) -> Any:
@@ -796,6 +1000,10 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
     if not key:
         raise HTTPException(502, f"Zephyr не вернул ключ прогона: {str(data)[:200]}")
     logger.info("Zephyr: создан прогон %s (%s кейсов, отслеживание %s)", key, len(payload["items"]), payload.get("issueKey"))
+    try:   # новый прогон сразу виден в списке прогонов и в строке релиза
+        _index_put(cfg, _runs_key(payload["projectKey"]), [_slim_run(_jira_request(cfg, "GET", f"{ATM}/testrun/{key}"))])
+    except HTTPException as e:
+        logger.warning("Zephyr: прогон %s создан, но не перечитан в индекс: %s", key, e.detail)
     return {"key": key, "url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{key}"}
 
 

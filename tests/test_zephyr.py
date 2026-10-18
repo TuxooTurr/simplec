@@ -519,26 +519,36 @@ def test_строка_релиза_прогоны_релиза_и_нф_прог�
     _release_route(jira)
     jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [
         _run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал"),
-        _run("SBER911-C3"), _run("SBER911-C4", "SBER911-999")] if p["startAt"] == 0 else []
-    z.release_add_run("SBER911-100", z.ReleaseRunLink(project="SBER911", runKey="sber911-c3"))
+        _run("SBER911-C3", "SBER911-12", "Новый функционал"), _run("SBER911-C4", "SBER911-999")] if p["startAt"] == 0 else []
     b = z.release_board("SBER911-100", project="SBER911", db=None)
-    assert [(r["key"], r["source"]) for r in b["runs"]] == [("SBER911-C1", "issue"), ("SBER911-C3", "simpletest")]
-    assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C2"] and b["storyRuns"]["SBER911-12"] == []
+    assert [(r["key"], r["source"]) for r in b["runs"]] == [("SBER911-C1", "zephyr")] and b["runs"][0]["type"] == "Регресс"
+    assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C2"]
     assert b["storyRuns"]["SBER911-11"][0]["type"] == "Новый функционал"
-    assert z.releases_list(project="SBER911") == {"releases": ["SBER911-100"], "links": {"SBER911-100": ["SBER911-C3"]}}
+
+
+def test_нф_прогоны_добавляются_к_релизу_многие_ко_многим(jira):
+    _release_route(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [
+        _run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал")] if p["startAt"] == 0 else []
+    z.release_add_runs("SBER911-100", z.ReleaseRuns(project="SBER911", runKeys=["sber911-c2", "SBER911-C1", "SBER911-C9"]))
+    z.release_add_runs("SBER911-200", z.ReleaseRuns(project="SBER911", runKeys=["SBER911-C2"]))   # тот же прогон — в другом релизе
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert [(r["key"], r["source"], r.get("missing", False)) for r in b["runs"]] == [
+        ("SBER911-C9", "simpletest", True), ("SBER911-C2", "simpletest", False), ("SBER911-C1", "zephyr", False)]
+    assert z.release_remove_run("SBER911-100", "SBER911-C2", project="SBER911")["runs"] == ["SBER911-C1", "SBER911-C9"]
+    assert z.release_add_runs("SBER911-200", z.ReleaseRuns(project="SBER911", runKeys=["SBER911-C2"]))["runs"] == ["SBER911-C2"]
 
 
 def test_релизы_в_simpletest_добавить_убрать(jira):
     z.releases_add(z.ReleaseAdd(project="sber911", key="sber911-1"))
     z.releases_add(z.ReleaseAdd(project="SBER911", key="SBER911-2"))
-    z.release_add_run("SBER911-1", z.ReleaseRunLink(project="SBER911", runKey="SBER911-C1"))
     assert z.releases_list(project="SBER911")["releases"] == ["SBER911-2", "SBER911-1"]
-    z.release_remove_run("SBER911-1", "SBER911-C1", project="SBER911")
-    assert z.releases_list(project="SBER911")["links"]["SBER911-1"] == []
     z.releases_remove("SBER911-1", project="SBER911")
-    assert z.releases_list(project="SBER911") == {"releases": ["SBER911-2"], "links": {}}
+    assert z.releases_list(project="SBER911") == {"releases": ["SBER911-2"]}
     with pytest.raises(HTTPException):
         z.releases_add(z.ReleaseAdd(project="SBER911", key="релиз"))
+    with pytest.raises(HTTPException):
+        z.release_add_runs("SBER911-2", z.ReleaseRuns(project="SBER911", runKeys=["не ключ"]))
 
 
 def test_список_прогонов_из_индекса_новые_сверху(jira):
@@ -559,3 +569,80 @@ def test_значения_полей_для_выпадающих_списков(
     assert v["statuses"] == ["Approved", "Draft"]
     assert v["fields"]["Вид тестирования"] == ["Регресс", "Новый функционал"]
     assert set(v["fields"]["Крит. регресс"]) == {"Да", "Нет"} and v["fields"]["Домен"] == ["Omega", "Sigma"]
+
+
+# ── Прогон регресса: создание с релизом в отслеживании ──────────────────────
+
+def _create_env(monkeypatch, reject_custom=False, tracked="SBER911-100"):
+    sent = []
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        if method == "GET":
+            return {"key": "SBER911-C9", "issueKey": tracked, "projectKey": "SBER911", "customFields": {"Вид тестирования": "Регресс"}}
+        sent.append(json_body)
+        if reject_custom and "customFields" in json_body:
+            raise HTTPException(400, "Jira: customFields: unknown field")
+        return {"key": "SBER911-C9"}
+    monkeypatch.setattr(z, "_jira_request", req)
+    return sent
+
+
+def test_прогон_регресса_с_релизом_и_видом_тестирования(jira, monkeypatch):
+    sent = _create_env(monkeypatch)
+    r = z.create_run(z.RunCreate(project="SBER911", name="Регресс", issueKey="sber911-100", caseKeys=["T1"], type="Регресс"), db=None)
+    assert sent == [{"projectKey": "SBER911", "name": "Регресс", "items": [{"testCaseKey": "T1"}], "issueKey": "SBER911-100",
+                     "customFields": {"Вид тестирования": "Регресс"}}]
+    assert r["issueKey"] == "SBER911-100" and r["warnings"] == []
+
+
+def test_вид_тестирования_не_принят_создаю_без_него(jira, monkeypatch):
+    sent = _create_env(monkeypatch, reject_custom=True)
+    r = z.create_run(z.RunCreate(project="SBER911", name="Регресс", issueKey="SBER911-100", caseKeys=["T1"], type="Регресс"), db=None)
+    assert len(sent) == 2 and "customFields" not in sent[1] and sent[1]["issueKey"] == "SBER911-100"
+    assert r["key"] == "SBER911-C9" and "Вид тестирования" in r["warnings"][0]
+
+
+def test_предупреждаю_если_релиз_не_встал_в_отслеживание(jira, monkeypatch):
+    _create_env(monkeypatch, tracked="")
+    r = z.create_run(z.RunCreate(project="SBER911", name="Регресс", issueKey="SBER911-100", caseKeys=["T1"]), db=None)
+    assert r["issueKey"] == "" and "не поставил SBER911-100" in r["warnings"][0]
+
+
+def test_весь_регресс_по_кэ_без_признака_крит():
+    cases = [_case("T1"), _case("T2", crit="Нет"), _case("T3", typ="Смоук")]
+    out, _ = z.crit_filter(cases, z._ke_items(["3521751"]), z.CritCriteria(only_crit=False))
+    assert [c["key"] for c in out] == ["T1", "T2"]
+
+
+def test_прогоны_грузятся_лёгкими_страницами_без_строк_кейсов(jira):
+    calls = []
+    def r(p):
+        calls.append(p)
+        return [_run(f"SBER911-C{i}") for i in range(p["startAt"], min(p["startAt"] + p["maxResults"], 120))]
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = r
+    assert len(z.runs(project="SBER911", db=None)["runs"]) == 120
+    assert all(c["maxResults"] == z.RUN_PAGE and c["fields"] == z.RUN_FIELDS for c in calls)
+    assert "items" not in z.RUN_FIELDS and "executionSummary" in z.RUN_FIELDS
+
+
+def test_прогоны_fields_не_принят_гружу_целиком(jira):
+    def r(p):
+        if "fields" in p:
+            raise HTTPException(400, "Jira: fields")
+        return [_run("SBER911-C1")] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = r
+    jira["routes"]["/rest/atm/1.0/testcycle/search"] = HTTPException(404, "Jira: not found")
+    assert [x["key"] for x in z.runs(project="SBER911", db=None)["runs"]] == ["SBER911-C1"]
+
+
+def test_прогресс_прогона_из_сводки_без_строк_кейсов():
+    r = z.norm_run({"key": "SBER911-C1", "testCaseCount": 40, "executionSummary": {"Pass": 30, "Fail": 2}})
+    assert r["total"] == 40 and r["counts"] == {"Pass": 30, "Fail": 2}
+
+
+def test_первая_страница_не_успела_пробую_поменьше(jira):
+    def r(p):
+        if p["maxResults"] > z.SMALL_PAGE:
+            raise HTTPException(502, "Jira недоступна: Read timed out. (read timeout=90)")
+        return [_run(f"SBER911-C{i}") for i in range(p["startAt"], min(p["startAt"] + p["maxResults"], 25))]
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = r
+    assert len(z.runs(project="SBER911", db=None)["runs"]) == 25

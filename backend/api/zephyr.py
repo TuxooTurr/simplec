@@ -294,37 +294,53 @@ def _save_index(base: str, project: str, idx: dict) -> None:
         logger.warning("Zephyr: индекс не сохранился на диск: %s", e)
 
 
+# Прогон в поиске приходит со всеми строками кейсов (items) — у регресса их сотни, страница из 200 таких прогонов
+# не укладывалась в таймаут. Для списка нужны только эти поля: прогресс берётся из executionSummary и testCaseCount.
+RUN_FIELDS = ("key,name,status,folder,version,projectVersion,issueKey,customFields,owner,"
+              "plannedStartDate,plannedEndDate,testCaseCount,executionSummary,projectKey")
+RUN_PAGE = 50              # прогоны тяжелее кейсов — страница меньше
+SMALL_PAGE = 10            # запасной размер страницы, если обычная не уложилась в таймаут
+
+
 def _page(cfg: dict, project: str, extra: str, start: int, size: int, kind: str = "testcase") -> list[dict]:
-    """Страница поиска кейсов (с узким набором полей; стенд не принял fields — без него, и запоминаем) или прогонов."""
+    """Страница поиска кейсов или прогонов с узким набором полей; стенд не принял fields — без него (и запоминаем)."""
     base = cfg["base_url"]
-    if kind != "testcase":
-        return _items(_first_working(cfg, kind, _search_variants(kind, project, extra, start, size), PAGE_TIMEOUT))
-    fields = "" if base in _no_fields else INDEX_FIELDS
+    mark = base if kind == "testcase" else f"{base}#{kind}"
+    fields = "" if mark in _no_fields else INDEX_FIELDS if kind == "testcase" else RUN_FIELDS
     try:
-        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size, fields), PAGE_TIMEOUT))
+        return _items(_first_working(cfg, kind, _search_variants(kind, project, extra, start, size, fields), PAGE_TIMEOUT))
     except HTTPException as e:
         if e.status_code != 400 or not fields:
             raise
-        _no_fields.add(base)
-        logger.info("Zephyr: параметр fields не принят — гружу кейсы целиком")
-        return _items(_first_working(cfg, "testcase", _search_variants("testcase", project, extra, start, size), PAGE_TIMEOUT))
+        _no_fields.add(mark)
+        logger.info("Zephyr: параметр fields не принят (%s) — гружу целиком", kind)
+        return _items(_first_working(cfg, kind, _search_variants(kind, project, extra, start, size), PAGE_TIMEOUT))
 
 
 def fetch_all(cfg: dict, project: str, extra: str = "", kind: str = "testcase") -> list[dict]:
     """Все кейсы (или прогоны) по запросу: первая страница → реальный размер страницы → остальные волнами параллельно."""
-    first = _page(cfg, project, extra, 0, FIRST_PAGE, kind)
-    if len(first) < FIRST_PAGE:
+    want = FIRST_PAGE if kind == "testcase" else RUN_PAGE
+    try:
+        first = _page(cfg, project, extra, 0, want, kind)
+    except HTTPException as e:
+        # Стенд не успел отдать страницу (обычно — прогоны целиком, если fields не учтён): пробуем страницу поменьше.
+        if kind == "testcase" or e.status_code != 502 or "timed out" not in str(e.detail).lower():
+            raise
+        logger.warning("Zephyr: страница %s по %s не успела (%s) — пробую по %s", kind, want, e.detail, SMALL_PAGE)
+        want = SMALL_PAGE
+        first = _page(cfg, project, extra, 0, want, kind)
+    if len(first) < want:
         if not first:
             return []
         # Меньше, чем просили: либо кейсы кончились, либо у сервера свой предел страницы — проверяем.
-        nxt = _page(cfg, project, extra, len(first), FIRST_PAGE, kind)
+        nxt = _page(cfg, project, extra, len(first), want, kind)
         if not nxt:
             return first
         size, out, start = len(first), first + nxt, len(first) * 2
         if len(nxt) < size:
             return out
     else:
-        size, out, start = FIRST_PAGE, first, FIRST_PAGE
+        size, out, start = want, first, want
     with ThreadPoolExecutor(max_workers=WAVE) as pool:
         while start < MAX_ALL:
             offsets = [start + i * size for i in range(WAVE)]
@@ -563,6 +579,9 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
             items = _items(data)
             if items and items[0].get("key"):
                 found.setdefault(store, items[0]["key"])
+            issue = next((x.get("issueKey") for x in items if x.get("issueKey")), None)   # задача из отслеживания прогона
+            if store == "run" and issue:
+                found.setdefault("issue", str(issue))
         return f
 
     check("jira-project", "Проект в Jira (id для внутреннего API)", lambda: f"/rest/api/2/project/{project}",
@@ -596,6 +615,12 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
     check("result-statuses", "Статусы результатов (внутренний API)",
           lambda: f"{TESTS}/project/{found['pid']}/testresultstatus" if found.get("pid") else None)
     check("environments", "Среды тестирования", lambda: f"{ATM}/environments", {"projectKey": project})
+    # Связи задачи с кейсами и прогонами (вся «трассировка» Zephyr, а не только issueKey прогона): если стенд их отдаёт,
+    # прогоны, привязанные к релизу и стори руками в Zephyr, можно читать отсюда.
+    check("issue-cases", "Кейсы задачи: issuelink/{задача}/testcases",
+          lambda: f"{ATM}/issuelink/{found['issue']}/testcases" if found.get("issue") else None)
+    check("issue-runs", "Прогоны задачи: issuelink/{задача}/testruns",
+          lambda: f"{ATM}/issuelink/{found['issue']}/testruns" if found.get("issue") else None)
 
     done = [r for r in results if not r.get("skipped")]
     return {"project": project, "base_url": cfg["base_url"], "checkedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -703,6 +728,7 @@ class CritCriteria(BaseModel):
     type_field: str = "Вид тестирования"
     type_value: str = "Регресс"
     ke_field: str = "АС"                      # КЭ кейса в SBER911 — поле «АС»: «Рабочая группа [CI07841867]»
+    only_crit: bool = True                    # False — весь регресс по КЭ, без признака «Крит. регресс»
 
 
 class CritBody(BaseModel):
@@ -722,7 +748,7 @@ def crit_filter(cases: list[dict], wanted: list[dict], c: CritCriteria) -> tuple
             continue
         stats["checked"] += 1
         crit = _cf_texts(_cf(case, c.crit_field))
-        if not any(x == yes or (yes in _YES and x in _YES) for x in crit):
+        if c.only_crit and not any(x == yes or (yes in _YES and x in _YES) for x in crit):
             stats["no_crit"] += 1
             continue
         if c.type_value.strip().lower() not in _cf_texts(_cf(case, c.type_field)):
@@ -823,9 +849,13 @@ def field_values(project: str = Query(..., min_length=1), db: Session = Depends(
 
 # ── Релизы: строки с маркерами, стори и их прогоны ───────────────────────────
 #
-# Публичный API Zephyr Server не умеет менять отслеживание существующего прогона (у прогона один issueKey,
-# изменения прогона — только во внутреннем API, на стенде 403). Поэтому «добавить прогон к релизу» хранит
-# связь в SimpleTest (data/zephyr_releases.json, общая для всех), а прогоны с релизом в issueKey подтягиваются сами.
+# Строка релиза: прогон регресса (релиз в отслеживании прогона, вид «Регресс»), стори релиза (связи задачи релиза)
+# и у каждой — есть ли прогон НФ (стори в отслеживании прогона, вид «Новый функционал»), и прогоны НФ самого релиза.
+#
+# Прогонов у релиза сколько угодно, релизов у прогона — тоже. В Zephyr это «отслеживание» прогона, но публичный API
+# Server отдаёт и принимает только одну задачу (issueKey, и только при создании), а внутренний API на стенде — 403.
+# Поэтому прогон релиза = релиз в issueKey прогона (из Zephyr) + связи, добавленные в SimpleTest (links). Список
+# релизов и связи — data/zephyr_releases.json, общий для всех.
 
 _RELEASES_FILE = _ROOT / "data" / "zephyr_releases.json"
 _releases_lock = threading.Lock()
@@ -846,10 +876,13 @@ def _rel_save(data: dict) -> None:
 
 
 def _rel_project(data: dict, project: str) -> dict:
-    return data.setdefault(project, {"releases": [], "links": {}})
+    p = data.setdefault(project, {"releases": []})
+    p.setdefault("links", {})   # релиз → прогоны, добавленные к нему в SimpleTest
+    return p
 
 
 _ISSUE_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
+_RUN_RE = re.compile(r"^[A-Z][A-Z0-9_]*-[A-Z]*\d+$")   # прогон Zephyr: SBER911-C709
 
 
 def _issue_key(k: str, what: str = "Номер задачи") -> str:
@@ -861,10 +894,10 @@ def _issue_key(k: str, what: str = "Номер задачи") -> str:
 
 @router.get("/api/zephyr/releases")
 def releases_list(project: str = Query(..., min_length=1)) -> dict:
-    """Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»), и прогоны, добавленные к ним вручную."""
+    """Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»)."""
     with _releases_lock:
-        p = _rel_load().get(project.strip().upper()) or {"releases": [], "links": {}}
-    return p
+        p = _rel_load().get(project.strip().upper()) or {}
+    return {"releases": list(p.get("releases", []))}
 
 
 class ReleaseAdd(BaseModel):
@@ -897,61 +930,68 @@ def releases_remove(key: str, project: str = Query(..., min_length=1)) -> dict:
     return p
 
 
-class ReleaseRunLink(BaseModel):
+class ReleaseRuns(BaseModel):
     project: str = Field(..., min_length=1)
-    runKey: str = Field(..., min_length=1)
+    runKeys: list[str] = Field(..., min_length=1)
 
 
 @router.post("/api/zephyr/release/{key}/runs")
-def release_add_run(key: str, body: ReleaseRunLink) -> dict:
+def release_add_runs(key: str, body: ReleaseRuns) -> dict:
+    """Добавить прогоны к релизу (связь хранится в SimpleTest: API Zephyr не меняет отслеживание готового прогона)."""
     key = _issue_key(key, "Номер релиза")
-    run_key = body.runKey.strip().upper()
     with _releases_lock:
         data = _rel_load()
         p = _rel_project(data, body.project.strip().upper())
-        if key not in p["releases"]:
-            p["releases"].insert(0, key)
         links = p["links"].setdefault(key, [])
-        if run_key not in links:
-            links.append(run_key)
+        for rk in body.runKeys:
+            rk = rk.strip().upper()
+            if not _RUN_RE.match(rk):
+                raise HTTPException(422, f"Ключ прогона «{rk}» — в формате SBER911-C123")
+            if rk not in links:
+                links.append(rk)
         _rel_save(data)
-    return p
+    return {"key": key, "runs": links}
 
 
 @router.delete("/api/zephyr/release/{key}/runs/{run_key}")
 def release_remove_run(key: str, run_key: str, project: str = Query(..., min_length=1)) -> dict:
+    """Убрать прогон из релиза — только связь, добавленную в SimpleTest (отслеживание в Zephyr не трогаем)."""
     key, run_key = key.strip().upper(), run_key.strip().upper()
     with _releases_lock:
         data = _rel_load()
         p = _rel_project(data, project.strip().upper())
         p["links"][key] = [k for k in p["links"].get(key, []) if k != run_key]
         _rel_save(data)
-    return p
+    return {"key": key, "runs": p["links"][key]}
 
 
 @router.get("/api/zephyr/release/{key}/board")
 def release_board(key: str, project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
     """
-    Строка релиза: задача релиза (КЭ, стори по связям), прогоны релиза — с релизом в отслеживании (issueKey)
-    и добавленные в SimpleTest, — и прогоны каждой стори (стори в отслеживании прогона).
+    Строка релиза: задача релиза (КЭ, стори по связям); прогоны релиза — с релизом в отслеживании (source=zephyr)
+    и добавленные в SimpleTest (source=simpletest); прогоны каждой стори (стори в отслеживании прогона).
     """
     cfg = _load_cfg(db)
     project = project.strip().upper()
     rel = release(key, db=db)
     idx = get_index(cfg, project, kind="testrun")
-    with _releases_lock:
-        manual = set((_rel_load().get(project) or {}).get("links", {}).get(rel["key"], []))
     by_issue: dict[str, list[dict]] = {}
     for r in idx["cases"].values():
         if r.get("issueKey"):
             by_issue.setdefault(str(r["issueKey"]).upper(), []).append(r)
     clean = lambda r: {k: v for k, v in r.items() if k != "customFields"}
-    runs_out = [{**clean(r), "source": "issue"} for r in by_issue.get(rel["key"], [])]
+    runs_out = [{**clean(r), "source": "zephyr"} for r in by_issue.get(rel["key"], [])]
+    with _releases_lock:
+        linked = (_rel_load().get(project) or {}).get("links", {}).get(rel["key"], [])
     have = {r["key"] for r in runs_out}
-    for rk in sorted(manual - have, key=_key_num):
+    for rk in linked:
+        if rk in have:
+            continue
         r = idx["cases"].get(rk)
         runs_out.append({**clean(r), "source": "simpletest"} if r else
-                        {"key": rk, "name": "", "type": "", "status": "", "total": 0, "counts": {}, "source": "simpletest", "missing": True})
+                        {"key": rk, "name": "", "type": "", "status": "", "issueKey": "", "total": 0, "counts": {},
+                         "source": "simpletest", "missing": True})
+    runs_out.sort(key=lambda r: _key_num(r["key"]), reverse=True)
     story_runs = {s["key"]: [clean(r) for r in by_issue.get(s["key"], [])] for s in rel["stories"]}
     return {"release": rel, "runs": runs_out, "storyRuns": story_runs, "runsLoadedAt": idx["loadedAt"]}
 
@@ -982,29 +1022,56 @@ class RunCreate(BaseModel):
     issueKey: str = ""                                     # задача Jira — отслеживание (номер релиза)
     caseKeys: list[str] = Field(default_factory=list)
     folder: str = ""
+    type: str = ""                                         # «Вид тестирования» прогона: «Регресс» — для маркера релиза
 
 
 @router.post("/api/zephyr/runs")
 def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
+    """
+    Новый прогон: кейсы, задача релиза в отслеживании (issueKey — его API принимает только при создании),
+    вид тестирования. Стенд не принял поле вида (400 — прогон не создан) — создаём без него и предупреждаем.
+    После создания прогон перечитывается: так видно, что релиз действительно встал в отслеживание.
+    """
     cfg = _load_cfg(db)
     if not body.caseKeys:
         raise HTTPException(422, "В прогоне нет кейсов")
     payload: dict[str, Any] = {"projectKey": body.project.strip().upper(), "name": body.name.strip(),
                                "items": [{"testCaseKey": k} for k in dict.fromkeys(body.caseKeys)]}
-    if body.issueKey.strip():
-        payload["issueKey"] = body.issueKey.strip().upper()
+    issue = body.issueKey.strip().upper()
+    if issue:
+        payload["issueKey"] = issue
     if body.folder.strip():
         payload["folder"] = body.folder.strip()
-    data = _write_variants(cfg, "testrun-create", "POST", [(f"{ATM}/testrun", payload), (f"{ATM}/testcycle", payload)])
+    warnings: list[str] = []
+    variants = lambda p: [(f"{ATM}/testrun", p), (f"{ATM}/testcycle", p)]
+    if body.type.strip():
+        try:
+            data = _write_variants(cfg, "testrun-create", "POST", variants({**payload, "customFields": {RUN_TYPE_FIELD: body.type.strip()}}))
+        except HTTPException as e:
+            if e.status_code != 400:
+                raise
+            logger.warning("Zephyr: прогон с полем «%s» не принят (%s) — создаю без него", RUN_TYPE_FIELD, e.detail)
+            data = _write_variants(cfg, "testrun-create", "POST", variants(payload))
+            warnings.append(f"Поле «{RUN_TYPE_FIELD}» = {body.type.strip()} стенд не принял ({e.detail}) — "
+                            "прогон создан без него, поставьте вид в Zephyr вручную.")
+    else:
+        data = _write_variants(cfg, "testrun-create", "POST", variants(payload))
     key = (data or {}).get("key", "")
     if not key:
         raise HTTPException(502, f"Zephyr не вернул ключ прогона: {str(data)[:200]}")
-    logger.info("Zephyr: создан прогон %s (%s кейсов, отслеживание %s)", key, len(payload["items"]), payload.get("issueKey"))
-    try:   # новый прогон сразу виден в списке прогонов и в строке релиза
-        _index_put(cfg, _runs_key(payload["projectKey"]), [_slim_run(_jira_request(cfg, "GET", f"{ATM}/testrun/{key}"))])
+    logger.info("Zephyr: создан прогон %s (%s кейсов, отслеживание %s)", key, len(payload["items"]), issue)
+    tracked = ""
+    try:   # перечитать: релиз в отслеживании и прогон сразу в списке прогонов и в строке релиза
+        fresh = _jira_request(cfg, "GET", f"{ATM}/testrun/{key}")
+        tracked = str(fresh.get("issueKey") or "").upper()
+        _index_put(cfg, _runs_key(payload["projectKey"]), [_slim_run(fresh)])
     except HTTPException as e:
-        logger.warning("Zephyr: прогон %s создан, но не перечитан в индекс: %s", key, e.detail)
-    return {"key": key, "url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{key}"}
+        logger.warning("Zephyr: прогон %s создан, но не перечитан: %s", key, e.detail)
+        tracked = issue   # проверить не удалось — не пугаем ложным предупреждением
+    if issue and tracked != issue:
+        warnings.append(f"Прогон создан, но Zephyr не поставил {issue} в отслеживание (там: {tracked or 'пусто'}) — "
+                        "добавьте релиз в отслеживание прогона в Zephyr вручную.")
+    return {"key": key, "url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{key}", "issueKey": tracked, "warnings": warnings}
 
 
 class StepResult(BaseModel):

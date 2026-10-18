@@ -153,11 +153,13 @@ export interface CritCriteria {
   type_field: string;
   type_value: string;
   ke_field: string;
+  /** true — только кейсы с признаком «Крит. регресс»; false — весь регресс по КЭ релиза. */
+  only_crit: boolean;
 }
 
 export const DEFAULT_CRITERIA: CritCriteria = {
   // Статус «Утверждено» = Approved в API; имена полей — как в выгрузках Zephyr SBER911 (точки и пробелы не важны).
-  status: "Утверждено", crit_field: "Крит. регресс", crit_value: "Да", type_field: "Вид тестирования", type_value: "Регресс", ke_field: "АС",
+  status: "Утверждено", crit_field: "Крит. регресс", crit_value: "Да", type_field: "Вид тестирования", type_value: "Регресс", ke_field: "АС", only_crit: true,
 };
 
 /** Значения для выпадающих списков «Условий» — по модели проекта. */
@@ -166,16 +168,14 @@ export const getFieldValues = (project: string) =>
 
 /* ── Релизы: строки с маркерами ───────────────────────────────────────────── */
 
-/** Релизы, которые ведём в SimpleTest, и прогоны, добавленные к ним вручную. */
-export interface ReleaseList { releases: string[]; links: Record<string, string[]> }
+/** Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»). */
+export interface ReleaseList { releases: string[] }
 
-export interface BoardRun extends ZRun {
-  /** issue — релиз в отслеживании прогона (Jira); simpletest — добавлен к релизу в SimpleTest. */
-  source: "issue" | "simpletest";
-  missing?: boolean;
-}
+/** Прогон релиза: zephyr — релиз в отслеживании прогона; simpletest — добавлен к релизу в SimpleTest. */
+export interface ReleaseRun extends ZRun { source: "zephyr" | "simpletest"; missing?: boolean }
 
-export interface ReleaseBoard { release: ZRelease; runs: BoardRun[]; storyRuns: Record<string, ZRun[]>; runsLoadedAt: number }
+/** Строка релиза: задача релиза, прогоны релиза, прогоны каждой стори (стори в отслеживании). */
+export interface ReleaseBoard { release: ZRelease; runs: ReleaseRun[]; storyRuns: Record<string, ZRun[]>; runsLoadedAt: number }
 
 export const getReleases = (project: string) => fetchJson<ReleaseList>(`/api/zephyr/releases?${q({ project })}`);
 
@@ -187,16 +187,17 @@ export const addRelease = (project: string, key: string) =>
 export const removeRelease = (project: string, key: string) =>
   fetchJson<ReleaseList>(`/api/zephyr/releases/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });
 
-export const getReleaseBoard = (project: string, key: string) =>
-  fetchJson<ReleaseBoard>(`/api/zephyr/release/${encodeURIComponent(key)}/board?${q({ project })}`);
-
-export const addReleaseRun = (project: string, key: string, runKey: string) =>
-  fetchJson<ReleaseList>(`/api/zephyr/release/${encodeURIComponent(key)}/runs`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, runKey }),
+/** Добавить прогоны к релизу — связь хранится в SimpleTest (API Zephyr не меняет отслеживание готового прогона). */
+export const addReleaseRuns = (project: string, key: string, runKeys: string[]) =>
+  fetchJson<{ key: string; runs: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/runs`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, runKeys }),
   });
 
 export const removeReleaseRun = (project: string, key: string, runKey: string) =>
-  fetchJson<ReleaseList>(`/api/zephyr/release/${encodeURIComponent(key)}/runs/${encodeURIComponent(runKey)}?${q({ project })}`, { method: "DELETE" });
+  fetchJson<{ key: string; runs: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/runs/${encodeURIComponent(runKey)}?${q({ project })}`, { method: "DELETE" });
+
+export const getReleaseBoard = (project: string, key: string) =>
+  fetchJson<ReleaseBoard>(`/api/zephyr/release/${encodeURIComponent(key)}/board?${q({ project })}`);
 
 /** Вид прогона по полю «Вид тестирования»: НФ (новый функционал), регресс или как есть. */
 export function runKind(type: string): "nf" | "regress" | "other" {
@@ -221,8 +222,9 @@ export const findCritCases = (project: string, ke: string[], criteria: CritCrite
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, ke, criteria }),
   });
 
-export const createRun = (body: { project: string; name: string; issueKey: string; caseKeys: string[]; folder?: string }) =>
-  fetchJson<{ key: string; url: string }>("/api/zephyr/runs", {
+/** Новый прогон: задача релиза — в отслеживании (API принимает её только при создании), type — «Вид тестирования». */
+export const createRun = (body: { project: string; name: string; issueKey: string; caseKeys: string[]; folder?: string; type?: string }) =>
+  fetchJson<{ key: string; url: string; issueKey: string; warnings: string[] }>("/api/zephyr/runs", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
 

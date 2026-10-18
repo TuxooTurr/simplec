@@ -42,12 +42,15 @@ function Step({ n, title, done, children }: { n: number; title: string; done?: b
  * Крит регресс релиза: номер релиза → его КЭ → кейсы с признаком «Крит регресс», статусом «Утверждено»,
  * типом «Регресс» и КЭ релиза → прогон, привязанный к задаче релиза (отслеживание) → прохождение
  * в плеере или кнопкой «Пройти все». С releaseKey — встроен в строку релиза: релиз загружается сам.
+ * modal — в окне «Собрать регресс»: кейсы ищутся сразу, отмечает их пользователь («Выбрать все»), прогон создаётся
+ * без доп. подтверждения, и окно закрывает раздел (onRunCreated).
  */
-export default function CritRegressView({ project, baseUrl, releaseKey, onRunCreated }: {
+export default function CritRegressView({ project, baseUrl, releaseKey, modal, onRunCreated }: {
   project: string;
   baseUrl: string;
   releaseKey?: string;
-  onRunCreated?: (key: string) => void;
+  modal?: boolean;
+  onRunCreated?: (key: string, warnings: string[]) => void;
 }) {
   const embedded = !!releaseKey;
   const [relKey, setRelKey] = useState(releaseKey ?? "");
@@ -70,7 +73,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
   const [confirm, setConfirm] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState("");
-  const [run, setRun] = useState<{ key: string; url: string; caseKeys: string[] } | null>(null);
+  const [run, setRun] = useState<{ key: string; url: string; caseKeys: string[]; issueKey: string; warnings: string[] } | null>(null);
   const [passAsk, setPassAsk] = useState(false);
   const [passBusy, setPassBusy] = useState(false);
   const [passNote, setPassNote] = useState("");
@@ -94,7 +97,8 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
     try {
       const r = await getRelease(k);
       setRel(r); setKeOn(new Set(r.ke.map(x => x.label)));
-      setRunName(`Крит регресс ${r.key} · ${today()}`);
+      setRunName(`${readCriteria().only_crit ? "Крит регресс" : "Регресс"} ${r.key} · ${today()}`);
+      if (modal && r.ke.length) void find(r.ke.map(x => x.label), readCriteria());   // набор кейсов — сразу
     } catch (e) { setRelErr((e as Error).message); }
     setRelBusy(false);
   };
@@ -103,11 +107,12 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
   const keList = rel ? [...rel.ke.map(x => x.label), ...[...keOn].filter(l => !rel.ke.some(x => x.label === l))] : [];
   const addKe = () => { const v = extraKe.trim(); if (v) { setKeOn(s => new Set(s).add(v)); setExtraKe(""); } };
 
-  const find = async () => {
+  const find = async (ke: string[] = [...keOn], criteria: CritCriteria = crit) => {
     setFindBusy(true); setFindErr(""); setCases(null); setStats(null); setRun(null);
     try {
-      const r = await findCritCases(project, [...keOn], crit);
-      setCases(r.cases); setStats(r.stats); setChosen(new Set(r.cases.map(c => c.key)));
+      const r = await findCritCases(project, ke, criteria);
+      // В окне кейсы отмечает сам пользователь («Выбрать все»), чтобы привычный клик не снял все отметки.
+      setCases(r.cases); setStats(r.stats); setChosen(new Set(modal ? [] : r.cases.map(c => c.key)));
     } catch (e) { setFindErr((e as Error).message); }
     setFindBusy(false);
   };
@@ -121,8 +126,8 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
     setCreating(true); setCreateErr("");
     try {
       const keys = (cases ?? []).filter(c => chosen.has(c.key)).map(c => c.key);
-      const r = await createRun({ project, name: runName.trim(), issueKey: rel.key, caseKeys: keys });
-      setRun({ ...r, caseKeys: keys }); setConfirm(false); setPassed({}); onRunCreated?.(r.key);
+      const r = await createRun({ project, name: runName.trim(), issueKey: rel.key, caseKeys: keys, type: crit.type_value });
+      setRun({ ...r, caseKeys: keys }); setConfirm(false); setPassed({}); onRunCreated?.(r.key, r.warnings);
     } catch (e) { setCreateErr((e as Error).message); }
     setCreating(false);
   };
@@ -139,7 +144,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
   };
 
   /** Выпадающий список: варианты — из модели проекта; текущее значение остаётся в списке, даже если его там нет. */
-  const select = (k: keyof CritCriteria, label: string, options: string[]) => {
+  const select = (k: Exclude<keyof CritCriteria, "only_crit">, label: string, options: string[]) => {
     const opts = crit[k] && !options.includes(crit[k]) ? [crit[k], ...options] : options;
     return (
       <label className="block text-xs text-text-muted">
@@ -203,23 +208,31 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
           <Step n={embedded ? 1 : 2} title="Кейсы крит регресса" done={!!cases?.length}>
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-xs text-text-muted">
-                «{crit.crit_field}» = {crit.crit_value} · статус «{crit.status}» · «{crit.type_field}» = {crit.type_value} · «{crit.ke_field}» из релиза ({keOn.size})
+                {crit.only_crit && <>«{crit.crit_field}» = {crit.crit_value} · </>}статус «{crit.status}» · «{crit.type_field}» = {crit.type_value} · «{crit.ke_field}» = КЭ релиза ({keOn.size})
               </p>
               <button type="button" onClick={() => setCritOpen(o => !o)} aria-expanded={critOpen}
                 className="flex items-center gap-1 text-xs text-primary hover:underline">
                 <SlidersHorizontal className="w-3.5 h-3.5" /> Условия <ChevronDown className={`w-3 h-3 transition-transform ${critOpen ? "rotate-180" : ""}`} /></button>
-              <button type="button" onClick={find} disabled={findBusy || keOn.size === 0}
-                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
-                {findBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} Найти кейсы</button>
+              <button type="button" onClick={() => find()} disabled={findBusy || keOn.size === 0}
+                className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-40
+                  ${modal ? "border border-border-main text-text-main hover:bg-bg-subtle" : "bg-primary text-white"}`}>
+                {findBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} {modal && cases ? "Обновить список" : "Найти кейсы"}</button>
             </div>
             {embedded && keBlock}
+            <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer select-none w-fit">
+              <input type="checkbox" checked={crit.only_crit} onChange={e => {
+                saveCrit({ ...crit, only_crit: e.target.checked });
+                setRunName(n => n.replace(/^(Крит регресс|Регресс)/, e.target.checked ? "Крит регресс" : "Регресс"));
+              }} />
+              Только кейсы с признаком «{crit.crit_field}» <span className="text-xs text-text-muted">(снимите — весь регресс по КЭ)</span>
+            </label>
             {critOpen && !values && !valuesErr && <p className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Собираю значения полей по модели…</p>}
             {critOpen && valuesErr && <p className="text-xs text-red-600 dark:text-red-400">Значения полей не загрузились: {valuesErr}</p>}
             {critOpen && values && (
               <div className="grid grid-cols-3 gap-3 rounded-lg bg-bg-subtle p-3">
                 {select("status", "Статус кейса", values.statuses)}
-                {select("crit_field", "Поле признака", fieldNames)}
-                {select("crit_value", "Значение признака", valuesOf(crit.crit_field))}
+                {crit.only_crit ? select("crit_field", "Поле признака", fieldNames) : <span />}
+                {crit.only_crit ? select("crit_value", "Значение признака", valuesOf(crit.crit_field)) : <span />}
                 {select("type_field", "Поле вида тестирования", fieldNames)}
                 {select("type_value", "Вид тестирования", valuesOf(crit.type_field))}
                 {select("ke_field", "Поле КЭ в кейсе", fieldNames)}
@@ -230,7 +243,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
             {findErr && <p className="text-sm text-red-600 dark:text-red-400">Кейсы не нашлись: {findErr}</p>}
             {stats && (
               <p className="text-xs text-text-muted">
-                Кейсов в статусе «{crit.status}»: {stats.checked} (другой статус — {stats.no_status}). Отсеяно: без признака крит — {stats.no_crit},
+                Кейсов в статусе «{crit.status}»: {stats.checked} (другой статус — {stats.no_status}). Отсеяно: {crit.only_crit && <>без признака крит — {stats.no_crit}, </>}
                 другой вид тестирования — {stats.no_type}, КЭ не из релиза — {stats.no_ke}. <b className="text-text-main">Подходит: {cases?.length ?? 0}</b>.
               </p>
             )}
@@ -273,16 +286,18 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
         )}
 
         {rel && cases && cases.length > 0 && (
+          // В окне строка прогона прилипает к низу — до «Создать прогон» не нужно листать сотни кейсов.
+          <div className={modal ? "sticky bottom-0 z-10 shadow-[0_-8px_16px_-8px_rgba(0,0,0,0.25)] rounded-xl" : ""}>
           <Step n={embedded ? 2 : 3} title="Прогон" done={!!run}>
             {!run ? (
               <>
                 <div className="flex items-center gap-2">
                   <input value={runName} onChange={e => setRunName(e.target.value)} aria-label="Название прогона" className={`${INPUT} flex-1`} />
-                  <button type="button" onClick={() => setConfirm(true)} disabled={!chosen.size || !runName.trim() || creating}
+                  <button type="button" onClick={modal ? create : () => setConfirm(true)} disabled={!chosen.size || !runName.trim() || creating}
                     className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
-                    <Rocket className="w-4 h-4" /> Создать прогон ({chosen.size})</button>
+                    {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />} Создать прогон ({chosen.size})</button>
                 </div>
-                <p className="text-xs text-text-muted">В отслеживании прогона будет задача релиза {rel.key}.</p>
+                <p className="text-xs text-text-muted">В отслеживании прогона будет задача релиза {rel.key}, «{crit.type_field}» прогона — {crit.type_value}.</p>
                 {confirm && (
                   <div className="flex flex-wrap items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
                     <span className="text-text-main">Создать в Jira прогон «{runName.trim()}» ({cases_(chosen.size)}) с отслеживанием {rel.key}?</span>
@@ -298,8 +313,11 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
               <div className="space-y-3">
                 <p className="text-sm text-text-main">
                   Прогон <a href={run.url} target="_blank" rel="noopener noreferrer" className="font-mono text-primary hover:underline">{run.key}</a> создан:
-                  {" "}{cases_(run.caseKeys.length)}, отслеживание — <span className="font-mono">{rel.key}</span>. Пройдите его:
+                  {" "}{cases_(run.caseKeys.length)}, в отслеживании — <span className="font-mono">{run.issueKey || "—"}</span>. Пройдите его:
                 </p>
+                {run.warnings.map(w => (
+                  <p key={w} className="rounded-lg border border-amber-400/60 bg-amber-50 dark:bg-amber-950/30 px-3 py-1.5 text-sm text-amber-800 dark:text-amber-200">{w}</p>
+                ))}
                 <div className="flex flex-wrap items-center gap-2">
                   <button type="button" onClick={() => setPlayer(true)}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90">
@@ -321,6 +339,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, onRunCre
               </div>
             )}
           </Step>
+          </div>
         )}
       </div>
   );

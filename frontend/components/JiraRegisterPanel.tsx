@@ -15,7 +15,7 @@ import {
 import { Select } from "@/components/ui";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  getJiraSettings, saveJiraSettings, getJiraMeta, loadJiraEpics,
+  getJiraSettings, getJiraMeta, loadJiraEpics, addLabelPresets, labelName,
   createJiraDefect, attachJiraFiles,
   type JiraProjectMeta, type JiraEpic, type JiraSettings,
 } from "@/lib/jiraApi";
@@ -184,15 +184,17 @@ export default function JiraRegisterPanel({
     setLabels(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]);
 
   const addNewLabel = async () => {
-    const l = newLabel.trim();
+    const l = labelName(newLabel);
     if (!l) return;
     setNewLabel("");
     if (!labels.includes(l)) setLabels(prev => [...prev, l]);
-    // новый пресет — сохраняем в настройки, чтобы был в списке в следующий раз
-    if (settings && !labelPresets.includes(l)) {
-      const next = { ...settings, labels: [...labelPresets, l] };
-      setSettings(next);
-      try { await saveJiraSettings(next); } catch { /* не критично */ }
+    // Новый лейбл — сразу в общий список пресетов на сервере: навсегда, у всех, без перезаписи остальных настроек.
+    if (!labelPresets.some(p => p.toLowerCase() === l.toLowerCase())) {
+      try {
+        const r = await addLabelPresets([l]);
+        setSettings(st => (st ? { ...st, labels: r.labels } : st));
+        setMeta(m => (m ? { ...m, labels_presets: r.labels } : m));
+      } catch { /* не сохранился — лейбл всё равно уйдёт в этот дефект */ }
     }
   };
 

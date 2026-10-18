@@ -16,10 +16,12 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState(false);
   const [openRow, setOpenRow] = useState<string | null>(null);
+  const [runKey, setRunKey] = useState("");
+  const [issueKey, setIssueKey] = useState("");
 
   const run = async () => {
     setBusy(true); setErr(""); setRep(null); setCopied(false);
-    try { setRep(await probeZephyr(project, samples)); } catch (e) { setErr((e as Error).message); }
+    try { setRep(await probeZephyr(project, samples, runKey.trim(), issueKey.trim())); } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
   const copy = async () => {
@@ -36,6 +38,14 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
           и вариант из документации), дерево папок и справочники. Отчёт скопируйте и пришлите — по нему включим
           создание и правку кейсов, прогонов и плеер.
         </p>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          <span>Необязательно — проверить отслеживание:</span>
+          <input value={runKey} onChange={e => setRunKey(e.target.value)} placeholder="Прогон: SBER911-C709" aria-label="Ключ прогона для проверки"
+            className="w-44 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
+          <input value={issueKey} onChange={e => setIssueKey(e.target.value)} placeholder="Релиз или стори: SBER911-12345" aria-label="Задача для проверки"
+            className="w-52 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
+          <span>— прогон, где в отслеживании и релиз, и стори; задача — одна из них.</span>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" onClick={run} disabled={busy}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">

@@ -1,24 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
-import { getRun, getRuns, runKind, runKindLabel, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
+import { fmtDate, fmtDuration, getRun, getRuns, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
 import { CaseCard, IssueLinks, ResultBar, ResultPill } from "./parts";
 import Player from "./Player";
 import CaseDialog from "./CaseDialog";
+import RunCard, { RunTypeChip } from "./RunCard";
 import { Resizer, usePaneSize } from "./Resizer";
 
-/** Плашка вида прогона: НФ — фиолетовая, регресс — синяя, прочее — нейтральная. */
-export function RunTypeChip({ type }: { type: string }) {
-  if (!type) return null;
-  const k = runKind(type);
-  const cls = k === "nf" ? "bg-violet-500/10 text-violet-700 dark:text-violet-300" : k === "regress" ? "bg-sky-500/10 text-sky-700 dark:text-sky-300" : "bg-bg-subtle text-text-muted";
-  return <span title={type} className={`inline-block px-1.5 py-px rounded text-[10px] font-semibold whitespace-nowrap ${cls}`}>{runKindLabel(type)}</span>;
-}
+/** Кейсы открытых прогонов — в памяти до перезагрузки страницы: повторный клик не ходит в Jira, «Обновить» — ходит. */
+const runCache = new Map<string, ZRunFull>();
+
+type Sort = "new" | "old";
+const SORT_KEY = "st_zephyr_runs_sort";
+/** Время создания прогона для сортировки; нет даты — по номеру прогона. */
+const created = (r: ZRun) => Date.parse(r.created || "") || Number(r.key.replace(/\D/g, "")) || 0;
 
 /**
- * Прогоны (тест-циклы): слева — список с прогрессом прохождения, справа — выбранный прогон:
- * задача Jira, к которой он привязан, и его кейсы со статусами. Клик по кейсу — карточка.
+ * Прогоны: слева — карточки (номер, название, прогресс, дата создания, «Пройти»), фильтр по виду тестирования
+ * и сортировка по дате; справа — выбранный прогон: кейсы с номером, статусом, названием и временем прохождения.
  */
 export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
   project: string; baseUrl: string; reloadKey: number;
@@ -29,40 +30,51 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("");
+  const [sort, setSort] = useState<Sort>("new");
   const [refreshing, setRefreshing] = useState(false);
   const [sel, setSel] = useState<string | null>(openKey ?? null);
-  const [minimized, setMinimized] = useState(false);
-  const listPane = usePaneSize("runs", 320, 240, 640);
-  useEffect(() => { if (openKey) setSel(openKey); }, [openKey]);
   const [run, setRun] = useState<ZRunFull | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
   const [runErr, setRunErr] = useState("");
   const [caseKey, setCaseKey] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [localReload, setLocalReload] = useState(0);
+  const listPane = usePaneSize("runs", 340, 260, 640);
+  useEffect(() => { if (openKey) setSel(openKey); }, [openKey]);
+  useEffect(() => { try { const v = localStorage.getItem(SORT_KEY); if (v === "old" || v === "new") setSort(v); } catch { /* по умолчанию */ } }, []);
+  const changeSort = (v: Sort) => { setSort(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* не запомнится */ } };
 
-  useEffect(() => {
-    let live = true;
-    setRuns(null); setErr("");
-    getRuns(project).then(r => live && setRuns(r.runs)).catch(e => live && setErr((e as Error).message));
-    return () => { live = false; };
-  }, [project, reloadKey]);
-  const refresh = async () => {
-    setRefreshing(true); setErr("");
-    try { setRuns((await getRuns(project, true)).runs); } catch (e) { setErr((e as Error).message); }
-    setRefreshing(false);
-  };
+  const loadRuns = useCallback(async (refresh = false) => {
+    setErr("");
+    try { setRuns((await getRuns(project, refresh)).runs); } catch (e) { setErr((e as Error).message); }
+  }, [project]);
+  useEffect(() => { setRuns(null); void loadRuns(); }, [loadRuns, reloadKey]);
+  const refreshList = async () => { setRefreshing(true); await loadRuns(true); setRefreshing(false); };
 
-  useEffect(() => {
-    if (!sel) return;
-    let live = true;
-    setRun(null); setRunErr(""); setCaseKey(null);
-    getRun(sel).then(r => live && setRun(r)).catch(e => live && setRunErr((e as Error).message));
-    return () => { live = false; };
-  }, [sel, reloadKey, localReload]);
+  /** Кейсы прогона: из кеша, если уже открывали; force — перечитать из Jira. */
+  const openRun = useCallback(async (key: string, force = false) => {
+    setRunErr(""); setCaseKey(null);
+    const hit = runCache.get(key);
+    if (hit && !force) { setRun(hit); return; }
+    if (!hit) setRun(null);
+    setRunBusy(true);
+    try {
+      const r = await getRun(key);
+      runCache.set(key, r);
+      setRun(cur => (cur === null || cur.key === key ? r : cur));
+      setRuns(list => list?.map(x => (x.key === key ? { ...x, counts: r.counts, total: r.total } : x)) ?? list);
+    } catch (e) { setRunErr((e as Error).message); }
+    setRunBusy(false);
+  }, []);
+  useEffect(() => { if (sel) void openRun(sel); }, [sel, openRun]);
 
-  const s = q.trim().toLowerCase();
   const types = useMemo(() => [...new Set((runs ?? []).map(r => r.type).filter(Boolean))].sort(), [runs]);
-  const shown = useMemo(() => (runs ?? []).filter(r => (!typeF || r.type === typeF) && (!s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s))), [runs, s, typeF]);
+  const s = q.trim().toLowerCase();
+  const shown = useMemo(() => (runs ?? [])
+    .filter(r => (!typeF || r.type === typeF) && (!s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s)))
+    .sort((a, b) => (sort === "new" ? created(b) - created(a) : created(a) - created(b))), [runs, s, typeF, sort]);
+
+  const SELECT = "text-sm border border-border-main rounded-lg px-2 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
     <div className="flex h-full min-h-0">
@@ -74,102 +86,93 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
               className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" />
             {q && <button type="button" onClick={() => setQ("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
           </label>
-          <button type="button" onClick={refresh} disabled={refreshing} title="Перечитать прогоны из Jira" aria-label="Обновить прогоны"
+          <button type="button" onClick={refreshList} disabled={refreshing} title="Перечитать список прогонов из Jira" aria-label="Обновить прогоны"
             className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /></button>
         </div>
-        {types.length > 0 && (
-          <select value={typeF} onChange={e => setTypeF(e.target.value)} aria-label="Вид тестирования прогона"
-            className="mb-2 text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30">
+        <div className="flex items-center gap-1.5 mb-2">
+          <select value={typeF} onChange={e => setTypeF(e.target.value)} aria-label="Вид тестирования прогона" className={`${SELECT} min-w-0 flex-1`}>
             <option value="">Все виды тестирования</option>
             {types.map(t => <option key={t} value={t}>{t}</option>)}
           </select>
-        )}
+          <select value={sort} onChange={e => changeSort(e.target.value as Sort)} aria-label="Сортировка по дате создания" className={SELECT}>
+            <option value="new">Сначала новые</option>
+            <option value="old">Сначала старые</option>
+          </select>
+        </div>
         {err && <p className="text-sm text-red-600 dark:text-red-400">Прогоны не загрузились: {err}</p>}
         {!runs && !err && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p>}
         {runs && shown.length === 0 && <p className="text-sm text-text-muted">{runs.length ? "Ничего не найдено." : "Прогонов в проекте нет."}</p>}
-        <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-1" aria-label="Прогоны">
+        <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-1.5" aria-label="Прогоны">
           {shown.map(r => (
             <li key={r.key}>
-              <button type="button" onClick={() => setSel(r.key)} aria-pressed={sel === r.key}
-                className={`w-full text-left rounded-lg px-2.5 py-2 border ${sel === r.key ? "border-primary/50 bg-primary/5" : "border-transparent hover:bg-bg-subtle"}`}>
-                <span className="flex items-center gap-1.5">
-                  <PlayCircle className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
-                  <span className="font-mono text-[11px] text-primary">{r.key}</span>
-                  <RunTypeChip type={r.type} />
-                  {r.version && <span className="ml-auto text-[10px] text-text-muted truncate max-w-[110px]">{r.version}</span>}
-                </span>
-                <span className="block text-sm text-text-main truncate mt-0.5">{r.name}</span>
-                <span className="block mt-1.5"><ResultBar counts={r.counts} total={r.total} /></span>
-              </button>
+              <RunCard run={r} active={sel === r.key} onOpen={() => setSel(r.key)}
+                onPassed={() => { void loadRuns(); if (sel === r.key) void openRun(r.key, true); else runCache.delete(r.key); }} />
             </li>
           ))}
         </ul>
       </div>
       <Resizer pane={listPane} label="Ширина списка прогонов" />
 
-      <div className="flex-1 min-w-0 flex min-h-0">
-        <div className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-4">
-          {!sel && <p className="text-sm text-text-muted">Выберите прогон слева.</p>}
-          {runErr && <p className="text-sm text-red-600 dark:text-red-400">Прогон не загрузился: {runErr}</p>}
-          {sel && !run && !runErr && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p>}
-          {run && (
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="font-mono text-xs text-primary">{run.key}</p>
-                    <h2 className="text-base font-semibold text-text-main">{run.name}</h2>
-                  </div>
-                  <button type="button" onClick={() => setPlaying(true)} disabled={!run.items.length}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
-                    <PlayCircle className="w-4 h-4" /> Пройти</button>
+      <div className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-4">
+        {!sel && <p className="text-sm text-text-muted">Выберите прогон слева.</p>}
+        {runErr && <p className="text-sm text-red-600 dark:text-red-400">Прогон не загрузился: {runErr}</p>}
+        {sel && !run && !runErr && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю кейсы прогона…</p>}
+        {run && (
+          <div className="space-y-4">
+            <div>
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-2 font-mono text-xs text-primary">{run.key} <RunTypeChip type={run.type} /></p>
+                  <h2 className="text-base font-semibold text-text-main">{run.name}</h2>
                 </div>
-                <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                  {run.type && <span>Вид тестирования: {run.type}</span>}
-                  {run.status && <span>Статус: {run.status}</span>}
-                  {run.version && <span>Версия: {run.version}</span>}
-                  {run.owner && <span>Владелец: {run.owner}</span>}
-                  {(run.plannedStart || run.plannedEnd) && <span>План: {run.plannedStart.slice(0, 10)} — {run.plannedEnd.slice(0, 10)}</span>}
-                </div>
+                <button type="button" onClick={() => openRun(run.key, true)} disabled={runBusy} title="Перечитать кейсы прогона из Jira"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-50">
+                  <RefreshCw className={`w-4 h-4 ${runBusy ? "animate-spin" : ""}`} /> Обновить</button>
+                <button type="button" onClick={() => setPlaying(true)} disabled={!run.items.length}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
+                  <PlayCircle className="w-4 h-4" /> Плеер</button>
               </div>
-              <div className="max-w-md"><ResultBar counts={run.counts} total={run.total || run.items.length} /></div>
-              <div className="flex items-center gap-2 text-xs">
-                <span className="text-text-muted">Отслеживание (задача Jira):</span>
-                <IssueLinks keys={run.issueKey ? [run.issueKey] : []} baseUrl={baseUrl} />
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
+                <span>Создан: {fmtDate(run.created)}</span>
+                {run.status && <span>Статус: {run.status}</span>}
+                {run.version && <span>Версия: {run.version}</span>}
+                <span className="flex items-center gap-1">Отслеживание: <IssueLinks keys={run.issueKey ? [run.issueKey] : []} baseUrl={baseUrl} /></span>
               </div>
-              <table className="w-full text-sm border border-border-main rounded-xl overflow-hidden">
-                <thead className="bg-bg-subtle text-[11px] uppercase tracking-wide text-text-muted">
-                  <tr><th className="text-left px-3 py-2">Кейс</th><th className="text-left px-3 py-2">Статус</th><th className="text-left px-3 py-2">Исполнитель</th>
-                    <th className="text-left px-3 py-2">Дата</th><th className="text-left px-3 py-2">Дефекты / связи</th></tr>
-                </thead>
-                <tbody>
-                  {run.items.length === 0 && <tr><td colSpan={5} className="px-3 py-4 text-center text-text-muted">В прогоне нет кейсов.</td></tr>}
-                  {run.items.map((it, i) => (
-                    <tr key={`${it.testCaseKey}-${i}`} className={`border-t border-border-main hover:bg-bg-subtle/60 cursor-pointer ${caseKey === it.testCaseKey ? "bg-primary/5" : ""}`}
-                      onClick={() => { setCaseKey(it.testCaseKey); setMinimized(false); }}>
-                      <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{it.testCaseKey}</td>
-                      <td className="px-3 py-1.5"><ResultPill status={it.status} /></td>
-                      <td className="px-3 py-1.5 text-text-main">{it.executedBy || it.assignee || "—"}</td>
-                      <td className="px-3 py-1.5 text-text-muted whitespace-nowrap">{it.executionDate ? it.executionDate.slice(0, 10) : "—"}</td>
-                      <td className="px-3 py-1.5" onClick={e => e.stopPropagation()}><IssueLinks keys={it.issueLinks} baseUrl={baseUrl} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
-          )}
-        </div>
-        {caseKey && (
-          <CaseDialog label={`Кейс ${caseKey}`} title={caseKey} minimized={minimized}
-            onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setCaseKey(null)}>
-            <CaseCard caseKey={caseKey} baseUrl={baseUrl} onClose={() => setCaseKey(null)} onMinimize={() => setMinimized(true)} />
-          </CaseDialog>
+            <div className="max-w-md"><ResultBar counts={run.counts} total={run.total || run.items.length} /></div>
+            <table className="w-full text-sm border border-border-main rounded-xl overflow-hidden">
+              <thead className="bg-bg-subtle text-[11px] uppercase tracking-wide text-text-muted">
+                <tr><th className="text-left px-3 py-2 w-32">Кейс</th><th className="text-left px-3 py-2 w-32">Статус</th>
+                  <th className="text-left px-3 py-2">Название</th><th className="text-left px-3 py-2 w-32">Время прохождения</th>
+                  <th className="text-left px-3 py-2 w-28">Дата</th></tr>
+              </thead>
+              <tbody>
+                {run.items.length === 0 && <tr><td colSpan={5} className="px-3 py-4 text-center text-text-muted">В прогоне нет кейсов.</td></tr>}
+                {run.items.map((it, i) => (
+                  <tr key={`${it.testCaseKey}-${i}`} onClick={() => { setCaseKey(it.testCaseKey); setMinimized(false); }}
+                    className={`border-t border-border-main hover:bg-bg-subtle/60 cursor-pointer ${caseKey === it.testCaseKey ? "bg-primary/5" : ""}`}>
+                    <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{it.testCaseKey}</td>
+                    <td className="px-3 py-1.5"><ResultPill status={it.status} /></td>
+                    <td className="px-3 py-1.5 text-text-main"><span className="block truncate max-w-[520px]" title={it.name}>{it.name || "—"}</span></td>
+                    <td className="px-3 py-1.5 text-text-main whitespace-nowrap tabular-nums">{fmtDuration(it.executionTime)}</td>
+                    <td className="px-3 py-1.5 text-text-muted whitespace-nowrap">{it.executionDate ? fmtDate(it.executionDate) : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
+      {caseKey && (
+        <CaseDialog label={`Кейс ${caseKey}`} title={caseKey} minimized={minimized}
+          onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setCaseKey(null)}>
+          <CaseCard caseKey={caseKey} baseUrl={baseUrl} onClose={() => setCaseKey(null)} onMinimize={() => setMinimized(true)} />
+        </CaseDialog>
+      )}
       {playing && run && (
         <Player runKey={run.key} project={project} baseUrl={baseUrl} items={run.items}
-          onClose={changed => { setPlaying(false); if (changed) setLocalReload(n => n + 1); }} />
+          onClose={changed => { setPlaying(false); if (changed) void openRun(run.key, true); }} />
       )}
     </div>
   );

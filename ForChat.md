@@ -500,6 +500,32 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
 
+### 2026-10-18 — Дефекты: новые лейблы сохраняются навсегда
+
+- `POST /api/jira/labels {labels}` (`jira_defects.py`): дописывает лейблы в пресеты `jira_labels_presets` (без повторов
+  без учёта регистра, пробелы → «_», как уходит в Jira — `label_name`), остальные настройки не трогает.
+- Фронт: `addLabelPresets` / `labelName` (`lib/jiraApi.ts`). `IssueFormModal` (Jira tool) — раньше новый лейбл жил только
+  в форме; `JiraRegisterPanel` — раньше пересохранял все настройки целиком и молча не сохранял, если они не загрузились.
+  Тесты — `tests/test_jira_label_presets.py` (3).
+
+### 2026-10-18 — Zephyr Tool: карточки прогонов, «Пройти», массовые правки кейсов, релиз по отслеживанию
+
+- **Отчёт стенда (232323.json)**: `issuelink/{задача}/testruns` — 404, `issuelink/{задача}/testcases` — 200; `fields` у
+  поиска кейсов учитывается (шагов нет). Отдельного «прогоны задачи» нет.
+- **Релиз** (`release_board`): прогоны релиза = прогоны с релизом в отслеживании; стори «Прогон есть», если она в
+  отслеживании прогона релиза. Всё отслеживание — через `trace_runs` (поиск TQL `issueKeys IN ("X")`, флаг `_trace_tql`);
+  стенд не понял (400) → по issueKey из индекса, `traceSource: "issueKey"` и предупреждение в строке. Ручные связи
+  SimpleTest (links) убраны. «Проверить API»: параметры `run`/`issue` (свой прогон и задача) + проверка `trace-tql`.
+- **Прогоны**: `RunCard` (номер, вид, название, прогресс, «пройдено n из N», дата создания `created`, статус, «Пройти»);
+  `POST /api/zephyr/run/{key}/pass` — Pass всем непройденным (`skipped` — уже Pass). `run()` отдаёт названия кейсов
+  (из индекса) и `executionTime`. `RunsView`: сортировка по `created` (`st_zephyr_runs_sort`), кеш кейсов прогона в памяти
+  модуля (`runCache`) + «Обновить».
+- **Кейсы**: `POST /api/zephyr/cases/delete`, `POST /api/zephyr/cases/edit` (status, priority, labelsAdd — к стоящим,
+  customFields; параллельно по WAVE, ошибки по кейсу); `CaseEdit.customFields`. Список: `CaseStatus` (метка),
+  `ColumnsMenu` (`st_zephyr_case_cols`), колонка «Длительность» (`estimatedTime`, в `INDEX_FIELDS` — у старой модели
+  появится после «Обновить из Jira»), панель выбора внизу списка (sticky — строки не прыгают), один кейс → карточка
+  сразу в правке (`CaseCard startEditing`), несколько → `BulkEditModal` / `DeleteCasesModal`.
+
 ### 2026-10-18 — Zephyr Tool: фикс — прогоны не загружались (Read timed out)
 
 - **Симптом**: «Прогоны не загрузились: … testrun/search … Read timed out (read timeout=30)». Таймаут 30 с — старый

@@ -18,6 +18,8 @@ export interface ZCase {
   updated: string;
   /** Задачи Jira, к которым привязан кейс (отслеживание). */
   issueLinks: string[];
+  /** Длительность кейса (расчётное время Zephyr), мс. */
+  estimatedTime?: number | null;
 }
 
 export interface ZStep { index: number; description: string; testData: string; expectedResult: string }
@@ -41,6 +43,8 @@ export interface ZRun {
   /** Вид тестирования прогона (поле прогона): «Регресс», «Новый функционал»… */
   type: string;
   owner: string;
+  /** Дата создания прогона (ISO). */
+  created: string;
   plannedStart: string;
   plannedEnd: string;
   total: number;
@@ -55,6 +59,10 @@ export interface ZResult {
   assignee: string;
   executedBy: string;
   executionDate: string;
+  /** Время прохождения кейса, мс. */
+  executionTime?: number | null;
+  /** Название кейса — из модели проекта. */
+  name?: string;
   comment: string;
   issueLinks: string[];
 }
@@ -109,8 +117,26 @@ export const getRuns = (project: string, refresh = false) =>
 
 export const getRun = (key: string) => fetchJson<ZRunFull>(`/api/zephyr/run/${encodeURIComponent(key)}`);
 
-export const probeZephyr = (project: string, samples: boolean) =>
-  fetchJson<ProbeReport>(`/api/zephyr/probe?${q({ project, samples: String(samples) })}`);
+/** Проверка API; run/issue — проверить конкретный прогон (с релизом и стори в отслеживании) и задачу. */
+export const probeZephyr = (project: string, samples: boolean, run = "", issue = "") =>
+  fetchJson<ProbeReport>(`/api/zephyr/probe?${q({ project, samples: String(samples), run, issue })}`);
+
+/** «Пройти прогон»: всем кейсам без Pass — Pass в Jira. */
+export const passRun = (key: string) =>
+  fetchJson<{ saved: number; skipped: number; total: number; errors: { testCaseKey: string; error: string }[] }>(
+    `/api/zephyr/run/${encodeURIComponent(key)}/pass`, { method: "POST" });
+
+/** Время в мс → «1 ч 05 мин», «3 мин 20 с», «45 с». */
+export function fmtDuration(ms?: number | null): string {
+  if (!ms || ms <= 0) return "—";
+  const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h) return `${h} ч ${String(m).padStart(2, "0")} мин`;
+  if (m) return `${m} мин${sec ? ` ${sec} с` : ""}`;
+  return `${sec} с`;
+}
+
+/** ISO → «01.10.2026». */
+export const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString("ru-RU") : "—");
 
 /**
  * Текстовые поля Zephyr (цель, предусловие, шаги) хранятся HTML-ом: <p>, <br>, <b>…
@@ -171,11 +197,11 @@ export const getFieldValues = (project: string) =>
 /** Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»). */
 export interface ReleaseList { releases: string[] }
 
-/** Прогон релиза: zephyr — релиз в отслеживании прогона; simpletest — добавлен к релизу в SimpleTest. */
-export interface ReleaseRun extends ZRun { source: "zephyr" | "simpletest"; missing?: boolean }
-
-/** Строка релиза: задача релиза, прогоны релиза, прогоны каждой стори (стори в отслеживании). */
-export interface ReleaseBoard { release: ZRelease; runs: ReleaseRun[]; storyRuns: Record<string, ZRun[]>; runsLoadedAt: number }
+/**
+ * Строка релиза: прогоны с релизом в отслеживании; для стори — прогоны релиза, где она тоже в отслеживании.
+ * traceSource: tql — по всему отслеживанию; issueKey — стенд отдаёт только основную задачу прогона.
+ */
+export interface ReleaseBoard { release: ZRelease; runs: ZRun[]; storyRuns: Record<string, ZRun[]>; traceSource: "tql" | "issueKey" }
 
 export const getReleases = (project: string) => fetchJson<ReleaseList>(`/api/zephyr/releases?${q({ project })}`);
 
@@ -186,15 +212,6 @@ export const addRelease = (project: string, key: string) =>
 
 export const removeRelease = (project: string, key: string) =>
   fetchJson<ReleaseList>(`/api/zephyr/releases/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });
-
-/** Добавить прогоны к релизу — связь хранится в SimpleTest (API Zephyr не меняет отслеживание готового прогона). */
-export const addReleaseRuns = (project: string, key: string, runKeys: string[]) =>
-  fetchJson<{ key: string; runs: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/runs`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, runKeys }),
-  });
-
-export const removeReleaseRun = (project: string, key: string, runKey: string) =>
-  fetchJson<{ key: string; runs: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/runs/${encodeURIComponent(runKey)}?${q({ project })}`, { method: "DELETE" });
 
 export const getReleaseBoard = (project: string, key: string) =>
   fetchJson<ReleaseBoard>(`/api/zephyr/release/${encodeURIComponent(key)}/board?${q({ project })}`);
@@ -268,6 +285,15 @@ export const updateCase = (key: string, project: string, edit: CaseEditIn) =>
   post<ZCaseFull>(`/api/zephyr/case/${encodeURIComponent(key)}`, { project, ...edit }, "PUT");
 
 export const createCase = (project: string, edit: CaseEditIn & { name: string }) => post<ZCaseFull>("/api/zephyr/case", { project, ...edit });
+
+/** Несколько кейсов: удалить / изменить статус, приоритет, метки (добавляются), пользовательские поля. */
+export const deleteCases = (project: string, keys: string[]) =>
+  post<{ deleted: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/delete", { project, keys });
+
+export interface CasesEditIn { status?: string; priority?: string; labelsAdd?: string[]; customFields?: Record<string, unknown> }
+
+export const editCases = (project: string, keys: string[], edit: CasesEditIn) =>
+  post<{ updated: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/edit", { project, keys, ...edit });
 
 export const deleteCase = (key: string, project: string) =>
   fetchJson<{ deleted: string }>(`/api/zephyr/case/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });

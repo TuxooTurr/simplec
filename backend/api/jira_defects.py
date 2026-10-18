@@ -413,6 +413,30 @@ def put_settings(body: JiraSettingsBody, db: Session = Depends(get_db)) -> dict:
     return get_settings(db)
 
 
+def label_name(label: str) -> str:
+    """Лейбл как его примет Jira: без пробелов по краям, пробелы внутри — «_» (так он и уходит в задачу)."""
+    return label.strip().replace(" ", "_")
+
+
+class LabelPresetsBody(BaseModel):
+    labels: list[str] = Field(default_factory=list)
+
+
+@router.post("/api/jira/labels")
+def add_label_presets(body: LabelPresetsBody, db: Session = Depends(get_db)) -> dict:
+    """Добавить лейблы в общий список пресетов (навсегда, пока их не уберут в настройках Jira).
+    Только дописывает — остальные настройки не трогает, повторы (без учёта регистра) пропускает."""
+    presets = list(_load_cfg(db)["labels"])
+    have = {l.lower() for l in presets}
+    for l in (label_name(x) for x in body.labels):
+        if l and l.lower() not in have:
+            presets.append(l)
+            have.add(l.lower())
+    _set(db, _K_LABELS, json.dumps(presets, ensure_ascii=False), "Пресеты лейблов дефектов")
+    db.commit()
+    return {"labels": presets}
+
+
 @router.post("/api/jira/token-from-login")
 def token_from_login(body: TokenFromLoginBody, db: Session = Depends(get_db)) -> dict:
     """Создать PAT по логину/паролю Сигмы. Пароль не сохраняется."""
@@ -695,7 +719,7 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             fields["priority"] = {"name": priority_name}
     if body.labels:
         # Jira не принимает пробелы в лейблах
-        fields["labels"] = [l.strip().replace(" ", "_") for l in body.labels if l.strip()]
+        fields["labels"] = [label_name(l) for l in body.labels if l.strip()]
 
     components = [c.strip() for c in body.components if c.strip()]
     if components:

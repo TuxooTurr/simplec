@@ -52,6 +52,18 @@ export function getJiraSettings(): Promise<JiraSettings> {
   return fetchJson("/api/jira/settings");
 }
 
+/** Добавить лейблы в общий список пресетов — навсегда (убрать можно в настройках Jira). Возвращает весь список. */
+export function addLabelPresets(labels: string[]): Promise<{ labels: string[] }> {
+  return fetchJson("/api/jira/labels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ labels }),
+  });
+}
+
+/** Лейбл как его примет Jira: пробелы внутри — «_» (так он уходит в задачу и хранится в пресетах). */
+export const labelName = (l: string) => l.trim().replace(/ /g, "_");
+
 export function saveJiraSettings(body: JiraSettings): Promise<JiraSettings> {
   return fetchJson("/api/jira/settings", {
     method: "PUT",

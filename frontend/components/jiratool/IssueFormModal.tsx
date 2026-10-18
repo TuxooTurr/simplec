@@ -13,7 +13,7 @@ import { formatLoadedAt, matchPriority, readEpicsCache, writeEpicsCache, type Ep
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { formatBug, formatTask, listRequirements, type Requirement } from "@/lib/api";
 import {
-  attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, loadJiraEpics,
+  addLabelPresets, attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
 import { CREATE_TYPES, PRIORITIES, type Participant } from "@/lib/jiraTool";
@@ -133,6 +133,19 @@ export default function IssueFormModal({ open, project, participants, listName, 
   // Пустой список в настройках — не «лейблов нет», а «не настроены»: тогда берём следующий источник.
   const baseLabels = meta?.labels_presets?.length ? meta.labels_presets : settings?.labels ?? [];
   const labelPresets = Array.from(new Set([...baseLabels, ...labels]));
+  /** Новый лейбл: отмечаем в задаче и сразу сохраняем в общий список пресетов — навсегда, у всех. */
+  const addLabel = async () => {
+    const l = labelName(newLabel);
+    if (!l) return;
+    setNewLabel("");
+    setLabels(x => Array.from(new Set([...x, l])));
+    if (baseLabels.some(p => p.toLowerCase() === l.toLowerCase())) return;
+    try {
+      const r = await addLabelPresets([l]);
+      setSettings(st => (st ? { ...st, labels: r.labels } : st));
+      setMeta(m => (m ? { ...m, labels_presets: r.labels } : m));
+    } catch { /* не сохранился — лейбл всё равно уйдёт в эту задачу */ }
+  };
   const standTypes = meta?.stand_types ?? [];
   const epicOptions = (epicsCache?.epics ?? []).map(e => ({ key: e.key, summary: e.summary }));
   const mobiles = new Set(meta?.mobile_components ?? ["iOS", "Android"]);
@@ -402,7 +415,8 @@ export default function IssueFormModal({ open, project, participants, listName, 
                       className={`px-2.5 py-1 rounded-full text-xs border ${labels.includes(l) ? "border-primary bg-primary/10 text-primary font-semibold" : "border-border-main text-text-muted hover:text-text-main"}`}>{l}</button>
                   ))}
                   <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="+ лейбл" aria-label="Новый лейбл"
-                    onKeyDown={e => { if (e.key === "Enter" && newLabel.trim()) { e.preventDefault(); setLabels(x => Array.from(new Set([...x, newLabel.trim()]))); setNewLabel(""); } }}
+                    title="Enter — добавить. Лейбл сохранится в списке навсегда (убрать — в настройках Jira)"
+                    onKeyDown={e => { if (e.key === "Enter" && newLabel.trim()) { e.preventDefault(); void addLabel(); } }}
                     className="w-24 border border-dashed border-border-main rounded-full px-2.5 py-1 text-xs bg-transparent text-text-main focus:outline-none focus:border-primary/50" />
                 </div>
               </div>

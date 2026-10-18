@@ -67,8 +67,10 @@ function Block({ title, text }: { title: string; text: string }) {
  * Карточка кейса: цель, предусловие, шаги, метки, связи с Jira. С editable — «Изменить» (редактор, в Jira уходят
  * только изменённые поля) и «Удалить» (с подтверждением). onChanged — раздел обновляет дерево и список по модели.
  */
-export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, onClose, onMinimize, onTitle }: {
+export function CaseCard({ caseKey, baseUrl, project = "", editable, startEditing, onChanged, onClose, onMinimize, onTitle }: {
   caseKey: string;
+  /** Открыть сразу в режиме правки («Изменить» из списка). */
+  startEditing?: boolean;
   baseUrl: string;
   project?: string;
   editable?: boolean;
@@ -96,10 +98,10 @@ export function CaseCard({ caseKey, baseUrl, project = "", editable, onChanged, 
   };
   useEffect(() => {
     let live = true;
-    setC(null); setErr(""); setEditing(false); setAskDel(false); setSaveErr("");
+    setC(null); setErr(""); setEditing(!!startEditing && !!editable); setAskDel(false); setSaveErr("");
     getCase(caseKey, project).then(x => { if (live) { setC(x); onTitle?.(x.name); } }).catch(e => live && setErr((e as Error).message));
     return () => { live = false; };
-  }, [caseKey, project]);
+  }, [caseKey, project, startEditing, editable]);
 
   return (
     <aside className="flex flex-col min-h-0 h-full border-l border-border-main bg-bg-card" aria-label={`Кейс ${caseKey}`}>

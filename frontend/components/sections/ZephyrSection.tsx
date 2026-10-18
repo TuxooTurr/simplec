@@ -1,19 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Upload, X } from "lucide-react";
+import { FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, Pencil, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import FolderTree from "@/components/zephyr/FolderTree";
 import RunsView from "@/components/zephyr/RunsView";
 import ReleasesView from "@/components/zephyr/ReleasesView";
 import CaseDialog from "@/components/zephyr/CaseDialog";
 import { Resizer, usePaneSize } from "@/components/zephyr/Resizer";
+import { BulkEditModal, CaseStatus, ColumnsMenu, DeleteCasesModal, useCaseCols } from "@/components/zephyr/CaseBulk";
 import ProbeModal from "@/components/zephyr/ProbeModal";
 import { CaseCard, NewCaseCard } from "@/components/zephyr/parts";
 import Modal from "@/components/ui/Modal";
 import { ApplyDialog, StagedCaseCard } from "@/components/zephyr/StagingParts";
 import { loadStaging, saveStaging, stagingFromXml, takeHandoff, usedFolders, type ApplyResult, type Parent, type Staging } from "@/lib/zephyrStaging";
 import { getJiraSettings } from "@/lib/jiraApi";
-import { DRAG_CASES, createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
+import { DRAG_CASES, fmtDate, fmtDuration, createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
 
 /** Узел дерева по пути — для подтверждения переноса (сколько кейсов уедет). */
 function findNode(nodes: ZFolder[], path: string): ZFolder | null {
@@ -59,6 +60,11 @@ export default function ZephyrSection() {
   const [opNote, setOpNote] = useState<{ ok: boolean; text: string } | null>(null);
   const [newCaseIn, setNewCaseIn] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  /** Несколько отмеченных кейсов: окно правки или удаления. */
+  const [bulk, setBulk] = useState<"edit" | "delete" | null>(null);
+  /** Кейс открыт кнопкой «Изменить» — карточка сразу в режиме правки. */
+  const [editOpen, setEditOpen] = useState(false);
+  const [cols, toggleCol] = useCaseCols();
   /** Перенос/переименование папки ждёт подтверждения: сколько кейсов уедет и куда. */
   const [folderMove, setFolderMove] = useState<{ source: string; target: string; count: number; rename: boolean } | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -294,6 +300,7 @@ export default function ZephyrSection() {
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle disabled:opacity-50 whitespace-nowrap">
                     <RefreshCw className={`w-3.5 h-3.5 ${modelBusy === "folder" ? "animate-spin" : ""}`} /> Обновить папку</button>
                 )}
+                <ColumnsMenu cols={cols} onToggle={toggleCol} />
                 <label className="flex items-center gap-2 w-64 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
                   <Search className="w-3.5 h-3.5 text-text-muted" />
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Название кейса" aria-label="Найти кейс"
@@ -311,16 +318,21 @@ export default function ZephyrSection() {
                         <input type="checkbox" aria-label="Выбрать все кейсы" checked={!!cases.length && cases.every(c => checked.has(c.key))}
                           onChange={e => setChecked(e.target.checked ? new Set(cases.map(c => c.key)) : new Set())} /></th>
                         <th className="text-left px-3 py-2 w-36">Ключ</th><th className="text-left px-3 py-2">Название</th>
-                        <th className="text-left px-3 py-2 w-28">Статус</th><th className="text-left px-3 py-2 w-24">Приоритет</th>
-                        <th className="text-left px-3 py-2 w-40">Владелец</th></tr>
+                        {cols.has("status") && <th className="text-left px-3 py-2 w-28">Статус</th>}
+                        {cols.has("priority") && <th className="text-left px-3 py-2 w-24">Приоритет</th>}
+                        {cols.has("duration") && <th className="text-left px-3 py-2 w-28">Длительность</th>}
+                        {cols.has("owner") && <th className="text-left px-3 py-2 w-40">Владелец</th>}
+                        {cols.has("folder") && <th className="text-left px-3 py-2 w-56">Папка</th>}
+                        {cols.has("labels") && <th className="text-left px-3 py-2 w-40">Метки</th>}
+                        {cols.has("updated") && <th className="text-left px-3 py-2 w-28">Изменён</th>}</tr>
                     </thead>
                     <tbody>
                       {cases.length === 0 && (
-                        <tr><td colSpan={6} className="px-4 py-6 text-center text-text-muted">
+                        <tr><td colSpan={3 + cols.size} className="px-4 py-6 text-center text-text-muted">
                           {text ? `По «${text}» кейсов нет.` : folder ? "В этой папке кейсов нет (кейсы вложенных папок — в самих папках)." : "Кейсов нет."}</td></tr>
                       )}
                       {cases.map(c => (
-                        <tr key={c.key} onClick={() => { setCaseKey(c.key); setNewCaseIn(null); }} aria-selected={caseKey === c.key}
+                        <tr key={c.key} onClick={() => { setCaseKey(c.key); setEditOpen(false); setNewCaseIn(null); }} aria-selected={caseKey === c.key}
                           // Перетащить на папку дерева: отмеченные кейсы (если строка среди них) или только эту строку.
                           draggable onDragStart={e => {
                             const keys = checked.has(c.key) ? [...checked] : [c.key];
@@ -334,23 +346,41 @@ export default function ZephyrSection() {
                           <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{c.key}</td>
                           <td className="px-3 py-1.5 text-text-main">
                             <span className="block truncate max-w-[520px]">{c.name}</span>
-                            {!folder && c.folder && <span className="block text-[11px] text-text-muted truncate">{c.folder}</span>}
+                            {!folder && c.folder && !cols.has("folder") && <span className="block text-[11px] text-text-muted truncate">{c.folder}</span>}
                           </td>
-                          <td className="px-3 py-1.5 text-text-main whitespace-nowrap">{c.status || "—"}</td>
-                          <td className="px-3 py-1.5 text-text-main whitespace-nowrap">{c.priority || "—"}</td>
-                          <td className="px-3 py-1.5 text-text-muted truncate">{c.owner || "—"}</td>
+                          {cols.has("status") && <td className="px-3 py-1.5"><CaseStatus status={c.status} /></td>}
+                          {cols.has("priority") && <td className="px-3 py-1.5 text-text-main whitespace-nowrap">{c.priority || "—"}</td>}
+                          {cols.has("duration") && <td className="px-3 py-1.5 text-text-main whitespace-nowrap tabular-nums">{fmtDuration(c.estimatedTime)}</td>}
+                          {cols.has("owner") && <td className="px-3 py-1.5 text-text-muted truncate">{c.owner || "—"}</td>}
+                          {cols.has("folder") && <td className="px-3 py-1.5 text-xs text-text-muted"><span className="block truncate max-w-[220px]" title={c.folder}>{c.folder || "—"}</span></td>}
+                          {cols.has("labels") && <td className="px-3 py-1.5 text-xs text-text-muted truncate">{c.labels.join(", ") || "—"}</td>}
+                          {cols.has("updated") && <td className="px-3 py-1.5 text-xs text-text-muted whitespace-nowrap">{c.updated ? fmtDate(c.updated) : "—"}</td>}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 )}
+              {checked.size > 0 && (
+                // Панель выбора — поверх низа списка, а не над ним: строки не сдвигаются, пока отмечаешь кейсы.
+                <div className="sticky bottom-3 z-10 mx-4 flex items-center gap-2 rounded-xl border border-primary/40 bg-bg-card shadow-lg px-4 py-2 text-sm">
+                  <span className="text-text-main">Выбрано: <b>{checked.size}</b></span>
+                  <button type="button" onClick={() => { if (checked.size === 1) { setCaseKey([...checked][0]); setEditOpen(true); setNewCaseIn(null); } else setBulk("edit"); }}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-white text-xs font-semibold hover:opacity-90">
+                    <Pencil className="w-3.5 h-3.5" /> Изменить</button>
+                  <button type="button" onClick={() => setBulk("delete")}
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 dark:border-red-900 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
+                    <Trash2 className="w-3.5 h-3.5" /> Удалить</button>
+                  <span className="text-xs text-text-muted">или перетащите на папку в дереве</span>
+                  <button type="button" onClick={() => setChecked(new Set())} className="ml-auto text-xs text-text-muted hover:text-text-main underline">Снять выбор</button>
+                </div>
+              )}
               </div>
             </div>
 
             {caseKey ? (
               <CaseDialog label={`Кейс ${caseKey}`} title={`${caseKey}${dialogTitle ? ` · ${dialogTitle}` : ""}`} minimized={minimized}
                 onMinimize={() => setMinimized(true)} onRestore={() => setMinimized(false)} onClose={() => setCaseKey(null)}>
-                <CaseCard caseKey={caseKey} baseUrl={baseUrl} project={project} editable onChanged={() => setReloadKey(k => k + 1)}
+                <CaseCard caseKey={caseKey} baseUrl={baseUrl} project={project} editable startEditing={editOpen} onChanged={() => setReloadKey(k => k + 1)}
                   onClose={() => setCaseKey(null)} onMinimize={() => setMinimized(true)} onTitle={setDialogTitle} />
               </CaseDialog>
             ) : newCaseIn !== null ? (
@@ -386,6 +416,18 @@ export default function ZephyrSection() {
             </div>
           </div>
         </Modal>
+      )}
+      {bulk === "edit" && (
+        <BulkEditModal project={project} keys={[...checked]} onClose={() => setBulk(null)}
+          onDone={r => { setBulk(null); setChecked(new Set()); done(!r.errors.length, `Изменено кейсов: ${r.ok}.${r.errors.length ? ` Ошибки: ${r.errors.map(e => `${e.key} — ${e.error}`).join("; ")}` : ""}`); }} />
+      )}
+      {bulk === "delete" && (
+        <DeleteCasesModal project={project} keys={[...checked]} onClose={() => setBulk(null)}
+          onDone={r => {
+            setBulk(null); setChecked(new Set());
+            if (caseKey && checked.has(caseKey)) setCaseKey(null);
+            done(!r.errors.length, `Удалено кейсов: ${r.ok}.${r.errors.length ? ` Ошибки: ${r.errors.map(e => `${e.key} — ${e.error}`).join("; ")}` : ""}`);
+          }} />
       )}
       {applyOpen && staging && <ApplyDialog project={project} staging={staging} onDone={afterApply} onClose={() => setApplyOpen(false)} />}
     </div>

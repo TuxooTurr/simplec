@@ -15,7 +15,7 @@ def jira(monkeypatch, tmp_path):
     monkeypatch.setattr(z, "_load_cfg", lambda db: CFG)
     monkeypatch.setattr(z, "_INDEX_DIR", tmp_path / "zephyr_index")
     monkeypatch.setattr(z, "_RELEASES_FILE", tmp_path / "zephyr_releases.json")
-    z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear(); z._failed.clear()
+    z._working.clear(); z._project_ids.clear(); z._index.clear(); z._locks.clear(); z._no_fields.clear(); z._failed.clear(); z._trace_tql.clear()
 
     def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
         state["calls"].append((path, params))
@@ -515,28 +515,35 @@ def test_стори_релиза_по_связям_задачи(jira):
                                                                             ("SBER911-12", "Стори Б", "входит в")]
 
 
-def test_строка_релиза_прогоны_релиза_и_нф_прогоны_стори(jira):
+def test_строка_релиза_без_поиска_по_отслеживанию_считает_по_issuekey(jira):
     _release_route(jira)
-    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [
-        _run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал"),
-        _run("SBER911-C3", "SBER911-12", "Новый функционал"), _run("SBER911-C4", "SBER911-999")] if p["startAt"] == 0 else []
+    def search(p):
+        if "issueKeys" in p["query"]:
+            raise HTTPException(400, "Jira: unknown field issueKeys")
+        return [_run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал"),
+                _run("SBER911-C4", "SBER911-999")] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = search
     b = z.release_board("SBER911-100", project="SBER911", db=None)
-    assert [(r["key"], r["source"]) for r in b["runs"]] == [("SBER911-C1", "zephyr")] and b["runs"][0]["type"] == "Регресс"
+    assert b["traceSource"] == "issueKey"
+    assert [r["key"] for r in b["runs"]] == ["SBER911-C1"] and b["runs"][0]["type"] == "Регресс"
+    assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C2"] and b["storyRuns"]["SBER911-12"] == []
+
+
+def test_строка_релиза_по_всему_отслеживанию_прогонов(jira):
+    """Прогоны C1, C2 — с релизом в отслеживании; стори 11 есть в отслеживании C2, стори 12 — только в чужом C9."""
+    _release_route(jira)
+    trace = {"SBER911-100": ["SBER911-C1", "SBER911-C2"], "SBER911-11": ["SBER911-C2"], "SBER911-12": ["SBER911-C9"]}
+    def search(p):
+        q = p["query"]
+        issue = q.split('issueKeys IN ("')[1].split('"')[0]
+        assert p["fields"] == z.RUN_FIELDS
+        return [_run(k, "SBER911-100") for k in trace.get(issue, [])]
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = search
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert b["traceSource"] == "tql"
+    assert [r["key"] for r in b["runs"]] == ["SBER911-C2", "SBER911-C1"]
     assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C2"]
-    assert b["storyRuns"]["SBER911-11"][0]["type"] == "Новый функционал"
-
-
-def test_нф_прогоны_добавляются_к_релизу_многие_ко_многим(jira):
-    _release_route(jira)
-    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: [
-        _run("SBER911-C1", "SBER911-100"), _run("SBER911-C2", "SBER911-11", "Новый функционал")] if p["startAt"] == 0 else []
-    z.release_add_runs("SBER911-100", z.ReleaseRuns(project="SBER911", runKeys=["sber911-c2", "SBER911-C1", "SBER911-C9"]))
-    z.release_add_runs("SBER911-200", z.ReleaseRuns(project="SBER911", runKeys=["SBER911-C2"]))   # тот же прогон — в другом релизе
-    b = z.release_board("SBER911-100", project="SBER911", db=None)
-    assert [(r["key"], r["source"], r.get("missing", False)) for r in b["runs"]] == [
-        ("SBER911-C9", "simpletest", True), ("SBER911-C2", "simpletest", False), ("SBER911-C1", "zephyr", False)]
-    assert z.release_remove_run("SBER911-100", "SBER911-C2", project="SBER911")["runs"] == ["SBER911-C1", "SBER911-C9"]
-    assert z.release_add_runs("SBER911-200", z.ReleaseRuns(project="SBER911", runKeys=["SBER911-C2"]))["runs"] == ["SBER911-C2"]
+    assert b["storyRuns"]["SBER911-12"] == []            # C9 не прогон релиза — стори не покрыта
 
 
 def test_релизы_в_simpletest_добавить_убрать(jira):
@@ -547,8 +554,6 @@ def test_релизы_в_simpletest_добавить_убрать(jira):
     assert z.releases_list(project="SBER911") == {"releases": ["SBER911-2"]}
     with pytest.raises(HTTPException):
         z.releases_add(z.ReleaseAdd(project="SBER911", key="релиз"))
-    with pytest.raises(HTTPException):
-        z.release_add_runs("SBER911-2", z.ReleaseRuns(project="SBER911", runKeys=["не ключ"]))
 
 
 def test_список_прогонов_из_индекса_новые_сверху(jira):
@@ -646,3 +651,63 @@ def test_первая_страница_не_успела_пробую_помен
         return [_run(f"SBER911-C{i}") for i in range(p["startAt"], min(p["startAt"] + p["maxResults"], 25))]
     jira["routes"]["/rest/atm/1.0/testrun/search"] = r
     assert len(z.runs(project="SBER911", db=None)["runs"]) == 25
+
+
+# ── Прогон: кейсы с названиями, «Пройти прогон»; массовые правки кейсов ─────
+
+def test_прогон_с_названиями_кейсов_и_временем_прохождения(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [{"key": "ICON-T1", "name": "Вход"}] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C1"] = {"key": "SBER911-C1", "projectKey": "SBER911", "createdOn": "2026-10-01T09:00:00Z",
+                                                          "items": [{"testCaseKey": "ICON-T1", "status": "Pass"}]}
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C1/testresults"] = [{"testCaseKey": "ICON-T1", "status": "Pass", "executionTime": 65000}]
+    r = z.run("SBER911-C1", db=None)
+    assert r["created"] == "2026-10-01T09:00:00Z"
+    it = r["items"][0]
+    assert (it["name"], it["executionTime"], it["status"]) == ("Вход", 65000, "Pass")
+
+
+def test_пройти_прогон_ставит_pass_только_непройденным(jira, monkeypatch):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: []
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C1"] = {"key": "SBER911-C1", "projectKey": "SBER911",
+        "items": [{"testCaseKey": "T1", "status": "Pass"}, {"testCaseKey": "T2", "status": "Fail"}, {"testCaseKey": "T3"}]}
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C1/testresults"] = []
+    sent = {}
+    monkeypatch.setattr(z, "_write_variants", lambda cfg, kind, method, variants: sent.update(body=variants[0][1]) or {})
+    r = z.pass_run("SBER911-C1", db=None)
+    assert [x["testCaseKey"] for x in sent["body"]] == ["T2", "T3"] and all(x["status"] == "Pass" for x in sent["body"])
+    assert (r["saved"], r["skipped"], r["total"]) == (2, 1, 3)
+
+
+def test_удалить_несколько_кейсов(jira, monkeypatch):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [{"key": "T1"}, {"key": "T2"}, {"key": "T3"}] if p["startAt"] == 0 else []
+    z.get_index(CFG, "SBER911")
+    calls = []
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        calls.append((method, path))
+        if path.endswith("/T2"):
+            raise HTTPException(403, "Jira: нет прав на операцию (403)")
+        return {}
+    monkeypatch.setattr(z, "_jira_request", req)
+    r = z.delete_cases(z.CasesBulk(project="SBER911", keys=["t1", "T2", "T3"]), db=None)
+    assert sorted(r["deleted"]) == ["T1", "T3"] and r["errors"][0]["key"] == "T2"
+    assert sorted(z._index[(CFG["base_url"], "SBER911")]["cases"]) == ["T2"]
+
+
+def test_изменить_несколько_кейсов_метки_добавляются(jira, monkeypatch):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [{"key": "T1", "labels": ["старая"]}, {"key": "T2"}] if p["startAt"] == 0 else []
+    z.get_index(CFG, "SBER911")
+    puts = {}
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        k = path.rsplit("/", 1)[1]
+        if method == "PUT":
+            puts[k] = json_body
+            return {}
+        return {"key": k, "status": "Approved", "labels": puts[k].get("labels", [])}
+    monkeypatch.setattr(z, "_jira_request", req)
+    r = z.edit_cases(z.CasesEdit(project="SBER911", keys=["T1", "T2"], status="Approved", labelsAdd=["регресс"],
+                                 customFields={"Крит. регресс": True}), db=None)
+    assert sorted(r["updated"]) == ["T1", "T2"] and r["errors"] == []
+    assert puts["T1"] == {"status": "Approved", "customFields": {"Крит. регресс": True}, "labels": ["старая", "регресс"]}
+    assert puts["T2"]["labels"] == ["регресс"]
+    with pytest.raises(HTTPException):
+        z.edit_cases(z.CasesEdit(project="SBER911", keys=["T1"]), db=None)

@@ -202,6 +202,34 @@ def test_проверка_отдаёт_каркас_без_данных_и_пр�
     assert by["tree-cases"]["path"] == "/rest/tests/1.0/project/11000/foldertree/testcase"
 
 
+
+def test_проверка_показывает_всё_отслеживание_прогона_без_текста(jira):
+    run = {"key": "SBER911-C709", "name": "Секретный прогон", "folder": "/Release 26/НФ", "issueKey": "SBER911-100",
+           "issueCount": 3}
+    jira["routes"]["/rest/api/2/project/SBER911"] = {"id": "11000"}
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C709"] = run
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = lambda p: (
+        [{**run, "issueKeys": ["SBER911-100", "SBER911-201", "SBER911-202"]}] if "folder" in p["query"] else [run])
+    jira["routes"]["/rest/tests/1.0/testrun/search"] = HTTPException(403, "Jira: нет прав на операцию (403)")
+    jira["routes"]["/rest/api/2/issue/SBER911-201/remotelink"] = [
+        {"object": {"title": "Секретная ссылка", "url": "https://jira.example/secure/Tests.jspa#/testPlayer/SBER911-C709"}}]
+    rep = z.probe(project="SBER911", samples=False, run="sber911-c709", issue="SBER911-201", db=None)
+    by = {r["id"]: r for r in rep["results"]}
+    assert by["run-get-v1"]["note"] == "отслеживание: issueKey=[SBER911-100] · issueCount=3"
+    assert by["run-trace-folder"]["note"] == (
+        "отслеживание: issueKey=[SBER911-100] · issueCount=3 · issueKeys=[SBER911-100, SBER911-201, SBER911-202]")
+    assert 'folder = "/Release 26/НФ"' in by["run-trace-folder"]["params"]["query"]
+    assert "issueKeys" in by["run-trace-folder-fields"]["params"]["fields"]
+    assert by["run-trace-internal"]["status"] == 403
+    assert by["issue-remotelinks"]["note"] == "ссылок: 1 · прогоны в них: SBER911-C709"
+    assert "Секретн" not in str(rep)                                # ключи и числа — да, текст — нет
+
+
+def test_проверка_отслеживания_пропускается_без_прогона(jira):
+    rep = z.probe(project="SBER911", samples=False, db=None)
+    by = {r["id"]: r for r in rep["results"]}
+    assert by["run-trace-folder"]["skipped"] and by["run-trace-internal"]["skipped"] and by["issue-remotelinks"]["skipped"]
+
 # ── Крит регресс ─────────────────────────────────────────────────────────────
 
 def test_кэ_из_объектов_строк_и_id():

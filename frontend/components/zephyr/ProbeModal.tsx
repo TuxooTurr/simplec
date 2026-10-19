@@ -42,9 +42,9 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
           <span>Необязательно — проверить отслеживание:</span>
           <input value={runKey} onChange={e => setRunKey(e.target.value)} placeholder="Прогон: SBER911-C709" aria-label="Ключ прогона для проверки"
             className="w-44 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
-          <input value={issueKey} onChange={e => setIssueKey(e.target.value)} placeholder="Релиз или стори: SBER911-12345" aria-label="Задача для проверки"
+          <input value={issueKey} onChange={e => setIssueKey(e.target.value)} placeholder="Стори: SBER911-12345" aria-label="Задача для проверки"
             className="w-52 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
-          <span>— прогон, где в отслеживании и релиз, и стори; задача — одна из них.</span>
+          <span>— прогон, где в отслеживании релиз и несколько стори; задача — одна из этих стори.</span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" onClick={run} disabled={busy}

@@ -566,6 +566,30 @@ def _shape(v: Any, depth: int = 0) -> Any:
     return type(v).__name__
 
 
+_TRACE_FIELD_RE = re.compile(r"issue|trace|link|jira", re.I)
+_ISSUE_IN_TEXT_RE = re.compile(r"\b[A-Z][A-Z0-9_]*-\d+\b")     # ключ задачи; прогон (SBER911-C709) не совпадёт
+_RUN_IN_TEXT_RE = re.compile(r"\b[A-Z][A-Z0-9_]*-C\d+\b")
+
+
+def trace_summary(r: Any) -> str:
+    """
+    Поля прогона, похожие на отслеживание (issueKey, issueKeys, issueLinks, traceLinks, issueCount…), → «поле=ключи».
+    Только ключи задач и числа, без текста: так в отчёте видно, отдаёт ли API всё отслеживание, а не одну задачу.
+    """
+    if not isinstance(r, dict):
+        return "отслеживание: ответ не объект"
+    parts = []
+    for k, v in r.items():
+        if not _TRACE_FIELD_RE.search(k):
+            continue
+        if v is None or isinstance(v, (bool, int, float)):
+            parts.append(f"{k}={v}")
+            continue
+        keys = sorted(set(_ISSUE_IN_TEXT_RE.findall(json.dumps(v, ensure_ascii=False))))
+        parts.append(f"{k}=[{', '.join(keys)}]" if keys else f"{k}: {type(v).__name__} без ключей задач")
+    return "отслеживание: " + (" · ".join(parts) if parts else "полей нет")
+
+
 @router.get("/api/zephyr/probe")
 def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, run: str = "", issue: str = "",
           db: Session = Depends(get_db)) -> dict:
@@ -631,10 +655,53 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
           {"query": _q_query(project), "maxResults": 3}, first_key("run"))
     check("run-search-doc", "Поиск прогонов: testcycle (как в документации)", lambda: f"{ATM}/testcycle/search",
           {"JQL": f"project={project}", "maxResult": 3}, first_key("run"))
-    check("run-get-v1", "Прогон целиком: testrun/{key}", lambda: f"{ATM}/testrun/{found['run']}" if found.get("run") else None)
+    run_obj: dict[str, Any] = {}
+    check("run-get-v1", "Прогон целиком: testrun/{key}", lambda: f"{ATM}/testrun/{found['run']}" if found.get("run") else None,
+          remember=lambda d: run_obj.update(d) if isinstance(d, dict) else None)
+    if run_obj:
+        results[-1]["note"] = trace_summary(run_obj)
     check("run-results-v1", "Результаты прогона: testrun/{key}/testresults",
           lambda: f"{ATM}/testrun/{found['run']}/testresults" if found.get("run") else None)
     check("run-get-doc", "Прогон целиком: testcycle/{key}", lambda: f"{ATM}/testcycle/{found['run']}" if found.get("run") else None)
+    # Отслеживание прогона, где кроме релиза стоят стори: отдаёт ли его API целиком хоть где-то. Поиск по отслеживанию
+    # стенд не понимает (в TQL только projectKey и folder), поэтому прогон ищется по своей папке — ответ поиска
+    # бывает полнее, чем testrun/{key}.
+    def run_in(store: dict) -> Callable[[Any], None]:
+        return lambda d: store.update(items=_items(d))
+
+    def note_run_in(store: dict) -> None:
+        if "items" not in store:
+            return
+        hit = next((x for x in store["items"] if str(x.get("key", "")).upper() == found.get("run")), None)
+        results[-1]["note"] = trace_summary(hit) if hit else f"прогона {found.get('run')} нет среди {len(store['items'])} в папке"
+
+    folder = str(run_obj.get("folder") or "")
+    folder_q = _q_query(project, 'folder = "' + folder.replace('"', '\\"') + '"') if folder else ""
+    by_folder: dict[str, Any] = {}
+    check("run-trace-folder", "Отслеживание прогона: поиск по его папке (целиком)",
+          lambda: f"{ATM}/testrun/search" if folder_q else None, {"query": folder_q, "maxResults": 200}, run_in(by_folder))
+    note_run_in(by_folder)
+    by_fields: dict[str, Any] = {}
+    check("run-trace-folder-fields", "Отслеживание прогона: поиск по папке с fields issueKeys/issueLinks/traceLinks",
+          lambda: f"{ATM}/testrun/search" if folder_q else None,
+          {"query": folder_q, "maxResults": 200, "fields": "key,issueKey,issueKeys,issueLinks,traceLinks,issueCount"},
+          run_in(by_fields))
+    note_run_in(by_fields)
+    internal: dict[str, Any] = {}
+    check("run-trace-internal", "Отслеживание прогона: внутренний API (попытка; если закрыт — 403, как дерево)",
+          lambda: f"{TESTS}/testrun/search" if found.get("run") and found.get("pid") else None,
+          {"query": f'testRun.projectId IN ({found.get("pid", "")}) AND testRun.key IN ("{found.get("run", "")}")',
+           "fields": "id,key,traceLinks", "maxResults": 1},
+          lambda d: internal.update(items=_items(d)))
+    if internal.get("items"):
+        results[-1]["note"] = trace_summary(internal["items"][0])
+    links: dict[str, Any] = {}
+    check("issue-remotelinks", "Ссылки задачи в Jira (remotelink): пишет ли Zephyr туда прогоны",
+          lambda: f"/rest/api/2/issue/{found['issue']}/remotelink" if found.get("issue") else None,
+          remember=lambda d: links.update(raw=d))
+    if "raw" in links:
+        runs_ = sorted(set(_RUN_IN_TEXT_RE.findall(json.dumps(links["raw"], ensure_ascii=False))))
+        results[-1]["note"] = f"ссылок: {len(_items(links['raw']))} · прогоны в них: {', '.join(runs_) or 'нет'}"
     check("tree-cases", "Дерево папок кейсов (внутренний API)",
           lambda: f"{TESTS}/project/{found['pid']}/foldertree/testcase" if found.get("pid") else None, {"showEmptyFolders": "true"})
     check("tree-runs", "Дерево папок прогонов (внутренний API)",

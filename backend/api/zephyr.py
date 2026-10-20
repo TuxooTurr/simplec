@@ -592,7 +592,7 @@ def trace_summary(r: Any) -> str:
 
 @router.get("/api/zephyr/probe")
 def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, run: str = "", issue: str = "",
-          db: Session = Depends(get_db)) -> dict:
+          run_id: str = "", db: Session = Depends(get_db)) -> dict:
     """
     Проверяет запросы чтения обоих вариантов и возвращает отчёт: что сработало, код ответа, каркас ответа
     (ключи и типы, без данных). samples=true — ещё и начало ответа (для разбора формата; там будут данные).
@@ -605,6 +605,8 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
         found["run"] = run.strip().upper()
     if issue.strip():
         found["issue"] = issue.strip().upper()
+    if run_id.strip().isdigit():   # числовой id прогона — из адреса запроса на странице прогона в Zephyr
+        found["run_id"] = run_id.strip()
     results: list[dict] = []
 
     def check(cid: str, label: str, path: Callable[[], Optional[str]], params: Optional[dict] = None,
@@ -695,6 +697,33 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
           lambda d: internal.update(items=_items(d)))
     if internal.get("items"):
         results[-1]["note"] = trace_summary(internal["items"][0])
+    # Отслеживание так, как его читает страница прогона в Zephyr (её блок связей работает, в отличие от блока в Jira):
+    # внутренний tracelinks/issue по числовому id прогона. В ответе — Jira-задачи числовыми id (issueId), ключи
+    # SBER911-… — поиском Jira «id in (…)». Числовой id публичный API не отдаёт: пробуем внутренний testrun/{ключ},
+    # иначе id вводят руками.
+    by_key: dict[str, Any] = {}
+    check("run-id-internal", "Числовой id прогона по ключу: внутренний testrun/{ключ}",
+          lambda: f"{TESTS}/testrun/{found['run']}" if found.get("run") else None, {"fields": "id,key"},
+          lambda d: by_key.update(id=str(d.get("id") or "")) if isinstance(d, dict) else None)
+    if by_key.get("id"):
+        found.setdefault("run_id", by_key["id"])
+        results[-1]["note"] = f"id {by_key['id']}"
+    links_: dict[str, Any] = {}
+    check("run-tracelinks", "Отслеживание прогона: tracelinks/issue по id (как страница прогона в Zephyr)",
+          lambda: f"{TESTS}/testrun/{found['run_id']}/tracelinks/issue" if found.get("run_id") else None,
+          {"fields": "id,issueId,type(id,index,name,i18nKey,systemKey),testCaseId,testRunId,testPlanId"},
+          lambda d: links_.update(items=_items(d)))
+    issue_ids = sorted({str(x.get("issueId")) for x in links_.get("items", []) if x.get("issueId")}, key=int)
+    if "items" in links_:
+        results[-1]["note"] = f"связей: {len(links_['items'])} · issueId: {', '.join(issue_ids) or 'нет'}"
+    keys_: dict[str, str] = {}
+    check("run-tracelinks-keys", "Ключи задач из отслеживания: поиск Jira «id in (…)»",
+          lambda: "/rest/api/2/search" if issue_ids else None,
+          {"jql": f"id in ({','.join(issue_ids)})", "fields": "issuetype", "maxResults": 100},
+          lambda d: keys_.update({str(i.get("id")): f"{i.get('key')} ({_name((i.get('fields') or {}).get('issuetype'))})"
+                                  for i in (d.get("issues") or []) if isinstance(i, dict)}) if isinstance(d, dict) else None)
+    if keys_:
+        results[-1]["note"] = "отслеживание: " + ", ".join(keys_[i] for i in issue_ids if i in keys_)
     links: dict[str, Any] = {}
     check("issue-remotelinks", "Ссылки задачи в Jira (remotelink): пишет ли Zephyr туда прогоны",
           lambda: f"/rest/api/2/issue/{found['issue']}/remotelink" if found.get("issue") else None,

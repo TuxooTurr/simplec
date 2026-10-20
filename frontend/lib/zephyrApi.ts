@@ -118,8 +118,8 @@ export const getRuns = (project: string, refresh = false) =>
 export const getRun = (key: string) => fetchJson<ZRunFull>(`/api/zephyr/run/${encodeURIComponent(key)}`);
 
 /** Проверка API; run/issue — проверить конкретный прогон (с релизом и стори в отслеживании) и задачу. */
-export const probeZephyr = (project: string, samples: boolean, run = "", issue = "") =>
-  fetchJson<ProbeReport>(`/api/zephyr/probe?${q({ project, samples: String(samples), run, issue })}`);
+export const probeZephyr = (project: string, samples: boolean, run = "", issue = "", runId = "") =>
+  fetchJson<ProbeReport>(`/api/zephyr/probe?${q({ project, samples: String(samples), run, issue, run_id: runId })}`);
 
 /** «Пройти прогон»: всем кейсам без Pass — Pass в Jira. */
 export const passRun = (key: string) =>

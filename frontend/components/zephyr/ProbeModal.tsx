@@ -18,10 +18,11 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
   const [openRow, setOpenRow] = useState<string | null>(null);
   const [runKey, setRunKey] = useState("");
   const [issueKey, setIssueKey] = useState("");
+  const [runId, setRunId] = useState("");
 
   const run = async () => {
     setBusy(true); setErr(""); setRep(null); setCopied(false);
-    try { setRep(await probeZephyr(project, samples, runKey.trim(), issueKey.trim())); } catch (e) { setErr((e as Error).message); }
+    try { setRep(await probeZephyr(project, samples, runKey.trim(), issueKey.trim(), runId.trim())); } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
   const copy = async () => {
@@ -44,7 +45,11 @@ export default function ProbeModal({ open, project, onClose }: { open: boolean; 
             className="w-44 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
           <input value={issueKey} onChange={e => setIssueKey(e.target.value)} placeholder="Стори: SBER911-12345" aria-label="Задача для проверки"
             className="w-52 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
-          <span>— прогон, где в отслеживании релиз и несколько стори; задача — одна из этих стори.</span>
+          <input value={runId} onChange={e => setRunId(e.target.value.replace(/\D/g, ""))} inputMode="numeric"
+            placeholder="id прогона: 1313743" aria-label="Числовой id прогона"
+            title="Число из адреса запроса …/rest/tests/1.0/testrun/<id>/tracelinks/issue на странице прогона (F12 → Network)"
+            className="w-44 font-mono text-xs border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main" />
+          <span>— прогон, где в отслеживании релиз и несколько стори; задача — одна из этих стори; id — число из адреса tracelinks.</span>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" onClick={run} disabled={busy}

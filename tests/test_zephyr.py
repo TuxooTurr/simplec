@@ -225,10 +225,37 @@ def test_проверка_показывает_всё_отслеживание_�
     assert "Секретн" not in str(rep)                                # ключи и числа — да, текст — нет
 
 
+
+def test_проверка_читает_отслеживание_по_числовому_id_и_переводит_в_ключи(jira):
+    jira["routes"]["/rest/tests/1.0/testrun/SBER911-C710"] = HTTPException(403, "Jira: нет прав на операцию (403)")
+    jira["routes"]["/rest/tests/1.0/testrun/1313743/tracelinks/issue"] = [
+        {"id": 1, "issueId": "25075530", "testRunId": 1313743, "type": {"systemKey": "RELATED"}},
+        {"id": 2, "issueId": "24913854", "testRunId": 1313743, "type": {"systemKey": "RELATED"}}]
+    jira["routes"]["/rest/api/2/search"] = lambda p: {"issues": [
+        {"id": "24913854", "key": "SBER911-28847", "fields": {"issuetype": {"name": "Релиз"}}},
+        {"id": "25075530", "key": "SBER911-29231", "fields": {"issuetype": {"name": "История"}}}]}
+    rep = z.probe(project="SBER911", samples=False, run="SBER911-C710", run_id="1313743", db=None)
+    by = {r["id"]: r for r in rep["results"]}
+    assert by["run-id-internal"]["status"] == 403                    # id по ключу не достали — взяли введённый
+    assert by["run-tracelinks"]["path"] == "/rest/tests/1.0/testrun/1313743/tracelinks/issue"
+    assert by["run-tracelinks"]["note"] == "связей: 2 · issueId: 24913854, 25075530"
+    assert ("/rest/api/2/search", {"jql": "id in (24913854,25075530)", "fields": "issuetype", "maxResults": 100}) in jira["calls"]
+    assert by["run-tracelinks-keys"]["note"] == "отслеживание: SBER911-28847 (Релиз), SBER911-29231 (История)"
+
+
+def test_id_прогона_по_ключу_из_внутреннего_api(jira):
+    jira["routes"]["/rest/tests/1.0/testrun/SBER911-C710"] = {"id": 1313743, "key": "SBER911-C710"}
+    jira["routes"]["/rest/tests/1.0/testrun/1313743/tracelinks/issue"] = []
+    rep = z.probe(project="SBER911", samples=False, run="SBER911-C710", db=None)
+    by = {r["id"]: r for r in rep["results"]}
+    assert by["run-id-internal"]["note"] == "id 1313743" and by["run-tracelinks"]["note"] == "связей: 0 · issueId: нет"
+    assert by["run-tracelinks-keys"]["skipped"]
+
 def test_проверка_отслеживания_пропускается_без_прогона(jira):
     rep = z.probe(project="SBER911", samples=False, db=None)
     by = {r["id"]: r for r in rep["results"]}
     assert by["run-trace-folder"]["skipped"] and by["run-trace-internal"]["skipped"] and by["issue-remotelinks"]["skipped"]
+    assert by["run-tracelinks"]["skipped"]
 
 # ── Крит регресс ─────────────────────────────────────────────────────────────
 

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import {
-  LOAD_DAY_MINUTES, fmtMinutes, netDayMinutes, newId, parseDuration,
+  DIRECTIONS, LOAD_DAY_MINUTES, fmtMinutes, inDirection, netDayMinutes, newId, parseDuration,
   type LoadReserve, type LoadSettings, type Participant,
 } from "@/lib/jiraTool";
 
@@ -13,7 +13,8 @@ const toHours = (min: number) => String(Math.round((min / 60) * 100) / 100);
 
 /**
  * Настройка нагрузки (общая для всех списков): сколько длится рабочий день и какие резервы забирают
- * из него время — например, час в день на автотесты у всех или только у автоматизаторов.
+ * из него время — например, у тестирования час на встречи и час на автотесты, у бэкенда — своё.
+ * Резерв — всем, людям выбранных направлений или конкретным людям.
  */
 export default function LoadSettingsModal({ open, settings, participants, onSave, onClose }: {
   open: boolean;
@@ -36,8 +37,13 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
   };
 
   const patch = (id: string, p: Partial<LoadReserve & { text: string }>) => setReserves(rs => rs.map(r => (r.id === id ? { ...r, ...p } : r)));
+  // Направления и люди — взаимоисключающие: «у тестирования» или «у этих людей», иначе непонятно, кому резерв.
   const toggle = (r: LoadReserve, pid: string) =>
-    patch(r.id, { participants: r.participants.includes(pid) ? r.participants.filter(x => x !== pid) : [...r.participants, pid] });
+    patch(r.id, { directions: [], participants: r.participants.includes(pid) ? r.participants.filter(x => x !== pid) : [...r.participants, pid] });
+  const toggleDir = (r: LoadReserve, d: string) => {
+    const cur = r.directions ?? [];
+    patch(r.id, { participants: [], directions: cur.includes(d) ? cur.filter(x => x !== d) : [...cur, d] });
+  };
   const add = () => setReserves(rs => [...rs, { id: newId("rsv"), name: rs.length ? "" : "Автотесты", minutes: 60, text: "1", participants: [] }]);
 
   const field = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -69,7 +75,7 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
           </div>
           {reserves.length === 0 && (
             <p className="text-sm text-text-muted p-3 border border-dashed border-border-main rounded-xl text-center">
-              Резервов нет. Например: «Автотесты — 1 ч в день» у всех или только у автоматизаторов.
+              Резервов нет. Например: у тестирования «Встречи — 1 ч» и «Автотесты — 1 ч» в день.
             </p>
           )}
           {reserves.map(r => {
@@ -87,8 +93,16 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="text-[11px] text-text-muted mr-0.5">Кому:</span>
-                  <button type="button" onClick={() => patch(r.id, { participants: [] })} aria-pressed={!r.participants.length}
-                    className={chip(!r.participants.length)}>Всем</button>
+                  <button type="button" onClick={() => patch(r.id, { participants: [], directions: [] })}
+                    aria-pressed={!r.participants.length && !r.directions?.length}
+                    className={chip(!r.participants.length && !r.directions?.length)}>Всем</button>
+                  {DIRECTIONS.map(d => (
+                    <button key={d.id} type="button" onClick={() => toggleDir(r, d.id)} aria-pressed={!!r.directions?.includes(d.id)}
+                      title={`Всем людям направления «${d.label}»`} className={chip(!!r.directions?.includes(d.id))}>{d.label}</button>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-text-muted mr-0.5">или людям:</span>
                   {participants.map(p => (
                     <button key={p.id} type="button" onClick={() => toggle(r, p.id)} aria-pressed={r.participants.includes(p.id)}
                       className={chip(r.participants.includes(p.id))}>{p.name}</button>
@@ -102,11 +116,20 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
         {participants.length > 0 && !badDay && (
           <section className="rounded-lg bg-bg-subtle px-3 py-2 text-xs space-y-0.5">
             <p className="font-semibold text-text-main">На задачи в день останется:</p>
-            {participants.map(p => (
-              <p key={p.id} className="flex justify-between gap-2 text-text-muted">
-                <span className="truncate">{p.name}</span><span className="tabular-nums text-text-main">{fmtMinutes(netDayMinutes(draft, p.id))}</span>
-              </p>
-            ))}
+            {DIRECTIONS.map(d => {
+              const members = participants.filter(p => inDirection(p, d.id));
+              if (!members.length) return null;
+              return (
+                <div key={d.id}>
+                  <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">{d.label}</p>
+                  {members.map(p => (
+                    <p key={p.id} className="flex justify-between gap-2 text-text-muted">
+                      <span className="truncate">{p.name}</span><span className="tabular-nums text-text-main">{fmtMinutes(netDayMinutes(draft, p))}</span>
+                    </p>
+                  ))}
+                </div>
+              );
+            })}
           </section>
         )}
 

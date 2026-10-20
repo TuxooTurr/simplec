@@ -4,8 +4,8 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  LOAD_COL, REQ_COL, DRAG_ISSUES, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
-  type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
+  LOAD_COL, REQ_COL, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
+  type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
@@ -45,11 +45,11 @@ export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
   if (ref === STAGE_COL) return 180;
   if (ref === DEFECTS_COL) return 110;
   if (ref === BLOCK_COL) return 90;
-  if (ref === PARTICIPANT_COL) return 220;
+  if (ref === PARTICIPANT_COL) return 270;
   if (ref === FOLDER_COL) return 180;
   if (ref === PLAN_COL || ref === FACT_COL) return 140;
   if (ref === START_COL || ref === END_COL) return 200;
-  if (isRoleCol(ref)) return 170;
+  if (isRoleCol(ref)) return 230;
   if (ref === LOAD_COL) return 150;
   if (ref === REQ_COL) return 220;
   if (ref.startsWith("own:")) {
@@ -74,7 +74,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, roleNames, onRole, onRoleNames, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -131,9 +131,11 @@ export default function ListTable({
   /** Клик по статусу (st) эпика: его стори. */
   onOpenStage: (issue: Issue) => void;
   /** Фамилии полей направлений (st): поле → список. */
-  roleNames: Record<string, string[]>;
-  onRole: (key: string, fieldId: string, patch: { name?: string; state?: "todo" | "doing" | "done" }) => void;
-  onRoleNames: (fieldId: string, names: string[]) => void;
+  onRole: (key: string, fieldId: string, patch: RoleValue) => void;
+  /** Добавить человека в справочник с направлением (имя из ячейки направления); вернуть его. */
+  onAddPerson: (dir: string, name: string) => Participant;
+  /** Убрать человека из направления в справочнике. */
+  onLeaveDirection: (dir: string, pid: string) => void;
   /** Исключить задачу из нагрузки (true) или вернуть (false). */
   onNoLoad: (key: string, skip: boolean) => void;
   /** Требования по задачам (ключ → id документов «Данных») и все документы для выбора. */
@@ -184,7 +186,7 @@ export default function ListTable({
     for (const i of items) {
       const sp = list.spend?.[i.key];
       if (sp?.plan != null) { plan += sp.plan; hasPlan = true; }
-      const f = factMinutes(sp);
+      const f = factMinutes(sp, !!list.loadWeekends);
       if (f != null && f >= 0) { fact += f; hasFact = true; }
     }
     return [hasPlan ? `план ${fmtMinutes(plan)}` : "", hasFact ? `факт ${fmtMinutes(fact)}` : ""].filter(Boolean).join(" · ");
@@ -421,7 +423,13 @@ export default function ListTable({
             ${pinned.has(c) ? rowBg(on) : ""} ${c === lastPinned ? EDGE : ""}`}
             style={pinned.has(c) ? stick(leftOf(c)) : undefined}>
             {c === PARTICIPANT_COL ? (
-              <ParticipantCell value={list.assignees[issue.key] ?? ""} participants={participants} onChange={pid => onParticipant(issue.key, pid)} />
+              <span className="flex items-center gap-1 min-w-0">
+                <span className="min-w-0 flex-1">
+                  <ParticipantCell value={list.assignees[issue.key] ?? ""} onChange={pid => onParticipant(issue.key, pid)}
+                    participants={participants.filter(p => inDirection(p, TESTING) || p.id === list.assignees[issue.key])} />
+                </span>
+                <span className="flex-shrink-0 w-16"><PlanCell compact value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} /></span>
+              </span>
             ) : c === STAGE_COL ? (
               <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined}
                 manual={stageManual[issue.key]} onManual={st => onStageManual(issue.key, st)} />
@@ -435,15 +443,16 @@ export default function ListTable({
               <SpendDateCell value={list.spend?.[issue.key]?.[c === START_COL ? "start" : "end"]} label={colLabel(c, list)}
                 onChange={v => onSpend(issue.key, c === START_COL ? { start: v } : { end: v })} />
             ) : c === FACT_COL ? (
-              <FactCell spend={list.spend?.[issue.key]} />
+              <FactCell spend={list.spend?.[issue.key]} weekends={!!list.loadWeekends} />
             ) : c === REQ_COL ? (
               <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
                 onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />
             ) : c === LOAD_COL ? (
               <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />
             ) : isRoleCol(c) ? (
-              <RoleCell label={colLabel(c, list)} value={list.roles?.[issue.key]?.[c.slice(5)]} names={roleNames[c.slice(5)] ?? []}
-                onChange={patch => onRole(issue.key, c.slice(5), patch)} onNames={names => onRoleNames(c.slice(5), names)} />
+              <RoleCell label={colLabel(c, list)} dir={c.slice(5)} value={list.roles?.[issue.key]?.[c.slice(5)]} people={participants}
+                onChange={patch => onRole(issue.key, c.slice(5), patch)} onAddPerson={name => onAddPerson(c.slice(5), name)}
+                onLeave={pid => onLeaveDirection(c.slice(5), pid)} />
             ) : c === FOLDER_COL ? (
               <span className="block truncate text-xs text-text-muted">{list.folders?.[issue.key] ?? "—"}</span>
             ) : c === "jira:summary" && !issue.local ? (

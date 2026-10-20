@@ -16,7 +16,7 @@ import {
   addLabelPresets, attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
-import { CREATE_TYPES, PRIORITIES, type Participant } from "@/lib/jiraTool";
+import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, type Participant } from "@/lib/jiraTool";
 
 /** Что уходит в список: черновик SimpleTest или созданная в Jira задача (тогда есть jiraKey/url). */
 export interface IssueDraft {
@@ -421,10 +421,10 @@ export default function IssueFormModal({ open, project, participants, listName, 
                 </div>
               </div>
               <div className="col-span-2">
-                <label htmlFor="if-ptc" className={LBL}>Участник (st)</label>
+                <label htmlFor="if-ptc" className={LBL}>Тестировщик (st)</label>
                 <select id="if-ptc" value={participantId} onChange={e => setParticipantId(e.target.value)} className={INPUT}>
                   <option value="">— не назначен</option>
-                  {participants.map(p => <option key={p.id} value={p.id}>{p.role ? `${p.name} · ${p.role}` : p.name}</option>)}
+                  {participants.filter(p => inDirection(p, TESTING) || p.id === participantId).map(p => <option key={p.id} value={p.id}>{p.role ? `${p.name} · ${p.role}` : p.name}</option>)}
                 </select>
               </div>
             </div>

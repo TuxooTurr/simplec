@@ -27,12 +27,15 @@ import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
 import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
+import LoadDetailsModal from "@/components/jiratool/LoadDetailsModal";
+import LoadRowView from "@/components/jiratool/LoadRowView";
+import { getPeople, savePeople } from "@/lib/peopleApi";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
-  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
-  projectKeyOfIssue, saveState,
+  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve,
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
@@ -54,7 +57,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "load" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "load" | "loadDetails" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -166,6 +169,56 @@ export default function JiraToolSection() {
       .catch(e => setJira({ state: "error", message: (e as Error).message }));
   };
   useEffect(() => { connect(); }, []);
+
+  /*
+   * Справочник людей живёт на бэкенде (/api/people), в состоянии — его копия: ячейки и нагрузка читают её синхронно.
+   * Сначала читаем бэкенд; там пусто, а в браузере есть участники или фамилии направлений — первый запуск после
+   * обновления: переносим их в справочник. Пока бэкенд не прочитан — ничего не сохраняем, чтобы не затереть его
+   * копией из браузера (например, если сервер на секунду недоступен).
+   */
+  const peopleSaved = useRef<string | null>(null);
+  const [peopleErr, setPeopleErr] = useState("");
+  const hasState = !!state;
+  useEffect(() => {
+    if (!hasState || peopleSaved.current !== null) return;
+    let alive = true;
+    getPeople().then(r => {
+      if (!alive) return;
+      setPeopleErr("");
+      update(s => {
+        const legacy = s.participants.length > 0 || Object.values(s.roleNames).some(n => n.length > 0);
+        const people = r.people.length || !legacy ? r.people : migratePeople(s.participants, s.roleNames);
+        peopleSaved.current = r.people.length ? JSON.stringify(people) : "";   // перенесённое — сохранится ниже
+        return { ...s, participants: people };
+      });
+    }, e => { if (alive) setPeopleErr(`Справочник людей не загрузился с сервера — изменения людей не сохранятся: ${(e as Error).message}`); });
+    return () => { alive = false; };
+  }, [hasState]);
+  const people = state?.participants;
+  useEffect(() => {
+    if (!people || peopleSaved.current === null) return;
+    const json = JSON.stringify(people);
+    if (json === peopleSaved.current) return;
+    const t = setTimeout(() => {
+      savePeople(people).then(() => { peopleSaved.current = json; setPeopleErr(""); },
+        e => setPeopleErr(`Справочник людей не сохранился на сервере: ${(e as Error).message}`));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [people]);
+
+  /** Новый человек из ячейки направления: такое имя уже есть в справочнике — добавляем ему направление. */
+  const addPerson = (dir: string, name: string): Participant => {
+    const all = state?.participants ?? [];
+    const hit = all.find(p => p.name.trim().toLowerCase() === name.trim().toLowerCase());
+    const person: Participant = hit
+      ? { ...hit, directions: Array.from(new Set([...(hit.directions ?? [TESTING]), dir])) }
+      : { id: newId("ptc"), name: name.trim(), role: DIRECTION_ROLE[dir] ?? "", color: nextColor(all), directions: [dir] };
+    update(s => ({ ...s, participants: hit ? s.participants.map(p => (p.id === hit.id ? person : p)) : [...s.participants, person] }));
+    return person;
+  };
+  const leaveDirection = (dir: string, pid: string) => update(s => ({
+    ...s, participants: s.participants.map(p => (p.id === pid ? { ...p, directions: (p.directions ?? [TESTING]).filter(d => d !== dir) } : p)),
+  }));
 
   const mergeIssues = (items: Issue[], drop: string[] = []) => setCache(c => {
     const n = { ...c };
@@ -323,11 +376,16 @@ export default function JiraToolSection() {
     return () => clearInterval(t);
   }, [jira.state]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Сколько задач у человека во всех списках: тестировщиком и в полях направлений (одна задача — один раз). */
   const usage = useMemo(() => {
     const u: Record<string, number> = {};
-    for (const l of state?.lists ?? []) for (const k of l.keys) { const p = l.assignees[k]; if (p) u[p] = (u[p] ?? 0) + 1; }
+    const people = state?.participants ?? [];
+    for (const l of state?.lists ?? []) for (const k of l.keys) {
+      const ids = new Set(DIRECTIONS.map(d => directionAssignment(l, d.id, k, people).pid).filter((x): x is string => !!x));
+      ids.forEach(id => { u[id] = (u[id] ?? 0) + 1; });
+    }
     return u;
-  }, [state?.lists]);
+  }, [state?.lists, state?.participants]);
 
   if (!state) return <Shell><div className="p-6 text-sm text-text-muted">Загрузка…</div></Shell>;
 
@@ -768,8 +826,8 @@ export default function JiraToolSection() {
             </div>
             {list && <RailButton label="Колонки" onClick={() => openPanel("columns")}><Columns3 className="w-4 h-4" /></RailButton>}
             {list && <RailButton label="Группировка" onClick={() => openPanel("group")} badge={list.groupBy.length || undefined}><Layers className="w-4 h-4" /></RailButton>}
-            <button type="button" onClick={() => setModal("participants")} aria-label="Участники"
-              title={`Участники: ${state.participants.map(p => p.name).join(", ") || "пока никого"}`}
+            <button type="button" onClick={() => setModal("participants")} aria-label="Справочник людей"
+              title={`Справочник людей: ${state.participants.map(p => p.name).join(", ") || "пока никого"}`}
               className="w-12 flex-shrink-0 bg-bg-card border border-border-main rounded-xl py-2 flex flex-col items-center -space-y-1.5 hover:border-primary/40">
               {state.participants.slice(0, 4).map(p => (
                 <span key={p.id} className="w-6 h-6 rounded-full ring-2 ring-[var(--color-bg-card,#fff)] flex items-center justify-center text-white text-[9px] font-bold"
@@ -1069,12 +1127,14 @@ export default function JiraToolSection() {
 
             <div className="bg-bg-card border border-border-main rounded-xl p-3">
               <div className="flex items-center justify-between mb-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Участники</p>
-                <button type="button" onClick={() => setModal("participants")} className="text-xs text-primary hover:underline">Изменить</button>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Тестировщики</p>
+                <button type="button" onClick={() => setModal("participants")} title="Справочник людей: тестировщики и люди направлений"
+                  className="text-xs text-primary hover:underline">Справочник</button>
               </div>
+              {peopleErr && <p className="mb-2 text-[11px] text-red-600 dark:text-red-400">{peopleErr}</p>}
               <div className="flex flex-wrap gap-1.5">
-                {state.participants.length === 0 && <span className="text-xs text-text-muted">Пока никого</span>}
-                {state.participants.map(p => (
+                {!state.participants.some(p => inDirection(p, TESTING)) && <span className="text-xs text-text-muted">Пока никого</span>}
+                {state.participants.filter(p => inDirection(p, TESTING)).map(p => (
                   <span key={p.id} title={`${p.name}${p.role ? ` · ${p.role}` : ""} · задач: ${usage[p.id] ?? 0}`}
                     className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold" style={{ backgroundColor: p.color }}>
                     {initials(p.name)}
@@ -1087,7 +1147,7 @@ export default function JiraToolSection() {
               <LoadPanel list={list} participants={state.participants} settings={state.loadSettings} onSettings={() => setModal("load")}
                 skip={key => loadSkip(list, byKey.get(key), stageOf)}
                 onRange={load => updateList(l => ({ ...l, load }))}
-                onAuto={on => updateList(l => ({ ...l, loadAuto: on ? undefined : false }))} />
+                onDetails={() => setModal("loadDetails")} />
             )}
 
             <button type="button" onClick={() => setModal("stages")}
@@ -1108,7 +1168,7 @@ export default function JiraToolSection() {
               ) : (
                 <p>Подключение к Jira…</p>
               )}
-              <p>Списки, участники, свои поля и черновики хранятся в этом браузере.</p>
+              <p>Списки, свои поля и черновики хранятся в этом браузере, справочник людей — на сервере SimpleTest.</p>
               <button type="button" onClick={() => setSettingsOpen(true)} className="hover:text-text-main underline-offset-2 hover:underline">
                 Настройки Jira
               </button>
@@ -1334,11 +1394,10 @@ export default function JiraToolSection() {
                     })}
                     onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))}
                     onOpenStage={issue => setModal({ stageFor: issue })}
-                    roleNames={state.roleNames}
                     onRole={(key, fid, patch) => updateList(l => ({
                       ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
                     }))}
-                    onRoleNames={(fid, names) => update(s => ({ ...s, roleNames: { ...s.roleNames, [fid]: names } }))}
+                    onAddPerson={addPerson} onLeaveDirection={leaveDirection}
                     onNoLoad={(key, skip) => setNoLoad([key], skip)}
                     reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
                     onReqUrl={(key, u) => update(s => {
@@ -1428,6 +1487,15 @@ export default function JiraToolSection() {
           mapping={state.mapping} styles={state.stageStyles} custom={state.customStages} onClose={() => setModal(null)}
           onSave={(mapping, stageStyles, customStages) => update(s => ({ ...s, mapping, stageStyles, customStages }))} />
       )}
+      {modal === "loadDetails" && list && (
+        <LoadDetailsModal list={list} people={state.participants} settings={state.loadSettings} issueOf={key => byKey.get(key)}
+          skip={key => loadSkip(list, byKey.get(key), stageOf)} onClose={() => setModal(null)}
+          onRange={load => updateList(l => ({ ...l, load }))}
+          onAuto={on => updateList(l => ({ ...l, loadAuto: on ? undefined : false }))}
+          onWeekends={on => updateList(l => ({ ...l, loadWeekends: on || undefined }))}
+          onBars={(dir, on) => updateList(l => ({ ...l, loadBars: { ...l.loadBars, [dir]: on } }))}
+          onSettings={() => setModal("load")} />
+      )}
       {modal === "load" && (
         <LoadSettingsModal open settings={state.loadSettings} participants={state.participants} onClose={() => setModal(null)}
           onSave={loadSettings => update(s => ({ ...s, loadSettings }))} />
@@ -1448,34 +1516,38 @@ export default function JiraToolSection() {
 }
 
 /**
- * Нагрузка по списку: у каждого участника — сумма «Траты план (st)» его задач в этом списке против
- * нормы за выбранный период (будни × норма дня минус резервы участника). Превышение — красным.
- * Период свой у каждого списка; норма и резервы — общие (шестерёнка).
+ * Нагрузка по списку — только команда тестирования: у каждого тестировщика сумма «Траты план (st)» его задач
+ * в этом списке против нормы за период (дни × норма дня минус резервы). Превышение — красным; если в списке
+ * считаются выходные — сколько из плана уходит на выходные (переработка). Остальные направления, галочки
+ * «выходные» и «готовые не считать» — в подробной нагрузке.
  */
-function LoadPanel({ list, participants, settings, onSettings, skip, onRange, onAuto }: {
+function LoadPanel({ list, participants, settings, onSettings, skip, onRange, onDetails }: {
   list: TaskList;
   participants: Participant[];
   settings: LoadSettings;
   onSettings: () => void;
   skip: (key: string) => ReturnType<typeof loadSkip>;
   onRange: (r: { from: string; to: string }) => void;
-  onAuto: (on: boolean) => void;
+  onDetails: () => void;
 }) {
   const range = list.load ?? defaultLoadRange();
   const rows = listLoad(list, participants, range, skip, settings);
   // Резервы у всех — в общую строку нормы; личные — в подсказке и под строкой участника.
-  const common = settings.reserves.filter(r => r.minutes > 0 && !r.participants.length);
+  const common = settings.reserves.filter(r => r.minutes > 0 && isCommonReserve(r));
   const commonMin = common.reduce((n, r) => n + r.minutes, 0);
-  const skippedAll = list.keys.filter(k => skip(k)).length;
-  const days = workdaysBetween(range.from, range.to);
+  const { days, weekend } = calendarDays(range.from, range.to, !!list.loadWeekends);
   const dateCls = "min-w-0 flex-1 text-xs border border-border-main rounded-md px-1.5 py-1 bg-[var(--color-input-bg)] text-text-main " +
     "focus:outline-none focus:ring-2 focus:ring-primary/30";
   return (
     <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка по списку</p>
-        <button type="button" onClick={onSettings} aria-label="Настройка нагрузки: норма дня и резервы" title="Норма дня и резервы (автотесты, дежурства…)"
-          className="p-1 -m-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-3.5 h-3.5" /></button>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка · Testing</p>
+        <span className="flex items-center gap-2">
+          <button type="button" onClick={onDetails} title="Все направления, выходные, не учтённые задачи"
+            className="text-xs text-primary hover:underline">Подробно</button>
+          <button type="button" onClick={onSettings} aria-label="Настройка нагрузки: норма дня и резервы" title="Норма дня и резервы (автотесты, дежурства…)"
+            className="p-1 -m-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-3.5 h-3.5" /></button>
+        </span>
       </div>
       <div className="flex items-center gap-1">
         <input type="date" value={range.from} max={range.to} onChange={e => e.target.value && onRange({ ...range, from: e.target.value })}
@@ -1484,53 +1556,15 @@ function LoadPanel({ list, participants, settings, onSettings, skip, onRange, on
         <input type="date" value={range.to} min={range.from} onChange={e => e.target.value && onRange({ ...range, to: e.target.value })}
           aria-label="Нагрузка: по дату" className={dateCls} />
       </div>
-      <p className="text-[11px] text-text-muted" title="Будни; праздники не учитываются. Норму дня и резервы — шестерёнкой.">
-        Рабочих дней: {days} · в день {fmtMinutes(settings.dayMinutes)}
+      <p className="text-[11px] text-text-muted" title="Праздники не учитываются. Норму дня и резервы — шестерёнкой; выходные — в «Подробно».">
+        {weekend ? <>Дней: {days}, из них выходных {weekend}</> : <>Рабочих дней: {days}</>} · в день {fmtMinutes(settings.dayMinutes)}
         {commonMin > 0 && <> − {common.map(r => `${r.name} ${fmtMinutes(r.minutes)}`).join(", ")} = <b className="font-medium text-text-main">{fmtMinutes(Math.max(0, settings.dayMinutes - commonMin))}</b></>}
       </p>
-      <label className="flex items-start gap-1.5 text-[11px] text-text-main cursor-pointer select-none">
-        <input type="checkbox" className="mt-0.5" checked={list.loadAuto !== false} onChange={e => onAuto(e.target.checked)} />
-        <span>Не учитывать задачи в «Готово к релизу» и дальше</span>
-      </label>
-      {skippedAll > 0 && (
-        <p className="text-[11px] text-text-muted" title="Вручную — галочка в колонке «Нагрузка (st)» или «Нагрузка…» в режиме выбора">
-          Не учтено задач: {skippedAll}
-        </p>
-      )}
-      {participants.length === 0 ? (
-        <p className="text-xs text-text-muted">Добавьте участников и назначьте их на задачи — здесь появится их нагрузка.</p>
+      {rows.length === 0 ? (
+        <p className="text-xs text-text-muted">Добавьте тестировщиков в справочник и назначьте их на задачи — здесь появится их нагрузка.</p>
       ) : (
         <ul className="space-y-1.5">
-          {rows.map(r => {
-            const pct = r.capacity ? Math.min(100, Math.round((r.planned / r.capacity) * 100)) : r.planned ? 100 : 0;
-            return (
-              <li key={r.participant.id} title={`Задач в нагрузке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}${r.skipped ? `, не учтено: ${r.skipped}` : ""}`
-                + (r.reserves.length ? `\nРезервы: ${r.reserves.map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")} — за период ${fmtMinutes(r.reserved)}` : "")}>
-                <div className="flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.participant.color }} />
-                  <span className="min-w-0 flex-1 truncate text-text-main">{r.participant.name}</span>
-                  <span className={`whitespace-nowrap tabular-nums ${r.over ? "text-red-600 dark:text-red-400 font-semibold" : "text-text-muted"}`}>
-                    {fmtMinutes(r.planned)} / {fmtMinutes(r.capacity)}
-                  </span>
-                </div>
-                <div className="mt-1 h-1.5 rounded-full bg-bg-subtle overflow-hidden" aria-hidden>
-                  <div className={`h-full rounded-full ${r.over ? "bg-red-500" : "bg-primary/70"}`} style={{ width: `${pct}%` }} />
-                </div>
-                {r.reserves.some(x => x.participants.length > 0) && (
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    резерв: {r.reserves.filter(x => x.participants.length > 0).map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")}
-                  </p>
-                )}
-                {(r.over || r.unplanned > 0) && (
-                  <p className="mt-0.5 text-[10px] text-text-muted">
-                    {r.over && <span className="text-red-600 dark:text-red-400">перегрузка {fmtMinutes(r.planned - r.capacity)}</span>}
-                    {r.over && r.unplanned > 0 && " · "}
-                    {r.unplanned > 0 && <>без плана: {r.unplanned}</>}
-                  </p>
-                )}
-              </li>
-            );
-          })}
+          {rows.map(r => <LoadRowView key={r.participant.id} r={r} bars />)}
         </ul>
       )}
     </div>

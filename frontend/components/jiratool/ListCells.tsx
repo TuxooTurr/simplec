@@ -9,7 +9,7 @@ import Floating from "./Floating";
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
-  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, isOpenDefect, parseDuration,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, inDirection, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
 import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
@@ -454,7 +454,7 @@ export function ParticipantCell({ value, participants, onChange }: { value: stri
   return (
     <span className="flex items-center gap-1.5 min-w-0">
       <RoleBadge participant={p} />
-      <select value={value} onChange={e => onChange(e.target.value)} aria-label="Участник"
+      <select value={value} onChange={e => onChange(e.target.value)} aria-label="Тестировщик"
         className="min-w-0 flex-1 bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:outline-none text-sm text-text-main truncate">
         <option value="">— не назначен</option>
         {/* Должность не дописываем: она уже в цветной метке слева. */}
@@ -464,7 +464,7 @@ export function ParticipantCell({ value, participants, onChange }: { value: stri
   );
 }
 
-/* ── Поля направлений (st): фамилия и состояние ─────────────────────────── */
+/* ── Поля направлений (st): человек, состояние и план ─────────────────────── */
 
 const ROLE_STATE_CLS: Record<RoleState, string> = {
   todo:  "bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200",
@@ -473,29 +473,36 @@ const ROLE_STATE_CLS: Record<RoleState, string> = {
 };
 
 /**
- * Ячейка направления: фамилия (свой список у каждого поля — добавить и удалить можно прямо
- * в выпадающем списке) и состояние цветом: серый — не взят, жёлтый — в работе, зелёный — выполнен.
+ * Ячейка направления — три значения: состояние цветом (серый — не взят, жёлтый — в работе, зелёный — выполнен),
+ * человек из справочника (люди этого направления; новое имя прямо здесь добавляет человека в справочник)
+ * и план трудозатрат — он идёт в нагрузку направления.
  */
-export function RoleCell({ label, value, names, onChange, onNames }: {
+export function RoleCell({ label, dir, value, people, onChange, onAddPerson, onLeave }: {
   label: string;
+  dir: string;
   value: RoleValue | undefined;
-  names: string[];
+  people: Participant[];
   onChange: (patch: RoleValue) => void;
-  onNames: (names: string[]) => void;
+  /** Добавить человека в справочник с этим направлением; вернуть его. */
+  onAddPerson: (name: string) => Participant;
+  /** Убрать человека из направления в справочнике (в заполненных ячейках он останется). */
+  onLeave: (pid: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const btn = useRef<HTMLButtonElement>(null);
   const state = value?.state ?? "todo";
-  const toggle = () => setOpen(o => !o);
+  const members = people.filter(p => inDirection(p, dir));
+  const current = value?.pid ? people.find(p => p.id === value.pid) : undefined;
+  const shownName = current?.name ?? value?.name ?? "";
+  const pick = (p: Participant) => { onChange({ ...value, pid: p.id, name: p.name }); setOpen(false); };
   const add = () => {
     const n = draft.trim();
     if (!n) return;
-    if (!names.includes(n)) onNames([...names, n]);
-    onChange({ ...value, name: n });
-    setDraft(""); setOpen(false);
+    const hit = members.find(p => p.name.trim().toLowerCase() === n.toLowerCase());
+    pick(hit ?? onAddPerson(n));
+    setDraft("");
   };
-  const shown = value?.name && !names.includes(value.name) ? [value.name, ...names] : names;
 
   return (
     <span className="flex items-center gap-1 min-w-0">
@@ -508,34 +515,38 @@ export function RoleCell({ label, value, names, onChange, onNames }: {
           {ROLE_STATES.map(st => <option key={st} value={st}>{ROLE_STATE_LABEL[st]}</option>)}
         </select>
       </span>
-      <button ref={btn} type="button" onClick={toggle} aria-expanded={open} aria-haspopup="listbox" aria-label={`${label}: фамилия`}
+      <button ref={btn} type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} aria-haspopup="listbox" aria-label={`${label}: исполнитель`}
         className="min-w-0 flex-1 text-left truncate px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm">
-        {value?.name || <span className="text-text-muted/50">—</span>}
+        {shownName || <span className="text-text-muted/50">—</span>}
       </button>
+      <span className="flex-shrink-0 w-16"><PlanCell compact value={value?.plan} onChange={m => onChange({ ...value, plan: m ?? undefined })} /></span>
       {open && (
-        <Floating anchor={btn} onClose={() => setOpen(false)} width={224} role="listbox" ariaLabel={`${label}: фамилии`} className="p-1">
-          <button type="button" role="option" aria-selected={!value?.name} onClick={() => { onChange({ ...value, name: "" }); setOpen(false); }}
+        <Floating anchor={btn} onClose={() => setOpen(false)} width={240} role="listbox" ariaLabel={`${label}: люди`} className="p-1">
+          <button type="button" role="option" aria-selected={!shownName} onClick={() => { onChange({ ...value, pid: undefined, name: "" }); setOpen(false); }}
             className="w-full text-left px-2 py-1 rounded text-sm text-text-muted hover:bg-bg-subtle">— не назначен</button>
           <div className="max-h-56 overflow-y-auto scrollbar-thin">
-            {shown.map(n => (
-              <div key={n} className={`group/rn flex items-center rounded ${value?.name === n ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
-                <button type="button" role="option" aria-selected={value?.name === n} onClick={() => { onChange({ ...value, name: n }); setOpen(false); }}
-                  className="flex-1 min-w-0 truncate text-left px-2 py-1 text-sm text-text-main">{n}</button>
-                {names.includes(n) && (
-                  <button type="button" onClick={() => onNames(names.filter(x => x !== n))} aria-label={`Убрать ${n} из списка ${label}`}
-                    title="Убрать из списка фамилий (в уже заполненных ячейках останется)"
-                    className="p-1 mr-0.5 rounded text-text-muted opacity-0 group-hover/rn:opacity-100 focus-visible:opacity-100 hover:text-red-500">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
+            {value?.name && !current && (
+              <p className="px-2 py-1 text-xs text-text-muted" title="Имени нет в справочнике: выберите человека или добавьте его ниже">
+                сейчас: {value.name} (нет в справочнике)</p>
+            )}
+            {members.map(p => (
+              <div key={p.id} className={`group/rn flex items-center rounded ${current?.id === p.id ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
+                <button type="button" role="option" aria-selected={current?.id === p.id} onClick={() => pick(p)}
+                  className="flex-1 min-w-0 flex items-center gap-1.5 text-left px-2 py-1 text-sm text-text-main">
+                  <RoleBadge participant={p} /><span className="truncate">{p.name}</span></button>
+                <button type="button" onClick={() => onLeave(p.id)} aria-label={`Убрать ${p.name} из направления ${label}`}
+                  title="Убрать из направления в справочнике (в уже заполненных ячейках останется)"
+                  className="p-1 mr-0.5 rounded text-text-muted opacity-0 group-hover/rn:opacity-100 focus-visible:opacity-100 hover:text-red-500">
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             ))}
           </div>
           <div className="flex items-center gap-1 border-t border-border-main mt-1 pt-1">
-            <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Новая фамилия, Enter"
-              onKeyDown={e => { if (e.key === "Enter") add(); if (e.key === "Escape") setOpen(false); }} aria-label={`Добавить фамилию в ${label}`}
+            <input autoFocus value={draft} onChange={e => setDraft(e.target.value)} placeholder="Новый человек, Enter"
+              onKeyDown={e => { if (e.key === "Enter") add(); if (e.key === "Escape") setOpen(false); }} aria-label={`Добавить человека в ${label}`}
               className="min-w-0 flex-1 text-sm px-2 py-1 rounded border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-            <button type="button" onClick={add} disabled={!draft.trim()} aria-label="Добавить фамилию"
+            <button type="button" onClick={add} disabled={!draft.trim()} aria-label="Добавить человека"
               className="p-1.5 rounded bg-primary text-white disabled:opacity-40"><Plus className="w-3.5 h-3.5" /></button>
           </div>
         </Floating>
@@ -715,7 +726,7 @@ const UNIT_KEY = "st_plan_unit";
  * переключатель ч/мин: значение пересчитывается (100 мин → 1:40 ч) и под полем
  * сразу видно, как оно будет записано.
  */
-export function PlanCell({ value, onChange }: { value: number | undefined; onChange: (min: number | null) => void }) {
+export function PlanCell({ value, onChange, compact }: { value: number | undefined; onChange: (min: number | null) => void; compact?: boolean }) {
   const [editing, setEditing] = useState(false);
   const [unit, setUnit] = useState<"h" | "m">("h");
   const [draft, setDraft] = useState("");
@@ -747,10 +758,10 @@ export function PlanCell({ value, onChange }: { value: number | undefined; onCha
 
   if (!editing) {
     return (
-      <button type="button" onClick={open} title="Нажмите, чтобы указать план"
-        className={`w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm whitespace-nowrap
-          ${value != null ? "text-text-main" : "text-text-muted/50"}`}>
-        {value != null ? fmtMinutes(value) : "—"}
+      <button type="button" onClick={open} title="Нажмите, чтобы указать план трудозатрат"
+        className={`w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main whitespace-nowrap
+          ${compact ? "text-xs tabular-nums truncate" : "text-sm"} ${value != null ? "text-text-main" : "text-text-muted/50"}`}>
+        {value != null ? fmtMinutes(value) : compact ? "план" : "—"}
       </button>
     );
   }
@@ -789,8 +800,8 @@ const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${St
 const WORK_HINT = `рабочее время: пн–пт ${hhmm(WORK_DAY.start)}–${hhmm(WORK_DAY.end)}, без обеда ${hhmm(WORK_DAY.lunch[0])}–${hhmm(WORK_DAY.lunch[1])}`;
 
 /** Траты факт = рабочее время между началом и концом; не заполнено хоть одно — пусто. Больше плана — подсвечиваем. */
-export function FactCell({ spend }: { spend: Spend | undefined }) {
-  const f = factMinutes(spend);
+export function FactCell({ spend, weekends }: { spend: Spend | undefined; weekends?: boolean }) {
+  const f = factMinutes(spend, weekends);
   if (f == null) {
     return <span className="text-text-muted/50 text-sm" title="Заполните «Начало теста» и «Конец теста»">—</span>;
   }
@@ -798,7 +809,7 @@ export function FactCell({ spend }: { spend: Spend | undefined }) {
   const over = spend?.plan != null && f > spend.plan;
   return (
     <span className={`text-sm whitespace-nowrap ${over ? "text-amber-700 dark:text-amber-300 font-medium" : "text-text-main"}`}
-      title={`${spend?.plan != null ? `План ${fmtMinutes(spend.plan)}${over ? ` — превышен на ${fmtMinutes(f - spend.plan)}` : ""}. ` : ""}Считается ${WORK_HINT}`}>
+      title={`${spend?.plan != null ? `План ${fmtMinutes(spend.plan)}${over ? ` — превышен на ${fmtMinutes(f - spend.plan)}` : ""}. ` : ""}Считается ${WORK_HINT}${weekends ? ", выходные тоже (переработка)" : ""}`}>
       {fmtMinutes(f)}
     </span>
   );

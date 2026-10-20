@@ -75,12 +75,18 @@ export function tagColor(field: OwnField, option: string): string {
   return TAG_COLORS[i % TAG_COLORS.length];
 }
 
+/**
+ * Человек из справочника (хранится на бэкенде: /api/people, data/people.json). Тестировщики — направление «testing»,
+ * остальные направления — поля направлений в строке задачи.
+ */
 export interface Participant {
   id: string;
   name: string;
-  /** Должность — аббревиатура до 3 символов (QA, AQA, LQA, SQA…): видна в цветной метке у ФИО. */
+  /** Должность — аббревиатура до 3 символов (QA, AQA, BE, BA…): видна в цветной метке у ФИО. */
   role: string;
   color: string;
+  /** Направления, в которых человек работает (DIRECTIONS). Нет — старая запись участника: это тестировщик. */
+  directions?: string[];
 }
 
 export const ROLE_SUGGESTIONS = ["QA", "AQA", "LQA", "SQA", "DEV", "BA", "SA", "PM", "TL", "OPS"];
@@ -116,12 +122,45 @@ export const SPEND_COLS: ColRef[] = [PLAN_COL, START_COL, END_COL, FACT_COL];
 export const ROLE_FIELDS: { id: string; label: string }[] = [
   { id: "analytics", label: "Analytics" },
   { id: "design", label: "Design" },
-  { id: "back", label: "Back" },
-  { id: "front", label: "Front" },
+  { id: "back", label: "Back-end" },
+  { id: "front", label: "Front-end" },
   { id: "mobile", label: "Mobile" },
-  { id: "dev", label: "Dev" },
-  { id: "sup", label: "Sup" },
+  { id: "dev", label: "DevOps" },
+  { id: "sup", label: "Support" },
 ];
+
+/** Направления нагрузки: тестирование (колонка «Тестировщик» + «Траты план») и поля направлений. */
+export const TESTING = "testing";
+export const DIRECTIONS: { id: string; label: string }[] = [{ id: TESTING, label: "Testing" }, ...ROLE_FIELDS];
+/** Метка по умолчанию для человека, перенесённого из старого списка фамилий направления. */
+export const DIRECTION_ROLE: Record<string, string> = {
+  testing: "QA", analytics: "BA", design: "DES", back: "BE", front: "FE", mobile: "MOB", dev: "OPS", sup: "SUP",
+};
+
+/** Работает ли человек в направлении. Старая запись участника (направления не заданы вовсе) — тестировщик. */
+export function inDirection(p: Participant, dir: string): boolean {
+  return p.directions ? p.directions.includes(dir) : dir === TESTING;
+}
+
+const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Перенос в справочник того, что раньше жило в браузере: участники становятся тестировщиками (если направления
+ * не заданы), фамилии из списков направлений — людьми этих направлений. Одна фамилия в нескольких направлениях —
+ * один человек с несколькими направлениями.
+ */
+export function migratePeople(participants: Participant[], roleNames: Record<string, string[]>): Participant[] {
+  const out: Participant[] = participants.map(p => ({ ...p, directions: p.directions ? [...p.directions] : [TESTING] }));
+  for (const [dir, names] of Object.entries(roleNames)) {
+    for (const n of names) {
+      if (!n.trim()) continue;
+      const hit = out.find(p => sameName(p.name, n));
+      if (hit) { if (!hit.directions!.includes(dir)) hit.directions!.push(dir); continue; }
+      out.push({ id: newId("ptc"), name: n.trim(), role: DIRECTION_ROLE[dir] ?? "", color: nextColor(out), directions: [dir] });
+    }
+  }
+  return out;
+}
 export const roleCol = (id: string): ColRef => `role:${id}`;
 export const ROLE_COLS: ColRef[] = ROLE_FIELDS.map(f => roleCol(f.id));
 export const isRoleCol = (ref: ColRef) => ref.startsWith("role:");
@@ -130,7 +169,11 @@ export const isRoleCol = (ref: ColRef) => ref.startsWith("role:");
 export type RoleState = "todo" | "doing" | "done";
 export const ROLE_STATES: RoleState[] = ["todo", "doing", "done"];
 export const ROLE_STATE_LABEL: Record<RoleState, string> = { todo: "Не взят в работу", doing: "В работе", done: "Выполнен" };
-export interface RoleValue { name?: string; state?: RoleState }
+/**
+ * Значение поля направления: человек (pid — id из справочника; name — его имя на момент выбора, для старых записей
+ * и файлов экспорта), состояние и план трудозатрат в минутах.
+ */
+export interface RoleValue { name?: string; pid?: string; state?: RoleState; plan?: number }
 
 /** Учитывать ли задачу в нагрузке участника (галочка в строке; авто — по статусу (st)). */
 export const LOAD_COL: ColRef = "load";
@@ -147,35 +190,56 @@ export const LOAD_DAY_MINUTES = 7 * 60;
 
 /**
  * Резерв — время, которое каждый рабочий день уходит не на задачи списка: например, час на автотесты.
- * Вычитается из нормы дня. participants пусто — резерв у всех участников.
+ * Вычитается из нормы дня. Кому: конкретным людям, людям направлений (у каждой команды свои — встречи, автотесты)
+ * или всем.
  */
-export interface LoadReserve { id: string; name: string; minutes: number; participants: string[] }
+export interface LoadReserve {
+  id: string; name: string; minutes: number;
+  /** Кому резерв: люди (id). Пусто — по направлениям, а если и они пусты — всем. */
+  participants: string[];
+  /** Направления (команды), у людей которых резерв: например, у тестирования — встречи и автотесты, у бэкенда — своё. */
+  directions?: string[];
+}
+
+/** Резерв у всех, без выбора людей и направлений. */
+export const isCommonReserve = (r: LoadReserve) => !r.participants.length && !r.directions?.length;
 
 /** Настройка нагрузки — общая для всех списков: норма и резервы относятся к людям, а не к спискам. */
 export interface LoadSettings { dayMinutes: number; reserves: LoadReserve[] }
 
 export const DEFAULT_LOAD_SETTINGS: LoadSettings = { dayMinutes: LOAD_DAY_MINUTES, reserves: [] };
 
-/** Резервы участника (общие и его личные). */
-export function reservesOf(settings: LoadSettings, participantId: string): LoadReserve[] {
-  return settings.reserves.filter(r => r.minutes > 0 && (!r.participants.length || r.participants.includes(participantId)));
+/** Резервы человека: общие, его направлений и личные. */
+export function reservesOf(settings: LoadSettings, person: Participant): LoadReserve[] {
+  return settings.reserves.filter(r => r.minutes > 0 && (
+    r.participants.length ? r.participants.includes(person.id)
+      : r.directions?.length ? r.directions.some(d => inDirection(person, d))
+      : true));
 }
 
 /** Сколько минут в день у участника остаётся на задачи: норма минус его резервы (не меньше нуля). */
-export function netDayMinutes(settings: LoadSettings, participantId: string): number {
-  return Math.max(0, settings.dayMinutes - reservesOf(settings, participantId).reduce((n, r) => n + r.minutes, 0));
+export function netDayMinutes(settings: LoadSettings, person: Participant): number {
+  return Math.max(0, settings.dayMinutes - reservesOf(settings, person).reduce((n, r) => n + r.minutes, 0));
 }
 
 /** Рабочие дни (пн–пт) между датами включительно; даты — «ГГГГ-ММ-ДД». */
 export function workdaysBetween(from: string, to: string): number {
+  return calendarDays(from, to, false).days;
+}
+
+/**
+ * Дни периода для нагрузки: weekends=false — только будни; true — и выходные (переработка), weekend — сколько из них
+ * выходных, чтобы показать переработку отдельно, а не растворить её в ёмкости.
+ */
+export function calendarDays(from: string, to: string, weekends: boolean): { days: number; weekend: number } {
   const a = Date.parse(`${from}T00:00`), b = Date.parse(`${to}T00:00`);
-  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return 0;
-  let n = 0;
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return { days: 0, weekend: 0 };
+  let work = 0, off = 0;
   for (const d = new Date(a); d.getTime() <= b; d.setDate(d.getDate() + 1)) {
     const wd = d.getDay();
-    if (wd !== 0 && wd !== 6) n++;
+    if (wd === 0 || wd === 6) off++; else work++;
   }
-  return n;
+  return weekends ? { days: work + off, weekend: off } : { days: work, weekend: 0 };
 }
 
 /** Период нагрузки по умолчанию: две недели с сегодняшнего дня. */
@@ -187,6 +251,8 @@ export function defaultLoadRange(now = new Date()): { from: string; to: string }
 
 export interface LoadRow {
   participant: Participant; planned: number; tasks: number; unplanned: number; capacity: number; over: boolean;
+  /** Сколько плана приходится на выходные: план сверх ёмкости будней, когда выходные учитываются. */
+  overtime: number;
   /** Резервы участника и сколько они забрали за период, мин. */
   reserves: LoadReserve[]; reserved: number;
   /** Задачи участника, не учтённые в нагрузке (вручную или по статусу). */
@@ -207,22 +273,76 @@ export function loadSkip(list: TaskList, issue: Issue | undefined, stageOf: (i: 
   return null;
 }
 
-/** Нагрузка участников по списку: сумма «Траты план (st)» их учитываемых задач против нормы за период. */
-export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string },
-                         skip: (key: string) => LoadSkip = () => null, settings: LoadSettings = DEFAULT_LOAD_SETTINGS): LoadRow[] {
-  const days = workdaysBetween(range.from, range.to);
-  return participants.map(p => {
-    const capacity = days * netDayMinutes(settings, p.id);
-    const reserves = reservesOf(settings, p.id);
-    const all = list.keys.filter(k => list.assignees[k] === p.id);
-    const keys = all.filter(k => !skip(k));
-    const planned = keys.reduce((n, k) => n + (list.spend?.[k]?.plan ?? 0), 0);
+/**
+ * Кто ведёт задачу в направлении и сколько у него плана: тестирование — «Тестировщик» и «Траты план (st)»;
+ * остальные — поле направления (человек по id из справочника, у старых записей — по имени).
+ */
+export function directionAssignment(list: TaskList, dir: string, key: string, people: Participant[]): { pid?: string; plan?: number } {
+  if (dir === TESTING) return { pid: list.assignees[key] || undefined, plan: list.spend?.[key]?.plan };
+  const v = list.roles?.[key]?.[dir];
+  if (!v) return {};
+  const pid = v.pid && people.some(p => p.id === v.pid) ? v.pid
+    : v.name ? people.find(p => sameName(p.name, v.name!) && inDirection(p, dir))?.id ?? people.find(p => sameName(p.name, v.name!))?.id
+    : undefined;
+  return { pid, plan: v.plan };
+}
+
+/** Нагрузка одного направления по списку. */
+export interface DirectionLoad {
+  id: string; label: string;
+  rows: LoadRow[];
+  planned: number; capacity: number;
+  /** Задачи с человеком или планом в этом направлении, не учтённые в нагрузке (готовы к релизу и дальше / сняты руками). */
+  skippedKeys: string[];
+  /** План задач, у которых в направлении нет человека: время есть, повесить не на кого. */
+  unassigned: { keys: string[]; plan: number };
+  days: number; weekend: number;
+}
+
+/**
+ * Нагрузка направления: у каждого человека направления (и у тех, кто стоит на задачах направления, хотя в справочнике
+ * у него другое направление) — сумма плана учитываемых задач против нормы за период: дни × (норма дня − резервы).
+ * Выходные (галочка списка) добавляют дни в ёмкость; план сверх ёмкости будней — переработка.
+ */
+export function directionLoad(list: TaskList, dir: { id: string; label: string }, people: Participant[], range: { from: string; to: string },
+                              skip: (key: string) => LoadSkip = () => null, settings: LoadSettings = DEFAULT_LOAD_SETTINGS): DirectionLoad {
+  const { days, weekend } = calendarDays(range.from, range.to, !!list.loadWeekends);
+  const byPerson = new Map<string, string[]>();
+  const skippedKeys: string[] = [];
+  const unassigned = { keys: [] as string[], plan: 0 };
+  for (const k of list.keys) {
+    const a = directionAssignment(list, dir.id, k, people);
+    if (!a.pid && a.plan == null) continue;
+    if (skip(k)) { skippedKeys.push(k); continue; }
+    if (!a.pid) { unassigned.keys.push(k); unassigned.plan += a.plan ?? 0; continue; }
+    byPerson.set(a.pid, [...(byPerson.get(a.pid) ?? []), k]);
+  }
+  const members = people.filter(p => inDirection(p, dir.id) || byPerson.has(p.id));
+  const rows = members.map(p => {
+    const net = netDayMinutes(settings, p);
+    const capacity = days * net;
+    const keys = byPerson.get(p.id) ?? [];
+    const plans = keys.map(k => directionAssignment(list, dir.id, k, people).plan);
+    const planned = plans.reduce<number>((n, m) => n + (m ?? 0), 0);
+    const all = list.keys.filter(k => directionAssignment(list, dir.id, k, people).pid === p.id);
     return {
       participant: p, planned, tasks: keys.length, capacity, over: planned > capacity, skipped: all.length - keys.length,
-      reserves, reserved: days * settings.dayMinutes - capacity,
-      unplanned: keys.filter(k => list.spend?.[k]?.plan == null).length,
+      overtime: weekend ? Math.max(0, Math.min(planned, capacity) - (days - weekend) * net) : 0,
+      reserves: reservesOf(settings, p), reserved: days * settings.dayMinutes - capacity,
+      unplanned: plans.filter(m => m == null).length,
     };
   }).sort((a, b) => (b.capacity ? b.planned / b.capacity : 0) - (a.capacity ? a.planned / a.capacity : 0) || b.planned - a.planned);
+  return {
+    id: dir.id, label: dir.label, rows, skippedKeys, unassigned, days, weekend,
+    planned: rows.reduce((n, r) => n + r.planned, 0) + unassigned.plan,
+    capacity: rows.reduce((n, r) => n + r.capacity, 0),
+  };
+}
+
+/** Нагрузка тестировщиков по списку (виджет «Нагрузка по списку»). */
+export function listLoad(list: TaskList, participants: Participant[], range: { from: string; to: string },
+                         skip: (key: string) => LoadSkip = () => null, settings: LoadSettings = DEFAULT_LOAD_SETTINGS): LoadRow[] {
+  return directionLoad(list, DIRECTIONS[0], participants, range, skip, settings).rows;
 }
 
 /** Трудозатраты задачи в списке: план в минутах, начало и конец теста — «ГГГГ-ММ-ДДTчч:мм». */
@@ -259,14 +379,14 @@ export function parseDuration(text: string, unit: "h" | "m"): number | null {
  */
 export const WORK_DAY = { start: 9 * 60, end: 18 * 60, lunch: [13 * 60, 14 * 60] as [number, number], days: [1, 2, 3, 4, 5] };
 
-/** Рабочие минуты между двумя моментами (по местному времени). */
-export function workingMinutes(fromMs: number, toMs: number): number {
+/** Рабочие минуты между двумя моментами (по местному времени). weekends — считать и субботу с воскресеньем. */
+export function workingMinutes(fromMs: number, toMs: number, weekends = false): number {
   if (toMs <= fromMs) return 0;
   const intervals: [number, number][] = [[WORK_DAY.start, WORK_DAY.lunch[0]], [WORK_DAY.lunch[1], WORK_DAY.end]];
   let total = 0;
   const day = new Date(fromMs); day.setHours(0, 0, 0, 0);
   for (; day.getTime() < toMs; day.setDate(day.getDate() + 1)) {
-    if (!WORK_DAY.days.includes(day.getDay())) continue;
+    if (!weekends && !WORK_DAY.days.includes(day.getDay())) continue;
     const base = day.getTime();
     for (const [a, b] of intervals) {
       const s = Math.max(fromMs, base + a * 60000), e = Math.min(toMs, base + b * 60000);
@@ -280,11 +400,11 @@ export function workingMinutes(fromMs: number, toMs: number): number {
  * Факт = рабочие минуты между началом и концом теста. Не заполнено хоть одно — не считаем (null).
  * Конец раньше начала — отрицательное значение (показываем как ошибку ввода).
  */
-export function factMinutes(s: Spend | undefined): number | null {
+export function factMinutes(s: Spend | undefined, weekends = false): number | null {
   if (!s?.start || !s?.end) return null;
   const a = Date.parse(s.start), b = Date.parse(s.end);
   if (Number.isNaN(a) || Number.isNaN(b)) return null;
-  return b < a ? -workingMinutes(b, a) || -1 : workingMinutes(a, b);
+  return b < a ? -workingMinutes(b, a, weekends) || -1 : workingMinutes(a, b, weekends);
 }
 
 /**
@@ -352,6 +472,10 @@ export interface TaskList {
   noLoad?: Record<string, boolean>;
   /** false — не исключать автоматически задачи в «Готово к релизу» и дальше (по умолчанию исключаем) */
   loadAuto?: boolean;
+  /** true — выходные считаются рабочими: и в ёмкости нагрузки, и в «Траты факт» (переработка). */
+  loadWeekends?: boolean;
+  /** Подробная нагрузка: у каких направлений показывать полосы загрузки людей (id направления → да/нет). */
+  loadBars?: Record<string, boolean>;
   /**
    * Источники задач — JQL-фильтр или релиз, из которых задачи добавлены в список. При обновлении кэша
    * их состав сверяется со снимком: новые задачи встают в список с отметкой «n», выпавшие — помечаются «У».
@@ -506,7 +630,11 @@ export function normLoadSettings(raw: Partial<LoadSettings> | undefined): LoadSe
   return {
     dayMinutes: Number.isFinite(day) && day > 0 && day <= 24 * 60 ? Math.round(day) : LOAD_DAY_MINUTES,
     reserves: (raw?.reserves ?? []).filter(r => r && typeof r.name === "string" && Number(r.minutes) >= 0)
-      .map(r => ({ id: r.id || newId("rsv"), name: r.name, minutes: Math.round(Number(r.minutes)), participants: Array.isArray(r.participants) ? r.participants : [] })),
+      .map(r => ({
+        id: r.id || newId("rsv"), name: r.name, minutes: Math.round(Number(r.minutes)),
+        participants: Array.isArray(r.participants) ? r.participants : [],
+        ...(Array.isArray(r.directions) && r.directions.length ? { directions: r.directions } : {}),
+      })),
   };
 }
 
@@ -609,7 +737,7 @@ export function blockersOf(defects: Issue[]): Issue[] {
 }
 
 export function colLabel(ref: ColRef, list: TaskList): string {
-  if (ref === PARTICIPANT_COL) return "Участник (st)";
+  if (ref === PARTICIPANT_COL) return "Тестировщик (st)";
   if (ref === STAGE_COL) return "Статус (st)";
   if (ref === FOLDER_COL) return "Папка (st)";
   if (ref === DEFECTS_COL) return "Дефекты (st)";
@@ -647,7 +775,7 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
     const p = ctx.list.spend?.[issue.key]?.plan;
     v = p == null ? null : String(p);
   } else if (ref === FACT_COL) {
-    const f = factMinutes(ctx.list.spend?.[issue.key]);
+    const f = factMinutes(ctx.list.spend?.[issue.key], !!ctx.list.loadWeekends);
     v = f == null ? null : String(f);
   } else if (ref === START_COL || ref === END_COL) {
     v = ctx.list.spend?.[issue.key]?.[ref === START_COL ? "start" : "end"] ?? null;

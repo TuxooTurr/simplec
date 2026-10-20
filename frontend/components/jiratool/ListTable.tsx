@@ -428,7 +428,7 @@ export default function ListTable({
                   <ParticipantCell value={list.assignees[issue.key] ?? ""} onChange={pid => onParticipant(issue.key, pid)}
                     participants={participants.filter(p => inDirection(p, TESTING) || p.id === list.assignees[issue.key])} />
                 </span>
-                <span className="flex-shrink-0 w-16"><PlanCell compact value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} /></span>
+                <span className="flex-shrink-0"><PlanCell compact value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} /></span>
               </span>
             ) : c === STAGE_COL ? (
               <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined}

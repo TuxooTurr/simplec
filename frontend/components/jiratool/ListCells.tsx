@@ -519,7 +519,7 @@ export function RoleCell({ label, dir, value, people, onChange, onAddPerson, onL
         className="min-w-0 flex-1 text-left truncate px-1 py-0.5 rounded border border-transparent hover:border-border-main text-sm">
         {shownName || <span className="text-text-muted/50">—</span>}
       </button>
-      <span className="flex-shrink-0 w-16"><PlanCell compact value={value?.plan} onChange={m => onChange({ ...value, plan: m ?? undefined })} /></span>
+      <span className="flex-shrink-0"><PlanCell compact value={value?.plan} onChange={m => onChange({ ...value, plan: m ?? undefined })} /></span>
       {open && (
         <Floating anchor={btn} onClose={() => setOpen(false)} width={240} role="listbox" ariaLabel={`${label}: люди`} className="p-1">
           <button type="button" role="option" aria-selected={!shownName} onClick={() => { onChange({ ...value, pid: undefined, name: "" }); setOpen(false); }}
@@ -731,6 +731,9 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
   const [unit, setUnit] = useState<"h" | "m">("h");
   const [draft, setDraft] = useState("");
   const ref = useRef<HTMLInputElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  /** Esc: окно закрывается тем же «закрыть», что и щелчок мимо, — но без сохранения. */
+  const cancelled = useRef(false);
 
   const toText = (min: number | undefined, u: "h" | "m") =>
     min == null ? "" : u === "m" ? String(min) : `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
@@ -738,6 +741,7 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
   const open = () => {
     let u: "h" | "m" = "h";
     try { u = localStorage.getItem(UNIT_KEY) === "m" ? "m" : "h"; } catch { /* по умолчанию часы */ }
+    cancelled.current = false;
     setUnit(u); setDraft(toText(value, u)); setEditing(true);
   };
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
@@ -752,25 +756,19 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
   };
   const commit = () => {
     setEditing(false);
+    if (cancelled.current) return;
     if (!draft.trim()) { if (value != null) onChange(null); return; }
     if (parsed != null && parsed !== value) onChange(parsed);
   };
+  const cancel = () => { cancelled.current = true; setEditing(false); };
 
-  if (!editing) {
-    return (
-      <button type="button" onClick={open} title="Нажмите, чтобы указать план трудозатрат"
-        className={`w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main whitespace-nowrap
-          ${compact ? "text-xs tabular-nums truncate" : "text-sm"} ${value != null ? "text-text-main" : "text-text-muted/50"}`}>
-        {value != null ? fmtMinutes(value) : compact ? "план" : "—"}
-      </button>
-    );
-  }
-  return (
-    <div className="space-y-0.5" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commit(); }}>
+  const editor = (
+    <>
       <div className="flex items-center gap-1">
         <input ref={ref} value={draft} onChange={e => setDraft(e.target.value)} inputMode="decimal"
+          onFocus={e => e.currentTarget.select()}   // старое значение выделено — ввод его заменяет, а не дописывается
           placeholder={unit === "h" ? "1.5 или 1:30" : "90"} aria-label="Траты план"
-          onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
+          onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") cancel(); }}
           className={`min-w-0 flex-1 bg-[var(--color-input-bg)] px-1 py-0.5 rounded border text-sm text-text-main focus:outline-none
             ${draft.trim() && parsed == null ? "border-red-400" : "border-primary/40"}`} />
         <span className="flex rounded border border-border-main overflow-hidden text-[10px] font-semibold flex-shrink-0" role="radiogroup" aria-label="Единица">
@@ -783,6 +781,40 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
         </span>
       </div>
       <p className="text-[10px] text-text-muted">{draft.trim() ? (parsed == null ? "не понял — пример: 1.5, 1:30, 90" : `= ${fmtMinutes(parsed)}`) : "пусто — убрать план"}</p>
+    </>
+  );
+
+  // В ячейке «Тестировщик» и в полях направлений план — рядом с именем: показывается целиком (сжимается имя),
+  // а ввод открывается окном поверх таблицы — в узкой ячейке вводимое не было видно.
+  if (compact) {
+    return (
+      <>
+        <button ref={btn} type="button" onClick={() => (editing ? commit() : open())} title="Нажмите, чтобы указать план трудозатрат"
+          aria-expanded={editing}
+          className={`text-left px-1 py-0.5 rounded border whitespace-nowrap text-xs tabular-nums
+            ${editing ? "border-primary/40" : "border-transparent hover:border-border-main"} ${value != null ? "text-text-main" : "text-text-muted/50"}`}>
+          {value != null ? fmtMinutes(value) : "план"}
+        </button>
+        {editing && (
+          <Floating anchor={btn} onClose={commit} width={220} ariaLabel="Траты план" className="p-2 space-y-1">
+            {editor}
+          </Floating>
+        )}
+      </>
+    );
+  }
+  if (!editing) {
+    return (
+      <button type="button" onClick={open} title="Нажмите, чтобы указать план трудозатрат"
+        className={`w-full text-left px-1 py-0.5 rounded border border-transparent hover:border-border-main whitespace-nowrap text-sm
+          ${value != null ? "text-text-main" : "text-text-muted/50"}`}>
+        {value != null ? fmtMinutes(value) : "—"}
+      </button>
+    );
+  }
+  return (
+    <div className="space-y-0.5" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) commit(); }}>
+      {editor}
     </div>
   );
 }

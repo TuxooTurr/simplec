@@ -74,18 +74,20 @@ def _resolve_token(cfg: dict) -> str:
 
 
 def _request(cfg: dict, method: str, path: str, params: Optional[dict] = None, json_body: Any = None,
-             files: Optional[dict] = None, timeout: int = 30) -> Any:
-    """Запрос к Confluence REST API. Ошибка — HTTPException с текстом Confluence (у Confluence он в «message»)."""
+             files: Optional[dict] = None, timeout: int = 30, auth: Optional[tuple] = None) -> Any:
+    """Запрос к Confluence REST API. auth=(логин, пароль) — Basic (для получения маркера), иначе Bearer маркером.
+    Ошибка — HTTPException с текстом Confluence (у Confluence он в «message»)."""
     import requests
 
     url = cfg["base_url"] + path
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
-               "Authorization": "Bearer " + _resolve_token(cfg)}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)"}
+    if auth is None:
+        headers["Authorization"] = "Bearer " + _resolve_token(cfg)
     if files:
         headers["X-Atlassian-Token"] = "no-check"   # без него Confluence отклоняет загрузку вложений (XSRF)
     logger.info("Confluence → %s %s params=%s", method, url, params)
     try:
-        resp = requests.request(method, url, params=params, json=json_body, files=files, headers=headers,
+        resp = requests.request(method, url, params=params, json=json_body, files=files, headers=headers, auth=auth,
                                 verify=cfg["ssl_verify"], timeout=timeout)
     except requests.exceptions.SSLError as e:
         raise HTTPException(502, f"SSL-ошибка при подключении к Confluence: {str(e)[:200]}. "
@@ -139,6 +141,36 @@ def put_settings(body: ConfluenceSettingsBody, db: Session = Depends(get_db)) ->
     _set(db, _K_SPACE, body.space.strip(), "Пространство Confluence для графика стендов")
     db.commit()
     return get_settings(db)
+
+
+class TokenFromLoginBody(BaseModel):
+    login: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+    base_url: str = ""
+
+
+@router.post("/api/confluence/token-from-login")
+def token_from_login(body: TokenFromLoginBody, db: Session = Depends(get_db)) -> dict:
+    """Маркер доступа по логину/паролю Сигмы — как у Jira (Confluence DC 7.9+: /rest/pat/latest/tokens). Пароль не хранится."""
+    if body.base_url.strip():
+        _set(db, _K_URL, body.base_url.strip().rstrip("/"), "Confluence base URL")
+        db.commit()
+    cfg = _load_cfg(db)
+    try:
+        result = _request(cfg, "POST", "/rest/pat/latest/tokens",
+                          json_body={"name": f"SimpleTest {time.strftime('%Y-%m-%d %H:%M')}", "expirationDuration": 180},
+                          auth=(body.login.strip(), body.password))
+    except HTTPException as e:
+        if e.status_code in (401, 403):
+            raise HTTPException(e.status_code, "Confluence не выдал маркер: неверный логин/пароль или выдача маркеров по паролю "
+                                               "закрыта. Создайте маркер в профиле Confluence → «Маркеры доступа» и вставьте его строкой.")
+        raise
+    token = result.get("rawToken", "")
+    if not token:
+        raise HTTPException(502, "Confluence не вернул маркер (rawToken) — создайте его в профиле Confluence и вставьте строкой")
+    _set(db, _K_TOKEN, token, "Confluence PAT (секрет)")
+    db.commit()
+    return {"status": "ok", "token": _MASK, "expires_days": 180}
 
 
 def _whoami(cfg: dict) -> dict:
@@ -269,7 +301,8 @@ def _ver(d: Any) -> int:
 def probe_write(body: ProbeWriteBody, db: Session = Depends(get_db)) -> dict:
     """
     Проверка записи на новой тестовой странице: создать → свойство (записать, перечитать, обновить, отказ на старой
-    версии) → обновить тело таблицей → приложить JSON. Существующие страницы не трогает.
+    версии) → обновить тело таблицей → приложить JSON → комментарий-заявка (оставить, прочитать, ответить на него).
+    Существующие страницы не трогает.
     """
     cfg = _load_cfg(db)
     space = body.space.strip()
@@ -318,5 +351,23 @@ def probe_write(body: ProbeWriteBody, db: Session = Depends(get_db)) -> dict:
              lambda: _request(cfg, "POST", f"/rest/api/content/{pid}/child/attachment", files={
                  "file": ("stand-schedule.json", json.dumps(value, ensure_ascii=False).encode("utf-8"), "application/json")}),
              lambda d: f"вложений: {_count(d)}")
+    # Заявки на установку коллеги оставляют комментариями к странице стенда, SimpleTest их читает и отвечает итогом.
+    comment = rep.step("comment-create", "Комментарий-заявка: оставить на странице", "POST", "/rest/api/content" if pid else None,
+                       lambda: _request(cfg, "POST", "/rest/api/content", json_body={
+                           "type": "comment", "container": {"id": pid, "type": "page"},
+                           "body": _storage("<p>Сервис: notify<br/>Дата: 23.10<br/>Команда: B2C</p>")}),
+                       lambda d: f"id {d.get('id')}")
+    cid = str((comment or {}).get("id") or "")
+    rep.step("comment-read", "Комментарии страницы: прочитать с текстом и автором", "GET",
+             f"/rest/api/content/{pid}/child/comment" if cid else None,
+             lambda: _request(cfg, "GET", f"/rest/api/content/{pid}/child/comment",
+                              {"expand": "body.storage,history", "limit": 50}),
+             lambda d: "заявка прочитана" if any(str(x.get("id")) == cid and "notify" in str(((x.get("body") or {}).get("storage") or {}).get("value"))
+                                                 for x in (d.get("results") or [])) else f"комментариев: {_count(d)}, заявки среди них нет")
+    rep.step("comment-reply", "Ответ на комментарий (итог заявки)", "POST", "/rest/api/content" if cid else None,
+             lambda: _request(cfg, "POST", "/rest/api/content", json_body={
+                 "type": "comment", "container": {"id": pid, "type": "page"}, "ancestors": [{"id": cid}],
+                 "body": _storage("<p>Принято: notify, 23.10, B2C (проверка SimpleTest)</p>")}),
+             lambda d: f"ответ id {d.get('id')}")
     url = f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}" if pid else ""
     return rep.out(cfg, space=space, page=url)

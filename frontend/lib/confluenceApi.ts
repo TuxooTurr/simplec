@@ -24,3 +24,6 @@ export const saveConfluenceSettings = (s: ConfluenceSettings) => fetchJson<Confl
 export const testConfluence = () => fetchJson<{ status: string; user: string; name: string }>("/api/confluence/test");
 export const probeConfluenceRead = (space: string, page: string) => fetchJson<ConfProbeReport>(`/api/confluence/probe?${q({ space, page })}`);
 export const probeConfluenceWrite = (space: string, parent: string) => fetchJson<ConfProbeReport>("/api/confluence/probe/write", json("POST", { space, parent }));
+/** Маркер доступа по логину/паролю Сигмы — как у Jira; пароль не сохраняется. */
+export const confluenceTokenFromLogin = (login: string, password: string, base_url: string) =>
+  fetchJson<{ status: string; token: string; expires_days: number }>("/api/confluence/token-from-login", json("POST", { login, password, base_url }));

@@ -1,114 +1,102 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, CheckCircle2, ClipboardCopy, ExternalLink, Loader2, MinusCircle, PenLine, Stethoscope, XCircle } from "lucide-react";
+import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardCopy, ExternalLink, Loader2, MinusCircle, PenLine, Settings2, Stethoscope, XCircle } from "lucide-react";
 import {
-  getConfluenceSettings, probeConfluenceRead, probeConfluenceWrite, saveConfluenceSettings, testConfluence,
-  type ConfProbeReport, type ConfluenceSettings,
+  getConfluenceSettings, probeConfluenceRead, probeConfluenceWrite, testConfluence,
+  type ConfProbeReport,
 } from "@/lib/confluenceApi";
+import { getStandsConfig } from "@/lib/standsApi";
+import StandTab from "@/components/stands/StandTab";
+import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
+import Modal from "@/components/ui/Modal";
+
+const STANDS = ["Major-Check", "Major-GO"];
 
 const INPUT = "w-full text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
-const MASK = "●●●●●●●●●●●●";
 
 /**
- * График стендов — когда какая команда ставит какие КЭ (микросервисы) на Major-Check и Major-GO, на 2 спринта вперёд.
- * Оригинал графика — страница Confluence (данные в свойстве страницы, таблица на странице собирается из них).
- *
- * Этап 1 (сейчас): подключение к Confluence и проверка API — умеет ли Confluence банка то, на чём держится хранение:
- * свойства страницы с версией (защита от затирания), обновление тела, вложения. Отчёт присылают разработчику.
- * Сам график — следующим этапом, по результатам проверки.
+ * График стендов — кто, когда и какие сервисы (КЭ) ставит на Major-Check и Major-GO, на 2 спринта вперёд.
+ * У каждого стенда своя страница Confluence: данные — в свойстве страницы (с версией — одновременные правки
+ * не затирают друг друга), текст страницы собирает SimpleTest; заявки коллеги оставляют комментариями к странице.
+ * Подключение к Confluence — как к Jira в Jira tool: плашка «не подключён», окно настроек, точка статуса;
+ * проверка API — окном по кнопке, как в Zephyr Tool.
  */
+type Conn = { state: "loading" } | { state: "ok"; user: string; baseUrl: string } | { state: "error"; message: string };
+
 export default function StandScheduleSection() {
+  const [tab, setTab] = useState<string>(STANDS[0]);
+  const [pages, setPages] = useState<Record<string, string> | null>(null);
+  const [conn, setConn] = useState<Conn>({ state: "loading" });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [probeOpen, setProbeOpen] = useState(false);
+
+  const connect = () => {
+    setConn({ state: "loading" });
+    Promise.all([testConfluence(), getConfluenceSettings(), getStandsConfig()])
+      .then(([me, st, cfg]) => { setConn({ state: "ok", user: me.user || me.name, baseUrl: st.base_url }); setPages(cfg.pages); })
+      .catch(e => setConn({ state: "error", message: (e as Error).message }));
+  };
+  useEffect(connect, []);
+
   return (
     <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-5">
-        <header className="space-y-1">
-          <h1 className="flex items-center gap-2 text-lg font-bold text-text-main"><CalendarDays className="w-5 h-5 text-primary" /> График стендов</h1>
-          <p className="text-sm text-text-muted">
-            Когда какая команда ставит какие КЭ на Major-Check и Major-GO — на 2 спринта вперёд. Ответ на вопрос
-            «можно ставить сейчас?»: заморозка стенда и лимит установок в день. Оригинал графика — страница Confluence,
-            чтобы его видели все 4 команды.
-          </p>
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-5">
+        <header className="flex flex-wrap items-start gap-3">
+          <div className="min-w-0 flex-1 space-y-1">
+            <h1 className="flex items-center gap-2 text-lg font-bold text-text-main"><CalendarDays className="w-5 h-5 text-primary" /> График стендов</h1>
+            <p className="text-sm text-text-muted">
+              Кто, когда и какие сервисы ставит на стенд — на 2 спринта вперёд. «Можно ставить сегодня?» — по заморозке и лимиту
+              установок в день. Оригинал — страница стенда в Confluence; заявки коллеги оставляют там комментарием.
+            </p>
+          </div>
+          <span className="flex items-center gap-2">
+            <span title={conn.state === "ok" ? `Confluence подключён: ${conn.baseUrl} (${conn.user})` : conn.state === "error" ? `Confluence не подключён: ${conn.message}` : "Подключение к Confluence…"}
+              className="flex items-center gap-1.5 text-xs text-text-muted">
+              <span className={`block w-2.5 h-2.5 rounded-full ${conn.state === "ok" ? "bg-emerald-500" : conn.state === "error" ? "bg-red-500" : "bg-amber-400 animate-pulse"}`} />
+              {conn.state === "ok" ? conn.baseUrl.replace(/^https?:\/\//, "") : conn.state === "error" ? "не подключён" : "подключение…"}
+            </span>
+            <button type="button" onClick={() => setProbeOpen(true)} title="Проверка API Confluence: чтение и запись на тестовой странице"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+              <Stethoscope className="w-4 h-4" /> Проверить API</button>
+            <button type="button" onClick={() => setSettingsOpen(true)} aria-label="Настройки Confluence" title="Настройки Confluence"
+              className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main"><Settings2 className="w-4 h-4" /></button>
+          </span>
         </header>
 
-        <section className="rounded-xl border border-dashed border-border-main bg-bg-subtle/50 px-4 py-3 text-sm text-text-muted">
-          <b className="text-text-main">Сейчас — этап 1: проверка Confluence.</b> Сам график появится здесь, когда станет ясно,
-          что Confluence банка умеет хранить его без затирания чужих правок. Подключите Confluence, запустите обе проверки
-          и пришлите отчёт.
-        </section>
+        {conn.state === "error" && (
+          <div role="alert" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-sm">
+            <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+            <span className="min-w-0 flex-1 text-text-main"><b>Confluence не подключён.</b> {conn.message}</span>
+            <button type="button" onClick={() => setSettingsOpen(true)}
+              className="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold whitespace-nowrap">Настроить Confluence</button>
+            <button type="button" onClick={connect}
+              className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main whitespace-nowrap">Повторить</button>
+          </div>
+        )}
+        {conn.state === "loading" && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Подключение к Confluence…</p>}
 
-        <ConnectionCard />
-        <ProbeCard />
+        {conn.state === "ok" && pages && (
+          <>
+            <div role="tablist" aria-label="Стенды" className="flex gap-1 border-b border-border-main">
+              {STANDS.map(t => (
+                <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+                  className={`px-4 py-2 -mb-px border-b-2 text-sm ${tab === t ? "border-primary text-primary font-semibold" : "border-transparent text-text-muted hover:text-text-main"}`}>
+                  {t}</button>
+              ))}
+            </div>
+            <StandTab key={tab} stand={tab} pageId={pages[tab] ?? ""} onPageBound={connect} />
+          </>
+        )}
       </div>
-    </div>
-  );
-}
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-xl border border-border-main bg-bg-card p-4 space-y-3">
-      <h2 className="text-sm font-semibold text-text-main">{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function ConnectionCard() {
-  const [s, setS] = useState<ConfluenceSettings | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  useEffect(() => { getConfluenceSettings().then(setS, e => setMsg({ ok: false, text: (e as Error).message })); }, []);
-  if (!s) return <Card title="Подключение к Confluence"><p className="text-sm text-text-muted">{msg?.text ?? "Загрузка…"}</p></Card>;
-  const patch = (p: Partial<ConfluenceSettings>) => { setS({ ...s, ...p }); setMsg(null); };
-
-  const save = async (andTest: boolean) => {
-    setBusy(true); setMsg(null);
-    try {
-      setS(await saveConfluenceSettings(s));
-      if (andTest) {
-        const me = await testConfluence();
-        setMsg({ ok: true, text: `Вход выполнен: ${me.user || me.name}` });
-      } else setMsg({ ok: true, text: "Сохранено" });
-    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
-    setBusy(false);
-  };
-
-  return (
-    <Card title="Подключение к Confluence">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="space-y-1 text-xs text-text-muted">Адрес
-          <input value={s.base_url} onChange={e => patch({ base_url: e.target.value })} placeholder="https://confluence.sberbank.ru" className={`${INPUT} font-mono`} />
-        </label>
-        <label className="space-y-1 text-xs text-text-muted">Пространство для графика
-          <input value={s.space} onChange={e => patch({ space: e.target.value })} placeholder="Ключ: QA911 или ~логин (личное)" className={`${INPUT} font-mono`} />
-        </label>
-      </div>
-      <label className="block space-y-1 text-xs text-text-muted">Маркер доступа
-        <input type="password" value={s.token} onChange={e => patch({ token: e.target.value })} autoComplete="new-password"
-          placeholder="Профиль Confluence → Настройки → Маркеры доступа → Создать" className={`${INPUT} font-mono`} />
-        <span className="block text-[11px]">{s.token === MASK ? "Маркер сохранён. Вставьте новый, чтобы заменить." : "Маркер Confluence свой — токен Jira сюда не подойдёт."}</span>
-      </label>
-      <label className="block space-y-1 text-xs text-text-muted">Или путь к файлу с маркером
-        <input value={s.token_path} onChange={e => patch({ token_path: e.target.value })} placeholder="/Users/you/.secrets/confluence_token.txt" className={`${INPUT} font-mono`} />
-      </label>
-      <label className="flex items-center gap-2 text-sm text-text-muted cursor-pointer">
-        <input type="checkbox" checked={!s.ssl_verify} onChange={e => patch({ ssl_verify: !e.target.checked })} />
-        Не проверять SSL-сертификат (корпоративный прокси)
-      </label>
-      {msg && (
-        <p className={`flex items-center gap-1.5 text-sm ${msg.ok ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
-          {msg.ok ? <CheckCircle2 className="w-4 h-4 flex-shrink-0" /> : <XCircle className="w-4 h-4 flex-shrink-0" />} {msg.text}
-        </p>
+      <ConfluenceSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); connect(); }} />
+      {probeOpen && (
+        <Modal open onClose={() => setProbeOpen(false)} title="Проверка API Confluence" size="max-w-3xl">
+          <ProbeCard />
+        </Modal>
       )}
-      <div className="flex justify-end gap-2">
-        <button type="button" onClick={() => save(false)} disabled={busy}
-          className="px-3.5 py-2 border border-border-main rounded-lg text-xs font-semibold text-text-muted hover:bg-bg-subtle disabled:opacity-40">Сохранить</button>
-        <button type="button" onClick={() => save(true)} disabled={busy}
-          className="flex items-center gap-1.5 px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold disabled:opacity-40">
-          {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />} Сохранить и проверить вход</button>
-      </div>
-    </Card>
+    </div>
   );
 }
 
@@ -138,7 +126,7 @@ function ProbeCard() {
   };
 
   return (
-    <Card title="Проверка API Confluence">
+    <div className="space-y-3">
       <p className="text-sm text-text-muted">
         <b className="text-text-main">Чтение</b> ничего не меняет: вход, пространство, страница и её свойства.{" "}
         <b className="text-text-main">Запись</b> создаёт в пространстве новую тестовую страницу и проверяет на ней всё, на чём
@@ -180,7 +168,7 @@ function ProbeCard() {
       {err && <p className="text-sm text-red-600 dark:text-red-400">{err}</p>}
       {reports.read && <ReportList title="Чтение" rep={reports.read} />}
       {reports.write && <ReportList title="Запись" rep={reports.write} />}
-    </Card>
+    </div>
   );
 }
 

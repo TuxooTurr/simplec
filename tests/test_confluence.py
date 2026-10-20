@@ -64,7 +64,10 @@ def test_проверка_чтения_без_страницы_пропуска�
 def test_проверка_записи_на_тестовой_странице_и_отказ_на_старой_версии(conf):
     prop = "/rest/api/content/77/property/" + c.PROBE_PROPERTY
     stored = {}
-    conf["routes"][("POST", "/rest/api/content")] = lambda b: {"id": "77", "version": {"number": 1}}
+    conf["routes"][("POST", "/rest/api/content")] = lambda b: (
+        {"id": "c1" if not b.get("ancestors") else "c2"} if b.get("type") == "comment" else {"id": "77", "version": {"number": 1}})
+    conf["routes"][("GET", "/rest/api/content/77/child/comment")] = {"results": [
+        {"id": "c1", "body": {"storage": {"value": "<p>Сервис: notify<br/>Дата: 23.10<br/>Команда: B2C</p>"}}}]}
     conf["routes"][("POST", "/rest/api/content/77/property")] = lambda b: stored.update(b) or {"version": {"number": 1}}
     conf["routes"][("GET", prop)] = lambda b: {"value": stored["value"], "version": {"number": 1}}
     seen = []
@@ -85,6 +88,9 @@ def test_проверка_записи_на_тестовой_странице_и
     created = conf["calls"][0][2]
     assert created["space"] == {"key": "~qa"} and created["ancestors"] == [{"id": "10"}]
     assert rep["page"] == "https://confluence.example/pages/viewpage.action?pageId=77"
+    assert by["comment-read"]["note"] == "заявка прочитана"
+    reply = next(b for m, p, b in conf["calls"] if m == "POST" and p == "/rest/api/content" and b.get("ancestors") and b["type"] == "comment")
+    assert reply["ancestors"] == [{"id": "c1"}] and reply["container"] == {"id": "77", "type": "page"}
     assert not any(m in ("PUT", "DELETE") and p == "/rest/api/content/10" for m, p, _ in conf["calls"])   # родителя не трогаем
 
 
@@ -96,3 +102,31 @@ def test_запись_прошла_там_где_ждали_отказ_это_п
     rep = c.probe_write(c.ProbeWriteBody(space="~qa"), db=None)
     by = {r["id"]: r for r in rep["results"]}
     assert not by["prop-conflict"]["ok"] and "ожидали отказ" in by["prop-conflict"]["error"]
+
+
+class _Db:
+    def commit(self):
+        pass
+
+
+def test_маркер_по_логину_паролю_сохраняется_пароль_нет(conf, monkeypatch):
+    saved = {}
+    monkeypatch.setattr(c, "_set", lambda db, k, v, d="": saved.__setitem__(k, v))
+    sent = {}
+
+    def req(cfg, method, path, params=None, json_body=None, files=None, timeout=30, auth=None):
+        sent.update(path=path, auth=auth)
+        return {"rawToken": "pat-123"}
+    monkeypatch.setattr(c, "_request", req)
+    out = c.token_from_login(c.TokenFromLoginBody(login=" ivanov ", password="secret", base_url="https://conf.example/"), db=_Db())
+    assert out["token"] == c._MASK and saved[c._K_TOKEN] == "pat-123" and saved[c._K_URL] == "https://conf.example"
+    assert sent == {"path": "/rest/pat/latest/tokens", "auth": ("ivanov", "secret")}
+    assert "secret" not in str(saved)
+
+
+def test_маркер_по_паролю_закрыт_понятная_ошибка(conf, monkeypatch):
+    monkeypatch.setattr(c, "_set", lambda *a, **k: None)
+    monkeypatch.setattr(c, "_request", lambda *a, **k: (_ for _ in ()).throw(HTTPException(403, "Confluence: нет прав")))
+    with pytest.raises(HTTPException) as e:
+        c.token_from_login(c.TokenFromLoginBody(login="ivanov", password="x"), db=_Db())
+    assert e.value.status_code == 403 and "Маркеры доступа" in e.value.detail

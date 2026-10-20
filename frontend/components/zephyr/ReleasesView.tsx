@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, ListChecks, Loader2, Plus, RefreshCw, ShieldCheck, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, ListChecks, Loader2, Plus, RefreshCw, ShieldCheck, Tags, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { addRelease, getReleaseBoard, getReleases, removeRelease, runKind, type ReleaseBoard, type ZLinked } from "@/lib/zephyrApi";
 import RunCard, { RunTypeChip } from "./RunCard";
 import CritRegressView from "./CritRegressView";
+import KeAlignModal from "./KeAlignModal";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
@@ -99,6 +100,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
   const b = st.data;
   const [regressOpen, setRegressOpen] = useState(false);
   const [nfOpen, setNfOpen] = useState(false);
+  const [keOpen, setKeOpen] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string }[]>([]);
 
@@ -196,6 +198,14 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
             </ul>
           )}
           <div className="border-t border-border-main"><MissingNfJql board={b} baseUrl={baseUrl} /></div>
+          {stories.length > 0 && (
+            <div className="border-t border-border-main px-4 py-2">
+              <button type="button" onClick={() => setKeOpen(true)}
+                title={`Выравнивание: всем стори — все КЭ релиза${b.release.ke.length ? ` (${b.release.ke.map(k => k.label).join(", ")})` : ""}. Сначала покажет, что изменится`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                <Tags className="w-4 h-4" /> КЭ релиза → на все стори</button>
+            </div>
+          )}
         </div>
       )}
       {open && !b && !st.err && <p className="flex items-center gap-2 border-t border-border-main px-4 py-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю релиз…</p>}
@@ -210,6 +220,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
             }} />
         </Modal>
       )}
+      {keOpen && <KeAlignModal releaseKey={relKey} baseUrl={baseUrl} onClose={() => setKeOpen(false)} />}
       {nfOpen && b && <NfRunsModal board={b} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
     </li>
   );

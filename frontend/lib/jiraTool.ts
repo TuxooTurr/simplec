@@ -729,6 +729,60 @@ export function withoutMark(marks: TaskList["marks"], key: string): TaskList["ma
   return rest;
 }
 
+/* ── Перенос задач между списками ──────────────────────────────────────── */
+
+/** Тип данных при перетаскивании строк таблицы на список в колонке «Списки»: JSON-массив ключей. */
+export const DRAG_ISSUES = "application/x-simpletest-issues";
+
+/**
+ * Перенести задачи из списка в список. Вместе с задачей едет то, что имеет смысл в другом списке: участник,
+ * направления (st), трудозатраты, исключение из нагрузки, значения своих полей и их ярлычки — в поле целевого
+ * списка с тем же id (списки из одного шаблона) или с тем же названием и типом; поля без пары не переносятся.
+ * Папка — только если в целевом списке есть папка с тем же названием, иначе задача встаёт в «Без папки».
+ * Задача уже есть в целевом списке — его данные главнее: из исходного она просто уходит.
+ * Из исходного задача убирается так же, как «Убрать из списка»: ключ и отметка «n»/«У».
+ */
+export function moveIssues(s: ToolState, fromId: string, toId: string, keys: string[]): ToolState {
+  const from = s.lists.find(l => l.id === fromId), to = s.lists.find(l => l.id === toId);
+  if (!from || !to || fromId === toId) return s;
+  const moving = new Set(keys.filter(k => from.keys.includes(k)));
+  if (!moving.size) return s;
+  const fresh = [...moving].filter(k => !to.keys.includes(k));
+
+  const pair = new Map<string, string>();      // id своего поля исходного списка → id в целевом
+  const norm = (n: string) => n.trim().toLowerCase();
+  for (const f of from.ownFields) {
+    const t = to.ownFields.find(x => x.id === f.id && x.type === f.type)
+      ?? to.ownFields.find(x => x.type === f.type && norm(x.name) === norm(f.name));
+    if (t) pair.set(f.id, t.id);
+  }
+  const byField = <T,>(rec: Record<string, T> | undefined): Record<string, T> | null => {
+    const out: Record<string, T> = {};
+    for (const [fid, v] of Object.entries(rec ?? {})) { const t = pair.get(fid); if (t) out[t] = v; }
+    return Object.keys(out).length ? out : null;
+  };
+
+  const target: TaskList = { ...to, keys: [...to.keys, ...fresh], values: { ...to.values }, assignees: { ...to.assignees } };
+  for (const k of fresh) {
+    const vals = byField(from.values[k]);
+    if (vals) target.values[k] = vals;
+    const icons = byField(from.icons?.[k]);
+    if (icons) target.icons = { ...target.icons, [k]: icons };
+    if (from.assignees[k]) target.assignees[k] = from.assignees[k];
+    if (from.roles?.[k]) target.roles = { ...target.roles, [k]: from.roles[k] };
+    if (from.spend?.[k]) target.spend = { ...target.spend, [k]: from.spend[k] };
+    if (from.noLoad?.[k]) target.noLoad = { ...target.noLoad, [k]: true };
+    const folder = from.folders?.[k];
+    if (folder && to.folderList?.includes(folder)) target.folders = { ...target.folders, [k]: folder };
+  }
+  const source: TaskList = {
+    ...from,
+    keys: from.keys.filter(k => !moving.has(k)),
+    marks: [...moving].reduce((m, k) => withoutMark(m, k), from.marks),
+  };
+  return { ...s, lists: s.lists.map(l => (l.id === fromId ? source : l.id === toId ? target : l)) };
+}
+
 /* ── Источники задач: JQL и релиз ──────────────────────────────────────── */
 
 export interface ListSource {

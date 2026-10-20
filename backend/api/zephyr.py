@@ -1080,6 +1080,152 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
     return {"release": rel, "runs": order(clean(r) for r in rel_runs),
             "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source}
 
+# ── Выравнивание КЭ: все КЭ релиза — на все его стори ────────────────────────
+#
+# По процессу у каждой стори релиза должны стоять все КЭ релиза. Добавляются только недостающие, свои КЭ стори
+# не трогаются. Как поле КЭ принимает запись, на стенде ещё не проверено, поэтому:
+#   • план (GET …/ke-plan) — только чтение: что у кого есть и чего не хватает + как поле объявлено у стори
+#     (editmeta: есть ли на экране правки, тип, операции) — это и есть проверка API;
+#   • запись (POST …/ke-apply) — только по кнопке; значения КЭ уходят в том же виде, в каком Jira их отдаёт
+#     у релиза, ответ Jira по каждой стори виден как есть.
+
+_STORY_RE = re.compile(r"истори|стори|story", re.I)    # как isStory во фронте (ReleasesView)
+
+
+def _raw_list(v: Any) -> list:
+    return [x for x in v if x not in (None, "")] if isinstance(v, list) else [] if v in (None, "", {}) else [v]
+
+
+def _ke_ident(x: Any) -> str:
+    """Чем одна КЭ отличается от другой: код (CI…/id), иначе название; непонятное значение — целиком."""
+    items = _ke_items(x)
+    if items:
+        return items[0]["id"] or items[0]["name"].lower()
+    return json.dumps(x, ensure_ascii=False, sort_keys=True)
+
+
+def _ke_label(x: Any) -> str:
+    items = _ke_items(x)
+    return items[0]["label"] if items else str(x)
+
+
+def _release_ke_raw(cfg: dict, key: str) -> dict:
+    """Задача релиза: поле КЭ (id и название), его значения как есть и стори по связям."""
+    data = _jira_request(cfg, "GET", f"/rest/api/2/issue/{key}", params={"expand": "names", "fields": "*all"})
+    fields = data.get("fields") or {}
+    names = data.get("names") or {}
+    fid = next((f for f, title in names.items() if _fname(str(title)) == "кэ" and _raw_list(fields.get(f))), "") \
+        or next((f for f, title in names.items() if _fname(str(title)) == "кэ"), "") or KE_FIELD_ID
+    return {"key": key, "summary": fields.get("summary") or "", "field": fid, "fieldName": str(names.get(fid) or "КЭ"),
+            "raw": _raw_list(fields.get(fid)),
+            "stories": [x for x in linked_issues(fields.get("issuelinks")) if _STORY_RE.search(x["issuetype"])]}
+
+
+def _ke_editmeta(cfg: dict, story: str, fid: str) -> dict:
+    """Как поле КЭ объявлено у стори для правки: на экране ли, тип, операции. Ошибка — текстом, без исключения."""
+    try:
+        meta = (_jira_request(cfg, "GET", f"/rest/api/2/issue/{story}/editmeta").get("fields") or {}).get(fid)
+    except HTTPException as e:
+        return {"story": story, "error": str(e.detail)[:300]}
+    if not isinstance(meta, dict):
+        return {"story": story, "onScreen": False}
+    schema = meta.get("schema") or {}
+    allowed = meta.get("allowedValues")
+    return {"story": story, "onScreen": True, "name": meta.get("name") or "", "required": bool(meta.get("required")),
+            "schema": {k: schema.get(k) for k in ("type", "items", "custom") if schema.get(k)},
+            "operations": list(meta.get("operations") or []),
+            "allowedValues": len(allowed) if isinstance(allowed, list) else None}
+
+
+def _ke_mode(check: dict, n_release: int) -> tuple[str, str]:
+    """Как писать поле: set — всем списком, add — по одной, "" — нельзя (и почему)."""
+    if check.get("error"):
+        return "", f"Не удалось прочитать настройки поля у стори: {check['error']}"
+    if not check.get("onScreen"):
+        return "", "Поля КЭ нет на экране редактирования стори — Jira не даст его изменить"
+    ops = check.get("operations") or []
+    multi = (check.get("schema") or {}).get("type") == "array"
+    if not multi and n_release > 1:
+        return "", "У стори в поле КЭ помещается одно значение, а у релиза их несколько"
+    if "set" in ops:
+        return "set", ""
+    if multi and "add" in ops:
+        return "add", ""
+    return "", f"Поле не принимает ни set, ни add (операции: {', '.join(ops) or 'нет'})"
+
+
+def ke_plan(cfg: dict, key: str) -> dict:
+    rel = _release_ke_raw(cfg, _issue_key(key, "Номер релиза"))
+    fid, rel_raw = rel["field"], rel["raw"]
+
+    def one(st: dict) -> dict:
+        row = {"key": st["key"], "summary": st["summary"], "status": st["status"], "ke": [], "missing": [], "raw": []}
+        try:
+            data = _jira_request(cfg, "GET", f"/rest/api/2/issue/{st['key']}", params={"fields": fid})
+        except HTTPException as e:
+            return {**row, "error": str(e.detail)[:300]}
+        raw = _raw_list((data.get("fields") or {}).get(fid))
+        have = {_ke_ident(x) for x in raw}
+        missing = [x for x in rel_raw if _ke_ident(x) not in have]
+        return {**row, "ke": [_ke_label(x) for x in raw], "missing": [_ke_label(x) for x in missing], "raw": raw,
+                "missingRaw": missing}
+
+    with ThreadPoolExecutor(max_workers=WAVE) as pool:
+        stories = list(pool.map(one, rel["stories"]))
+    probe_on = next((x["key"] for x in stories if x.get("missingRaw")), stories[0]["key"] if stories else "")
+    check = _ke_editmeta(cfg, probe_on, fid) if probe_on else {}
+    mode, why = _ke_mode(check, len(rel_raw)) if probe_on else ("", "")
+    return {"release": {"key": rel["key"], "summary": rel["summary"], "field": fid, "fieldName": rel["fieldName"],
+                        "ke": [_ke_label(x) for x in rel_raw], "raw": rel_raw},
+            "stories": stories, "check": check, "mode": mode, "blocked": why}
+
+
+def _public_plan(plan: dict) -> dict:
+    """Наружу — без сырых значений стори (они нужны только записи), но с сырыми КЭ релиза — по ним видно формат поля."""
+    return {**plan, "stories": [{k: v for k, v in x.items() if k not in ("raw", "missingRaw")} for x in plan["stories"]]}
+
+
+@router.get("/api/zephyr/release/{key}/ke-plan")
+def release_ke_plan(key: str, db: Session = Depends(get_db)) -> dict:
+    """КЭ релиза и стори: чего не хватает каждой стори + как поле КЭ объявлено у стори (проверка API). Только чтение."""
+    return _public_plan(ke_plan(_load_cfg(db), key))
+
+
+class KeApplyBody(BaseModel):
+    stories: list[str] = Field(default_factory=list)   # каким стори добавить (пусто — всем, кому не хватает)
+
+
+@router.post("/api/zephyr/release/{key}/ke-apply")
+def release_ke_apply(key: str, body: KeApplyBody, db: Session = Depends(get_db)) -> dict:
+    """Добавить стори релиза недостающие КЭ релиза. Свои КЭ стори остаются. Ответ Jira — по каждой стори."""
+    cfg = _load_cfg(db)
+    plan = ke_plan(cfg, key)
+    if not plan["mode"]:
+        raise HTTPException(409, plan["blocked"] or "Запись поля КЭ невозможна")
+    fid, mode = plan["release"]["field"], plan["mode"]
+    wanted = {k.strip().upper() for k in body.stories if k.strip()}
+    todo = [x for x in plan["stories"] if x.get("missingRaw") and (not wanted or x["key"] in wanted)]
+
+    def one(row: dict) -> dict:
+        if mode == "add":
+            payload = {"update": {fid: [{"add": x} for x in row["missingRaw"]]}}
+        elif (plan["check"].get("schema") or {}).get("type") == "array":
+            payload = {"fields": {fid: row["raw"] + row["missingRaw"]}}
+        elif row["raw"]:
+            return {"key": row["key"], "ok": False, "error": "У стори уже стоит другая КЭ, а поле держит одно значение — не затираю"}
+        else:
+            payload = {"fields": {fid: row["missingRaw"][0]}}
+        try:
+            _jira_request(cfg, "PUT", f"/rest/api/2/issue/{row['key']}", json_body=payload)
+            return {"key": row["key"], "ok": True, "added": row["missing"]}
+        except HTTPException as e:
+            return {"key": row["key"], "ok": False, "error": str(e.detail)[:500]}
+
+    with ThreadPoolExecutor(max_workers=WAVE) as pool:
+        results = list(pool.map(one, todo))
+    return {"results": results, "plan": _public_plan(ke_plan(cfg, key))}
+
+
 
 def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str, Any]]) -> Any:
     """Запись по вариантам: следующий — только если запроса нет (404/405), иначе ошибка как есть."""

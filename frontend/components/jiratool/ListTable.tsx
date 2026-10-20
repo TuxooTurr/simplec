@@ -4,7 +4,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  LOAD_COL, REQ_COL, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
+  LOAD_COL, REQ_COL, DRAG_ISSUES, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
@@ -346,6 +346,8 @@ export default function ListTable({
           if (dragFolderRef.current || dragCol) return;            // тянут папку или колонку — не строку
           if (armedRef.current?.id !== id) { e.preventDefault(); return; }
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", issue.key);
+          // Для переноса в другой список (бросить на список слева): отмеченные вместе со строкой — все отмеченные.
+          e.dataTransfer.setData(DRAG_ISSUES, JSON.stringify(on ? [...selected] : [issue.key]));
           dragRef.current = { key: issue.key, path, levels, folder };
           // Подсветку — после начала переноса: Chrome отменяет перенос, если в dragstart меняется страница.
           setTimeout(() => { if (dragRef.current?.key === issue.key) setDragRow({ key: issue.key, path }); }, 0);

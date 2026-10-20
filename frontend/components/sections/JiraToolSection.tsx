@@ -28,7 +28,7 @@ import StageModal from "@/components/jiratool/StageModal";
 import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, workdaysBetween, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -705,6 +705,13 @@ export default function JiraToolSection() {
     setSelected(new Set());
   };
 
+  /** Перенести задачи открытого списка в другой: выбранные — из панели выбора, или перетащенные на список слева. */
+  const moveToList = (toId: string, keys: string[]) => {
+    if (!activeId || !keys.length) return;
+    update(st => moveIssues(st, activeId, toId, keys));
+    setSelected(p => { const n = new Set(p); keys.forEach(k => n.delete(k)); return n; });
+  };
+
   /** Статусы сменены в Jira — перечитываем эти задачи (и связанные: этап эпика мог сдвинуться). */
   /** Статус (st) руками; null — вернуть расчёт по Jira. */
   const setStageManual = (key: string, st: Stage | null) => update(s => {
@@ -797,6 +804,7 @@ export default function JiraToolSection() {
                   if (id === activeId) openList(state.lists.find(x => x.id !== id)?.id ?? "");
                   setAskDeleteList(null);
                 }}
+                onDropIssues={moveToList}
                 onMove={(id, target, place) => update(s => {
                   const byId = new Map(s.lists.map(x => [x.id, x]));
                   const ids = moveItem(s.lists.map(x => x.id), id, target, place);
@@ -1230,6 +1238,15 @@ export default function JiraToolSection() {
                       <option value="">В папку…</option>
                       {list.folderList.map(f => <option key={f} value={f}>{f}</option>)}
                       <option value="__none__">{NO_FOLDER}</option>
+                    </select>
+                  )}
+                  {state.lists.length > 1 && (
+                    <select value="" onChange={e => e.target.value && moveToList(e.target.value, [...selected])}
+                      aria-label="Перенести выбранные в другой список" disabled={!selected.size}
+                      title="Перенести в другой список — с участником, трудозатратами и своими полями, которые есть и там. Или перетащите строки на список слева"
+                      className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)] disabled:opacity-40">
+                      <option value="">В список…</option>
+                      {state.lists.filter(l => l.id !== activeId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                   )}
                   <button type="button" onClick={stopSelecting}

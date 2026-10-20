@@ -739,3 +739,81 @@ def test_изменить_несколько_кейсов_метки_добав�
     assert puts["T2"]["labels"] == ["регресс"]
     with pytest.raises(HTTPException):
         z.edit_cases(z.CasesEdit(project="SBER911", keys=["T1"]), db=None)
+
+
+# ── Выравнивание КЭ релиза на стори ──────────────────────────────────────────
+
+KE_A = {"id": "1", "value": "Платформа [CI001]"}
+KE_B = {"id": "2", "value": "Мобильное приложение [CI002]"}
+KE_C = {"id": "3", "value": "Своя КЭ стори [CI003]"}
+
+
+def _ke_release(jira, story_ke: dict, meta: dict | None = None):
+    """Релиз с КЭ A и B, связанные стори и дефект; story_ke — КЭ стори; meta — поле КЭ в editmeta."""
+    link = lambda k, t: {"type": {"outward": "включает"}, "outwardIssue": {"key": k, "fields": {"summary": k, "issuetype": {"name": t}, "status": {"name": "Открыт"}}}}
+    jira["routes"]["/rest/api/2/issue/SBER911-100"] = {
+        "names": {"customfield_18300": "КЭ", "customfield_1": "КЭ дистрибутива"},
+        "fields": {"summary": "Релиз", "customfield_18300": [KE_A, KE_B], "customfield_1": "D-10",
+                   "issuelinks": [link("SBER911-1", "История"), link("SBER911-2", "Story"), link("SBER911-9", "Дефект")]}}
+    for k, v in story_ke.items():
+        jira["routes"][f"/rest/api/2/issue/{k}"] = {"fields": {"customfield_18300": v}}
+    if meta is None:
+        meta = {"schema": {"type": "array", "custom": "ke"}, "operations": ["add", "set", "remove"]}
+    jira["routes"]["/rest/api/2/issue/SBER911-1/editmeta"] = {"fields": {"customfield_18300": meta} if meta else {}}
+
+
+def test_план_кэ_показывает_недостающие_и_проверку_поля(jira):
+    _ke_release(jira, {"SBER911-1": [KE_A, KE_C], "SBER911-2": [KE_A, KE_B]})
+    plan = z.release_ke_plan("sber911-100", db=None)
+    st = {x["key"]: x for x in plan["stories"]}
+    assert set(st) == {"SBER911-1", "SBER911-2"}                                  # дефект — не стори
+    assert st["SBER911-1"]["missing"] == ["Мобильное приложение (CI002)"] and st["SBER911-2"]["missing"] == []
+    assert "raw" not in st["SBER911-1"] and "missingRaw" not in st["SBER911-1"]
+    assert plan["release"]["field"] == "customfield_18300" and plan["mode"] == "set"
+    assert plan["check"]["schema"]["type"] == "array" and plan["check"]["story"] == "SBER911-1"
+
+
+def test_запись_кэ_дописывает_недостающие_и_не_трогает_свои(jira, monkeypatch):
+    _ke_release(jira, {"SBER911-1": [KE_A, KE_C], "SBER911-2": [KE_A, KE_B]})
+    sent = []
+    real = z._jira_request
+    monkeypatch.setattr(z, "_jira_request", lambda cfg, m, p, **kw: sent.append((p, kw.get("json_body"))) or {} if m == "PUT" else real(cfg, m, p, **kw))
+    out = z.release_ke_apply("SBER911-100", z.KeApplyBody(), db=None)
+    assert sent == [("/rest/api/2/issue/SBER911-1", {"fields": {"customfield_18300": [KE_A, KE_C, KE_B]}})]
+    assert out["results"] == [{"key": "SBER911-1", "ok": True, "added": ["Мобильное приложение (CI002)"]}]
+
+
+def test_запись_кэ_операцией_add_если_set_нет(jira, monkeypatch):
+    _ke_release(jira, {"SBER911-1": [], "SBER911-2": [KE_B]}, {"schema": {"type": "array"}, "operations": ["add", "remove"]})
+    sent = []
+    real = z._jira_request
+    monkeypatch.setattr(z, "_jira_request", lambda cfg, m, p, **kw: sent.append((p, kw.get("json_body"))) or {} if m == "PUT" else real(cfg, m, p, **kw))
+    z.release_ke_apply("SBER911-100", z.KeApplyBody(stories=["SBER911-2"]), db=None)
+    assert sent == [("/rest/api/2/issue/SBER911-2", {"update": {"customfield_18300": [{"add": KE_A}]}})]
+
+
+def test_запись_кэ_запрещена_если_поля_нет_на_экране_или_оно_одно(jira):
+    _ke_release(jira, {"SBER911-1": [], "SBER911-2": []}, {})
+    plan = z.release_ke_plan("SBER911-100", db=None)
+    assert plan["mode"] == "" and "экране" in plan["blocked"]
+    with pytest.raises(HTTPException) as e:
+        z.release_ke_apply("SBER911-100", z.KeApplyBody(), db=None)
+    assert e.value.status_code == 409
+    _ke_release(jira, {"SBER911-1": [], "SBER911-2": []}, {"schema": {"type": "option"}, "operations": ["set"]})
+    assert "одно значение" in z.release_ke_plan("SBER911-100", db=None)["blocked"]
+
+
+def test_ошибка_jira_по_одной_стори_не_останавливает_остальные(jira, monkeypatch):
+    _ke_release(jira, {"SBER911-1": [], "SBER911-2": []})
+    real = z._jira_request
+
+    def req(cfg, m, p, **kw):
+        if m == "PUT":
+            if p.endswith("SBER911-1"):
+                raise HTTPException(400, "Jira: customfield_18300: неверное значение")
+            return {}
+        return real(cfg, m, p, **kw)
+    monkeypatch.setattr(z, "_jira_request", req)
+    res = {r["key"]: r for r in z.release_ke_apply("SBER911-100", z.KeApplyBody(), db=None)["results"]}
+    assert not res["SBER911-1"]["ok"] and "неверное значение" in res["SBER911-1"]["error"]
+    assert res["SBER911-2"]["ok"]

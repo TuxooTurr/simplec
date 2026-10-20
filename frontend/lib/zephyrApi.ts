@@ -232,6 +232,35 @@ export interface CritCase extends ZCase { ke: string[] }
 
 export interface CritStats { checked: number; no_status: number; no_crit: number; no_type: number; no_ke: number; fields: string[] }
 
+/* ── Выравнивание КЭ: КЭ релиза → на все стори ─────────────────────────────── */
+
+/** Стори релиза: какие КЭ стоят и каких из КЭ релиза не хватает. */
+export interface KeStory { key: string; summary: string; status: string; ke: string[]; missing: string[]; error?: string }
+
+/** Как поле КЭ объявлено у стори для правки (editmeta) — это и есть проверка API записи. */
+export interface KeCheck {
+  story?: string; onScreen?: boolean; name?: string; required?: boolean; error?: string;
+  schema?: { type?: string; items?: string; custom?: string }; operations?: string[]; allowedValues?: number | null;
+}
+
+/**
+ * План: КЭ релиза (raw — значения как отдаёт Jira, по ним видно формат), стори и проверка поля.
+ * mode: set — запишем списком, add — по одной; "" — запись невозможна, причина в blocked.
+ */
+export interface KePlan {
+  release: { key: string; summary: string; field: string; fieldName: string; ke: string[]; raw: unknown[] };
+  stories: KeStory[]; check: KeCheck; mode: "set" | "add" | ""; blocked: string;
+}
+
+export interface KeResult { key: string; ok: boolean; added?: string[]; error?: string }
+
+export const getKePlan = (key: string) => fetchJson<KePlan>(`/api/zephyr/release/${encodeURIComponent(key)}/ke-plan`);
+
+export const applyKe = (key: string, stories: string[]) =>
+  fetchJson<{ results: KeResult[]; plan: KePlan }>(`/api/zephyr/release/${encodeURIComponent(key)}/ke-apply`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stories }),
+  });
+
 export const getRelease = (key: string) => fetchJson<ZRelease>(`/api/zephyr/release/${encodeURIComponent(key.trim())}`);
 
 export const findCritCases = (project: string, ke: string[], criteria: CritCriteria) =>

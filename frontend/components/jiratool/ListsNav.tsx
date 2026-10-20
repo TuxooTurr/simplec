@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import { FolderTree, GripVertical, LayoutList, Trash2 } from "lucide-react";
+import { DRAG_ISSUES } from "@/lib/jiraTool";
 
 export interface ListsNavItem { id: string; name: string; project: string; count: number; structure: boolean }
 
@@ -11,8 +12,9 @@ const VISIBLE = 4;
 /**
  * Списки в колонке Jira tool: видно первые 4, остальные — прокруткой. Порядок меняется перетаскиванием
  * (линия показывает, куда встанет список; у края области она сама прокручивается) или Alt+↑/↓ с клавиатуры.
+ * На список можно бросить строки таблицы (DRAG_ISSUES) — задачи переедут в него из открытого списка.
  */
-export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove }: {
+export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove, onDropIssues }: {
   items: ListsNavItem[];
   activeId: string | null;
   askDeleteId: string | null;
@@ -21,12 +23,15 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
   onConfirmDelete: (id: string) => void;
   onCancelDelete: () => void;
   onMove: (id: string, target: string, place: "before" | "after") => void;
+  onDropIssues: (listId: string, keys: string[]) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [maxH, setMaxH] = useState<number | undefined>(undefined);
   const dragId = useRef<string | null>(null);
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<{ id: string; place: "before" | "after" } | null>(null);
+  const [dropOn, setDropOn] = useState<string | null>(null);   // список, на который сейчас бросят задачи
+  const issuesDrag = (e: React.DragEvent) => e.dataTransfer.types.includes(DRAG_ISSUES);
 
   // Высота — ровно по 4 первым спискам (строки разной высоты: с подписью проекта и без).
   useLayoutEffect(() => {
@@ -69,19 +74,32 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
             setTimeout(() => { if (dragId.current === l.id) setDragging(l.id); }, 0);
           }}
           onDragOver={e => {
+            if (!dragId.current && issuesDrag(e)) {
+              if (l.id === activeId) return;                    // в тот же список — нечего переносить
+              e.preventDefault(); e.dataTransfer.dropEffect = "move";
+              if (dropOn !== l.id) setDropOn(l.id);
+              return;
+            }
             if (!dragId.current) return;
             e.preventDefault(); e.dataTransfer.dropEffect = "move";
             const place = placeOf(e);
             if (over?.id !== l.id || over.place !== place) setOver({ id: l.id, place });
           }}
+          onDragLeave={e => { if (dropOn === l.id && !e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOn(null); }}
           onDrop={e => {
             e.preventDefault();
+            if (!dragId.current && issuesDrag(e)) {
+              setDropOn(null);
+              try { onDropIssues(l.id, JSON.parse(e.dataTransfer.getData(DRAG_ISSUES)) as string[]); } catch { /* чужие данные */ }
+              return;
+            }
             if (dragId.current && dragId.current !== l.id) onMove(dragId.current, l.id, placeOf(e));
             end();
           }}
           onDragEnd={end}
           className={`group/li relative flex items-center rounded-lg transition-colors
             ${l.id === activeId ? "bg-primary/10" : "hover:bg-bg-subtle"} ${dragging === l.id ? "opacity-40" : ""}
+            ${dropOn === l.id ? "ring-2 ring-primary bg-primary/10" : ""}
             ${over?.id === l.id && dragging !== l.id ? (over.place === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]") : ""}`}>
           {items.length > 1 && (
             <GripVertical aria-hidden className="absolute left-0 w-3 h-3.5 text-text-muted opacity-0 group-hover/li:opacity-60 cursor-grab" />

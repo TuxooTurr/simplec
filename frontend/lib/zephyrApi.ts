@@ -201,7 +201,17 @@ export interface ReleaseList { releases: string[] }
  * Строка релиза: прогоны с релизом в отслеживании; для стори — прогоны релиза, где она тоже в отслеживании.
  * traceSource: tql — по всему отслеживанию; issueKey — стенд отдаёт только основную задачу прогона.
  */
-export interface ReleaseBoard { release: ZRelease; runs: ZRun[]; storyRuns: Record<string, ZRun[]>; traceSource: "tql" | "issueKey" }
+export interface ReleaseBoard {
+  release: ZRelease; runs: ZRun[]; storyRuns: Record<string, ZRun[]>; traceSource: "tql" | "issueKey";
+  /** Сохранённый в SimpleTest список НФ-прогонов релиза: сверка по issueKey + добавленные руками. */
+  nfRuns: ZRun[];
+  /** Последний анализ покрытия стори (расчёт у нас, с ручной правкой); null — ещё не анализировали. */
+  coverage?: Coverage | null;
+}
+
+/** Связь стори с прогоном в анализе покрытия: auto — номер стори в названии или issueKey; manual — правка руками. */
+export interface CoverageLink { run: string; auto: boolean; manual?: boolean }
+export interface Coverage { stories: Record<string, CoverageLink[]>; covered: number; total: number; analyzedAt: string }
 
 export const getReleases = (project: string) => fetchJson<ReleaseList>(`/api/zephyr/releases?${q({ project })}`);
 
@@ -212,6 +222,21 @@ export const addRelease = (project: string, key: string) =>
 
 export const removeRelease = (project: string, key: string) =>
   fetchJson<ReleaseList>(`/api/zephyr/releases/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });
+
+const postJson = <T,>(path: string, method: string, body: unknown) =>
+  fetchJson<T>(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** Добавить прогон в список НФ релиза по номеру или убрать из него (сверка убранный не вернёт). */
+export const editNfRuns = (key: string, project: string, edit: { add?: string; remove?: string }) =>
+  postJson<{ runs: string[]; removed: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/nf-runs`, "POST", { project, ...edit });
+
+/** «Проанализировать покрытие»: стори релиза × сохранённые НФ-прогоны — расчёт в SimpleTest. */
+export const analyzeCoverage = (key: string, project: string) =>
+  postJson<Coverage>(`/api/zephyr/release/${encodeURIComponent(key)}/coverage`, "POST", { project });
+
+/** Ручная правка связи стори ↔ прогон; linked=null — вернуть автоматическую. */
+export const setCoverageLink = (key: string, project: string, story: string, run: string, linked: boolean | null) =>
+  postJson<Coverage>(`/api/zephyr/release/${encodeURIComponent(key)}/coverage/manual`, "PUT", { project, story, run, linked });
 
 export const getReleaseBoard = (project: string, key: string) =>
   fetchJson<ReleaseBoard>(`/api/zephyr/release/${encodeURIComponent(key)}/board?${q({ project })}`);

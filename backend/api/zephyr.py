@@ -1052,6 +1052,7 @@ def releases_remove(key: str, project: str = Query(..., min_length=1)) -> dict:
         data = _rel_load()
         p = _rel_project(data, project.strip().upper())
         p["releases"] = [k for k in p["releases"] if k != key]
+        p.get("nf", {}).pop(key, None)    # сохранённые НФ-прогоны и покрытие этого релиза — вместе со строкой
         _rel_save(data)
     return p
 
@@ -1106,8 +1107,161 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
         rel_runs = by_issue.get(rel["key"], [])
         story_runs = {s_["key"]: [clean(r) for r in by_issue.get(s_["key"], [])] for s_ in rel["stories"]}
         source = "issueKey"
+    # Сохранённый список НФ-прогонов релиза: сверка добавляет найденные (кроме убранных руками); прогоны,
+    # которые API не показывает с релизом (релиз — не основная задача), добавляют руками — они остаются.
+    with _releases_lock:
+        data = _rel_load()
+        nf = _rel_nf(_rel_project(data, project), rel["key"])
+        for r in rel_runs:
+            if is_nf_type(r.get("type", "")) and r["key"] not in nf["runs"] and r["key"] not in nf["removed"]:
+                nf["runs"].append(r["key"])
+            if r["key"] in nf["runs"]:
+                nf["runInfo"][r["key"]] = _run_info(r)
+        nf["syncedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _rel_save(data)
+        stored = dict(nf)
+    nf_runs = [_nf_run_view(cfg, project, k, stored) for k in stored["runs"]]
     return {"release": rel, "runs": order(clean(r) for r in rel_runs),
-            "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source}
+            "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source,
+            "nfRuns": order(r for r in nf_runs if r), "coverage": stored.get("coverage")}
+
+
+# ── НФ-прогоны релиза и покрытие стори — у нас, а не в API ───────────────────
+#
+# Полное отслеживание прогона API маркеру не отдаёт (внутренний /rest/tests — 403), поэтому связи считаем сами:
+#   • список НФ-прогонов релиза хранится в data/zephyr_releases.json (сверка по issueKey + ручное добавление);
+#   • «Проанализировать покрытие»: стори релиза × сохранённые прогоны — авто (номер стори в названии прогона или
+#     в его issueKey) плюс ручная правка (manual: стори → прогон → да/нет); результат хранится и показывается в строке.
+
+def is_nf_type(t: str) -> bool:
+    """Вид прогона «Новый функционал» / «НФ…» — как runKind во фронте."""
+    return bool(re.search(r"^нф(?![а-яё])|нов\S*\s+функц", t.strip().lower()))
+
+
+def _rel_nf(p: dict, rel: str) -> dict:
+    nf = p.setdefault("nf", {}).setdefault(rel, {})
+    for k, v in (("runs", []), ("removed", []), ("manual", {}), ("runInfo", {})):
+        nf.setdefault(k, v)
+    return nf
+
+
+def _run_info(r: dict) -> dict:
+    """Что нужно для расчёта покрытия без API: название и задача отслеживания."""
+    return {"name": r.get("name") or "", "issueKey": str(r.get("issueKey") or "").upper(), "type": r.get("type") or ""}
+
+
+def _nf_run_view(cfg: dict, project: str, key: str, nf: dict) -> Optional[dict]:
+    """Прогон из списка релиза — карточкой: из индекса прогонов, иначе из сохранённого снимка."""
+    try:
+        r = (get_index(cfg, project, kind="testrun")["cases"]).get(key)
+    except HTTPException:
+        r = None
+    if r:
+        return {k: v for k, v in r.items() if k != "customFields"}
+    info = nf["runInfo"].get(key) or {}
+    return {"key": key, "name": info.get("name", ""), "status": "", "folder": "", "version": "", "issueKey": info.get("issueKey", ""),
+            "type": info.get("type", ""), "owner": "", "created": "", "plannedStart": "", "plannedEnd": "", "total": 0, "counts": {}}
+
+
+def story_in_run(story: str, info: dict) -> bool:
+    """Авто-связь: номер стори в названии прогона («НФ-SBER911-29231 · …», без хвоста цифр) или в его issueKey."""
+    if info.get("issueKey") == story:
+        return True
+    # Перед номером может стоять дефис («НФ-SBER911-…»), но не буква или цифра; после — не цифра (29231 ≠ 2923).
+    return bool(re.search(rf"(?<![A-Z0-9]){re.escape(story)}(?!\d)", (info.get("name") or "").upper()))
+
+
+def coverage_of(stories: list[str], nf: dict) -> dict:
+    """Стори → прогоны: авто + ручная правка. Только по сохранённому, без запросов в Jira."""
+    out: dict[str, list[dict]] = {}
+    for s_ in stories:
+        rows = []
+        for run in nf["runs"]:
+            auto = story_in_run(s_, nf["runInfo"].get(run) or {})
+            manual = (nf["manual"].get(s_) or {}).get(run)
+            if (manual if manual is not None else auto):
+                rows.append({"run": run, "auto": auto, **({"manual": manual} if manual is not None else {})})
+        out[s_] = rows
+    return {"stories": out, "analyzedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "covered": sum(1 for v in out.values() if v), "total": len(out)}
+
+
+class NfRunsEdit(BaseModel):
+    project: str = Field(..., min_length=1)
+    add: str = ""
+    remove: str = ""
+
+
+@router.post("/api/zephyr/release/{key}/nf-runs")
+def release_nf_runs(key: str, body: NfRunsEdit, db: Session = Depends(get_db)) -> dict:
+    """Добавить прогон в список НФ релиза руками (по номеру) или убрать (сверка его больше не вернёт)."""
+    rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
+    info = None
+    if body.add.strip():
+        run = body.add.strip().upper()
+        if not _RUN_RE.match(run):
+            raise HTTPException(422, "Номер прогона — в формате SBER911-C709")
+        r = _jira_request(_load_cfg(db), "GET", f"{ATM}/testrun/{run}")
+        info = _run_info(norm_run(r))
+    with _releases_lock:
+        data = _rel_load()
+        nf = _rel_nf(_rel_project(data, project), rel)
+        if info is not None:
+            run = body.add.strip().upper()
+            if run not in nf["runs"]:
+                nf["runs"].append(run)
+            nf["removed"] = [x for x in nf["removed"] if x != run]
+            nf["runInfo"][run] = info
+        if body.remove.strip():
+            run = body.remove.strip().upper()
+            nf["runs"] = [x for x in nf["runs"] if x != run]
+            if run not in nf["removed"]:
+                nf["removed"].append(run)
+            nf["runInfo"].pop(run, None)
+        _rel_save(data)
+        return {"runs": list(nf["runs"]), "removed": list(nf["removed"])}
+
+
+class CoverageBody(BaseModel):
+    project: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/release/{key}/coverage")
+def release_coverage(key: str, body: CoverageBody, db: Session = Depends(get_db)) -> dict:
+    """«Проанализировать покрытие»: стори релиза (из Jira) × сохранённые НФ-прогоны — расчёт у нас, результат хранится."""
+    rel = release(_issue_key(key, "Номер релиза"), db=db)
+    stories = [x["key"] for x in rel["stories"] if _STORY_RE.search(x["issuetype"])]
+    with _releases_lock:
+        data = _rel_load()
+        nf = _rel_nf(_rel_project(data, body.project.strip().upper()), rel["key"])
+        nf["stories"] = stories
+        nf["coverage"] = coverage_of(stories, nf)
+        _rel_save(data)
+        return nf["coverage"]
+
+
+class CoverageManual(BaseModel):
+    project: str = Field(..., min_length=1)
+    story: str = Field(..., min_length=1)
+    run: str = Field(..., min_length=1)
+    linked: Optional[bool] = None    # None — вернуть авто
+
+
+@router.put("/api/zephyr/release/{key}/coverage/manual")
+def release_coverage_manual(key: str, body: CoverageManual) -> dict:
+    """Ручная правка связи стори ↔ прогон; покрытие пересчитывается по сохранённому, без Jira."""
+    rel, story, run = _issue_key(key, "Номер релиза"), _issue_key(body.story, "Номер стори"), body.run.strip().upper()
+    with _releases_lock:
+        data = _rel_load()
+        nf = _rel_nf(_rel_project(data, body.project.strip().upper()), rel)
+        m = nf["manual"].setdefault(story, {})
+        if body.linked is None:
+            m.pop(run, None)
+        else:
+            m[run] = body.linked
+        nf["coverage"] = coverage_of(nf.get("stories") or list((nf.get("coverage") or {}).get("stories", {}).keys()), nf)
+        _rel_save(data)
+        return nf["coverage"]
 
 # ── Выравнивание КЭ: все КЭ релиза — на все его стори ────────────────────────
 #

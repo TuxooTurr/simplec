@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, ListChecks, Loader2, Plus, RefreshCw, ShieldCheck, Tags, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { addRelease, getReleaseBoard, getReleases, removeRelease, runKind, type ReleaseBoard, type ZLinked } from "@/lib/zephyrApi";
+import { addRelease, analyzeCoverage, editNfRuns, getReleaseBoard, getReleases, removeRelease, runKind, setCoverageLink, type ReleaseBoard, type ZLinked } from "@/lib/zephyrApi";
 import RunCard, { RunTypeChip } from "./RunCard";
 import CritRegressView from "./CritRegressView";
 import KeAlignModal from "./KeAlignModal";
@@ -18,9 +18,15 @@ type BoardState = { data?: ReleaseBoard; err?: string; busy?: boolean };
 const isStory = (i: ZLinked) => /истори|стори|story/i.test(i.issuetype);
 const storiesOf = (b: ReleaseBoard) => b.release.stories.filter(isStory);
 /** Прогоны релиза, в отслеживании которых есть стори (стори и релиз — в одном прогоне). */
-const storyRunsOf = (b: ReleaseBoard, key: string) => b.storyRuns[key] ?? [];
+/** Прогоны стори: после анализа покрытия — по нему (расчёт SimpleTest с ручной правкой), до — по issueKey прогонов. */
+const storyRunsOf = (b: ReleaseBoard, key: string) => {
+  if (!b.coverage) return b.storyRuns[key] ?? [];
+  const keys = new Set((b.coverage.stories[key] ?? []).map(x => x.run));
+  return b.nfRuns.filter(r => keys.has(r.key));
+};
 const regressRuns = (b: ReleaseBoard) => b.runs.filter(r => runKind(r.type) === "regress");
-const nfRuns = (b: ReleaseBoard) => b.runs.filter(r => runKind(r.type) === "nf");
+/** НФ-прогоны релиза — сохранённый список SimpleTest (сверка по issueKey + добавленные руками). */
+const nfRuns = (b: ReleaseBoard) => b.nfRuns ?? b.runs.filter(r => runKind(r.type) === "nf");
 const storiesWithoutRun = (b: ReleaseBoard) => storiesOf(b).filter(s => !storyRunsOf(b, s.key).length);
 /** НФ релиза: стори есть, и каждая — в отслеживании прогона релиза. */
 const nfDone = (b: ReleaseBoard) => storiesOf(b).length > 0 && storiesWithoutRun(b).length === 0;
@@ -37,20 +43,123 @@ function Marker({ on, part, children, title }: { on: boolean; part?: boolean; ch
   );
 }
 
-/** Окно маркера НФ: прогоны «Новый функционал» релиза — карточки (название, прогресс, дата, «Пройти»). */
-function NfRunsModal({ board, onOpenRun, onChanged, onClose }: {
-  board: ReleaseBoard; onOpenRun: (key: string) => void; onChanged: () => void; onClose: () => void;
+/**
+ * Окно маркера НФ: сохранённый список НФ-прогонов релиза — карточки (прогресс, «Пройти» = Pass в Jira).
+ * API показывает у прогона одну задачу отслеживания, поэтому прогон, где релиз не основная задача, сверка не найдёт —
+ * его добавляют по номеру; лишний — убирают (сверка его больше не вернёт).
+ */
+function NfRunsModal({ board, project, onOpenRun, onChanged, onClose }: {
+  board: ReleaseBoard; project: string; onOpenRun: (key: string) => void; onChanged: () => void; onClose: () => void;
 }) {
   const runs = nfRuns(board);
-  const total = storiesOf(board).length;
-  const covered = total - storiesWithoutRun(board).length;
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const edit = async (e: { add?: string; remove?: string }) => {
+    setBusy(true); setErr("");
+    try { await editNfRuns(board.release.key, project, e); setDraft(""); onChanged(); } catch (x) { setErr((x as Error).message); }
+    setBusy(false);
+  };
   return (
     <Modal open onClose={onClose} title={`Прогоны НФ · ${board.release.key}`} size="max-w-3xl">
       <div className="space-y-3 text-sm">
-        <p className="text-text-muted">Стори в прогонах релиза: <b className="text-text-main">{covered} из {total}</b>.</p>
-        {runs.length === 0 ? <p className="text-text-muted">У релиза нет прогонов «Новый функционал». Поставьте номер релиза в отслеживание прогона в Zephyr и обновите строку.</p> : (
+        <p className="text-text-muted">
+          НФ-прогонов релиза: <b className="text-text-main">{runs.length}</b>. Список хранится в SimpleTest: сверка добавляет прогоны,
+          где релиз — основная задача отслеживания; остальные добавьте по номеру.
+        </p>
+        <div className="flex items-center gap-2">
+          <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === "Enter" && draft.trim() && edit({ add: draft })}
+            placeholder="Номер прогона: SBER911-C710" aria-label="Добавить прогон в НФ релиза" className={`${INPUT} w-56 font-mono`} />
+          <button type="button" onClick={() => edit({ add: draft })} disabled={busy || !draft.trim()}
+            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />} Добавить</button>
+          {err && <span className="text-xs text-red-600 dark:text-red-400">{err}</span>}
+        </div>
+        {runs.length === 0 ? <p className="text-text-muted">Пока нет НФ-прогонов. Добавьте номер прогона выше или поставьте релиз в отслеживание прогона в Zephyr и обновите строку.</p> : (
           <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {runs.map(r => <li key={r.key}><RunCard run={r} onOpen={() => { onClose(); onOpenRun(r.key); }} onPassed={onChanged} /></li>)}
+            {runs.map(r => (
+              <li key={r.key} className="relative group/nf">
+                <RunCard run={r} onOpen={() => { onClose(); onOpenRun(r.key); }} onPassed={onChanged} />
+                <button type="button" onClick={() => edit({ remove: r.key })} disabled={busy} aria-label={`Убрать ${r.key} из НФ релиза`}
+                  title="Убрать из списка НФ релиза (в Zephyr ничего не меняется)"
+                  className="absolute top-1.5 right-1.5 p-1 rounded-md text-text-muted opacity-0 group-hover/nf:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-bg-subtle">
+                  <X className="w-3.5 h-3.5" /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Покрытие стори релиза НФ-прогонами — расчёт SimpleTest: авто (номер стори в названии прогона или его issueKey)
+ * и ручная правка галочками. В Jira ничего не пишется; результат хранится и красит строки стори.
+ */
+function CoverageModal({ board, project, onChanged, onClose }: {
+  board: ReleaseBoard; project: string; onChanged: () => void; onClose: () => void;
+}) {
+  const [cov, setCov] = useState(board.coverage ?? null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const runs = nfRuns(board);
+  const stories = storiesOf(board);
+  const run = async (fn: () => Promise<typeof cov>) => {
+    setBusy(true); setErr("");
+    try { setCov(await fn()); onChanged(); } catch (x) { setErr((x as Error).message); }
+    setBusy(false);
+  };
+  const toggle = (story: string, r: string) => {
+    const link = cov?.stories[story]?.find(x => x.run === r);
+    const auto = link ? link.auto : false;
+    const next = !link;
+    // Совпало с авто — снимаем ручную правку, иначе запоминаем руками.
+    void run(() => setCoverageLink(board.release.key, project, story, r, next === auto ? null : next));
+  };
+  return (
+    <Modal open onClose={onClose} title={`Покрытие стори · ${board.release.key}`} size="max-w-4xl">
+      <div className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => run(() => analyzeCoverage(board.release.key, project))} disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} {cov ? "Пересчитать" : "Проанализировать"}</button>
+          {cov && <span className="text-text-main">Покрыто стори: <b>{cov.covered} из {cov.total}</b> <span className="text-xs text-text-muted">· {cov.analyzedAt}</span></span>}
+          {err && <span className="text-xs text-red-600 dark:text-red-400">{err}</span>}
+        </div>
+        <p className="text-xs text-text-muted">
+          Авто — номер стори в названии прогона или в его основной задаче отслеживания. Галочкой можно поправить связь руками
+          (рамка — правка руками). В Jira ничего не меняется.
+        </p>
+        {!cov ? <p className="text-text-muted">Нажмите «Проанализировать» — стори релиза сопоставятся с его НФ-прогонами ({runs.length}).</p>
+          : runs.length === 0 ? <p className="text-text-muted">У релиза нет НФ-прогонов — добавьте их в окне маркера «НФ».</p> : (
+          <ul className="border border-border-main rounded-xl divide-y divide-border-main max-h-[60vh] overflow-y-auto scrollbar-thin">
+            {stories.map(st => {
+              const links = cov.stories[st.key] ?? [];
+              return (
+                <li key={st.key} className="px-3 py-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Marker on={links.length > 0} title={links.length ? "Стори покрыта" : "Ни одного прогона"}>{links.length ? "есть" : "нет"}</Marker>
+                    <span className="font-mono text-xs text-primary">{st.key}</span>
+                    <span className="min-w-0 flex-1 truncate text-text-main" title={st.summary}>{st.summary}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pl-1">
+                    {runs.map(r => {
+                      const link = links.find(x => x.run === r.key);
+                      return (
+                        <button key={r.key} type="button" disabled={busy} onClick={() => toggle(st.key, r.key)} aria-pressed={!!link}
+                          title={`${r.key} — ${r.name}${link ? (link.manual !== undefined ? " · связь руками" : " · авто") : ""}`}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono border
+                            ${link ? "bg-primary/10 text-primary border-primary/50" : "text-text-muted border-border-main hover:text-text-main"}
+                            ${link?.manual !== undefined ? "ring-1 ring-amber-400" : ""}`}>
+                          {link ? <Check className="w-3 h-3" /> : <CircleDashed className="w-3 h-3" />}{r.key}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
@@ -101,6 +210,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
   const [regressOpen, setRegressOpen] = useState(false);
   const [nfOpen, setNfOpen] = useState(false);
   const [keOpen, setKeOpen] = useState(false);
+  const [covOpen, setCovOpen] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string }[]>([]);
 
@@ -108,6 +218,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
   const nf = b ? nfDone(b) : false;
   const stories = b ? storiesOf(b) : [];
   const withRun = b ? stories.length - storiesWithoutRun(b).length : 0;
+  const nfCount = b ? nfRuns(b).length : 0;
   const covered = regress.length > 0 && nf;
 
   return (
@@ -126,9 +237,11 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
           <>
             <Marker on={regress.length > 0} title={regress.length ? `Прогон регресса: ${regress.map(r => r.key).join(", ")}` : "Прогона регресса с релизом в отслеживании нет"}>Регресс</Marker>
             <button type="button" onClick={() => setNfOpen(true)} aria-label="Прогоны НФ релиза" className="rounded-full hover:ring-2 hover:ring-primary/30">
+              {/* Счётчик — НФ-прогоны релиза (вид «Новый функционал», релиз в отслеживании); цвет — покрыты ли стори. */}
               <Marker on={nf} part={!nf && withRun > 0}
-                title={stories.length ? `Стори в прогонах релиза: ${withRun} из ${stories.length} — нажмите: прогоны НФ релиза` : "К релизу не привязаны стори — нажмите: прогоны НФ релиза"}>
-                НФ{!nf && stories.length > 0 && <span className="font-normal"> {withRun}/{stories.length}</span>}</Marker>
+                title={`НФ-прогонов релиза: ${nfCount} (видны прогоны, где релиз — основная задача отслеживания). `
+                  + (stories.length ? `Стори в прогонах: ${withRun} из ${stories.length}.` : "К релизу не привязаны стори.") + " Нажмите — прогоны НФ релиза"}>
+                НФ <span className="font-normal tabular-nums">{nfCount}</span></Marker>
             </button>
             <button type="button" onClick={() => setRegressOpen(true)}
               className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-white text-xs font-semibold hover:opacity-90 whitespace-nowrap">
@@ -166,11 +279,11 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
 
       {open && b && (
         <div className="border-t border-border-main">
-          {b.traceSource === "issueKey" && (
+          {b.traceSource === "issueKey" && !b.coverage && (
             <p className="flex items-start gap-2 px-4 py-2 text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-              <span>Стенд отдаёт у прогона только основную задачу отслеживания: прогоны релиза — где релиз основной задачей, стори — по своей
-                основной задаче. Чтобы видеть всё отслеживание, пришлите «Проверить API» с номером прогона, где в отслеживании и релиз, и стори.</span>
+              <span>Стенд отдаёт у прогона только одну задачу отслеживания, поэтому стори ниже — по ней. Точнее: «Проанализировать
+                покрытие» — SimpleTest сопоставит стори с НФ-прогонами релиза сам (по номеру стори), связи можно поправить руками.</span>
             </p>
           )}
           {stories.length === 0 ? (
@@ -199,7 +312,12 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
           )}
           <div className="border-t border-border-main"><MissingNfJql board={b} baseUrl={baseUrl} /></div>
           {stories.length > 0 && (
-            <div className="border-t border-border-main px-4 py-2">
+            <div className="border-t border-border-main px-4 py-2 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setCovOpen(true)}
+                title="Сопоставить стори релиза с его НФ-прогонами: авто по номеру стори + правка руками. Считает SimpleTest, в Jira ничего не пишется"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                <ListChecks className="w-4 h-4" /> Проанализировать покрытие
+                {b.coverage && <span className="text-xs text-text-muted">· {b.coverage.covered}/{b.coverage.total}</span>}</button>
               <button type="button" onClick={() => setKeOpen(true)}
                 title={`Выравнивание: всем стори — все КЭ релиза${b.release.ke.length ? ` (${b.release.ke.map(k => k.label).join(", ")})` : ""}. Сначала покажет, что изменится`}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
@@ -221,7 +339,8 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
         </Modal>
       )}
       {keOpen && <KeAlignModal releaseKey={relKey} baseUrl={baseUrl} onClose={() => setKeOpen(false)} />}
-      {nfOpen && b && <NfRunsModal board={b} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
+      {nfOpen && b && <NfRunsModal board={b} project={project} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
+      {covOpen && b && <CoverageModal board={b} project={project} onChanged={onReload} onClose={() => setCovOpen(false)} />}
     </li>
   );
 }

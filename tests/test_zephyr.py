@@ -844,3 +844,59 @@ def test_ошибка_jira_по_одной_стори_не_останавлив�
     res = {r["key"]: r for r in z.release_ke_apply("SBER911-100", z.KeApplyBody(), db=None)["results"]}
     assert not res["SBER911-1"]["ok"] and "неверное значение" in res["SBER911-1"]["error"]
     assert res["SBER911-2"]["ok"]
+
+
+# ── НФ-прогоны релиза и покрытие стори — расчёт у нас ────────────────────────
+
+def _nf_search(jira):
+    """Прогоны: C1 — регресс релиза, C2 — НФ релиза (стори 11 в названии), C3 — НФ без релиза (видна стори)."""
+    def search(p):
+        if "issueKeys" in p["query"]:
+            raise HTTPException(400, "Jira: unknown field issueKeys")
+        if p["startAt"]:
+            return []
+        c2 = {**_run("SBER911-C2", "SBER911-100", "Новый функционал"), "name": "НФ-SBER911-11 · Стори А"}
+        return [_run("SBER911-C1", "SBER911-100"), c2, _run("SBER911-C3", "SBER911-12", "Новый функционал")]
+    jira["routes"]["/rest/atm/1.0/testrun/search"] = search
+
+
+def test_нф_прогоны_релиза_сохраняются_и_дополняются_руками(jira):
+    _release_route(jira); _nf_search(jira)
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert [r["key"] for r in b["nfRuns"]] == ["SBER911-C2"]            # регресс и чужой НФ — не в списке
+    # C3 API с релизом не показывает (видна стори) — добавляем руками; C2 убираем — сверка его не вернёт
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", add="sber911-c3"), db=None)
+    z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", remove="SBER911-C2"), db=None)
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert [r["key"] for r in b["nfRuns"]] == ["SBER911-C3"]
+    with pytest.raises(HTTPException):
+        z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", add="не прогон"), db=None)
+
+
+def test_покрытие_стори_авто_по_названию_и_issuekey_и_ручная_правка(jira):
+    _release_route(jira); _nf_search(jira)
+    z.release_board("SBER911-100", project="SBER911", db=None)
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", add="SBER911-C3"), db=None)
+    cov = z.release_coverage("SBER911-100", z.CoverageBody(project="SBER911"), db=None)
+    assert cov["stories"]["SBER911-11"] == [{"run": "SBER911-C2", "auto": True}]     # номер в названии
+    assert cov["stories"]["SBER911-12"] == [{"run": "SBER911-C3", "auto": True}]     # issueKey
+    assert (cov["covered"], cov["total"]) == (2, 2)
+    # ручная правка: стори 11 есть и в общем C3; у стори 12 C3 снимаем — Jira не трогаем
+    z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-11", run="SBER911-C3", linked=True))
+    cov = z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-12", run="SBER911-C3", linked=False))
+    assert [x["run"] for x in cov["stories"]["SBER911-11"]] == ["SBER911-C2", "SBER911-C3"]
+    assert cov["stories"]["SBER911-11"][1] == {"run": "SBER911-C3", "auto": False, "manual": True}
+    assert cov["stories"]["SBER911-12"] == [] and cov["covered"] == 1
+    cov = z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-12", run="SBER911-C3", linked=None))
+    assert cov["stories"]["SBER911-12"] == [{"run": "SBER911-C3", "auto": True}]     # вернули авто
+    assert z.release_board("SBER911-100", project="SBER911", db=None)["coverage"]["covered"] == 2
+
+
+def test_номер_стори_в_названии_не_путается_с_длинным():
+    info = {"name": "НФ-SBER911-29231 · тема", "issueKey": ""}
+    assert z.story_in_run("SBER911-29231", info)
+    assert not z.story_in_run("SBER911-2923", info)
+    assert not z.story_in_run("SBER911-9231", info)
+    assert z.is_nf_type("Новый функционал") and z.is_nf_type("НФ") and not z.is_nf_type("Регресс")

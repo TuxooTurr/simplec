@@ -11,5 +11,6 @@ export const getPeople = () => fetchJson<{ people: Participant[]; updatedAt: str
 export const savePeople = (people: Participant[]) =>
   fetchJson<{ people: Participant[]; updatedAt: string }>("/api/people", {
     method: "PUT", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ people: people.map(p => ({ ...p, directions: p.directions ?? [] })) }),
+    // Направления не заданы — старая запись участника: это тестировщик (как в inDirection).
+    body: JSON.stringify({ people: people.map(p => ({ ...p, directions: p.directions ?? ["testing"] })) }),
   });

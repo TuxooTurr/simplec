@@ -1255,22 +1255,24 @@ export interface ExportFile {
   stageStyles: StageStyles;
 }
 
+/**
+ * Списки → файл. Справочник людей общий на все списки, поэтому уходит целиком (с направлениями) вместе с резервами
+ * нагрузки — у получателя нагрузка посчитается так же. listIds пустой — файл только со справочником людей.
+ */
 export function exportLists(s: ToolState, listIds: string[]): ExportFile {
   const lists = s.lists.filter(l => listIds.includes(l.id));
   const keys = new Set(lists.flatMap(l => l.keys));
-  const usedParticipants = new Set(lists.flatMap(l => Object.values(l.assignees)));
   return {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
     exportedAt: new Date().toISOString(),
     lists,
-    participants: s.participants.filter(p => usedParticipants.has(p.id)),
+    participants: s.participants,
     roleNames: s.roleNames,
     reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
     reqUrls: Object.fromEntries(Object.entries(s.reqUrls).filter(([k]) => keys.has(k))),
     stageManual: Object.fromEntries(Object.entries(s.stageManual).filter(([k]) => keys.has(k))),
-    // Резервы — только общие и тех участников, что уходят в файл.
-    loadReserves: s.loadSettings.reserves.filter(r => !r.participants.length || r.participants.some(id => usedParticipants.has(id))),
+    loadReserves: s.loadSettings.reserves,
     drafts: s.created.filter(i => keys.has(i.key)),
     customStages: s.customStages,
     stageStyles: s.stageStyles,
@@ -1303,19 +1305,28 @@ export function parseExportFile(text: string): ExportFile {
 
 /**
  * Импорт: списки добавляются новыми (свой id; одноимённый — с пометкой «(импорт)»), чужое ничего не затирает.
- * Участник с тем же ФИО — тот же человек (не дублируем), иначе добавляется. Фамилии направлений и свои статусы —
- * объединяются; привязки требований и черновики — только те, которых у получателя ещё нет.
+ * Человек с тем же ФИО — тот же человек: не дублируем, его направления дополняются направлениями из файла; новый —
+ * добавляется в справочник. Ссылки на людей в списках (тестировщик, поля направлений) переводятся на людей
+ * получателя. Фамилии направлений и свои статусы — объединяются; привязки требований и черновики — только те,
+ * которых у получателя ещё нет.
  */
-export function importLists(s: ToolState, f: ExportFile): { state: ToolState; names: string[] } {
+export function importLists(s: ToolState, f: ExportFile): { state: ToolState; names: string[]; peopleAdded: number } {
   const participants = [...s.participants];
   const pidMap: Record<string, string> = {};
+  let peopleAdded = 0;
   for (const p of f.participants) {
-    const same = participants.find(x => x.name.trim().toLowerCase() === p.name.trim().toLowerCase());
-    if (same) pidMap[p.id] = same.id;
-    else {
+    const dirs = p.directions ?? [TESTING];          // старый файл: участник без направлений — тестировщик
+    const at = participants.findIndex(x => sameName(x.name, p.name));
+    if (at >= 0) {
+      const same = participants[at];
+      pidMap[p.id] = same.id;
+      const merged = Array.from(new Set([...(same.directions ?? [TESTING]), ...dirs]));
+      if (merged.length !== (same.directions ?? [TESTING]).length) participants[at] = { ...same, directions: merged };
+    } else {
       const id = participants.some(x => x.id === p.id) ? newId("ptc") : p.id;
-      participants.push({ ...p, id, role: normRole(p.role ?? "") });
+      participants.push({ ...p, id, role: normRole(p.role ?? ""), directions: dirs });
       pidMap[p.id] = id;
+      peopleAdded++;
     }
   }
   // Черновик с таким же ключом у получателя уже есть (своя нумерация) — даём импортированному новый номер.
@@ -1343,12 +1354,16 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
     taken.add(name); names.push(name);
     const assignees = Object.fromEntries(Object.entries(l.assignees ?? {})
       .map(([k, pid]) => [k, pidMap[pid] ?? ""]).filter(([, pid]) => pid));
-    return migrateList({ ...l, id: newId("lst"), name, assignees, values: l.values ?? {}, ownFields: l.ownFields ?? [], groupBy: l.groupBy ?? [] });
+    // Люди в полях направлений — на людей получателя; не нашёлся — остаётся имя (найдётся по нему).
+    const roles = l.roles && Object.fromEntries(Object.entries(l.roles).map(([k, byDir]) => [k, Object.fromEntries(
+      Object.entries(byDir).map(([dir, v]) => [dir, v.pid ? { ...v, pid: pidMap[v.pid] } : v]))]));
+    return migrateList({ ...l, id: newId("lst"), name, assignees, roles, values: l.values ?? {}, ownFields: l.ownFields ?? [], groupBy: l.groupBy ?? [] });
   });
   const roleNames = { ...s.roleNames };
   for (const [fid, ns] of Object.entries(f.roleNames)) roleNames[fid] = Array.from(new Set([...(roleNames[fid] ?? []), ...ns]));
   return {
     names,
+    peopleAdded,
     state: {
       ...s,
       lists: [...s.lists, ...lists],

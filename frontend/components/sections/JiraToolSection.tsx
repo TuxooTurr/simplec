@@ -460,11 +460,11 @@ export default function JiraToolSection() {
     openList(l.id); setNewList(null); setNewTpl("");
   };
 
-  /** Списки → файл .json: скачивается браузером, его можно переслать коллеге. */
+  /** Списки и весь справочник людей → файл .json: скачивается браузером, его можно переслать коллеге. ids пустой — только люди. */
   const exportToFile = (ids: string[]) => {
-    if (!state || !ids.length) return;
+    if (!state || (!ids.length && !state.participants.length)) return;
     const data = exportLists(state, ids);
-    const one = ids.length === 1 ? state.lists.find(l => l.id === ids[0])?.name ?? "список" : "списки";
+    const one = !ids.length ? "справочник людей" : ids.length === 1 ? state.lists.find(l => l.id === ids[0])?.name ?? "список" : "списки";
     const safe = one.replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 60) || "список";
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -473,7 +473,9 @@ export default function JiraToolSection() {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     setExportMenu(false);
-    setIoNote({ ok: true, text: ids.length === 1 ? `Список «${one}» сохранён в файл` : `Списков в файле: ${ids.length}` });
+    const people = `людей в справочнике: ${state.participants.length}`;
+    setIoNote({ ok: true, text: !ids.length ? `Справочник сохранён в файл — ${people}`
+      : ids.length === 1 ? `Список «${one}» сохранён в файл, ${people}` : `Списков в файле: ${ids.length}, ${people}` });
   };
 
   /** Файл → списки добавляются новыми; ничего у получателя не затирается. */
@@ -485,8 +487,11 @@ export default function JiraToolSection() {
       // Считаем один раз (у импортированных списков новые id) и подставляем готовое состояние.
       const r = importLists(cur, f);
       update(() => r.state);
-      openList(r.state.lists[r.state.lists.length - f.lists.length].id);
-      setIoNote({ ok: true, text: `Добавлено списков: ${f.lists.length} — ${f.lists.map(l => `«${l.name}»`).join(", ")}` });
+      if (f.lists.length) openList(r.state.lists[r.state.lists.length - f.lists.length].id);
+      const people = r.peopleAdded ? `новых людей в справочнике: ${r.peopleAdded}` : "новых людей нет — все уже в справочнике";
+      setIoNote({ ok: true, text: f.lists.length
+        ? `Добавлено списков: ${f.lists.length} — ${f.lists.map(l => `«${l.name}»`).join(", ")}; ${people}`
+        : `Справочник из файла: ${people}` });
     } catch (e) {
       setIoNote({ ok: false, text: e instanceof ImportError ? e.message : `Файл не прочитался: ${(e as Error).message}` });
     }
@@ -877,13 +882,14 @@ export default function JiraToolSection() {
                   <input ref={importInput} type="file" accept=".json,application/json" className="hidden" aria-hidden tabIndex={-1}
                     onChange={e => { const f = e.target.files?.[0]; if (f) void importFromFile(f); e.target.value = ""; }} />
                   <button type="button" onClick={() => importInput.current?.click()} aria-label="Импорт списков из файла"
-                    title="Импорт: загрузить списки из файла .json (добавятся новыми, ваши не затрутся)"
+                    title="Импорт: списки и люди из файла .json (списки добавятся новыми, люди — в справочник; ваше не затрётся)"
                     className="p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Upload className="w-4 h-4" /></button>
                   <button type="button" onClick={() => setExportMenu(m => !m)} aria-label="Экспорт списков в файл" aria-expanded={exportMenu}
-                    disabled={!state.lists.length} title="Экспорт: сохранить список в файл .json, чтобы переслать или не потерять"
+                    disabled={!state.lists.length && !state.participants.length}
+                    title="Экспорт: списки и справочник людей в файл .json, чтобы переслать или не потерять"
                     className="p-1.5 mr-0.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle disabled:opacity-40"><Download className="w-4 h-4" /></button>
                   {exportMenu && (
-                    <div className="absolute z-30 right-0 top-full mt-1 w-56 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
+                    <div className="absolute z-30 right-0 top-full mt-1 w-64 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
                       <button type="button" onClick={() => list && exportToFile([list.id])} disabled={!list}
                         className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40 truncate">
                         Текущий список{list ? ` «${list.name}»` : ""}
@@ -892,6 +898,12 @@ export default function JiraToolSection() {
                         className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle">
                         Все списки ({state.lists.length})
                       </button>
+                      <button type="button" onClick={() => exportToFile([])} disabled={!state.participants.length}
+                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                        Только справочник людей ({state.participants.length})
+                      </button>
+                      <p className="px-2.5 pt-1 pb-0.5 text-[10px] text-text-muted border-t border-border-main mt-1">
+                        Справочник людей и резервы нагрузки уходят в файл всегда — он общий на все списки.</p>
                     </div>
                   )}
                 </div>

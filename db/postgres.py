@@ -2,8 +2,12 @@
 Соединение с БД для SimpleTest.
 
 DATABASE_URL задаётся через .env:
-  PostgreSQL:  postgresql://user:pass@localhost:5432/metrics
+  PostgreSQL:  postgresql+psycopg2://user:pass@localhost:5432/metrics
   SQLite:      sqlite:///./simpletest.db   (без Docker, для локального запуска)
+
+Драйвер PostgreSQL указывается явно (psycopg2 из requirements.txt): в SQLAlchemy 2.1
+голый «postgresql://» по умолчанию ведёт на psycopg v3, которого в зависимостях нет.
+Старые URL вида «postgresql://...» нормализуются ниже, чтобы существующие .env не ломались.
 """
 
 import os
@@ -12,8 +16,10 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://simpletest:simpletest@localhost:5432/metrics",
+    "postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics",
 )
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
 
 _is_sqlite = DATABASE_URL.startswith("sqlite")
 

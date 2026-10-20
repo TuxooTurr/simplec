@@ -161,7 +161,7 @@ npm run start --prefix frontend          # порт 3000
 ```bash
 docker compose up -d                       # postgres:16 на :5432 (db=metrics, user/pass=simpletest)
 # в .env переключить БД на PostgreSQL:
-#   DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
+#   DATABASE_URL=postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics
 bash start.sh
 ```
 
@@ -202,7 +202,7 @@ CMD ["node","server.js"]
 
 `.env` в корне (не коммитится, шаблон — `.env.example`). Ключевое:
 - **`GIGACHAT_AUTH_KEY`** — Base64 `client_id:client_secret` из developers.sber.ru. `GIGACHAT_SCOPE=GIGACHAT_API_PERS` (или `_CORP`). Прочие LLM (DeepSeek/OpenAI/Ollama/Groq/custom) — через env или UI → Настройки → Дополнительные LLM.
-- **`DATABASE_URL`** — по умолчанию `sqlite:///./simpletest.db`; для PostgreSQL — строка `postgresql://...`.
+- **`DATABASE_URL`** — по умолчанию `sqlite:///./simpletest.db`; для PostgreSQL — `postgresql+psycopg2://...` (голый `postgresql://` тоже работает: `db/postgres.py` сам подставляет драйвер psycopg2).
 - **Kafka** (`KAFKA_BOOTSTRAP_SERVERS`, протокол, SASL) — для алертов/метрик.
 - **Корп-сеть с TLS-инспекцией (Sber BIG IP):** быстро — `SSL_NO_VERIFY=1` или `SSL_MAX_TLS12=1` в `.env`; правильно — `bash certs/build_bundle.sh` и указать `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`.
 
@@ -428,6 +428,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 - **Язык:** весь UI, комментарии и коммиты — на русском.
 - **Порты:** заняты? → `lsof -ti :8000 | xargs kill -9` (8000), то же для 3000.
 - **ChromaDB** падает на Python 3.14 → используй 3.10–3.12.
+- **PostgreSQL-драйвер:** в `DATABASE_URL` — `postgresql+psycopg2://`. В SQLAlchemy 2.1 голый `postgresql://` ведёт на psycopg v3 (его нет в requirements) → `ModuleNotFoundError: psycopg`. `db/postgres.py` переписывает голый `postgresql://` на `+psycopg2` сам.
 - **localStorage-ключи фронта:** `st_auth_token` (Bearer-токен), `st_theme` (`light`/`dark`), `st_nav_order` + `st_nav_hidden` (порядок и скрытые разделы сайдбара), `st_alert_script_order` (порядок скриптов в Алертах), `st_automodel_history`, `st_autotest_project`, `st_projects`, `st_teams`, `st_ke`, `st_gen_history`.
 - **Тема:** класс `.dark` на `<html>`, проставляется инлайн-скриптом в `app/layout.tsx` ДО первой отрисовки (без мерцания). Цвета — CSS-переменные в `app/globals.css`. Семантические статус-цвета — классы `tone-success/warning/danger/info/neutral` (адаптируются к теме). В `globals.css` есть «слой совместимости тёмной темы»: оверрайды голых светлых утилит (`bg-*-50`, `border-*-200`, `text-*-700` …) внутри `@layer components`, чтобы они корректно темнели, но уступали явным `dark:`-вариантам.
 - **Добавить LLM-провайдера:** `agents/llm_client.py` (init/chat) + UI в `SettingsSection.tsx`.
@@ -499,6 +500,14 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
+
+### 2026-10-22 — Явный драйвер psycopg2 для PostgreSQL (SQLAlchemy 2.1)
+- **Проблема:** `requirements.txt` ставит `sqlalchemy>=2.0.0` → на чистой установке приезжает 2.1.x,
+  где `postgresql://` по умолчанию = драйвер psycopg v3. В зависимостях только `psycopg2-binary`,
+  поэтому `import db.postgres` без `DATABASE_URL` (дефолт — PostgreSQL) падал с `No module named 'psycopg'`.
+- **Фикс:** `db/postgres.py` — дефолт `postgresql+psycopg2://...` + нормализация голого `postgresql://`
+  (старые `.env` на серверах продолжают работать без правок). Примеры в `.env.example`, README.md, ForChat.md
+  переведены на `postgresql+psycopg2://`.
 
 ### 2026-10-21 — График стендов: черновик брони и диапазон дней; Jira tool: «Создать дефект» из окна дефектов
 - **Бронь на диапазон:** у брони необязательное поле `dateTo`, бронь хранится одной записью.

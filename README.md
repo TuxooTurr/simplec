@@ -126,7 +126,7 @@ SimpleTest/
 |------|-----------|
 | Frontend | Next.js 16, React 19, TypeScript 5, TailwindCSS 3 |
 | Backend | FastAPI 0.128, Uvicorn 0.40, Python 3.12 |
-| База данных | PostgreSQL 16, SQLAlchemy 2.0 |
+| База данных | PostgreSQL 16 (драйвер psycopg2) или SQLite, SQLAlchemy 2.x |
 | Vector DB | ChromaDB 1.4 (RAG для эталонов) |
 | Доступ | Bearer-токен; 2 пользователя захардкожены в `backend/api/auth.py` (`Sber911`, `SberMonitoring`) |
 | Real-time | WebSockets (стриминг генерации) |
@@ -179,7 +179,7 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Раскомментировать PostgreSQL-строку в .env:
-#   DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
+#   DATABASE_URL=postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics
 
 docker compose up -d             # Поднять PostgreSQL
 
@@ -220,7 +220,7 @@ DEEPSEEK_MODEL=deepseek-chat
 # Дополнительные LLM настраиваются в UI: Settings → Дополнительные LLM
 
 # База данных
-DATABASE_URL=postgresql://simpletest:simpletest@localhost:5432/metrics
+DATABASE_URL=postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics
 
 # Kafka (алерты)
 KAFKA_BOOTSTRAP_SERVERS=

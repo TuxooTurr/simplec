@@ -6,6 +6,7 @@ import GenerationSection from "./sections/GenerationSection";
 import EtalonsSection from "./sections/EtalonsSection";
 import JiraToolSection from "./sections/JiraToolSection";
 import ZephyrSection from "./sections/ZephyrSection";
+import StandScheduleSection from "./sections/StandScheduleSection";
 import MetricsSection from "./sections/MetricsSection";
 import EventGeneratorsSection from "./sections/EventGeneratorsSection";
 import TestDataSection from "./sections/TestDataSection";
@@ -53,6 +54,7 @@ export default function SectionRenderer() {
     etalons:    <EtalonsSection />,
     bugs:       <JiraToolSection />,
     zephyr:     <ZephyrSection />,
+    stands:     <StandScheduleSection />,
     logs:       WEB_CONNECTORS_ENABLED ? <LogAnalyzerSection /> : <FeatureDisabled title="Логи временно отключены"
       text="Анализатор логов работает через веб-коннекторы, а они пока выключены. Код сохранён — раздел вернётся вместе с коннекторами." />,
     kafka:      <KafkaSection />,

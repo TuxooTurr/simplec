@@ -8,6 +8,7 @@ export type SectionId =
   | "test_data"
   | "bugs"
   | "zephyr"
+  | "stands"
   | "logs"
   | "alerts"
   | "kafka"

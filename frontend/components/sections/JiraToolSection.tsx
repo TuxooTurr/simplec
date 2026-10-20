@@ -868,6 +868,7 @@ export default function JiraToolSection() {
                   setAskDeleteList(null);
                 }}
                 onDropIssues={moveToList}
+                onRename={(id, name) => update(s => ({ ...s, lists: s.lists.map(x => (x.id === id ? { ...x, name } : x)) }))}
                 onMove={(id, target, place) => update(s => {
                   const byId = new Map(s.lists.map(x => [x.id, x]));
                   const ids = moveItem(s.lists.map(x => x.id), id, target, place);

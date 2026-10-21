@@ -6,13 +6,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
   LogOut, User, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays, DatabaseBackup,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
 import { ThemeToggle } from "./ui";
 import WhatsNewModal from "./WhatsNewModal";
+import BackupModal from "./BackupModal";
+import { sectionOfPath } from "@/lib/backupApi";
 import { LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -81,6 +83,7 @@ export default function Sidebar() {
   const [overId, setOverId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [backupOpen, setBackupOpen] = useState(false);   // резервная копия — из любого раздела
   const [releaseUnseen, setReleaseUnseen] = useState(false);
 
   useEffect(() => {
@@ -297,6 +300,13 @@ export default function Sidebar() {
           </button>
           <ThemeToggle />
           {isSuperuser && (
+            <button type="button" onClick={() => setBackupOpen(true)} title="Резервная копия: выгрузить или восстановить данные"
+              aria-label="Резервная копия данных"
+              className="p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors">
+              <DatabaseBackup className="w-4 h-4" />
+            </button>
+          )}
+          {isSuperuser && (
             <Link
               href="/settings"
               title="Настройки"
@@ -308,6 +318,7 @@ export default function Sidebar() {
         </div>
       </div>
 
+      <BackupModal open={backupOpen} onClose={() => setBackupOpen(false)} section={sectionOfPath(pathname ?? "")} />
       <WhatsNewModal
         open={whatsNewOpen}
         onClose={() => {

@@ -23,6 +23,8 @@ import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
+import BackupModal from "@/components/BackupModal";
+import { isBackup } from "@/lib/backupApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
 import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
@@ -99,6 +101,8 @@ export default function JiraToolSection() {
   /* ── Экспорт и импорт списков файлом ── */
   const [exportMenu, setExportMenu] = useState(false);
   const [ioNote, setIoNote] = useState<{ ok: boolean; text: string } | null>(null);
+  /** Резервная копия всего SimpleTest: окно открыто; файл, который импорт узнал как резервную копию. */
+  const [backup, setBackup] = useState<{ file: File | null } | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
 
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
@@ -482,7 +486,9 @@ export default function JiraToolSection() {
   /** Файл → списки добавляются новыми; ничего у получателя не затирается. */
   const importFromFile = async (file: File) => {
     try {
-      const f = parseExportFile(await file.text());
+      const text = await file.text();
+      try { if (isBackup(JSON.parse(text))) { setBackup({ file }); return; } } catch { /* не JSON — скажет parseExportFile */ }
+      const f = parseExportFile(text);
       const cur = stateRef.current;
       if (!cur) return;
       // Считаем один раз (у импортированных списков новые id) и подставляем готовое состояние.
@@ -897,6 +903,10 @@ export default function JiraToolSection() {
                       </button>
                       <p className="px-2.5 pt-1 pb-0.5 text-[10px] text-text-muted border-t border-border-main mt-1">
                         Справочник людей и резервы нагрузки уходят в файл всегда — он общий на все списки.</p>
+                      <button type="button" onClick={() => { setExportMenu(false); setBackup({ file: null }); }}
+                        className="w-full text-left px-2.5 py-1.5 mt-1 rounded text-sm text-text-main hover:bg-bg-subtle border-t border-border-main">
+                        Резервная копия: весь Jira tool или все разделы…
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1472,6 +1482,7 @@ export default function JiraToolSection() {
       {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
       )}
+      {backup && <BackupModal open section="bugs" file={backup.file} onClose={() => setBackup(null)} />}
       {modal === "participants" && (
         <ParticipantsModal open participants={state.participants} usage={usage} onClose={() => setModal(null)}
           onChange={participants => update(s => {

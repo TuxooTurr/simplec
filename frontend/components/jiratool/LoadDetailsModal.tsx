@@ -47,7 +47,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
           <input type="date" value={range.to} min={range.from} onChange={e => e.target.value && onRange({ ...range, to: e.target.value })}
             aria-label="Нагрузка: по дату" className={dateCls} />
           <span className="text-xs text-text-muted">
-            {weekend ? `дней ${days}, из них выходных ${weekend}` : `рабочих дней ${days}`} · в день {fmtMinutes(settings.dayMinutes)}
+            {weekend ? `дней ${days}, из них выходных ${weekend}` : `рабочих дней ${days}`} · в день {fmtMinutes(settings.dayMinutes, "hm")}
           </span>
           <button type="button" onClick={onSettings} title="Норма дня и резервы" aria-label="Норма дня и резервы"
             className="ml-auto p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-4 h-4" /></button>
@@ -101,7 +101,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
                       const left = Math.max(0, settings.dayMinutes - own.reduce((n, r) => n + r.minutes, 0));
                       return own.length > 0 && (
                         <p className="text-[11px] text-text-muted" title="Резервы — шестерёнкой: всем, по направлениям или людям">
-                          в день {fmtMinutes(settings.dayMinutes)} − {own.map(r => `${r.name} ${fmtMinutes(r.minutes)}`).join(" − ")} = <b className="font-medium text-text-main">{fmtMinutes(left)}</b> на задачи
+                          в день {fmtMinutes(settings.dayMinutes, "hm")} − {own.map(r => `${r.name} ${fmtMinutes(r.minutes, "hm")}`).join(" − ")} = <b className="font-medium text-text-main">{fmtMinutes(left)}</b> на задачи
                         </p>
                       );
                     })()}

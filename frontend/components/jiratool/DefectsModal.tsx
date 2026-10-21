@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareShare } from "lucide-react";
+import { Bug, Check, MessageSquareShare } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } from "@/lib/jiraTool";
 import { STAGES, type StageInfo } from "@/lib/jiraStages";
@@ -22,12 +22,15 @@ function stageRank(info: StageInfo): number {
  * их отдельной группой ниже; сортировка по колонке работает внутри каждой группы.
  * «Статус (st)» — у каждого дефекта свой, по его статусу Jira (блокировка задачи на дефекты не переносится).
  * «Скопировать в чат» — показанные дефекты: номер, название, приоритет, статус (st).
+ * «Создать дефект» — форма дефекта: у эпика эпик подставлен, у стори дефект после создания связывается с ней.
  */
-export default function DefectsModal({ open, issue, defects, stageOf, onClose }: {
+export default function DefectsModal({ open, issue, defects, stageOf, onCreate, onClose }: {
   open: boolean;
   issue: Issue;
   defects: Issue[];
   stageOf: (i: Issue) => StageInfo;
+  /** Создать дефект к этой задаче; нет — кнопки нет (задача — черновик, её нет в Jira). */
+  onCreate?: () => void;
   onClose: () => void;
 }) {
   const [showFixed, setShowFixed] = useState(false);
@@ -59,6 +62,12 @@ export default function DefectsModal({ open, issue, defects, stageOf, onClose }:
           </label>
           <span className="ml-auto flex items-center gap-2">
             {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
+            {onCreate && (
+              <button type="button" onClick={onCreate}
+                title={categoryOf(issue) === "epic" ? "Новый дефект с эпиком " + issue.key : "Новый дефект, связанный с " + issue.key}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold">
+                <Bug className="w-4 h-4" /> Создать дефект</button>
+            )}
             <button type="button" onClick={copy} disabled={!shown.length}
               title="Номер, название, приоритет и статус (st) показанных дефектов — для чата"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">

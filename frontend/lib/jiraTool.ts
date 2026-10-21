@@ -348,29 +348,57 @@ export function listLoad(list: TaskList, participants: Participant[], range: { f
 /** Трудозатраты задачи в списке: план в минутах, начало и конец теста — «ГГГГ-ММ-ДДTчч:мм». */
 export interface Spend { plan?: number; start?: string; end?: string }
 
-/** 100 → «1 ч 40 мин», 40 → «40 мин», 120 → «2 ч». */
-export function fmtMinutes(min: number): string {
-  const m = Math.round(Math.abs(min));
+/**
+ * Как показывать трудозатраты: «ч · мин» (100 → «1 ч 40 мин») или «д · ч · мин» (по норме рабочего дня из настроек
+ * нагрузки: при 7 ч в дне 600 мин → «1 д 3 ч»). Переключатель — в Jira tool, выбор запоминается в браузере.
+ */
+export type TimeFmt = "hm" | "dhm";
+const TIME_FMT_KEY = "st_time_fmt";
+let timeFmt: TimeFmt = "hm";
+let timeDay = LOAD_DAY_MINUTES;
+try { if (localStorage.getItem(TIME_FMT_KEY) === "dhm") timeFmt = "dhm"; } catch { /* сервер или нет хранилища — ч · мин */ }
+
+export const getTimeFmt = (): TimeFmt => timeFmt;
+export function setTimeFmt(f: TimeFmt): void {
+  timeFmt = f;
+  try { localStorage.setItem(TIME_FMT_KEY, f); } catch { /* не запомнится */ }
+}
+/** Сколько минут в «дне» для «д · ч · мин» — норма дня из настроек нагрузки. */
+export function setTimeDay(min: number): void { if (min > 0) timeDay = min; }
+export const getTimeDay = (): number => timeDay;
+
+/** Минуты → текст в выбранном формате; fmt "hm" — всегда часы и минуты (нормы и резервы «в день»). */
+export function fmtMinutes(min: number, fmt: TimeFmt = timeFmt, day: number = timeDay): string {
+  let m = Math.round(Math.abs(min));
+  const parts: string[] = [];
+  if (fmt === "dhm" && day > 0 && m >= day) {
+    parts.push(`${Math.floor(m / day)} д`);
+    m %= day;
+  }
   const h = Math.floor(m / 60), r = m % 60;
-  const text = h ? (r ? `${h} ч ${r} мин` : `${h} ч`) : `${r} мин`;
+  if (h) parts.push(`${h} ч`);
+  if (r || !parts.length) parts.push(`${r} мин`);
+  const text = parts.join(" ");
   return min < 0 ? `−${text}` : text;
 }
 
 /**
- * Ввод времени → минуты. Часы: «1.5», «1,5», «1:40», «1 ч 40 мин»; минуты: «100».
- * null — не разобрать.
+ * Ввод времени → минуты. Часы: «1.5», «1,5», «1:40», «1 ч 40 мин»; минуты: «100»; дни: «1 д 2 ч 30 мин»,
+ * а в единице «д» — «1.5» (дни считаются по норме дня). null — не разобрать.
  */
-export function parseDuration(text: string, unit: "h" | "m"): number | null {
+export function parseDuration(text: string, unit: "h" | "m" | "d", day: number = timeDay): number | null {
   const t = text.trim().toLowerCase().replace(",", ".");
   if (!t) return null;
   const hm = /^(\d+):(\d{1,2})$/.exec(t);
   if (hm) return Number(hm[1]) * 60 + Number(hm[2]);
-  // \w в JS не ловит кириллицу — поэтому явный набор букв («ч», «час», «мин», «h», «m»).
-  const words = /^(?:(\d+(?:\.\d+)?)\s*(?:ч[а-яё]*|h\w*))?\s*(?:(\d+)\s*(?:м[а-яё]*|m\w*))?$/.exec(t);
-  if (words && (words[1] || words[2])) return Math.round(Number(words[1] ?? 0) * 60 + Number(words[2] ?? 0));
+  // \w в JS не ловит кириллицу — поэтому явный набор букв («д», «дн», «ч», «час», «мин», «d», «h», «m»).
+  const words = /^(?:(\d+(?:\.\d+)?)\s*(?:д[а-яё]*|d\w*))?\s*(?:(\d+(?:\.\d+)?)\s*(?:ч[а-яё]*|h\w*))?\s*(?:(\d+)\s*(?:м[а-яё]*|m\w*))?$/.exec(t);
+  if (words && (words[1] || words[2] || words[3])) {
+    return Math.round(Number(words[1] ?? 0) * day + Number(words[2] ?? 0) * 60 + Number(words[3] ?? 0));
+  }
   const n = Number(t);
   if (!Number.isFinite(n) || n < 0) return null;
-  return Math.round(unit === "h" ? n * 60 : n);
+  return Math.round(unit === "d" ? n * day : unit === "h" ? n * 60 : n);
 }
 
 /**

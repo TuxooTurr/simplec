@@ -50,10 +50,12 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
  * Дальше выбор: «Создать в SimpleTest» (черновик в списке) или сразу «Создать в Jira».
  * С initial — это уже черновик из списка: его можно поправить и сохранить или отправить в Jira.
  */
-export default function IssueFormModal({ open, project, participants, listName, initial, prefill, jiraOnly, files: initialFiles, onSave, onClose }: {
+export default function IssueFormModal({ open, project, participants, listName, initial, prefill, linkTo, jiraOnly, files: initialFiles, onSave, onClose }: {
   open: boolean;
-  /** Новая задача с заранее заполненными полями (например, дефект из упавшего шага в Zephyr Tool). */
-  prefill?: Partial<Pick<IssueDraft, "type" | "summary" | "description" | "priority" | "labels">>;
+  /** Новая задача с заранее заполненными полями (например, дефект из упавшего шага в Zephyr Tool или к эпику). */
+  prefill?: Partial<Pick<IssueDraft, "type" | "summary" | "description" | "priority" | "labels" | "epicKey">>;
+  /** Связать созданную в Jira задачу с этой (дефект к стори из окна «Дефекты»). */
+  linkTo?: { key: string; summary: string };
   /** Только создание в Jira: без списка SimpleTest — ни галочки «Добавить в список», ни черновика. */
   jiraOnly?: boolean;
   /** Вложения с самого начала (например, скриншоты из плеера). */
@@ -102,7 +104,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
   const [newLabel, setNewLabel] = useState("");
   const [components, setComponents] = useState<string[]>(initial?.components ?? []);
   const [standType, setStandType] = useState(initial?.standType ?? "");
-  const [epicKey, setEpicKey] = useState(initial?.epicKey ?? "");
+  const [epicKey, setEpicKey] = useState(initial?.epicKey ?? prefill?.epicKey ?? "");
   const [participantId, setParticipantId] = useState(initial?.participantId ?? "");
 
   /* ── Jira ── */
@@ -199,6 +201,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
       const res = await createJiraDefect({
         project, summary: summary.trim(), description, priority, labels, epic_key: epicKey, components,
         assignee: "", ke: "", environment: "", stand_type: isDefect ? standType : "", issuetype: type,
+        ...(linkTo ? { link_key: linkTo.key } : {}),
       });
       const warnings = [...res.warnings];
       // Все вложения — и у дефекта, и у задачи, с генерацией и без; скриншоты — под именем из описания.
@@ -253,6 +256,13 @@ export default function IssueFormModal({ open, project, participants, listName, 
         e.preventDefault();
         addFiles(pasted);
       }}>
+        {(linkTo || prefill?.epicKey) && (
+          <p className="text-xs rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-text-main">
+            {linkTo
+              ? <>После создания в Jira {type.toLowerCase()} свяжется с <b>{linkTo.key}</b> {linkTo.summary && <>«{linkTo.summary}»</>} — и появится в её «Дефектах (st)».</>
+              : <>Эпик подставлен: <b>{prefill?.epicKey}</b> — {type.toLowerCase()} попадёт в «Дефекты (st)» эпика.</>}
+          </p>
+        )}
         {/* Тип */}
         <div className="flex items-center gap-2" role="radiogroup" aria-label="Тип задачи">
           {CREATE_TYPES.map(({ type: t, hint }) => {

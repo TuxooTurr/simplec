@@ -61,7 +61,7 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
             <input id="load-day" value={day} onChange={e => setDay(e.target.value)} inputMode="decimal" aria-invalid={badDay}
               className={`${field} w-24 ${badDay ? "border-red-400" : ""}`} />
             <span className="text-xs text-text-muted">
-              {badDay ? "Введите часы: 7, 6.5 или 6:30" : `${fmtMinutes(dayMin!)} в будний день — до вычета резервов`}
+              {badDay ? "Введите часы: 7, 6.5 или 6:30" : `${fmtMinutes(dayMin!, "hm")} в будний день — до вычета резервов`}
             </span>
           </div>
         </section>
@@ -124,7 +124,7 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
                   <p className="mt-1 text-[10px] uppercase tracking-wide text-text-muted">{d.label}</p>
                   {members.map(p => (
                     <p key={p.id} className="flex justify-between gap-2 text-text-muted">
-                      <span className="truncate">{p.name}</span><span className="tabular-nums text-text-main">{fmtMinutes(netDayMinutes(draft, p))}</span>
+                      <span className="truncate">{p.name}</span><span className="tabular-nums text-text-main">{fmtMinutes(netDayMinutes(draft, p), "hm")}</span>
                     </p>
                   ))}
                 </div>

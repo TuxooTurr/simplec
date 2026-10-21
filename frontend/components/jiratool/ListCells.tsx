@@ -9,7 +9,7 @@ import Floating from "./Floating";
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
-  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, inDirection, isOpenDefect, parseDuration,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
 import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
@@ -728,26 +728,27 @@ const UNIT_KEY = "st_plan_unit";
  */
 export function PlanCell({ value, onChange, compact }: { value: number | undefined; onChange: (min: number | null) => void; compact?: boolean }) {
   const [editing, setEditing] = useState(false);
-  const [unit, setUnit] = useState<"h" | "m">("h");
+  const [unit, setUnit] = useState<"h" | "m" | "d">("h");
   const [draft, setDraft] = useState("");
   const ref = useRef<HTMLInputElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
   /** Esc: окно закрывается тем же «закрыть», что и щелчок мимо, — но без сохранения. */
   const cancelled = useRef(false);
 
-  const toText = (min: number | undefined, u: "h" | "m") =>
-    min == null ? "" : u === "m" ? String(min) : `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
+  const toText = (min: number | undefined, u: "h" | "m" | "d") =>
+    min == null ? "" : u === "m" ? String(min) : u === "d" ? String(Math.round((min / getTimeDay()) * 100) / 100)
+      : `${Math.floor(min / 60)}:${String(min % 60).padStart(2, "0")}`;
 
   const open = () => {
-    let u: "h" | "m" = "h";
-    try { u = localStorage.getItem(UNIT_KEY) === "m" ? "m" : "h"; } catch { /* по умолчанию часы */ }
+    let u: "h" | "m" | "d" = "h";
+    try { const x = localStorage.getItem(UNIT_KEY); u = x === "m" || x === "d" ? x : "h"; } catch { /* по умолчанию часы */ }
     cancelled.current = false;
     setUnit(u); setDraft(toText(value, u)); setEditing(true);
   };
   useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
 
   const parsed = parseDuration(draft, unit);
-  const switchUnit = (u: "h" | "m") => {
+  const switchUnit = (u: "h" | "m" | "d") => {
     if (u === unit) return;
     setDraft(parsed == null ? draft : toText(parsed, u));
     setUnit(u);
@@ -767,20 +768,20 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
       <div className="flex items-center gap-1">
         <input ref={ref} value={draft} onChange={e => setDraft(e.target.value)} inputMode="decimal"
           onFocus={e => e.currentTarget.select()}   // старое значение выделено — ввод его заменяет, а не дописывается
-          placeholder={unit === "h" ? "1.5 или 1:30" : "90"} aria-label="Траты план"
+          placeholder={unit === "h" ? "1.5 или 1:30" : unit === "d" ? "1.5 или 1 д 2 ч" : "90"} aria-label="Траты план"
           onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") cancel(); }}
           className={`min-w-0 flex-1 bg-[var(--color-input-bg)] px-1 py-0.5 rounded border text-sm text-text-main focus:outline-none
             ${draft.trim() && parsed == null ? "border-red-400" : "border-primary/40"}`} />
         <span className="flex rounded border border-border-main overflow-hidden text-[10px] font-semibold flex-shrink-0" role="radiogroup" aria-label="Единица">
-          {(["h", "m"] as const).map(u => (
+          {(["d", "h", "m"] as const).map(u => (
             <button key={u} type="button" role="radio" aria-checked={unit === u} onMouseDown={e => e.preventDefault()} onClick={() => switchUnit(u)}
               className={`px-1.5 py-0.5 ${unit === u ? "bg-primary text-white" : "text-text-muted hover:text-text-main"}`}>
-              {u === "h" ? "ч" : "мин"}
+              {u === "d" ? "д" : u === "h" ? "ч" : "мин"}
             </button>
           ))}
         </span>
       </div>
-      <p className="text-[10px] text-text-muted">{draft.trim() ? (parsed == null ? "не понял — пример: 1.5, 1:30, 90" : `= ${fmtMinutes(parsed)}`) : "пусто — убрать план"}</p>
+      <p className="text-[10px] text-text-muted">{draft.trim() ? (parsed == null ? "не понял — пример: 1.5, 1:30, 90, 1 д 2 ч" : `= ${fmtMinutes(parsed)}`) : "пусто — убрать план"}</p>
     </>
   );
 

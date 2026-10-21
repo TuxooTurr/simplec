@@ -406,6 +406,8 @@ class CreateDefectBody(BaseModel):
     # Тип задачи. Пусто — тип из настроек (Дефект). Для не-дефекта (например, «Задача»)
     # поля, обязательные только для дефекта SBER911 (вид испытаний, тип объекта, стенд), не уходят.
     issuetype: str = ""
+    # Связать созданную задачу с этой (стори из списка Jira tool): дефект попадает в «Дефекты (st)» стори.
+    link_key: str = ""
 
 
 # ── Routes: настройки и токен ────────────────────────────────────────────────
@@ -838,8 +840,36 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             warnings,
         )
 
+    if key and body.link_key.strip():
+        link_issue(cfg, key, body.link_key.strip().upper(), warnings)
+
     return {"status": "created", "key": key, "url": f"{cfg['base_url']}/browse/{key}",
             "warnings": warnings}
+
+
+# Предпочтительные типы связи: «Relates» (в русской Jira — «Связано»/«Связь»). Нет такого — первый из списка Jira.
+_LINK_TYPE_HINTS = ("relates", "relate", "связ")
+
+
+def link_issue(cfg: dict, key: str, other: str, warnings: list[str]) -> bool:
+    """Связь key ↔ other типом «Relates» (или подходящим из типов этой Jira). Не вышло — предупреждение, не ошибка."""
+    try:
+        types = _jira_request(cfg, "GET", "/rest/api/2/issueLinkType").get("issueLinkTypes") or []
+    except HTTPException as e:
+        types = []
+        logger.warning("Jira link: типы связей недоступны: %s", e.detail)
+    names = [t.get("name", "") for t in types if t.get("name")]
+    pick = next((n for n in names if any(h in n.lower() for h in _LINK_TYPE_HINTS)), None) \
+        or next((t.get("name") for t in types if any(h in (t.get("inward", "") + t.get("outward", "")).lower() for h in _LINK_TYPE_HINTS)), None) \
+        or (names[0] if names else "Relates")
+    try:
+        _jira_request(cfg, "POST", "/rest/api/2/issueLink",
+                      json_body={"type": {"name": pick}, "inwardIssue": {"key": key}, "outwardIssue": {"key": other}})
+        logger.info("Jira link: %s ↔ %s (%s)", key, other, pick)
+        return True
+    except HTTPException as e:
+        warnings.append(f"{key} создан, но связь с {other} не создалась ({pick}): {str(e.detail)[:150]}. Свяжите в Jira вручную.")
+        return False
 
 
 @router.post("/api/jira/attach/{key}")

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, ClipboardCheck, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
@@ -24,6 +24,7 @@ import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import BackupModal from "@/components/BackupModal";
+import { downloadBacklog } from "@/lib/backlogExport";
 import { isBackup } from "@/lib/backupApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
@@ -35,7 +36,7 @@ import { getPeople, savePeople } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
-  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve, ownStageInfo,
@@ -103,6 +104,10 @@ export default function JiraToolSection() {
   const [ioNote, setIoNote] = useState<{ ok: boolean; text: string } | null>(null);
   /** Резервная копия всего SimpleTest: окно открыто; файл, который импорт узнал как резервную копию. */
   const [backup, setBackup] = useState<{ file: File | null } | null>(null);
+  /** Формат трудозатрат («ч · мин» / «д · ч · мин»): сам формат — в lib/jiraTool, состояние — чтобы перерисовать таблицу. */
+  const [timeFmt, setTimeFmtState] = useState<TimeFmt>(getTimeFmt);
+  /** Создание дефекта из окна «Дефекты» задачи: эпику — Epic Link, стори и прочим — связь после создания. */
+  const [defectFor, setDefectFor] = useState<Issue | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
 
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
@@ -706,6 +711,16 @@ export default function JiraToolSection() {
     else { setPendingCopy(text); setReportNote("Браузер не дал скопировать автоматически — нажмите «Скопировать»."); }
   };
 
+  /** Выбранные задачи — в .xlsx по формату «Бэклога Платформы» (lib/backlogExport.ts). */
+  const exportExcel = async () => {
+    if (!ctx || !list) return;
+    const issues = reportSections().flatMap(x => x.issues);
+    try {
+      const name = await downloadBacklog(list.name, issues, ctx);
+      setReportNote(`Выгружено в Excel: задач ${issues.length} — ${name}`);
+    } catch (e) { setReportNote((e as Error).message); }
+  };
+
   const copyChatReport = async () => {
     if (!ctx) return;
     const sections = reportSections();
@@ -805,6 +820,9 @@ export default function JiraToolSection() {
 
   /** Из свёрнутой полоски: развернуть колонку и сразу открыть нужную настройку. */
   const openPanel = (p: Panel) => { toggleAside(false); setPanel(p); };
+
+  // «д · ч · мин» считает день по норме из настроек нагрузки — до отрисовки ячеек.
+  if (state) setTimeDay(state.loadSettings.dayMinutes);
 
   return (
     <Shell>
@@ -1251,6 +1269,17 @@ export default function JiraToolSection() {
                     )}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
+                  {/* Формат трудозатрат во всём Jira tool и в Excel: ч·мин или д·ч·мин (день — норма из настроек нагрузки) */}
+                  <span className="flex rounded-lg border border-border-main overflow-hidden text-xs" role="radiogroup" aria-label="Формат времени"
+                    title={`Трудозатраты: часы и минуты или дни, часы и минуты (день = ${fmtMinutes(state.loadSettings.dayMinutes, "hm")} — норма из настроек нагрузки)`}>
+                    {(["hm", "dhm"] as const).map(f => (
+                      <button key={f} type="button" role="radio" aria-checked={timeFmt === f}
+                        onClick={() => { setTimeFmt(f); setTimeFmtState(f); }}
+                        className={`px-2.5 py-2 whitespace-nowrap ${timeFmt === f ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
+                        {f === "hm" ? "ч · мин" : "д · ч · мин"}
+                      </button>
+                    ))}
+                  </span>
                   <button type="button" onClick={refreshFromJira} disabled={jira.state !== "ok"} aria-label="Обновить из Jira"
                     title="Перечитать задачи списка из Jira" className="p-2 rounded-lg border border-border-main text-text-muted hover:text-primary disabled:opacity-40">
                     <RefreshCw className={`w-4 h-4 ${busy > 0 ? "animate-spin" : ""}`} />
@@ -1291,12 +1320,6 @@ export default function JiraToolSection() {
                   </span>
                   <button type="button" onClick={() => setModal("bulk")} disabled={!selected.size}
                     className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
-                  <button type="button" onClick={() => {
-                    updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)), marks: [...selected].reduce((m, k) => withoutMark(m, k), l.marks) }));
-                    setSelected(new Set());
-                  }}
-                    disabled={!selected.size}
-                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Убрать из списка</button>
                   <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Требования…</button>
                   <select value="" disabled={!selected.size} aria-label="Нагрузка для выбранных"
@@ -1324,8 +1347,16 @@ export default function JiraToolSection() {
                       {state.lists.filter(l => l.id !== activeId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                   )}
+                  {/* Удаление из списка — справа, отдельно от массовых действий и красным: его легко перепутать */}
+                  <button type="button" onClick={() => {
+                    updateList(l => ({ ...l, keys: l.keys.filter(k => !selected.has(k)), marks: [...selected].reduce((m, k) => withoutMark(m, k), l.marks) }));
+                    setSelected(new Set());
+                  }}
+                    disabled={!selected.size}
+                    className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-semibold hover:bg-red-700 disabled:opacity-40">
+                    <Trash2 className="w-4 h-4" /> Убрать из списка{selected.size ? ` (${selected.size})` : ""}</button>
                   <button type="button" onClick={stopSelecting}
-                    className="ml-auto px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
+                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
                 </div>
               )}
 
@@ -1436,6 +1467,11 @@ export default function JiraToolSection() {
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
                     <ClipboardCheck className="w-4 h-4" /> Чек-лист
                   </button>
+                  <button type="button" onClick={exportExcel} disabled={!selected.size || !!reportBusy}
+                    title="Как «Бэклог Платформы», два листа: «Фамилии» — люди направлений, «Нагрузка» — их план (в выбранном формате времени). Команда — папка задачи; состояние направления — цветом: серый, жёлтый, зелёный"
+                    className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
+                    <FileSpreadsheet className="w-4 h-4" /> Выгрузить в Excel
+                  </button>
                   {reportBusy && (
                     <span className="flex items-center gap-2 text-xs text-text-muted" role="status">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> Проверки по требованиям: {reportBusy.done} из {reportBusy.total}
@@ -1521,7 +1557,17 @@ export default function JiraToolSection() {
         <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
-        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} onClose={() => setModal(null)} />
+        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf}
+          onCreate={modal.defectsFor.local ? undefined : () => setDefectFor(modal.defectsFor)} onClose={() => setModal(null)} />
+      )}
+      {/* Поверх окна «Дефекты» — поэтому ниже него */}
+      {defectFor && (
+        <IssueFormModal open jiraOnly project={projectKeyOfIssue(defectFor.key)} participants={state.participants}
+          prefill={categoryOf(defectFor) === "epic" ? { type: "Дефект", epicKey: defectFor.key } : { type: "Дефект" }}
+          linkTo={categoryOf(defectFor) === "epic" ? undefined : { key: defectFor.key, summary: String(defectFor.fields.summary ?? "") }}
+          // Новый дефект — сразу в кэш (с Epic Link и связями), чтобы окно «Дефекты» и маркер в списке его показали.
+          onSave={d => { if (d.jira) void sync([d.jira.key], []); }}
+          onClose={() => setDefectFor(null)} />
       )}
       {modal && typeof modal === "object" && "own" in modal && (
         <OwnFieldModal open initial={modal.own} typeLocked={!!modal.own && ownUsed(modal.own.id)} onClose={() => setModal(null)}
@@ -1574,8 +1620,8 @@ function LoadPanel({ list, participants, settings, onSettings, skip, onRange, on
           aria-label="Нагрузка: по дату" className={dateCls} />
       </div>
       <p className="text-[11px] text-text-muted" title="Праздники не учитываются. Норму дня и резервы — шестерёнкой; выходные — в «Подробно».">
-        {weekend ? <>Дней: {days}, из них выходных {weekend}</> : <>Рабочих дней: {days}</>} · в день {fmtMinutes(settings.dayMinutes)}
-        {commonMin > 0 && <> − {common.map(r => `${r.name} ${fmtMinutes(r.minutes)}`).join(", ")} = <b className="font-medium text-text-main">{fmtMinutes(Math.max(0, settings.dayMinutes - commonMin))}</b></>}
+        {weekend ? <>Дней: {days}, из них выходных {weekend}</> : <>Рабочих дней: {days}</>} · в день {fmtMinutes(settings.dayMinutes, "hm")}
+        {commonMin > 0 && <> − {common.map(r => `${r.name} ${fmtMinutes(r.minutes, "hm")}`).join(", ")} = <b className="font-medium text-text-main">{fmtMinutes(Math.max(0, settings.dayMinutes - commonMin), "hm")}</b></>}
       </p>
       {rows.length === 0 ? (
         <p className="text-xs text-text-muted">Добавьте тестировщиков в справочник и назначьте их на задачи — здесь появится их нагрузка.</p>

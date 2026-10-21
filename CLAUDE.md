@@ -100,6 +100,7 @@ SimpleTest/
 │   │   ├── kernel.py        # Jupyter ядра для алертов
 │   │   ├── etalons.py       # Эталонные примеры (RAG)
 │   │   ├── revisor.py       # Ревизия тест-кейсов
+│   │   ├── xlsx_export.py   # POST /api/export/xlsx — таблица в Excel (генератор backend/xlsx_writer.py, без openpyxl)
 │   │   ├── backup.py        # Резервная копия: выгрузка всех данных (data/*.json, БД, эталоны) в .json и восстановление
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения

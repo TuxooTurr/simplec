@@ -106,6 +106,8 @@ export interface CreateJiraDefect {
   stand_type: string;
   /** Тип задачи; пусто — из настроек (Дефект). Для «Задачи» поля дефекта не уходят. */
   issuetype?: string;
+  /** Связать созданную задачу с этой (дефект к стори — для «Дефекты (st)»). */
+  link_key?: string;
 }
 
 export function createJiraDefect(body: CreateJiraDefect): Promise<{ status: string; key: string; url: string; warnings: string[] }> {

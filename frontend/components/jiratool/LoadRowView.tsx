@@ -5,7 +5,7 @@ export default function LoadRowView({ r, bars }: { r: LoadRow; bars: boolean }) 
   const pct = r.capacity ? Math.min(100, Math.round((r.planned / r.capacity) * 100)) : r.planned ? 100 : 0;
   return (
     <li title={`Задач в нагрузке: ${r.tasks}${r.unplanned ? `, без плана: ${r.unplanned}` : ""}${r.skipped ? `, не учтено: ${r.skipped}` : ""}`
-      + (r.reserves.length ? `\nРезервы: ${r.reserves.map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")} — за период ${fmtMinutes(r.reserved)}` : "")}>
+      + (r.reserves.length ? `\nРезервы: ${r.reserves.map(x => `${x.name} ${fmtMinutes(x.minutes, "hm")}/день`).join(", ")} — за период ${fmtMinutes(r.reserved)}` : "")}>
       <div className="flex items-center gap-1.5 text-xs">
         <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: r.participant.color }} />
         <span className="min-w-0 flex-1 truncate text-text-main">{r.participant.name}</span>
@@ -20,7 +20,7 @@ export default function LoadRowView({ r, bars }: { r: LoadRow; bars: boolean }) 
       )}
       {r.reserves.some(x => !isCommonReserve(x)) && (
         <p className="mt-0.5 text-[10px] text-text-muted">
-          резерв: {r.reserves.filter(x => !isCommonReserve(x)).map(x => `${x.name} ${fmtMinutes(x.minutes)}/день`).join(", ")}
+          резерв: {r.reserves.filter(x => !isCommonReserve(x)).map(x => `${x.name} ${fmtMinutes(x.minutes, "hm")}/день`).join(", ")}
         </p>
       )}
       {(r.over || r.overtime > 0 || r.unplanned > 0) && (

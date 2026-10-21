@@ -48,8 +48,13 @@ _K_TOKEN_PATH = "jira_token_path"
 _K_SSL_VERIFY = "jira_ssl_verify"     # "1" / "" (пусто = выключено, корп. BIG IP)
 _K_LABELS     = "jira_labels_presets" # JSON-список пресетов лейблов
 _K_ISSUETYPE  = "jira_issuetype"
+_K_LABELS_SEEDED = "jira_labels_seeded"  # JSON-список лейблов по умолчанию, которые уже добавлены в пресеты
 
-_DEFAULT_LABELS = ["Фокус911", "ПРМ", "Sber911-AI"]
+# Лейблы по умолчанию. Новый лейбл отсюда попадает в сохранённый список пресетов один раз:
+# убрали его в настройках Jira — обратно не вернётся.
+_DEFAULT_LABELS = ["Фокус911", "ПРМ", "Sber911-AI",
+                   "911-Команда-ОбщиеСервисы", "911-Команда-Агенты", "911-Команда-ITSM", "B2C_Маркин"]
+_FIRST_DEFAULTS = ["Фокус911", "ПРМ", "Sber911-AI"]   # были по умолчанию до учёта добавленных
 
 # Имена полей в Jira, которые резолвим по названию (регистронезависимо).
 # Для каждого логического поля — варианты написания в корп. Jira.
@@ -75,6 +80,12 @@ def _set(db: Session, key: str, value: str, description: str = "") -> None:
         db.add(MetricsSettings(key=key, value=value, description=description))
 
 
+def _save_labels(db: Session, labels: list[str]) -> None:
+    """Сохранить пресеты; все лейблы по умолчанию с этого момента считаются уже предложенными."""
+    _set(db, _K_LABELS, json.dumps(labels, ensure_ascii=False), "Пресеты лейблов дефектов")
+    _set(db, _K_LABELS_SEEDED, json.dumps(_DEFAULT_LABELS, ensure_ascii=False), "Лейблы по умолчанию, уже добавленные в пресеты")
+
+
 def _load_cfg(db: Session) -> dict:
     labels_raw = _get(db, _K_LABELS, "")
     try:
@@ -83,6 +94,19 @@ def _load_cfg(db: Session) -> dict:
             labels = list(_DEFAULT_LABELS)
     except Exception:
         labels = list(_DEFAULT_LABELS)
+    if labels_raw:
+        # Сохранённый список: дописываем лейблы по умолчанию, появившиеся после его сохранения (один раз).
+        try:
+            seeded = json.loads(_get(db, _K_LABELS_SEEDED, "")) or list(_FIRST_DEFAULTS)
+        except Exception:
+            seeded = list(_FIRST_DEFAULTS)
+        seen = {x.lower() for x in seeded}
+        have = {x.lower() for x in labels}
+        fresh = [x for x in _DEFAULT_LABELS if x.lower() not in seen and x.lower() not in have]
+        if any(x.lower() not in seen for x in _DEFAULT_LABELS):
+            labels = [*labels, *fresh]
+            _save_labels(db, labels)
+            db.commit()
     return {
         "base_url":   (_get(db, _K_URL, "https://jira.sberbank.ru")).rstrip("/"),
         "token":      _get(db, _K_TOKEN, ""),
@@ -406,8 +430,7 @@ def put_settings(body: JiraSettingsBody, db: Session = Depends(get_db)) -> dict:
         _set(db, _K_TOKEN, body.token.strip(), "Jira PAT (секрет)")
     _set(db, _K_TOKEN_PATH, body.token_path.strip(), "Путь к файлу с Jira-токеном")
     _set(db, _K_SSL_VERIFY, "1" if body.ssl_verify else "", "Проверка SSL Jira")
-    _set(db, _K_LABELS, json.dumps([l for l in body.labels if l.strip()], ensure_ascii=False),
-         "Пресеты лейблов дефектов")
+    _save_labels(db, [l for l in body.labels if l.strip()])
     _set(db, _K_ISSUETYPE, body.issuetype.strip() or "Дефект", "Тип задачи для дефектов")
     db.commit()
     return get_settings(db)
@@ -432,7 +455,7 @@ def add_label_presets(body: LabelPresetsBody, db: Session = Depends(get_db)) -> 
         if l and l.lower() not in have:
             presets.append(l)
             have.add(l.lower())
-    _set(db, _K_LABELS, json.dumps(presets, ensure_ascii=False), "Пресеты лейблов дефектов")
+    _save_labels(db, presets)
     db.commit()
     return {"labels": presets}
 

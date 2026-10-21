@@ -1,23 +1,25 @@
 """
-График стендов — кто, когда и какие сервисы (КЭ) ставит на Major-Check и Major-GO, на 2 спринта вперёд.
+График стендов — кто, когда и какие сервисы (КЭ) ставит на Major-Check и Major-GO.
 
 Устройство (решения Стефана):
   • у каждого стенда своя страница Confluence; оригинал графика — свойство страницы (content property `simpletest-stand`,
     JSON с версией: одновременная запись двух SimpleTest не затирает друг друга — вторая получит 409 и повторит);
-  • текст страницы SimpleTest собирает сам: памятка, «сегодня», таблица всех рабочих дней двух спринтов;
-  • заявки коллеги оставляют комментариями к странице по шаблону («Сервис: … / Дата: … / Команда: …»);
-    «Забрать заявки» разбирает новые комментарии, проверяет правила (заморозка, лимит дня, команда) — прошла: бронь
-    в графике, нет или не разобралась: «На рассмотрении»; на комментарий уходит ответ с итогом.
+  • окно планирования — даты, которые выбирают сами (к спринтам не привязано), плюс отметки дат релизов;
+  • строка графика — команда; конфликт — один и тот же КЭ в один день у двух команд: бронь не блокируется, а красится;
+    общего лимита на стенд по умолчанию нет (120 КЭ, многие друг друга не трогают) — его можно включить;
+  • у брони — фичи (свободный ввод): на графике при наведении, в Confluence — отдельным столбцом;
+  • заявки коллеги оставляют комментариями к странице по шаблону («Сервис / Дата / Команда / Фичи / Задача»);
+    «Забрать заявки» разбирает новые комментарии, проверяет правила — прошла: бронь, нет или не разобралась:
+    «На рассмотрении»; на комментарий уходит ответ с итогом (и предупреждением о конфликте, если он есть).
 
 Локально (metrics_settings, ключ stands_config) хранится только привязка стенд → страница: она у каждого SimpleTest своя.
-Лимиты, спринты, команды, брони, заморозки, обработанные комментарии — в свойстве страницы, общие для всех.
 
 Эндпоинты:
   GET  /api/stands/config                 — привязка страниц
   PUT  /api/stands/config                 — сохранить привязку (ссылка или id страницы)
   POST /api/stands/{stand}/create-page    — создать страницу стенда в пространстве из настроек Confluence
-  GET  /api/stands/{stand}                — график: дни, брони, заморозки, «на рассмотрении», настройки стенда
-  PUT  /api/stands/{stand}/settings       — лимит в день, начало и длина спринта, команды
+  GET  /api/stands/{stand}                — график: дни окна, брони с конфликтами, заморозки, релизы, «на рассмотрении»
+  PUT  /api/stands/{stand}/settings       — окно планирования, релизы, команды, лимит (0 — без лимита)
   POST /api/stands/{stand}/bookings       — бронь
   DELETE /api/stands/{stand}/bookings/{id}
   POST /api/stands/{stand}/freezes        — заморозка
@@ -114,14 +116,11 @@ def _page_id(db: Session, stand: str) -> str:
 
 # ── Данные стенда в свойстве страницы ────────────────────────────────────────
 
-def _monday(d: date) -> date:
-    return d - timedelta(days=d.weekday())
-
-
 def default_data(stand: str) -> dict:
-    return {"format": "simpletest.stand-schedule", "version": 1, "stand": stand, "limit": 3,
-            "sprintStart": _monday(today()).isoformat(), "sprintDays": 14, "teams": list(DEFAULT_TEAMS),
-            "bookings": [], "freezes": [], "pending": [], "processed": []}
+    now = today()
+    return {"format": "simpletest.stand-schedule", "version": 2, "stand": stand, "limit": 0,
+            "window": {"from": now.isoformat(), "to": (now + timedelta(days=27)).isoformat()}, "releases": [],
+            "teams": list(DEFAULT_TEAMS), "bookings": [], "freezes": [], "pending": [], "processed": []}
 
 
 def _norm_data(stand: str, raw: Any) -> dict:
@@ -130,6 +129,13 @@ def _norm_data(stand: str, raw: Any) -> dict:
         for k in d:
             if k in raw and raw[k] is not None:
                 d[k] = raw[k]
+        if "window" not in raw and raw.get("sprintStart"):   # первая версия: окно — два спринта от начала спринта
+            start = date.fromisoformat(raw["sprintStart"])
+            d["window"] = {"from": start.isoformat(), "to": (start + timedelta(days=2 * int(raw.get("sprintDays") or 14) - 1)).isoformat()}
+            if raw.get("limit") == 3:      # 3 стояло по умолчанию, а не выбрано — общего лимита больше нет
+                d["limit"] = 0
+    for b in d["bookings"]:
+        b.setdefault("features", "")
     d["stand"] = stand
     return d
 
@@ -173,23 +179,10 @@ def mutate(cfg: dict, pid: str, stand: str, fn: Callable[[dict], Any], retries: 
 
 # ── Календарь и правила ──────────────────────────────────────────────────────
 
-def horizon(data: dict, now: Optional[date] = None) -> list[date]:
-    """Рабочие дни текущего и следующего спринта (спринты идут подряд от sprintStart с шагом sprintDays)."""
-    now = now or today()
-    start = date.fromisoformat(data["sprintStart"])
-    step = max(1, int(data.get("sprintDays") or 14))
-    while start + timedelta(days=step) <= now:
-        start += timedelta(days=step)
-    while start > now:
-        start -= timedelta(days=step)
-    days = [start + timedelta(days=i) for i in range(step * 2)]
-    return [d for d in days if d.weekday() < 5]
-
-
-def sprint_of(data: dict, d: date) -> int:
-    """Номер спринта дня от sprintStart (0, 1, 2…) — для подписи границ спринтов."""
-    start = date.fromisoformat(data["sprintStart"])
-    return (d - start).days // max(1, int(data.get("sprintDays") or 14))
+def window_days(data: dict) -> list[date]:
+    """Все дни окна планирования (с выходными — на графике они серые)."""
+    a, b = date.fromisoformat(data["window"]["from"]), date.fromisoformat(data["window"]["to"])
+    return [a + timedelta(days=i) for i in range((b - a).days + 1)] if b >= a else []
 
 
 def freeze_on(data: dict, d: date) -> Optional[dict]:
@@ -199,6 +192,18 @@ def freeze_on(data: dict, d: date) -> Optional[dict]:
 
 def bookings_on(data: dict, d: date) -> list[dict]:
     return [b for b in data["bookings"] if b["date"] == d.isoformat()]
+
+
+def _ke(s_: str) -> str:
+    return re.sub(r"\s+", " ", s_.strip().lower())
+
+
+def conflicts_on(data: dict, d: date) -> dict[str, list[str]]:
+    """КЭ дня, которые трогают две и больше команды: КЭ → команды."""
+    teams: dict[str, set] = {}
+    for b in bookings_on(data, d):
+        teams.setdefault(_ke(b["service"]), set()).add(b["team"])
+    return {k: sorted(v) for k, v in teams.items() if len(v) > 1}
 
 
 def match_team(data: dict, text: str) -> Optional[str]:
@@ -214,36 +219,44 @@ def match_team(data: dict, text: str) -> Optional[str]:
 
 
 def check(data: dict, d: date, hotfix: bool = False, now: Optional[date] = None) -> Optional[str]:
-    """Почему нельзя поставить в этот день; None — можно."""
+    """Почему нельзя поставить в этот день; None — можно. Конфликт по КЭ не запрещает — он красится."""
     now = now or today()
     if d.weekday() >= 5:
         return "выходной"
     if d < now:
         return "день уже прошёл"
-    if d not in horizon(data, now):
-        return "дальше двух спринтов"
+    if d not in window_days(data):
+        w = data["window"]
+        return f"вне окна планирования {date.fromisoformat(w['from']).strftime('%d.%m')}–{date.fromisoformat(w['to']).strftime('%d.%m')}"
     fz = freeze_on(data, d)
     if fz and not hotfix:
         return f"заморозка до {date.fromisoformat(fz['to']).strftime('%d.%m')}" + (f" ({fz['reason']})" if fz.get("reason") else "")
-    if len(bookings_on(data, d)) >= int(data["limit"]):
-        return f"лимит {data['limit']}/{data['limit']} на {d.strftime('%d.%m')}"
+    limit = int(data.get("limit") or 0)
+    if limit and len(bookings_on(data, d)) >= limit:
+        return f"лимит {limit}/{limit} на {d.strftime('%d.%m')}"
     return None
 
 
 def nearest_free(data: dict, after: date, now: Optional[date] = None) -> Optional[date]:
-    return next((d for d in horizon(data, now) if d >= after and check(data, d, now=now) is None), None)
+    return next((d for d in window_days(data) if d >= after and check(data, d, now=now) is None), None)
 
 
-def _new_booking(d: date, team: str, service: str, task: str, by: str, source: str, comment: str = "") -> dict:
+def conflict_note(data: dict, d: date, service: str, team: str) -> str:
+    """Предупреждение о конфликте для ответа на заявку: этот КЭ в этот день ставит другая команда."""
+    others = sorted({b["team"] for b in bookings_on(data, d) if _ke(b["service"]) == _ke(service) and b["team"] != team})
+    return f" — КОНФЛИКТ: {service} в этот день ставит также {', '.join(others)}" if others else ""
+
+
+def _new_booking(d: date, team: str, service: str, task: str, by: str, source: str, comment: str = "", features: str = "") -> dict:
     return {"id": "bk-" + uuid.uuid4().hex[:8], "date": d.isoformat(), "team": team, "service": service.strip(),
-            "task": task.strip().upper(), "by": by, "source": source, "comment": comment,
+            "features": features.strip(), "task": task.strip().upper(), "by": by, "source": source, "comment": comment,
             "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
 
 # ── Заявки из комментариев ───────────────────────────────────────────────────
 
 _KEYS = {"сервис": "service", "кэ": "service", "микросервис": "service", "дата": "date", "день": "date",
-         "команда": "team", "задача": "task", "хотфикс": "hotfix"}
+         "команда": "team", "задача": "task", "хотфикс": "hotfix", "фичи": "features", "фича": "features"}
 
 
 def comment_text(storage: str) -> str:
@@ -283,6 +296,7 @@ def parse_request(text: str, now: Optional[date] = None) -> dict:
         if m and m[1].strip().lower() in _KEYS:
             got[_KEYS[m[1].strip().lower()]] = m[2]
     out: dict[str, Any] = {"service": got.get("service", "").strip(), "team": got.get("team", "").strip(),
+                           "features": got.get("features", "").strip(),
                            "task": got.get("task", "").strip().upper(), "date": None,
                            "hotfix": got.get("hotfix", "").strip().lower() in ("да", "yes", "1", "+")}
     missing = [n for k, n in (("service", "Сервис"), ("date", "Дата"), ("team", "Команда")) if not got.get(k, "").strip()]
@@ -342,12 +356,14 @@ def apply_requests(data: dict, comments: list[dict], now: Optional[date] = None)
         if why:
             data["pending"].append({"cid": c["id"], "text": c["text"], "author": c["author"], "reason": why,
                                     "service": req["service"], "team": team or req["team"], "task": req["task"],
+                                    "features": req["features"],
                                     "date": req["date"].isoformat() if req.get("date") else ""})
             decisions.append({"cid": c["id"], "ok": False, "text": f"На рассмотрении: {why}"})
             continue
-        data["bookings"].append(_new_booking(req["date"], team, req["service"], req["task"], c["author"], "comment", c["id"]))
+        note = conflict_note(data, req["date"], req["service"], team)
+        data["bookings"].append(_new_booking(req["date"], team, req["service"], req["task"], c["author"], "comment", c["id"], req["features"]))
         decisions.append({"cid": c["id"], "ok": True,
-                          "text": f"Принято: {req['service']}, {req['date'].strftime('%d.%m')}, {team}"})
+                          "text": f"Принято: {req['service']}, {req['date'].strftime('%d.%m')}, {team}{note}"})
     return decisions
 
 
@@ -363,55 +379,71 @@ def day_status(data: dict, d: date, now: Optional[date] = None) -> tuple[str, st
     now = now or today()
     if d < now:
         return "ПРОШЁЛ", "Grey"
+    if d.weekday() >= 5:
+        return "ВЫХОДНОЙ", "Grey"
     if freeze_on(data, d):
-        return "ЗАМОРОЗКА", "Red"
-    if len(bookings_on(data, d)) >= int(data["limit"]):
+        return "ЗАМОРОЗКА", "Yellow"
+    if conflicts_on(data, d):
+        return "КОНФЛИКТ", "Red"
+    limit = int(data.get("limit") or 0)
+    if limit and len(bookings_on(data, d)) >= limit:
         return "ЛИМИТ", "Red"
     return "МОЖНО", "Green"
 
 
 def render_page(data: dict, now: Optional[date] = None) -> str:
-    """Текст страницы (storage format): памятка, сегодня, таблица всех рабочих дней двух спринтов."""
+    """Текст страницы (storage format): памятка, сегодня, шаблон заявки, релизы, заморозки, таблица рабочих дней окна."""
     now = now or today()
     e = html.escape
-    days = horizon(data, now)
-    title, colour = day_status(data, now, now) if now.weekday() < 5 else ("ВЫХОДНОЙ", "Grey")
+    w = data["window"]
+    title, colour = day_status(data, now, now)
+    rels = sorted(data["releases"], key=lambda r: r["date"])
     parts = [
         '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Страница собирается из SimpleTest — таблицу руками '
         f'не правьте. Обновлено {datetime.now().strftime("%d.%m.%Y %H:%M")}.</p></ac:rich-text-body></ac:structured-macro>',
         f"<h2>Сегодня, {now.strftime('%d.%m')}</h2><p>{e(data['stand'])}: {_status_macro(title, colour)} "
-        f"установок {len(bookings_on(data, now))}/{data['limit']}</p>",
+        f"установок {len(bookings_on(data, now))}</p>",
         "<h2>Как подать заявку</h2><p>Оставьте комментарий к этой странице — каждая строка «Название: значение»:</p>"
         "<p><code>Сервис: notify</code><br/><code>Дата: 23.10</code><br/>"
-        f"<code>Команда: {e(' / '.join(data['teams']))}</code><br/><code>Задача: SBER911-12345</code> (необязательно)<br/>"
-        "<code>Хотфикс: да</code> (только для установки в заморозку)</p>"
-        f"<p>Лимит — {data['limit']} установки в день. Ответ с итогом придёт на ваш комментарий.</p>",
+        f"<code>Команда: {e(' / '.join(data['teams']))}</code><br/><code>Фичи: тема инцидента на карточке; фильтр по статусу</code><br/>"
+        "<code>Задача: SBER911-12345</code> (необязательно)<br/><code>Хотфикс: да</code> (только для установки в заморозку)</p>"
+        "<p>Если один и тот же сервис в один день ставят две команды — это конфликт: строка отмечается красным, договоритесь между собой. "
+        "Ответ с итогом придёт на ваш комментарий.</p>",
+        f"<h2>Окно планирования: {date.fromisoformat(w['from']).strftime('%d.%m.%Y')} — {date.fromisoformat(w['to']).strftime('%d.%m.%Y')}</h2>",
     ]
+    if rels:
+        parts.append("<p>Релизы: " + "; ".join(f"<strong>{e(r['name'])}</strong> — {date.fromisoformat(r['date']).strftime('%d.%m')}" for r in rels) + "</p>")
     fz_list = [f for f in data["freezes"] if f["to"] >= now.isoformat()]
     if fz_list:
-        parts.append("<h2>Заморозки</h2><ul>" + "".join(
-            f"<li>{date.fromisoformat(f['from']).strftime('%d.%m')}–{date.fromisoformat(f['to']).strftime('%d.%m')}"
-            f"{': ' + e(f['reason']) if f.get('reason') else ''}</li>" for f in fz_list) + "</ul>")
-    current = None
-    for d in days:
-        sp = sprint_of(data, d)
-        if sp != current:
-            if current is not None:
-                parts.append("</tbody></table>")
-            current = sp
-            first = days[[sprint_of(data, x) for x in days].index(sp)]
-            parts.append(f"<h2>Спринт с {first.strftime('%d.%m')}</h2><table><tbody>"
-                         "<tr><th>День</th><th>Статус</th><th>Установок</th><th>Брони: команда · сервис · задача</th></tr>")
+        parts.append("<p>Заморозки: " + "; ".join(
+            f"{date.fromisoformat(f['from']).strftime('%d.%m')}–{date.fromisoformat(f['to']).strftime('%d.%m')}"
+            f"{' (' + e(f['reason']) + ')' if f.get('reason') else ''}" for f in fz_list) + "</p>")
+    parts.append("<table><tbody><tr><th>День</th><th>Статус</th><th>КЭ (команда)</th><th>Фичи</th><th>Задача</th></tr>")
+    rel_on = {r["date"]: r["name"] for r in rels}
+    for d in window_days(data):
+        if d.weekday() >= 5:
+            continue
         label, col = day_status(data, d, now)
-        fz = freeze_on(data, d)
-        items = [f"{e(b['team'])} · {e(b['service'])}" + (f" · {e(b['task'])}" if b.get("task") else "") for b in bookings_on(data, d)]
-        if fz and fz.get("reason"):
-            items.insert(0, f"<em>заморозка: {e(fz['reason'])}</em>")
+        conf = conflicts_on(data, d)
         day = f"{WEEKDAYS[d.weekday()]} {d.strftime('%d.%m')}"
-        parts.append(f"<tr><td>{'<strong>' + day + '</strong>' if d == now else day}</td><td>{_status_macro(label, col)}</td>"
-                     f"<td>{len(bookings_on(data, d))}/{data['limit']}</td><td>{'<br/>'.join(items) or '—'}</td></tr>")
-    if current is not None:
-        parts.append("</tbody></table>")
+        day = f"<strong>{day}</strong>" if d == now else day
+        if d.isoformat() in rel_on:
+            day += f"<br/>{_status_macro('РЕЛИЗ ' + rel_on[d.isoformat()], 'Blue')}"
+        fz = freeze_on(data, d)
+        if fz and fz.get("reason"):
+            day += f"<br/><em>заморозка: {e(fz['reason'])}</em>"
+        rows = sorted(bookings_on(data, d), key=lambda b: (b["team"], b["service"].lower()))
+        if not rows:
+            parts.append(f"<tr><td>{day}</td><td>{_status_macro(label, col)}</td><td>—</td><td></td><td></td></tr>")
+            continue
+        for n, b in enumerate(rows):
+            ke = f"{e(b['service'])} ({e(b['team'])})"
+            if _ke(b["service"]) in conf:
+                ke = f"{ke} {_status_macro('КОНФЛИКТ', 'Red')}"
+            feats = "<br/>".join(e(x.strip()) for x in re.split(r"[;\n]", b.get("features") or "") if x.strip())
+            lead = f"<td rowspan=\"{len(rows)}\">{day}</td><td rowspan=\"{len(rows)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
+            parts.append(f"<tr>{lead}<td>{ke}</td><td>{feats or '—'}</td><td>{e(b.get('task') or '')}</td></tr>")
+    parts.append("</tbody></table>")
     return "".join(parts)
 
 
@@ -436,14 +468,17 @@ def publish(cfg: dict, pid: str, data: dict) -> Optional[str]:
 def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None) -> dict:
     now = now or today()
     days = []
-    for d in horizon(data, now):
+    for d in window_days(data):
         label, colour = day_status(data, d, now)
-        fz = freeze_on(data, d)
-        days.append({"date": d.isoformat(), "weekday": WEEKDAYS[d.weekday()], "sprint": sprint_of(data, d), "today": d == now,
-                     "status": label, "colour": colour, "freeze": fz, "bookings": bookings_on(data, d)})
-    t_label, t_colour = day_status(data, now, now) if now.weekday() < 5 else ("ВЫХОДНОЙ", "Grey")
+        conf = conflicts_on(data, d)
+        days.append({"date": d.isoformat(), "weekday": WEEKDAYS[d.weekday()], "weekend": d.weekday() >= 5, "today": d == now,
+                     "status": label, "colour": colour, "freeze": freeze_on(data, d),
+                     "bookings": [{**b, "conflict": _ke(b["service"]) in conf} for b in bookings_on(data, d)],
+                     "conflicts": [{"service": k, "teams": v} for k, v in conf.items()]})
+    t_label, t_colour = day_status(data, now, now)
     return {"stand": data["stand"], "pageId": pid, "url": f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}",
-            "limit": data["limit"], "sprintStart": data["sprintStart"], "sprintDays": data["sprintDays"], "teams": data["teams"],
+            "limit": int(data.get("limit") or 0), "window": data["window"], "releases": sorted(data["releases"], key=lambda r: r["date"]),
+            "teams": data["teams"],
             "today": {"date": now.isoformat(), "status": t_label, "colour": t_colour, "count": len(bookings_on(data, now))},
             "days": days, "freezes": data["freezes"], "pending": data["pending"]}
 
@@ -489,26 +524,38 @@ def create_page(stand: str, body: CreatePage, db: Session = Depends(get_db)) -> 
     return view(data, cfg, pid)
 
 
+class ReleaseMark(BaseModel):
+    name: str = Field(..., min_length=1)
+    date: str
+
+
 class SettingsBody(BaseModel):
-    limit: int = Field(3, ge=1, le=50)
-    sprintStart: str
-    sprintDays: int = Field(14, ge=1, le=60)
+    windowFrom: str
+    windowTo: str
+    releases: list[ReleaseMark] = Field(default_factory=list)
     teams: list[str] = Field(default_factory=lambda: list(DEFAULT_TEAMS))
+    limit: int = Field(0, ge=0, le=500)      # 0 — без общего лимита на стенд
 
 
 @router.put("/api/stands/{stand}/settings")
 def put_settings(stand: str, body: SettingsBody, db: Session = Depends(get_db)) -> dict:
     cfg, pid, stand = _ctx(db, stand)
     try:
-        date.fromisoformat(body.sprintStart)
+        a, b = date.fromisoformat(body.windowFrom), date.fromisoformat(body.windowTo)
+        rels = [{"id": "rl-" + uuid.uuid5(uuid.NAMESPACE_URL, f"{r.name}|{r.date}").hex[:8], "name": r.name.strip(),
+                 "date": date.fromisoformat(r.date).isoformat()} for r in body.releases]
     except ValueError:
-        raise HTTPException(422, "Начало спринта — дата ГГГГ-ММ-ДД")
+        raise HTTPException(422, "Даты — ГГГГ-ММ-ДД")
+    if b < a:
+        raise HTTPException(422, "Конец окна раньше начала")
+    if (b - a).days > 366:
+        raise HTTPException(422, "Окно планирования — не больше года")
     teams = [t.strip() for t in body.teams if t.strip()]
     if not teams:
         raise HTTPException(422, "Нужна хотя бы одна команда")
 
     def fn(d: dict) -> None:
-        d.update(limit=body.limit, sprintStart=body.sprintStart, sprintDays=body.sprintDays, teams=teams)
+        d.update(window={"from": a.isoformat(), "to": b.isoformat()}, releases=rels, teams=teams, limit=body.limit)
     data, _ = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data)
 
@@ -517,6 +564,7 @@ class BookingBody(BaseModel):
     date: str
     team: str = Field(..., min_length=1)
     service: str = Field(..., min_length=1)
+    features: str = ""
     task: str = ""
     hotfix: bool = False
 
@@ -537,7 +585,7 @@ def add_booking(stand: str, body: BookingBody, db: Session = Depends(get_db)) ->
         if why:
             free = nearest_free(data, d)
             raise HTTPException(409, f"Нельзя: {why}" + (f". Ближайший свободный день — {free.strftime('%d.%m')}" if free else ""))
-        data["bookings"].append(_new_booking(d, team, body.service, body.task, "SimpleTest", "simpletest"))
+        data["bookings"].append(_new_booking(d, team, body.service, body.task, "SimpleTest", "simpletest", features=body.features))
     data, _ = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data)
 
@@ -592,6 +640,7 @@ class PendingDecision(BaseModel):
     date: str = ""        # можно поправить при принятии
     team: str = ""
     service: str = ""
+    features: str = ""
     task: str = ""
     note: str = ""        # причина отказа — уйдёт в ответ
 
@@ -617,8 +666,10 @@ def decide(stand: str, cid: str, body: PendingDecision, db: Session = Depends(ge
             # Решение руками — правила не блокируют (например, осознанно сверх лимита), но день должен быть рабочим.
             if d.weekday() >= 5:
                 raise HTTPException(422, "Это выходной")
-            data["bookings"].append(_new_booking(d, team, service, body.task or item["task"], item["author"], "comment", cid))
-            reply["text"] = f"Принято: {service}, {d.strftime('%d.%m')}, {team}"
+            note = conflict_note(data, d, service, team)
+            data["bookings"].append(_new_booking(d, team, service, body.task or item["task"], item["author"], "comment", cid,
+                                                 body.features or item.get("features", "")))
+            reply["text"] = f"Принято: {service}, {d.strftime('%d.%m')}, {team}{note}"
         else:
             reply["text"] = "Отклонено" + (f": {body.note.strip()}" if body.note.strip() else "")
         data["pending"] = [p for p in data["pending"] if p["cid"] != cid]

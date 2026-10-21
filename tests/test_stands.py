@@ -57,90 +57,109 @@ def _comment(cid, text, author="Иванов"):
     return {"id": cid, "body": {"storage": {"value": "<p>" + text.replace("\n", "<br/>") + "</p>"}}, "history": {"createdBy": {"displayName": author}}}
 
 
-def _settings(start="2026-10-19"):
-    st.put_settings("Major-Check", st.SettingsBody(limit=2, sprintStart=start, sprintDays=14), db=None)
+def _settings(frm="2026-10-19", to="2026-11-13", limit=0, releases=()):
+    st.put_settings("Major-Check", st.SettingsBody(windowFrom=frm, windowTo=to, limit=limit,
+                                                   releases=[st.ReleaseMark(name=n, date=d) for n, d in releases]), db=None)
 
 
-def test_горизонт_два_спринта_рабочих_дней():
-    d = {**st.default_data("Major-Check"), "sprintStart": "2026-10-05"}
-    days = st.horizon(d, TODAY)
-    assert days[0] == date(2026, 10, 19) and days[-1] == date(2026, 11, 13) and len(days) == 20   # текущий спринт с 19.10 + следующий
+def _book(date_, team, service, features="", task="", hotfix=False):
+    return st.add_booking("Major-Check", st.BookingBody(date=date_, team=team, service=service, features=features, task=task, hotfix=hotfix), db=None)
+
+
+def test_окно_планирования_все_дни_и_старые_данные_спринта():
+    d = {**st.default_data("Major-Check"), "window": {"from": "2026-10-19", "to": "2026-11-13"}}
+    days = st.window_days(d)
+    assert days[0] == date(2026, 10, 19) and days[-1] == date(2026, 11, 13) and len(days) == 26     # с выходными
+    old = st._norm_data("Major-Check", {"sprintStart": "2026-10-19", "sprintDays": 14, "limit": 3, "bookings": [{"id": "x", "date": "2026-10-20", "team": "SC", "service": "a"}]})
+    assert old["window"] == {"from": "2026-10-19", "to": "2026-11-15"} and old["limit"] == 0     # лимит 3 был по умолчанию
+    assert old["bookings"][0]["features"] == ""
 
 
 def test_разбор_заявки_и_даты():
-    r = st.parse_request("Сервис: notify\nДата: 23.10\nКоманда: b2c\nЗадача: sber911-1", TODAY)
-    assert (r["service"], r["date"], r["team"], r["task"]) == ("notify", date(2026, 10, 23), "b2c", "SBER911-1")
+    r = st.parse_request("Сервис: notify\nДата: 23.10\nКоманда: b2c\nФичи: тема инцидента; фильтр\nЗадача: sber911-1", TODAY)
+    assert (r["service"], r["date"], r["team"], r["task"], r["features"]) == ("notify", date(2026, 10, 23), "b2c", "SBER911-1", "тема инцидента; фильтр")
     assert "Команда" in st.parse_request("Сервис: x\nДата: 23.10", TODAY)["error"]
     assert "не понял дату" in st.parse_request("Сервис: x\nДата: завтра\nКоманда: SC", TODAY)["error"]
-    assert st.parse_date("05.01", TODAY) == date(2027, 1, 5)           # без года — ближайшая впереди
-    assert st.parse_date("2026-10-23", TODAY) == date(2026, 10, 23)
+    assert st.parse_date("05.01", TODAY) == date(2027, 1, 5)
     d = st.default_data("Major-Check")
-    assert st.match_team(d, "базовые") == "Базовые сервисы" and st.match_team(d, "b2c") == "B2C" and st.match_team(d, "") is None
+    assert st.match_team(d, "базовые") == "Базовые сервисы" and st.match_team(d, "b2c") == "B2C"
 
 
-def test_бронь_правила_лимит_выходной_заморозка(conf):
+def test_конфликт_один_кэ_две_команды_красится_но_не_блокирует(conf):
     _settings()
-    st.add_booking("Major-Check", st.BookingBody(date="2026-10-22", team="SC", service="notify"), db=None)
-    st.add_booking("Major-Check", st.BookingBody(date="2026-10-22", team="Агенты", service="gateway"), db=None)
+    _book("2026-10-22", "SC", "notify", "тема инцидента")
+    _book("2026-10-22", "Агенты", "gateway")
+    v = _book("2026-10-22", "B2C", " Notify ", "фильтр")                  # тот же КЭ другой командой — можно, но конфликт
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert day["status"] == "КОНФЛИКТ" and day["conflicts"] == [{"service": "notify", "teams": ["B2C", "SC"]}]
+    assert sorted((b["service"].strip(), b["conflict"]) for b in day["bookings"]) == [("Notify", True), ("gateway", False), ("notify", True)]
+    _book("2026-10-23", "SC", "notify"); _book("2026-10-23", "SC", "notify")  # одна команда дважды — не конфликт
+    assert next(x for x in st.get_stand("Major-Check", db=None)["days"] if x["date"] == "2026-10-23")["status"] == "МОЖНО"
+
+
+def test_правила_выходной_заморозка_окно_и_лимит_по_желанию(conf):
+    _settings()
+    for _ in range(5):
+        _book("2026-10-22", "SC", "svc")                                  # без лимита — сколько угодно
     with pytest.raises(HTTPException) as e:
-        st.add_booking("Major-Check", st.BookingBody(date="2026-10-22", team="B2C", service="rms"), db=None)
-    assert "лимит 2/2" in e.value.detail and "23.10" in e.value.detail      # подсказан ближайший свободный
-    with pytest.raises(HTTPException) as e:
-        st.add_booking("Major-Check", st.BookingBody(date="2026-10-24", team="B2C", service="rms"), db=None)
+        _book("2026-10-24", "B2C", "rms")
     assert "выходной" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        _book("2026-12-01", "B2C", "rms")
+    assert "вне окна планирования 19.10–13.11" in e.value.detail
     st.add_freeze("Major-Check", st.FreezeBody(start="2026-10-27", end="2026-10-28", reason="регресс"), db=None)
     with pytest.raises(HTTPException) as e:
-        st.add_booking("Major-Check", st.BookingBody(date="2026-10-27", team="B2C", service="rms"), db=None)
+        _book("2026-10-27", "B2C", "rms")
     assert "заморозка до 28.10 (регресс)" in e.value.detail
-    v = st.add_booking("Major-Check", st.BookingBody(date="2026-10-27", team="B2C", service="hotfix-svc", hotfix=True), db=None)
-    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
-    assert day["status"] == "ЛИМИТ" and len(day["bookings"]) == 2
-    assert "ЗАМОРОЗКА" in conf["body"] and "регресс" in conf["body"]        # страница пересобрана
+    _book("2026-10-27", "B2C", "hotfix-svc", hotfix=True)
+    _settings(limit=2)
+    _book("2026-10-29", "SC", "a"); _book("2026-10-29", "SC", "b")
+    with pytest.raises(HTTPException) as e:
+        _book("2026-10-29", "SC", "c")
+    assert "лимит 2/2" in e.value.detail and "30.10" in e.value.detail
 
 
 def test_одновременная_запись_не_теряет_бронь_коллеги(conf):
     _settings()
     conf["conflict_once"] = True
-    v = st.add_booking("Major-Check", st.BookingBody(date="2026-10-22", team="SC", service="notify"), db=None)
-    services = {b["service"] for d in v["days"] for b in d["bookings"]}
-    assert services == {"notify", "agent-api"}                          # своя и коллеги, записанная между чтением и записью
+    v = _book("2026-10-22", "SC", "notify")
+    assert {b["service"] for d in v["days"] for b in d["bookings"]} == {"notify", "agent-api"}
 
 
-def test_заявки_из_комментариев_принимаются_по_правилам_и_получают_ответ(conf):
+def test_заявки_из_комментариев_с_фичами_и_конфликтом_в_ответе(conf):
     _settings()
     conf["comments"] = [
-        _comment("c1", "Сервис: notify\nДата: 22.10\nКоманда: B2C"),
-        _comment("c2", "Сервис: gateway\nДата: 22.10\nКоманда: SC"),
-        _comment("c3", "Сервис: rms\nДата: 22.10\nКоманда: Агенты"),      # сверх лимита 2
-        _comment("c4", "просто вопрос без шаблона"),
-        _comment("c5", "Сервис: x\nДата: 23.10\nКоманда: Космос"),
+        _comment("c1", "Сервис: notify\nДата: 22.10\nКоманда: B2C\nФичи: тема инцидента"),
+        _comment("c2", "Сервис: notify\nДата: 22.10\nКоманда: SC"),           # тот же КЭ — конфликт, но принято
+        _comment("c3", "просто вопрос без шаблона"),
+        _comment("c4", "Сервис: x\nДата: 23.10\nКоманда: Космос"),
+        _comment("c5", "Сервис: x\nДата: 25.10\nКоманда: SC"),                # воскресенье
     ]
     v = st.pull("Major-Check", db=None)
     assert v["pulled"]["accepted"] == 2 and v["pulled"]["pending"] == 3
-    reasons = {p["cid"]: p["reason"] for p in v["pending"]}
-    assert "лимит 2/2" in reasons["c3"] and "ближайший свободный день — 23.10" in reasons["c3"]
-    assert "не указано" in reasons["c4"] and "не знаю команду «Космос»" in reasons["c5"]
     replies = dict(conf["replies"])
-    assert replies["c1"].startswith("<p>Принято: notify, 22.10, B2C") and replies["c3"].startswith("<p>На рассмотрении")
-    # Повторный сбор не берёт те же комментарии дважды
+    assert replies["c1"] == "<p>Принято: notify, 22.10, B2C</p>"
+    assert "КОНФЛИКТ: notify в этот день ставит также B2C" in replies["c2"]
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert any(b["features"] == "тема инцидента" for b in day["bookings"]) and day["status"] == "КОНФЛИКТ"
+    reasons = {p["cid"]: p["reason"] for p in v["pending"]}
+    assert "не указано" in reasons["c3"] and "Космос" in reasons["c4"] and "выходной" in reasons["c5"]
     assert st.pull("Major-Check", db=None)["pulled"] == {"accepted": 0, "pending": 0, "replyErrors": []}
-    # Решение по заявке руками: c3 переносим на 23.10
-    v = st.decide("Major-Check", "c3", st.PendingDecision(accept=True, date="2026-10-23"), db=None)
-    assert all(p["cid"] != "c3" for p in v["pending"])
-    assert any(b["service"] == "rms" for d in v["days"] if d["date"] == "2026-10-23" for b in d["bookings"])
-    v = st.decide("Major-Check", "c5", st.PendingDecision(accept=False, note="нет такой команды"), db=None)
-    assert dict(conf["replies"])["c5"] == "<p>Отклонено: нет такой команды</p>"
+    v = st.decide("Major-Check", "c5", st.PendingDecision(accept=True, date="2026-10-26", features="ночная установка"), db=None)
+    assert any(b["features"] == "ночная установка" for d in v["days"] if d["date"] == "2026-10-26" for b in d["bookings"])
+    st.decide("Major-Check", "c4", st.PendingDecision(accept=False, note="нет такой команды"), db=None)
+    assert dict(conf["replies"])["c4"] == "<p>Отклонено: нет такой команды</p>"
 
 
-def test_страница_все_дни_двух_спринтов_и_памятка(conf):
-    _settings()
-    st.add_booking("Major-Check", st.BookingBody(date="2026-10-23", team="SC", service="notify", task="SBER911-5"), db=None)
+def test_страница_таблица_дней_маркеры_фичи_релизы(conf):
+    _settings(releases=[("Release 26", "2026-11-06")])
+    _book("2026-10-23", "SC", "notify", "тема инцидента; фильтр по статусу", "SBER911-5")
+    _book("2026-10-23", "B2C", "notify")
     body = conf["body"]
-    assert body.count("<tr><td>") == 20                                   # все рабочие дни двух спринтов, в т.ч. пустые
-    assert body.count("<h2>Спринт с ") == 2
-    assert "Сервис: notify" in body and "Базовые сервисы / Агенты / B2C / SC" in body
-    assert "SC · notify · SBER911-5" in body and "<strong>ср 21.10</strong>" in body
-    assert 'ac:name="status"' in body and "ПРОШЁЛ" in body               # пн и вт уже прошли
+    assert body.count("<tr><td") == 20 + 1                      # 20 рабочих дней окна, у 23.10 две брони — строк на одну больше
+    assert '<td rowspan="2">' in body and "notify (SC)" in body and "тема инцидента<br/>фильтр по статусу" in body
+    assert body.count(">КОНФЛИКТ<") >= 2 and "РЕЛИЗ Release 26" in body and "Окно планирования: 19.10.2026 — 13.11.2026" in body
+    assert "Фичи: тема инцидента" in body and "<strong>ср 21.10</strong>" in body and "ПРОШЁЛ" in body
 
 
 def test_нет_страницы_стенда_понятная_ошибка(conf):

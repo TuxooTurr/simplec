@@ -226,3 +226,48 @@ def test_нет_страницы_стенда_понятная_ошибка(conf
     with pytest.raises(HTTPException) as e:
         st.get_stand("Major-GO", db=None)
     assert e.value.status_code == 409 and "не выбрана страница" in e.value.detail
+
+
+def test_бронь_на_диапазон_одна_запись_по_рабочим_дням(conf):
+    _settings()
+    st.add_freeze("Major-Check", st.FreezeBody(start="2026-11-04", end="2026-11-04", reason="регресс"), db=None)
+    items = [
+        st.BookingBody(date="2026-10-22", dateTo="2026-10-27", team="B2C", service="rms-front", task="SBER911-1", features="Карточка"),
+        st.BookingBody(date="2026-11-02", dateTo="2026-11-05", team="SC", service="gateway", task="SBER911-2"),   # 04.11 заморозка
+        st.BookingBody(date="2026-10-26", team="SC", service="rms-front", task="SBER911-3"),                          # конфликт в диапазоне
+    ]
+    v = st.add_bookings("Major-Check", st.BulkBookings(items=items), db=None)
+    assert v["added"] == 2 and v["rejected"] == [{"service": "gateway", "task": "SBER911-2", "reason": "04.11: заморозка до 04.11 (регресс)"}]
+    days = {d["date"]: d for d in v["days"]}
+    on = lambda iso: [(b["team"], b["service"]) for b in days[iso]["bookings"]]
+    for iso in ("2026-10-22", "2026-10-23", "2026-10-26", "2026-10-27"):
+        assert ("B2C", "rms-front") in on(iso)
+    assert on("2026-10-24") == [] and on("2026-10-25") == [] and on("2026-10-28") == []     # выходные и после конца — пусто
+    assert days["2026-10-26"]["status"] == "КОНФЛИКТ" and days["2026-10-23"]["status"] == "МОЖНО"
+    stored = [b for b in conf["prop"]["bookings"] if b["task"] == "SBER911-1"]
+    assert len(stored) == 1 and stored[0]["dateTo"] == "2026-10-27"                          # одна запись на весь диапазон
+    assert conf["body"].count("SBER911-1 — Карточка") == 4                                    # на странице — в каждом рабочем дне
+    bad = st.add_bookings("Major-Check", st.BulkBookings(items=[st.BookingBody(date="2026-10-24", dateTo="2026-10-25", team="SC", service="x")]), db=None)
+    assert bad["rejected"][0]["reason"] == "в диапазоне одни выходные"
+
+
+def test_кэ_сравниваются_по_коду(conf):
+    from db import ke_store
+    assert ke_store.ke_key("Чат [CI04663753]") == ke_store.ke_key("ci04663753") == ke_store.ke_key("Чат (4663753)") == "ci4663753"
+    assert ke_store.ke_key("Чат [CI04663753]") != ke_store.ke_key("Чат [CI04510531]")          # одинаковые названия — разные КЭ
+    assert ke_store.ke_key("Контроль качества релизов Sigma (Release Quality Management)").startswith("контроль")
+    assert ke_store.clean(["Чат [CI04663753]", "CI04663753", "Чат [CI04510531]"]) == ["Чат [CI04510531]", "Чат [CI04663753]"]
+    _settings()
+    _book("2026-10-22", "B2C", "Управление приоритетными событиями [CI03521751]", task="SBER911-1")
+    v = _book("2026-10-22", "SC", "Управление приоритетными событиями (3521751)", task="SBER911-2")   # так КЭ приходит из Jira
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert day["status"] == "КОНФЛИКТ"
+
+
+def test_базовый_справочник_кэ_из_репозитория():
+    import json
+    from db import ke_store
+    base = json.loads(ke_store.DEFAULT_FILE.read_text("utf-8"))
+    assert len(base) == 83 and "Чат [CI04663753]" in base and "Чат [CI04510531]" in base
+    assert not any("Удалить" in k for k in base)
+    assert len({ke_store.ke_key(k) for k in base}) == len(base)                                       # коды уникальны

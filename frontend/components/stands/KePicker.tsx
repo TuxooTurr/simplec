@@ -1,9 +1,12 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { keKey } from "@/lib/standsApi";
 
-const norm = (s: string) => s.trim().toLowerCase();
+const norm = keKey;   // один КЭ — по коду CI, без кода — по названию
+/** Название КЭ без кода: «Чат [CI04663753]» → «чат». */
+const nameOf = (k: string) => k.replace(/\s*[[(][^\])]*[\])]\s*$/, "").trim().toLowerCase();
 
 /**
  * Несколько КЭ сразу: выбранные — чипами, ввод фильтрует справочник КЭ (выпадающий список).
@@ -11,18 +14,23 @@ const norm = (s: string) => s.trim().toLowerCase();
  * в справочник (у всех, навсегда) и сразу выбирается. Не сохранился — всё равно выбран для этой брони.
  * Вставка «a, b; c» добавляет все. Backspace в пустом поле убирает последний.
  */
-export default function KePicker({ value, onChange, catalog, onCreate }: {
+export default function KePicker({ value, onChange, catalog, onCreate, autoFocus = false, placeholder, className = "min-w-[18rem] flex-1" }: {
   value: string[]; onChange: (v: string[]) => void; catalog: string[];
   /** Создать КЭ в справочнике. */
   onCreate: (names: string[]) => Promise<void>;
+  autoFocus?: boolean;
+  placeholder?: string;
+  className?: string;
 }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(-1);   // -1 — ничего не подсвечено стрелками
   const input = useRef<HTMLInputElement>(null);
+  const listId = useId();   // полей КЭ на форме несколько — у каждого свой список
 
   const chosen = new Set(value.map(norm));
-  const matches = catalog.filter(k => !chosen.has(norm(k)) && (!q.trim() || norm(k).includes(norm(q)))).slice(0, 60);
+  const needle = q.trim().toLowerCase();
+  const matches = catalog.filter(k => !chosen.has(norm(k)) && (!needle || k.toLowerCase().includes(needle))).slice(0, 60);
   const add = (raw: string[]) => {
     const next = [...value];
     const fresh: string[] = [];
@@ -39,7 +47,7 @@ export default function KePicker({ value, onChange, catalog, onCreate }: {
   };
 
   return (
-    <div className="relative min-w-[18rem] flex-1">
+    <div className={`relative ${className}`}>
       <div className="flex flex-wrap items-center gap-1 min-h-[34px] px-1.5 py-1 border border-border-main rounded-lg bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30"
         onClick={() => input.current?.focus()}>
         {value.map(k => (
@@ -48,8 +56,8 @@ export default function KePicker({ value, onChange, catalog, onCreate }: {
             <button type="button" onClick={() => onChange(value.filter(x => x !== k))} aria-label={`Убрать ${k}`} className="hover:text-red-600"><X className="w-3 h-3" /></button>
           </span>
         ))}
-        <input ref={input} autoFocus value={q} aria-label="КЭ" role="combobox" aria-expanded={open && matches.length > 0} aria-controls="ke-picker-list"
-          placeholder={value.length ? "ещё КЭ…" : catalog.length ? "КЭ: начните вводить или выберите" : "КЭ (сервис): notify"}
+        <input ref={input} autoFocus={autoFocus} value={q} aria-label="КЭ" role="combobox" aria-expanded={open && matches.length > 0} aria-controls={listId}
+          placeholder={value.length ? "ещё КЭ…" : placeholder ?? (catalog.length ? "КЭ: начните вводить или выберите" : "КЭ (сервис): notify")}
           onChange={e => {
             const t = e.target.value;
             if (/[,;\n]/.test(t)) add(t.split(/[,;\n]/)); else { setQ(t); setHi(-1); }
@@ -71,14 +79,15 @@ export default function KePicker({ value, onChange, catalog, onCreate }: {
           className="flex-1 min-w-[8rem] bg-transparent text-sm text-text-main focus:outline-none px-1" />
       </div>
       {open && (matches.length > 0 || q.trim()) && (
-        <ul id="ke-picker-list" role="listbox"
+        <ul id={listId} role="listbox"
           className="absolute z-20 mt-1 w-full max-h-60 overflow-y-auto scrollbar-thin rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg text-sm">
           {matches.map((k, i) => (
             <li key={k} role="option" aria-selected={i === hi}
               onMouseDown={e => { e.preventDefault(); add([k]); }} onMouseEnter={() => setHi(i)}
               className={`px-2.5 py-1 cursor-pointer ${i === hi ? "bg-primary/10 text-primary" : "text-text-main"}`}>{k}</li>
           ))}
-          {q.trim() && !catalog.some(k => norm(k) === norm(q)) && (
+          {/* Создать — только если такого КЭ нет ни по коду, ни по названию (иначе вышел бы дубль без кода) */}
+          {q.trim() && !catalog.some(k => norm(k) === norm(q) || nameOf(k) === q.trim().toLowerCase()) && (
             <li role="option" aria-selected={false} onMouseDown={e => { e.preventDefault(); add([q]); }}
               className="px-2.5 py-1 cursor-pointer text-text-muted hover:bg-bg-subtle border-t border-border-main">
               + Создать КЭ «{q.trim()}» — добавится в справочник</li>

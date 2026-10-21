@@ -6,10 +6,10 @@ import { AlertTriangle, Check, ExternalLink, Inbox, Link2, ListPlus, Loader2, Ma
 import {
   addStandBookings, addStandFreeze, createStandPage, decideStandPending, deleteStandBooking, deleteStandFreeze, getStand,
   pullStandRequests, saveStandSettings, saveStandsConfig, addKe, saveKeCatalog,
-  type NewBooking, type StandPending, type StandSettings, type StandView,
+  canonKe, keKey, type NewBooking, type StandPending, type StandSettings, type StandView,
 } from "@/lib/standsApi";
-import StandTimeline, { blocksOf, TEAM_CLS, ZOOM, type StandBlock } from "./StandTimeline";
-import ImportFromList from "./ImportFromList";
+import StandTimeline, { blocksOf, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
+import ImportFromList, { type PickedFeature } from "./ImportFromList";
 import KePicker from "./KePicker";
 import { useFeatureStage } from "./useFeatureStage";
 
@@ -172,11 +172,11 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
           onPickBlock={b => { setCell(null); setPickedKey(b.key); }} />
 
         {cell && cellDay && (
-          <BookingForm key={`${cell.date}|${cell.team}`} date={cell.date} weekday={cellDay.weekday} team={cell.team} teams={v.teams}
-            catalog={v.keCatalog} onCreateKe={createKe} freeze={!!cellDay.freeze} busy={busy} onCancel={() => setCell(null)}
-            onImport={items => run(() => addStandBookings(stand, items), r => {
+          <BookingForm key={`${cell.date}|${cell.team}`} date={cell.date} team={cell.team} teams={v.teams} freezes={v.freezes}
+            window={v.window} catalog={v.keCatalog} onCreateKe={createKe} featureStage={featureStage} busy={busy} onCancel={() => setCell(null)}
+            onPublish={items => run(() => addStandBookings(stand, items), r => {
               const x = r as StandView & { added: number; rejected: { service: string; task: string; reason: string }[] };
-              return `Добавлено броней: ${x.added}` + (x.rejected.length ? `; не встали ${x.rejected.length}: ${x.rejected.slice(0, 3).map(j => `${j.task || j.service} — ${j.reason}`).join("; ")}` : "");
+              return `Опубликовано броней: ${x.added}` + (x.rejected.length ? `; не встали ${x.rejected.length}: ${x.rejected.slice(0, 3).map(j => `${j.task || j.service} — ${j.reason}`).join("; ")}` : "");
             }).then(ok => ok && setCell(null))} />
         )}
       </div>
@@ -196,11 +196,12 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
               return (
                 <li key={it.id} className="flex flex-wrap items-center gap-2 px-2.5 py-1.5">
                   <span className="font-mono text-primary">{it.task || "—"}</span>
-                  <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}</span>
+                  <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}
+                    {it.dateTo && <span className="text-xs text-text-muted"> · {ddmm(it.date)}–{ddmm(it.dateTo)}</span>}</span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
                   <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "SimpleTest"}</span>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
-                    aria-label={`Удалить ${it.task || "бронь"}`} title="Снять эту фичу с установки"
+                    aria-label={`Удалить ${it.task || "бронь"}`} title={it.dateTo ? "Снять эту фичу с установки — со всего диапазона" : "Снять эту фичу с установки"}
                     className="p-1 text-text-muted hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
                 </li>
               );
@@ -214,45 +215,121 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
   );
 }
 
-function BookingForm({ date, weekday, team: team0, teams, catalog, onCreateKe, freeze, busy, onImport, onCancel }: {
-  date: string; weekday: string; team: string; teams: string[]; catalog: string[]; onCreateKe: (names: string[]) => Promise<void>;
-  freeze: boolean; busy: boolean;
-  onImport: (items: NewBooking[]) => void; onCancel: () => void;
+/** Строка черновика брони: фича (номер и название) и её КЭ. */
+interface DraftRow { id: string; task: string; name: string; kes: string[] }
+const newRow = (r: Partial<DraftRow> = {}): DraftRow => ({ id: Math.random().toString(36).slice(2), task: "", name: "", kes: [], ...r });
+
+/** Рабочие дни диапазона (как на бэкенде: выходные пропускаются). */
+function workDays(from: string, to: string): string[] {
+  const out: string[] = [];
+  if (!from || !to || to < from) return out;
+  for (let d = new Date(`${from}T00:00:00`); ; d.setDate(d.getDate() + 1)) {
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (iso > to || out.length > 70) break;
+    if (d.getDay() !== 0 && d.getDay() !== 6) out.push(iso);
+  }
+  return out;
+}
+
+/**
+ * Черновик брони: команда, дни «с — по», фичи с их КЭ. Фичи — руками или «Из списка Jira tool» (номер, название
+ * и КЭ задачи подставляются, их можно поправить, добавить КЭ). «КЭ для всех фич» добавляется к каждой.
+ * В Confluence ничего не уходит, пока не нажата «Опубликовать»: бронь на каждую пару фича × КЭ, одна на весь диапазон.
+ */
+function BookingForm({ date, team: team0, teams, freezes, window: win, catalog, onCreateKe, featureStage, busy, onPublish, onCancel }: {
+  date: string; team: string; teams: string[]; freezes: StandView["freezes"]; window: StandView["window"]; catalog: string[];
+  onCreateKe: (names: string[]) => Promise<void>; featureStage: FeatureStage; busy: boolean;
+  onPublish: (items: NewBooking[]) => void; onCancel: () => void;
 }) {
   const [fromList, setFromList] = useState(false);
   const [team, setTeam] = useState(team0);
-  const [kes, setKes] = useState<string[]>([]);
-  const [features, setFeatures] = useState("");
-  const [task, setTask] = useState("");
+  const [from, setFrom] = useState(date);
+  const [to, setTo] = useState(date);
+  const [rows, setRows] = useState<DraftRow[]>([newRow()]);
+  const [common, setCommon] = useState<string[]>([]);
   const [hotfix, setHotfix] = useState(false);
-  // Один и тот же номер и название фичи — на каждый выбранный КЭ.
-  const items = kes.map(service => ({ date, team, service, features: features.trim(), task: task.trim().toUpperCase(), hotfix }));
+  const setRow = (id: string, patch: Partial<DraftRow>) => setRows(rs => rs.map(r => (r.id === id ? { ...r, ...patch } : r)));
+  const norm = keKey;
+
+  const days = workDays(from, to);
+  const frozen = days.filter(d => freezes.some(f => f.from <= d && d <= f.to));
+  const rangeTo = to > from ? to : "";
+  const filled = rows.filter(r => r.task.trim() || r.name.trim() || r.kes.length);
+  const kesOf = (r: DraftRow) => [...r.kes, ...common].filter((k, i, a) => a.findIndex(x => norm(x) === norm(k)) === i);
+  const noKe = filled.filter(r => !kesOf(r).length);
+  const items: NewBooking[] = filled.flatMap(r => kesOf(r).map(service => ({
+    date: from, dateTo: rangeTo, team, service, features: r.name.trim(), task: r.task.trim().toUpperCase(), hotfix,
+  })));
+  const pick = (picked: PickedFeature[]) => setRows(rs => {
+    const have = new Set(rs.map(r => r.task.trim().toUpperCase()).filter(Boolean));
+    const base = rs.filter(r => r.task.trim() || r.name.trim() || r.kes.length);   // пустую строку-заготовку убираем
+    // КЭ задачи — в написании справочника: из Jira он может прийти «Название (3521751)».
+    return [...base, ...picked.filter(p => !have.has(p.task)).map(p => newRow({ ...p, kes: p.kes.map(k => canonKe(k, catalog)) }))];
+  });
+  const dd = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+
   return (
-    <form className="rounded-xl border border-primary/40 bg-primary/5 p-3 space-y-2 text-sm"
-      onSubmit={e => { e.preventDefault(); if (items.length) onImport(items); }}>
-      <p className="font-semibold text-text-main">Бронь на {weekday} {ddmm(date)}</p>
-      <div className="flex flex-wrap items-start gap-2">
+    <form className="rounded-xl border border-primary/40 bg-primary/5 p-3 space-y-3 text-sm"
+      onSubmit={e => { e.preventDefault(); if (items.length && !noKe.length) onPublish(items); }}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-text-main">Новая бронь</span>
         <select value={team} onChange={e => setTeam(e.target.value)} aria-label="Команда" className={INPUT}>
           {teams.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
-        <KePicker value={kes} onChange={setKes} catalog={catalog} onCreate={onCreateKe} />
+        <label className="flex items-center gap-1.5 text-xs text-text-muted">с
+          <input type="date" value={from} min={win.from} max={win.to} aria-label="С даты"
+            onChange={e => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} className={INPUT} /></label>
+        <label className="flex items-center gap-1.5 text-xs text-text-muted">по
+          <input type="date" value={to} min={from} max={win.to} aria-label="По дату" onChange={e => setTo(e.target.value)} className={INPUT} /></label>
+        <span className="text-xs text-text-muted">рабочих дней: {days.length}{days.length > 1 ? ` (${dd(days[0])}–${dd(days[days.length - 1])})` : ""}</span>
+        {frozen.length > 0 && (
+          <label className="flex items-center gap-1 text-xs text-amber-800 dark:text-amber-300">
+            <input type="checkbox" checked={hotfix} onChange={e => setHotfix(e.target.checked)} /> хотфикс — в заморозку ({frozen.map(dd).join(", ")})</label>
+        )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <input value={task} onChange={e => setTask(e.target.value)} placeholder="Фича: SBER911-…" aria-label="Номер фичи" className={`${INPUT} w-40 font-mono`} />
-        <input value={features} onChange={e => setFeatures(e.target.value)} placeholder="Название фичи" aria-label="Название фичи" className={`${INPUT} flex-1 min-w-[16rem]`} />
-        {freeze && <label className="flex items-center gap-1 text-xs text-text-main"><input type="checkbox" checked={hotfix} onChange={e => setHotfix(e.target.checked)} /> хотфикс (день в заморозке)</label>}
+
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-start gap-2">
+          <span className="text-xs text-text-muted pt-2 w-32">КЭ для всех фич</span>
+          <KePicker value={common} onChange={setCommon} catalog={catalog} onCreate={onCreateKe} placeholder="добавится к каждой фиче" className="flex-1 min-w-[16rem]" />
+        </div>
+        {rows.map((r, n) => {
+          const st = r.task.trim() ? featureStage(r.task.trim().toUpperCase()) : null;
+          return (
+            <div key={r.id} className="flex flex-wrap items-start gap-2 rounded-lg border border-border-main bg-bg-card p-2">
+              <input value={r.task} onChange={e => setRow(r.id, { task: e.target.value })} placeholder="SBER911-…" aria-label={`Номер фичи ${n + 1}`}
+                className={`${INPUT} w-32 font-mono`} />
+              <input value={r.name} onChange={e => setRow(r.id, { name: e.target.value })} placeholder="Название фичи" aria-label={`Название фичи ${n + 1}`}
+                className={`${INPUT} flex-1 min-w-[12rem]`} />
+              <KePicker value={r.kes} onChange={kes => setRow(r.id, { kes })} catalog={catalog} onCreate={onCreateKe} autoFocus={n === 0 && rows.length === 1}
+                placeholder={common.length ? "свои КЭ (по желанию)" : "КЭ фичи"} className="flex-[2] min-w-[16rem]" />
+              {st && <span className="text-xs text-text-muted whitespace-nowrap pt-2" title="Статус (st) в Jira tool">{st.dot} {st.text}</span>}
+              <button type="button" onClick={() => setRows(rs => (rs.length > 1 ? rs.filter(x => x.id !== r.id) : [newRow()]))}
+                aria-label={`Убрать фичу ${n + 1}`} className="p-2 text-text-muted hover:text-red-600"><X className="w-4 h-4" /></button>
+            </div>
+          );
+        })}
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setRows(rs => [...rs, newRow()])} className="flex items-center gap-1 text-xs text-primary hover:underline">
+            <Plus className="w-3.5 h-3.5" /> фича</button>
+          <button type="button" onClick={() => setFromList(o => !o)} aria-expanded={fromList}
+            title="Номер, название и КЭ задач из списка Jira tool подставятся в форму"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle">
+            <ListPlus className="w-3.5 h-3.5" /> Из списка Jira tool</button>
+        </div>
+        {fromList && <ImportFromList already={new Set(rows.map(r => r.task.trim().toUpperCase()).filter(Boolean))} onPick={rs => { pick(rs); setFromList(false); }} />}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="submit" disabled={busy || !items.length} className="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
-          Забронировать{items.length > 1 ? `: КЭ ${items.length}` : ""}</button>
-        <button type="button" onClick={() => setFromList(o => !o)} aria-expanded={fromList}
-          title="Подставить задачи из списка Jira tool: номер, название, КЭ задачи"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-          <ListPlus className="w-4 h-4" /> Из списка Jira tool</button>
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-border-main pt-2">
+        <button type="submit" disabled={busy || !items.length || !!noKe.length || !days.length}
+          className="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
+          Опубликовать{items.length ? `: броней ${items.length}` : ""}</button>
         <button type="button" onClick={onCancel} className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-muted">Отмена</button>
-        <span className="text-xs text-text-muted">тот же КЭ у команды по другой фиче встанет в тот же блок</span>
+        <span className="text-xs text-text-muted">
+          {filled.length ? `фич ${filled.length} × их КЭ` : "добавьте фичу или КЭ"}{days.length > 1 ? `, каждая — на ${days.length} рабочих дня(ей)` : ""}
+        </span>
+        {noKe.length > 0 && <span className="text-xs text-amber-700 dark:text-amber-300">без КЭ: {noKe.map(r => r.task || r.name || "строка").join(", ")}</span>}
       </div>
-      {fromList && <ImportFromList date={date} team={team} fallbackService={kes.join(", ")} busy={busy} onImport={onImport} />}
     </form>
   );
 }

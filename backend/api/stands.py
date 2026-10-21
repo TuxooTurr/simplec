@@ -196,7 +196,32 @@ def freeze_on(data: dict, d: date) -> Optional[dict]:
 
 
 def bookings_on(data: dict, d: date) -> list[dict]:
-    return [b for b in data["bookings"] if b["date"] == d.isoformat()]
+    """Брони дня. Бронь на диапазон (date — dateTo) стоит в каждый его рабочий день; в выходные броней нет."""
+    iso = d.isoformat()
+    if d.weekday() >= 5:
+        return [b for b in data["bookings"] if b["date"] == iso]
+    return [b for b in data["bookings"] if b["date"] <= iso <= (b.get("dateTo") or b["date"])]
+
+
+def range_days(a: date, b: date) -> list[date]:
+    """Рабочие дни диапазона (выходные пропускаются)."""
+    return [d for d in (a + timedelta(days=i) for i in range((b - a).days + 1)) if d.weekday() < 5]
+
+
+def check_range(data: dict, a: date, b: date, hotfix: bool = False) -> Optional[str]:
+    """Почему нельзя поставить на диапазон; None — можно. Проверяется каждый рабочий день."""
+    if b < a:
+        return "конец диапазона раньше начала"
+    if (b - a).days > 62:
+        return "диапазон — не больше двух месяцев"
+    days = range_days(a, b)
+    if not days:
+        return "в диапазоне одни выходные"
+    for d in days:
+        why = check(data, d, hotfix)
+        if why:
+            return why if a == b else f"{d.strftime('%d.%m')}: {why}"
+    return None
 
 
 def installs_on(data: dict, d: date) -> int:
@@ -205,7 +230,8 @@ def installs_on(data: dict, d: date) -> int:
 
 
 def _ke(s_: str) -> str:
-    return re.sub(r"\s+", " ", s_.strip().lower())
+    """Ключ КЭ для конфликтов и группировки: по коду CI, если он есть («Чат [CI04663753]» = «ci04663753»), иначе по названию."""
+    return ke_store.ke_key(s_)
 
 
 def conflicts_on(data: dict, d: date) -> dict[str, list[str]]:
@@ -257,8 +283,10 @@ def conflict_note(data: dict, d: date, service: str, team: str) -> str:
     return f" — КОНФЛИКТ: {service} в этот день ставит также {', '.join(others)}" if others else ""
 
 
-def _new_booking(d: date, team: str, service: str, task: str, by: str, source: str, comment: str = "", features: str = "") -> dict:
-    return {"id": "bk-" + uuid.uuid4().hex[:8], "date": d.isoformat(), "team": team, "service": service.strip(),
+def _new_booking(d: date, team: str, service: str, task: str, by: str, source: str, comment: str = "", features: str = "",
+                 to: Optional[date] = None) -> dict:
+    extra = {"dateTo": to.isoformat()} if to and to > d else {}
+    return {"id": "bk-" + uuid.uuid4().hex[:8], "date": d.isoformat(), **extra, "team": team, "service": service.strip(),
             "features": features.strip(), "task": task.strip().upper(), "by": by, "source": source, "comment": comment,
             "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
@@ -613,6 +641,7 @@ def put_ke_catalog(body: KeNames) -> dict:
 
 class BookingBody(BaseModel):
     date: str
+    dateTo: str = ""          # конец диапазона (включительно); пусто — один день
     team: str = Field(..., min_length=1)
     service: str = Field(..., min_length=1)
     features: str = ""
@@ -648,8 +677,9 @@ class BulkBookings(BaseModel):
 @router.post("/api/stands/{stand}/bookings/bulk")
 def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) -> dict:
     """
-    Пачка броней одной записью (импорт задач из списка Jira tool: задача с 30 КЭ — 30 броней). Каждая проверяется
-    правилами; не прошедшие возвращаются с причиной, остальные встают. Страница пересобирается один раз.
+    Пачка броней одной записью (форма брони: фичи × КЭ, на день или диапазон). Бронь на диапазон — одна запись
+    с dateTo, проверяется каждый рабочий день. Не прошедшие возвращаются с причиной, остальные встают.
+    Страница пересобирается один раз.
     """
     cfg, pid, stand = _ctx(db, stand)
     if not body.items:
@@ -662,16 +692,17 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
         for it in body.items:
             try:
                 d = date.fromisoformat(it.date)
+                to = date.fromisoformat(it.dateTo) if it.dateTo else d
             except ValueError:
                 rejected.append({"service": it.service, "task": it.task, "reason": "дата не ГГГГ-ММ-ДД"})
                 continue
             team = match_team(data, it.team)
             why = None if team else f"нет команды «{it.team}»"
-            why = why or check(data, d, it.hotfix)
+            why = why or (check(data, d, it.hotfix) if to == d else check_range(data, d, to, it.hotfix))
             if why:
                 rejected.append({"service": it.service, "task": it.task, "reason": why})
                 continue
-            data["bookings"].append(_new_booking(d, team, it.service, it.task, "SimpleTest", "simpletest", features=it.features))
+            data["bookings"].append(_new_booking(d, team, it.service, it.task, "SimpleTest", "simpletest", features=it.features, to=to))
         return rejected
     data, rejected = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data, {"added": len(body.items) - len(rejected), "rejected": rejected})

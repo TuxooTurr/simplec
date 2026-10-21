@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 
@@ -22,8 +23,21 @@ DEFAULT_FILE = Path(__file__).resolve().parent / "ke_catalog_default.json"
 _lock = threading.Lock()
 
 
-def _key(name: str) -> str:
-    return " ".join(name.split()).lower()
+# Код КЭ: «Чат [CI04663753]», «ci04663753», «Управление приоритетными событиями (3521751)» — id опции Jira
+# это тот же код без «CI» и ведущих нулей. Названия в SBER911 повторяются («Чат», «Sber911 - шлюз» — по два КЭ),
+# поэтому один КЭ узнаём по коду, а без кода — по названию.
+_CODE_RE = re.compile(r"(?:\bci0*(\d{5,})\b|[(\[]\s*(?:ci)?0*(\d{5,})\s*[)\]])", re.I)
+
+
+def ke_key(name: str) -> str:
+    """Ключ сравнения КЭ: «ci<код без нулей>», если код есть, иначе название без регистра и лишних пробелов."""
+    m = _CODE_RE.search(name or "")
+    if m:
+        return "ci" + (m.group(1) or m.group(2))
+    return " ".join((name or "").split()).lower()
+
+
+_key = ke_key
 
 
 def clean(names: list[str]) -> list[str]:

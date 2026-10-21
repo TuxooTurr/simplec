@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { StandBooking, StandView } from "@/lib/standsApi";
+import { keKey, type StandBooking, type StandView } from "@/lib/standsApi";
 
 /** Установка на графике: команда + день + КЭ; внутри — фичи (брони), ради которых КЭ ставят. */
 export interface StandBlock { key: string; date: string; team: string; service: string; conflict: boolean; items: StandBooking[] }
@@ -9,7 +9,6 @@ export interface StandBlock { key: string; date: string; team: string; service: 
 /** Статус (st) фичи из Jira tool: кружок и подпись; null — задачи нет в Jira tool. */
 export type FeatureStage = (taskKey: string) => { dot: string; text: string } | null;
 
-const keKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 
 /** Брони дня одной команды → установки по КЭ (порядок — по названию КЭ). */
 export function blocksOf(bookings: StandBooking[], team: string, date: string): StandBlock[] {
@@ -200,7 +199,8 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
               return (
                 <li key={it.id} className="flex gap-1.5 text-text-main">
                   <span className="font-mono text-primary whitespace-nowrap">{it.task || "—"}</span>
-                  <span className="min-w-0 flex-1">{it.features || <span className="text-text-muted">без названия</span>}</span>
+                  <span className="min-w-0 flex-1">{it.features || <span className="text-text-muted">без названия</span>}
+                    {it.dateTo && <span className="text-text-muted"> · {it.date.slice(8, 10)}.{it.date.slice(5, 7)}–{it.dateTo.slice(8, 10)}.{it.dateTo.slice(5, 7)}</span>}</span>
                   <span className="whitespace-nowrap text-text-muted">{st ? `${st.dot} ${st.text}` : ""}</span>
                 </li>
               );

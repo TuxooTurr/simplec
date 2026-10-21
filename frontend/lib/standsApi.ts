@@ -6,7 +6,8 @@
 import { fetchJson } from "./jiraApi";
 
 export interface StandBooking {
-  id: string; date: string; team: string; service: string; features: string; task: string; by: string;
+  /** dateTo — конец диапазона (включительно); нет — бронь на один день. */
+  id: string; date: string; dateTo?: string; team: string; service: string; features: string; task: string; by: string;
   source: "simpletest" | "comment"; createdAt: string;
   /** Тот же КЭ в этот день ставит и другая команда. */
   conflict: boolean;
@@ -32,7 +33,22 @@ export interface StandView {
 }
 export interface StandsConfig { stands: string[]; pages: Record<string, string>; urls: Record<string, string> }
 export interface StandSettings { windowFrom: string; windowTo: string; releases: { name: string; date: string }[]; teams: string[]; limit: number }
-export interface NewBooking { date: string; team: string; service: string; features: string; task: string; hotfix: boolean }
+export interface NewBooking { date: string; dateTo?: string; team: string; service: string; features: string; task: string; hotfix: boolean }
+
+/**
+ * Ключ сравнения КЭ — как ke_key на бэкенде (db/ke_store.py): по коду CI, если он есть
+ * («Чат [CI04663753]» = «ci04663753» = «Чат (4663753)» из Jira), иначе по названию. Названия повторяются, коды — нет.
+ */
+export function keKey(s: string): string {
+  const m = /(?:\bci0*(\d{5,})\b|[(\[]\s*(?:ci)?0*(\d{5,})\s*[)\]])/i.exec(s ?? "");
+  return m ? `ci${m[1] ?? m[2]}` : (s ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** КЭ в написании справочника (из Jira он может прийти «Название (3521751)»); нет в справочнике — как есть. */
+export function canonKe(s: string, catalog: string[]): string {
+  const k = keKey(s);
+  return catalog.find(c => keKey(c) === k) ?? s.trim();
+}
 
 const enc = encodeURIComponent;
 const send = <T,>(path: string, method: string, body?: unknown) =>

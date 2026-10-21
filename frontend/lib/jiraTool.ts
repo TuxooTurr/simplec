@@ -1114,6 +1114,28 @@ export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
 }
 
 /**
+ * Собственный статус (st) задачи — без блокировки, которую она унаследовала: у стори — от блокирующих дефектов
+ * эпика, у эпика — от дефектов сторей. Блокировка остаётся, только если блокирующий дефект её собственный.
+ * Нужен там, где задачи эпика показываются рядом с ним: иначе при заблокированном эпике «Заблокирован» у всех.
+ */
+export function ownStageInfo(info: StageInfo, ownDefects: Issue[] | undefined): StageInfo {
+  if (info.kind !== "blocked") return info;
+  const mine = new Set((ownDefects ?? []).map(d => d.key));
+  const by = info.by.filter(d => mine.has(d.key));
+  return by.length ? { ...info, by } : info.base;
+}
+
+/** Дефекты задачи для чата: номер, название, приоритет и статус (st) каждого дефекта — в формате «Скопировать в чат». */
+export function defectsChatReport(issue: Issue, defects: Issue[], stageOf: (i: Issue) => StageInfo): string {
+  const out = [`*Дефекты ${issue.key}* ${String(issue.fields.summary ?? "").trim()}`];
+  for (const d of defects) {
+    const info = stageOf(d);
+    out.push(`• [*${d.key}*] ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")} — ${stageDot(info)} ${stageText(info)}`);
+  }
+  return out.join("\n");
+}
+
+/**
  * «Чек-лист»: по фиче — код и наименование, затем критически важные проверки (если сгенерированы
  * по требованиям) и «Результат проверок:» — его заполняет тестировщик.
  */

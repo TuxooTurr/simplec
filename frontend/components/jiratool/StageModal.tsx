@@ -15,16 +15,18 @@ function stageRank(info: StageInfo): number {
 
 /**
  * Окно по клику на «Статус (st)» эпика: его стори — тип, номер со ссылкой в Jira, название,
- * статус Jira, статус (st), исполнитель. Дефекты здесь не показываются — они только в «Дефекты (st)»,
- * включая блокирующие, из-за которых эпик «Заблокирован».
+ * статус Jira, собственный статус (st) стори (блокировка эпика на стори здесь не переносится), исполнитель.
+ * Дефекты здесь не показываются — они только в «Дефекты (st)», включая блокирующие, из-за которых эпик «Заблокирован».
  * Только просмотр: статус (st) меняется стрелкой в строке списка.
  */
-export default function StageModal({ open, issue, stories, stageOf, onClose }: {
+export default function StageModal({ open, issue, stories, stageOf, ownStageOf, onClose }: {
   open: boolean;
   issue: Issue;
   /** Стори эпика (через Epic Link). */
   stories: Issue[];
   stageOf: (i: Issue) => StageInfo;
+  /** Собственный статус (st) стори — без блокировки, унаследованной от эпика (иначе при заблокированном эпике заблокированы все). */
+  ownStageOf: (i: Issue) => StageInfo;
   onClose: () => void;
 }) {
   const info = stageOf(issue);
@@ -52,7 +54,7 @@ export default function StageModal({ open, issue, stories, stageOf, onClose }: {
               </p>
             ) : (
               <IssueTable cols={["type", "key", "summary", "status", "stage", "assignee"]} initialSort={{ col: "stage", dir: 1 }}
-                stage={s => <StageBadge info={stageOf(s)} />} stageRank={s => stageRank(stageOf(s))}
+                stage={s => <StageBadge info={ownStageOf(s)} />} stageRank={s => stageRank(ownStageOf(s))}
                 groups={[{ title: null, issues: stories }]} />
             )}
           </section>

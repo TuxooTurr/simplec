@@ -30,12 +30,13 @@ import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import LoadDetailsModal from "@/components/jiratool/LoadDetailsModal";
 import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople } from "@/lib/peopleApi";
+import { copyToClipboard } from "@/lib/clipboard";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
-  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve,
+  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve, ownStageInfo,
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
@@ -692,16 +693,7 @@ export default function JiraToolSection() {
       : [{ folder: null, issues: chosen }];
   };
 
-  const copyText = async (text: string): Promise<boolean> => {
-    try { await navigator.clipboard.writeText(text); return true; } catch { /* нет доступа — запасной способ */ }
-    const ta = document.createElement("textarea");
-    ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    let ok = false;
-    try { ok = document.execCommand("copy"); } catch { /* не вышло */ }
-    ta.remove();
-    return ok;
-  };
+  const copyText = copyToClipboard;
 
   const deliver = async (text: string, note: string) => {
     if (await copyText(text)) { setPendingCopy(null); setReportNote(note); }
@@ -1474,7 +1466,8 @@ export default function JiraToolSection() {
           initial={draftOf(modal.draft)} onSave={d => saveDraft(modal.draft, d)} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
-        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} onClose={() => setModal(null)} />
+        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf}
+          ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onClose={() => setModal(null)} />
       )}
       {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
@@ -1517,7 +1510,7 @@ export default function JiraToolSection() {
         <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
-        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} onClose={() => setModal(null)} />
+        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "own" in modal && (
         <OwnFieldModal open initial={modal.own} typeLocked={!!modal.own && ownUsed(modal.own.id)} onClose={() => setModal(null)}

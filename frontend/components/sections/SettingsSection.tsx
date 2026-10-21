@@ -715,6 +715,17 @@ function UnifiedLlmProviders({
       </div>
 
       {/* Add new provider — скрыто на контурах с ограничением GIGACHAT_ONLY */}
+      {/* Потолок TLS 1.2 — для всех провайдеров; включён по умолчанию (корп. прокси рвёт TLS 1.3 → Errno 54) */}
+      <label className="flex items-start gap-2.5 bg-bg-subtle border border-border-main rounded-lg p-3 cursor-pointer">
+        <input type="checkbox" className="mt-0.5" checked={builtinValues["ssl_max_tls12"] !== ""}
+          onChange={e => { void onSaveBuiltin("ssl_max_tls12", e.target.checked ? "1" : ""); }} />
+        <span className="text-xs">
+          <span className="font-semibold text-text-main">Корпоративный прокси: TLS 1.2</span>
+          <span className="block text-text-muted mt-0.5">
+            Соединения с моделями — не выше TLS 1.2. Корпоративный прокси рвёт TLS 1.3, и подключение падает
+            с «[Errno 54] Connection reset by peer». Все провайдеры поддерживают TLS 1.2 — выключать незачем.</span>
+        </span>
+      </label>
       {gigachatOnly ? (
         <div className="bg-bg-subtle border border-border-main rounded-lg p-4 flex items-start gap-2.5">
           <Shield className="w-4 h-4 text-text-muted shrink-0 mt-0.5" />

@@ -98,6 +98,14 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
         "description": "Отключить проверку серверного сертификата GigaChat (корп. BIG IP)",
         "group":       "llm",
     },
+    "ssl_max_tls12": {
+        # По умолчанию включено: корп. BIG IP рвёт рукопожатие TLS 1.3 («[Errno 54] Connection reset by peer»).
+        # TLS 1.2 поддерживают все LLM-провайдеры, поэтому потолок безвреден и вне корп. сети. Хранится в БД,
+        # а не только в .env: переустановка «удалить папку → поставить заново» флаг не теряет, и он есть в резервной копии.
+        "value":       os.getenv("SSL_MAX_TLS12", "1"),
+        "description": "Соединения с LLM — не выше TLS 1.2 (корпоративный прокси рвёт TLS 1.3)",
+        "group":       "llm",
+    },
     _CUSTOM_LLM_KEY: {
         "value":       os.getenv("CUSTOM_LLM_PROVIDERS", "[]"),
         "description": "Пользовательские chat/completions-compatible LLM подключения",
@@ -127,6 +135,7 @@ _ENV_MAP: Dict[str, str] = {
     "gigachat_client_cert_path":      "GIGACHAT_CLIENT_CERT_PATH",
     "gigachat_client_key_path":       "GIGACHAT_CLIENT_KEY_PATH",
     "gigachat_no_verify":             "GIGACHAT_NO_VERIFY",
+    "ssl_max_tls12":                  "SSL_MAX_TLS12",
     _CUSTOM_LLM_KEY:                  "CUSTOM_LLM_PROVIDERS",
     _REVISOR_STANDS_KEY:              "REVISOR_API_STANDS",
 }
@@ -701,7 +710,8 @@ def gigachat_models(req: GigachatModelsRequest) -> dict:
         )
         return {"models": models}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Не удалось получить модели: {str(e)[:200]}")
+        from agents.llm_client import connection_reset_hint
+        raise HTTPException(status_code=400, detail=connection_reset_hint(e) or f"Не удалось получить модели: {str(e)[:200]}")
 
 
 class GigachatTestChatRequest(GigachatModelsRequest):
@@ -728,7 +738,7 @@ def gigachat_test_chat(req: GigachatTestChatRequest) -> dict:
         return {"status": "green", "message": f"OK — модель ответила: {preview[:80]}"}
     except Exception as e:
         _, friendly = LLMClient.classify_error(e)
-        return {"status": "red", "message": friendly[:200]}
+        return {"status": "red", "message": friendly[:400]}
 
 
 # ── Загрузка файлов сертификатов GigaChat ────────────────────────────────────

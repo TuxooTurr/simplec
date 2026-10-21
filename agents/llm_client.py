@@ -73,38 +73,65 @@ def _resolve_pem_path(path: str) -> str:
     return tmp
 
 
-def _get_verify():
-    """Возвращает SSL verify параметр для httpx (False / path / SSLContext).
+def _get_verify(no_verify: bool | None = None, ca: str = ""):
+    """SSL verify для httpx: False / путь к CA / SSLContext.
 
-    Порядок приоритетов:
-    1. SSL_NO_VERIFY=1   -> verify=False (быстрый обход для корпоративного прокси)
-    2. certs/ca-bundle.pem / SSL_CERT_FILE -> SSLContext с корпоративным CA
-    3. По умолчанию -> SSLContext с certifi + флаги совместимости
+    no_verify: True — не проверять сертификат; None — по SSL_NO_VERIFY (явно заданный CA важнее глобального флага).
+    ca: свой CA (путь к PEM); пусто — SSL_CERT_FILE или certifi.
+    SSL_MAX_TLS12=1 — потолок TLS 1.2 действует ВСЕГДА, в том числе без проверки сертификата: раньше при
+    SSL_NO_VERIFY=1 возвращался голый False, и корпоративный прокси продолжал рвать рукопожатие TLS 1.3.
     """
-    if os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes"):
+    if no_verify is None:
+        no_verify = os.environ.get("SSL_NO_VERIFY", "").lower() in ("1", "true", "yes") and not ca
+    tls12 = os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes")
+    if no_verify and not tls12:
         return False
+    if ca and not tls12:
+        return ca
 
     import ssl
 
-    ca = os.environ.get("SSL_CERT_FILE")
-    cafile = ca if (ca and os.path.exists(ca)) else None
-
+    env_ca = os.environ.get("SSL_CERT_FILE")
+    cafile = ca or (env_ca if (env_ca and os.path.exists(env_ca)) else None)
     try:
         import certifi
         ctx = ssl.create_default_context(cafile=cafile or certifi.where())
     except Exception:
+        if no_verify:
+            return False
         return cafile or True
 
+    if no_verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     if hasattr(ssl, "OP_LEGACY_SERVER_CONNECT"):
         ctx.options |= ssl.OP_LEGACY_SERVER_CONNECT
-
-    if os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes"):
+    if tls12:
         try:
             ctx.maximum_version = ssl.TLSVersion.TLSv1_2
         except AttributeError:
             pass
-
     return ctx
+
+
+_RESET_HINT = (
+    "Соединение сброшено сетью ([Errno 54] Connection reset by peer) — так корпоративный прокси рвёт TLS 1.3. "
+    "Включите «Корпоративный прокси: TLS 1.2» в Настройки → LLM Провайдеры и повторите. "
+    "Не помогло — проверьте VPN/прокси до провайдера."
+)
+
+
+def connection_reset_hint(e: BaseException) -> str:
+    """Подсказка, если соединение сброшено сетью (ECONNRESET: 54 — macOS, 104 — Linux, 10054 — Windows); иначе ""."""
+    msg = str(e).lower()
+    chain = [e, getattr(e, "__cause__", None), getattr(e, "__context__", None)]
+    codes = {getattr(x, "errno", None) for x in chain if x is not None}
+    if codes & {54, 104, 10054} or any(s in msg for s in ("connection reset", "errno 54", "errno 104", "10054", "econnreset")):
+        if os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes"):
+            return ("Соединение сброшено сетью (Connection reset by peer), хотя TLS 1.2 уже включён. "
+                    "Похоже, прокси не пускает к провайдеру — проверьте VPN/прокси или доступ к адресу провайдера.")
+        return _RESET_HINT
+    return ""
 
 
 def gigachat_only() -> bool:
@@ -191,7 +218,9 @@ def _gigachat_tls_kwargs() -> dict:
     if os.environ.get("SSL_MAX_TLS12", "").lower() in ("1", "true", "yes"):
         # Явный SSLContext доходит и до auth-, и до chat-клиента GigaChat SDK
         # (verify_ssl_certs/ca_bundle_file при заданном ssl_context игнорируются).
-        kwargs["ssl_context"] = _gigachat_ssl_context(ca_cert, no_verify)
+        # Проверка — как без потолка: есть CA — проверяем по нему, нет — не проверяем (сертификат Сбера
+        # не из certifi; иначе включённый по умолчанию TLS 1.2 сломал бы GigaChat).
+        kwargs["ssl_context"] = _gigachat_ssl_context(ca_cert, no_verify or not ca_cert)
     elif ca_cert:
         kwargs["ca_bundle_file"] = ca_cert
         kwargs["verify_ssl_certs"] = True
@@ -242,7 +271,7 @@ def list_gigachat_models(
             raise ValueError("Не указан путь к клиентскому сертификату")
         cert_file = _resolve_pem_path(cert_file)
         key_file = _resolve_pem_path(key_file)
-        verify = False if no_verify else (_resolve_pem_path(ca) if ca else _get_verify())
+        verify = _get_verify(no_verify or None, _resolve_pem_path(ca) if ca else "")
         cert = (cert_file, key_file) if key_file else cert_file
         with httpx.Client(timeout=30.0, verify=verify, cert=cert) as c:
             r = c.get(base_url + "/models", headers={"Content-Type": "application/json"})
@@ -304,7 +333,7 @@ def probe_gigachat_chat(
         cert_file = _resolve_pem_path(cert_file)
         key_file = _resolve_pem_path(key_file)
         ca = ca_cert_path or _env("GIGACHAT_CA_CERT_PATH")
-        verify = False if no_verify else (_resolve_pem_path(ca) if ca else _get_verify())
+        verify = _get_verify(no_verify or None, _resolve_pem_path(ca) if ca else "")
         cert = (cert_file, key_file) if key_file else cert_file
         with httpx.Client(timeout=60.0, verify=verify, cert=cert) as c:
             r = c.post(base_url + "/chat/completions", json=payload,
@@ -428,7 +457,7 @@ class LLMClient:
             no_verify = _gigachat_no_verify()
             # SSL_NO_VERIFY / GIGACHAT_NO_VERIFY / SSL_MAX_TLS12 / CA учитываются.
             # Порядок как в list_gigachat_models — чат и /models ходят одинаково.
-            verify = False if no_verify else (ca if ca else _get_verify())
+            verify = _get_verify(no_verify or None, ca or "")
             cert = (cert_file, key_file) if key_file else cert_file
             logger.info(
                 "GigaChat init (certificate): base_url=%s model=%s no_verify=%s ca=%s",
@@ -478,7 +507,7 @@ class LLMClient:
             raise ValueError("Custom LLM API key is empty")
 
         ca_path = str(cfg.get("ca_cert_path", "")).strip()
-        verify = _resolve_pem_path(ca_path) if ca_path else _get_verify()
+        verify = _get_verify(None, _resolve_pem_path(ca_path) if ca_path else "")
         client_cert = _resolve_pem_path(str(cfg.get("client_cert_path", "")).strip())
         client_key = _resolve_pem_path(str(cfg.get("client_key_path", "")).strip())
         if self.auth_type == "certificate" and not client_cert:
@@ -643,6 +672,9 @@ class LLMClient:
     def classify_error(e: Exception) -> tuple[bool, str]:
         """Returns (is_llm_error, friendly_russian_message)."""
         msg = str(e).lower()
+        hint = connection_reset_hint(e)
+        if hint:
+            return True, hint
         if "402" in msg or "payment" in msg or "quota" in msg or "insufficient" in msg or "balance" in msg:
             return True, "Ой! Закончились средства или квота у LLM-провайдера. Пополните баланс или смените провайдера в настройках."
         if "401" in msg or "403" in msg or "unauthorized" in msg or "forbidden" in msg or "authentication" in msg or "invalid api key" in msg:
@@ -701,6 +733,9 @@ class LLMClient:
         except Exception as e:
             errmsg = str(e)
             lower = errmsg.lower()
+            hint = connection_reset_hint(e)
+            if hint:
+                return {"status": "red", "message": hint}
             if "402" in errmsg or "payment" in lower or "quota" in lower or "balance" in lower:
                 return {"status": "yellow", "message": "Нет средств (402) — пополните баланс"}
             if "429" in errmsg or "rate limit" in lower or "too many requests" in lower:

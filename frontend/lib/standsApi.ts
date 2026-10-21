@@ -21,6 +21,8 @@ export interface StandDay {
 }
 export interface StandView {
   stand: string; pageId: string; url: string; limit: number; window: { from: string; to: string }; releases: StandRelease[]; teams: string[];
+  /** Справочник КЭ для выпадающего списка (файл на сервере, один на оба стенда). */
+  keCatalog: string[];
   today: { date: string; status: string; colour: string; count: number };
   days: StandDay[]; freezes: StandFreeze[]; pending: StandPending[];
   /** Данные сохранены, но текст страницы не пересобрался — причина. */
@@ -42,9 +44,15 @@ export const createStandPage = (stand: string, parent: string) => send<StandView
 export const getStand = (stand: string) => fetchJson<StandView>(`/api/stands/${enc(stand)}`);
 export const saveStandSettings = (stand: string, s: StandSettings) => send<StandView>(`/api/stands/${enc(stand)}/settings`, "PUT", s);
 export const addStandBooking = (stand: string, b: NewBooking) => send<StandView>(`/api/stands/${enc(stand)}/bookings`, "POST", b);
+/** Пачка броней одной записью (импорт задач из списка Jira tool); не прошедшие правила — с причиной. */
+export const addStandBookings = (stand: string, items: NewBooking[]) =>
+  send<StandView & { added: number; rejected: { service: string; task: string; reason: string }[] }>(`/api/stands/${enc(stand)}/bookings/bulk`, "POST", { items });
 export const deleteStandBooking = (stand: string, id: string) => send<StandView>(`/api/stands/${enc(stand)}/bookings/${enc(id)}`, "DELETE");
 export const addStandFreeze = (stand: string, f: { start: string; end: string; reason: string }) => send<StandView>(`/api/stands/${enc(stand)}/freezes`, "POST", f);
 export const deleteStandFreeze = (stand: string, id: string) => send<StandView>(`/api/stands/${enc(stand)}/freezes/${enc(id)}`, "DELETE");
 export const pullStandRequests = (stand: string) => send<StandView>(`/api/stands/${enc(stand)}/pull`, "POST");
+/** Справочник КЭ: создать (дописать новые) и сохранить целиком. */
+export const addKe = (ke: string[]) => send<{ ke: string[] }>("/api/ke-catalog", "POST", { ke });
+export const saveKeCatalog = (ke: string[]) => send<{ ke: string[] }>("/api/ke-catalog", "PUT", { ke });
 export const decideStandPending = (stand: string, cid: string, d: { accept: boolean; date?: string; team?: string; service?: string; features?: string; task?: string; note?: string }) =>
   send<StandView>(`/api/stands/${enc(stand)}/pending/${enc(cid)}`, "POST", d);

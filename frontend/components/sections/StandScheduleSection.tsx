@@ -41,7 +41,7 @@ export default function StandScheduleSection() {
 
   return (
     <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="max-w-5xl mx-auto px-6 py-6 space-y-5">
+      <div className="px-6 py-6 space-y-5">
         <header className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1 space-y-1">
             <h1 className="flex items-center gap-2 text-lg font-bold text-text-main"><CalendarDays className="w-5 h-5 text-primary" /> График стендов</h1>

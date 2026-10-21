@@ -12,7 +12,9 @@
     «Забрать заявки» разбирает новые комментарии, проверяет правила — прошла: бронь, нет или не разобралась:
     «На рассмотрении»; на комментарий уходит ответ с итогом (и предупреждением о конфликте, если он есть).
 
-Локально (metrics_settings, ключ stands_config) хранится только привязка стенд → страница: она у каждого SimpleTest своя.
+Локально (metrics_settings, ключ stands_config) хранится привязка стенд → страница: она у каждого SimpleTest своя.
+Справочник КЭ для выпадающего списка — файл на сервере (db/ke_store.py → data/ke_catalog.json), один на оба стенда;
+базовый список — db/ke_catalog_default.json в репозитории.
 
 Эндпоинты:
   GET  /api/stands/config                 — привязка страниц
@@ -21,11 +23,13 @@
   GET  /api/stands/{stand}                — график: дни окна, брони с конфликтами, заморозки, релизы, «на рассмотрении»
   PUT  /api/stands/{stand}/settings       — окно планирования, релизы, команды, лимит (0 — без лимита)
   POST /api/stands/{stand}/bookings       — бронь
+  POST /api/stands/{stand}/bookings/bulk  — пачка броней одной записью (импорт из списка Jira tool, несколько КЭ)
   DELETE /api/stands/{stand}/bookings/{id}
   POST /api/stands/{stand}/freezes        — заморозка
   DELETE /api/stands/{stand}/freezes/{id}
   POST /api/stands/{stand}/pull           — забрать заявки из комментариев
   POST /api/stands/{stand}/pending/{cid}  — решить заявку «на рассмотрении»: принять (с правкой) или отклонить
+  GET/POST/PUT /api/ke-catalog            — справочник КЭ: прочитать / создать КЭ / сохранить целиком
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.confluence import _load_cfg, _request, page_ref
 from backend.api.jira_defects import _get, _set
+from db import ke_store
 from db.postgres import get_db
 
 router = APIRouter()
@@ -194,6 +199,11 @@ def bookings_on(data: dict, d: date) -> list[dict]:
     return [b for b in data["bookings"] if b["date"] == d.isoformat()]
 
 
+def installs_on(data: dict, d: date) -> int:
+    """Установок за день: команда + КЭ — одна установка, сколько бы фич в неё ни входило."""
+    return len({(b["team"], _ke(b["service"])) for b in bookings_on(data, d)})
+
+
 def _ke(s_: str) -> str:
     return re.sub(r"\s+", " ", s_.strip().lower())
 
@@ -232,7 +242,7 @@ def check(data: dict, d: date, hotfix: bool = False, now: Optional[date] = None)
     if fz and not hotfix:
         return f"заморозка до {date.fromisoformat(fz['to']).strftime('%d.%m')}" + (f" ({fz['reason']})" if fz.get("reason") else "")
     limit = int(data.get("limit") or 0)
-    if limit and len(bookings_on(data, d)) >= limit:
+    if limit and installs_on(data, d) >= limit:
         return f"лимит {limit}/{limit} на {d.strftime('%d.%m')}"
     return None
 
@@ -337,6 +347,16 @@ def _reply(cfg: dict, pid: str, cid: str, text: str) -> Optional[str]:
         return str(e.detail)[:200]
 
 
+def split_ke(text: str) -> list[str]:
+    """«notify, gateway; auth» → ["notify", "gateway", "auth"] без повторов."""
+    out: list[str] = []
+    for x in re.split(r"[,;\n]", text or ""):
+        x = x.strip()
+        if x and _ke(x) not in {_ke(y) for y in out}:
+            out.append(x)
+    return out
+
+
 def apply_requests(data: dict, comments: list[dict], now: Optional[date] = None) -> list[dict]:
     """Новые комментарии → брони или «на рассмотрении». Возвращает решения [{cid, ok, text}] для ответов."""
     now = now or today()
@@ -360,10 +380,13 @@ def apply_requests(data: dict, comments: list[dict], now: Optional[date] = None)
                                     "date": req["date"].isoformat() if req.get("date") else ""})
             decisions.append({"cid": c["id"], "ok": False, "text": f"На рассмотрении: {why}"})
             continue
-        note = conflict_note(data, req["date"], req["service"], team)
-        data["bookings"].append(_new_booking(req["date"], team, req["service"], req["task"], c["author"], "comment", c["id"], req["features"]))
+        # «Сервис: notify, gateway» — бронь на каждый КЭ (одна фича трогает несколько сервисов).
+        kes = split_ke(req["service"])
+        notes = "".join(conflict_note(data, req["date"], k, team) for k in kes)
+        for k in kes:
+            data["bookings"].append(_new_booking(req["date"], team, k, req["task"], c["author"], "comment", c["id"], req["features"]))
         decisions.append({"cid": c["id"], "ok": True,
-                          "text": f"Принято: {req['service']}, {req['date'].strftime('%d.%m')}, {team}{note}"})
+                          "text": f"Принято: {', '.join(kes)}, {req['date'].strftime('%d.%m')}, {team}{notes}"})
     return decisions
 
 
@@ -386,7 +409,7 @@ def day_status(data: dict, d: date, now: Optional[date] = None) -> tuple[str, st
     if conflicts_on(data, d):
         return "КОНФЛИКТ", "Red"
     limit = int(data.get("limit") or 0)
-    if limit and len(bookings_on(data, d)) >= limit:
+    if limit and installs_on(data, d) >= limit:
         return "ЛИМИТ", "Red"
     return "МОЖНО", "Green"
 
@@ -402,9 +425,9 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Страница собирается из SimpleTest — таблицу руками '
         f'не правьте. Обновлено {datetime.now().strftime("%d.%m.%Y %H:%M")}.</p></ac:rich-text-body></ac:structured-macro>',
         f"<h2>Сегодня, {now.strftime('%d.%m')}</h2><p>{e(data['stand'])}: {_status_macro(title, colour)} "
-        f"установок {len(bookings_on(data, now))}</p>",
+        f"установок {installs_on(data, now)}</p>",
         "<h2>Как подать заявку</h2><p>Оставьте комментарий к этой странице — каждая строка «Название: значение»:</p>"
-        "<p><code>Сервис: notify</code><br/><code>Дата: 23.10</code><br/>"
+        "<p><code>Сервис: notify, gateway</code> (несколько КЭ — через запятую)<br/><code>Дата: 23.10</code><br/>"
         f"<code>Команда: {e(' / '.join(data['teams']))}</code><br/><code>Фичи: тема инцидента на карточке; фильтр по статусу</code><br/>"
         "<code>Задача: SBER911-12345</code> (необязательно)<br/><code>Хотфикс: да</code> (только для установки в заморозку)</p>"
         "<p>Если один и тот же сервис в один день ставят две команды — это конфликт: строка отмечается красным, договоритесь между собой. "
@@ -418,7 +441,7 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         parts.append("<p>Заморозки: " + "; ".join(
             f"{date.fromisoformat(f['from']).strftime('%d.%m')}–{date.fromisoformat(f['to']).strftime('%d.%m')}"
             f"{' (' + e(f['reason']) + ')' if f.get('reason') else ''}" for f in fz_list) + "</p>")
-    parts.append("<table><tbody><tr><th>День</th><th>Статус</th><th>КЭ (команда)</th><th>Фичи</th><th>Задача</th></tr>")
+    parts.append("<table><tbody><tr><th>День</th><th>Статус</th><th>КЭ (команда)</th><th>Фичи</th></tr>")
     rel_on = {r["date"]: r["name"] for r in rels}
     for d in window_days(data):
         if d.weekday() >= 5:
@@ -432,17 +455,20 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         fz = freeze_on(data, d)
         if fz and fz.get("reason"):
             day += f"<br/><em>заморозка: {e(fz['reason'])}</em>"
-        rows = sorted(bookings_on(data, d), key=lambda b: (b["team"], b["service"].lower()))
-        if not rows:
-            parts.append(f"<tr><td>{day}</td><td>{_status_macro(label, col)}</td><td>—</td><td></td><td></td></tr>")
+        # Строка — команда + КЭ (одна установка), в «Фичи» — все фичи, ради которых КЭ ставят: номер — название.
+        groups: dict[tuple, list[dict]] = {}
+        for b in sorted(bookings_on(data, d), key=lambda b: (b["team"], b["service"].lower(), b.get("task") or "")):
+            groups.setdefault((b["team"], _ke(b["service"])), []).append(b)
+        if not groups:
+            parts.append(f"<tr><td>{day}</td><td>{_status_macro(label, col)}</td><td>—</td><td></td></tr>")
             continue
-        for n, b in enumerate(rows):
-            ke = f"{e(b['service'])} ({e(b['team'])})"
-            if _ke(b["service"]) in conf:
+        for n, ((team, kek), items) in enumerate(groups.items()):
+            ke = f"{e(items[0]['service'])} ({e(team)})"
+            if kek in conf:
                 ke = f"{ke} {_status_macro('КОНФЛИКТ', 'Red')}"
-            feats = "<br/>".join(e(x.strip()) for x in re.split(r"[;\n]", b.get("features") or "") if x.strip())
-            lead = f"<td rowspan=\"{len(rows)}\">{day}</td><td rowspan=\"{len(rows)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
-            parts.append(f"<tr>{lead}<td>{ke}</td><td>{feats or '—'}</td><td>{e(b.get('task') or '')}</td></tr>")
+            feats = "<br/>".join(e(" — ".join(x for x in (b.get("task") or "", (b.get("features") or "").strip()) if x)) or "—" for b in items)
+            lead = f"<td rowspan=\"{len(groups)}\">{day}</td><td rowspan=\"{len(groups)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
+            parts.append(f"<tr>{lead}<td>{ke}</td><td>{feats}</td></tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
 
@@ -478,8 +504,8 @@ def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None) -> dict:
     t_label, t_colour = day_status(data, now, now)
     return {"stand": data["stand"], "pageId": pid, "url": f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}",
             "limit": int(data.get("limit") or 0), "window": data["window"], "releases": sorted(data["releases"], key=lambda r: r["date"]),
-            "teams": data["teams"],
-            "today": {"date": now.isoformat(), "status": t_label, "colour": t_colour, "count": len(bookings_on(data, now))},
+            "teams": data["teams"], "keCatalog": ke_store.load(),
+            "today": {"date": now.isoformat(), "status": t_label, "colour": t_colour, "count": installs_on(data, now)},
             "days": days, "freezes": data["freezes"], "pending": data["pending"]}
 
 
@@ -560,6 +586,31 @@ def put_settings(stand: str, body: SettingsBody, db: Session = Depends(get_db)) 
     return _done(cfg, pid, data)
 
 
+# ── Справочник КЭ (файл на сервере, один на оба стенда) ─────────────────────
+
+class KeNames(BaseModel):
+    ke: list[str] = Field(default_factory=list, max_length=5000)
+
+
+@router.get("/api/ke-catalog")
+def get_ke_catalog() -> dict:
+    return {"ke": ke_store.load()}
+
+
+@router.post("/api/ke-catalog")
+def add_ke(body: KeNames) -> dict:
+    """Создать КЭ (из формы брони): дописываются только новые, повторы без учёта регистра пропускаются."""
+    if not ke_store.clean(body.ke):
+        raise HTTPException(422, "Пустое название КЭ")
+    return {"ke": ke_store.add(body.ke)}
+
+
+@router.put("/api/ke-catalog")
+def put_ke_catalog(body: KeNames) -> dict:
+    """Справочник целиком (правка списком в настройках стенда)."""
+    return {"ke": ke_store.replace(body.ke)}
+
+
 class BookingBody(BaseModel):
     date: str
     team: str = Field(..., min_length=1)
@@ -588,6 +639,42 @@ def add_booking(stand: str, body: BookingBody, db: Session = Depends(get_db)) ->
         data["bookings"].append(_new_booking(d, team, body.service, body.task, "SimpleTest", "simpletest", features=body.features))
     data, _ = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data)
+
+
+class BulkBookings(BaseModel):
+    items: list[BookingBody] = Field(default_factory=list)
+
+
+@router.post("/api/stands/{stand}/bookings/bulk")
+def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) -> dict:
+    """
+    Пачка броней одной записью (импорт задач из списка Jira tool: задача с 30 КЭ — 30 броней). Каждая проверяется
+    правилами; не прошедшие возвращаются с причиной, остальные встают. Страница пересобирается один раз.
+    """
+    cfg, pid, stand = _ctx(db, stand)
+    if not body.items:
+        raise HTTPException(422, "Нечего добавлять")
+    if len(body.items) > 500:
+        raise HTTPException(422, "Не больше 500 броней за раз")
+
+    def fn(data: dict) -> list[dict]:
+        rejected = []
+        for it in body.items:
+            try:
+                d = date.fromisoformat(it.date)
+            except ValueError:
+                rejected.append({"service": it.service, "task": it.task, "reason": "дата не ГГГГ-ММ-ДД"})
+                continue
+            team = match_team(data, it.team)
+            why = None if team else f"нет команды «{it.team}»"
+            why = why or check(data, d, it.hotfix)
+            if why:
+                rejected.append({"service": it.service, "task": it.task, "reason": why})
+                continue
+            data["bookings"].append(_new_booking(d, team, it.service, it.task, "SimpleTest", "simpletest", features=it.features))
+        return rejected
+    data, rejected = mutate(cfg, pid, stand, fn)
+    return _done(cfg, pid, data, {"added": len(body.items) - len(rejected), "rejected": rejected})
 
 
 @router.delete("/api/stands/{stand}/bookings/{bid}")
@@ -660,16 +747,17 @@ def decide(stand: str, cid: str, body: PendingDecision, db: Session = Depends(ge
             except ValueError:
                 raise HTTPException(422, "Укажите дату заявки")
             team = match_team(data, body.team or item["team"])
-            service = (body.service or item["service"]).strip()
-            if not team or not service:
+            kes = split_ke(body.service or item["service"])
+            if not team or not kes:
                 raise HTTPException(422, "Укажите команду из списка и сервис")
             # Решение руками — правила не блокируют (например, осознанно сверх лимита), но день должен быть рабочим.
             if d.weekday() >= 5:
                 raise HTTPException(422, "Это выходной")
-            note = conflict_note(data, d, service, team)
-            data["bookings"].append(_new_booking(d, team, service, body.task or item["task"], item["author"], "comment", cid,
-                                                 body.features or item.get("features", "")))
-            reply["text"] = f"Принято: {service}, {d.strftime('%d.%m')}, {team}{note}"
+            notes = "".join(conflict_note(data, d, ke, team) for ke in kes)
+            for ke in kes:
+                data["bookings"].append(_new_booking(d, team, ke, body.task or item["task"], item["author"], "comment", cid,
+                                                     body.features or item.get("features", "")))
+            reply["text"] = f"Принято: {', '.join(kes)}, {d.strftime('%d.%m')}, {team}{notes}"
         else:
             reply["text"] = "Отклонено" + (f": {body.note.strip()}" if body.note.strip() else "")
         data["pending"] = [p for p in data["pending"] if p["cid"] != cid]

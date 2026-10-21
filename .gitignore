@@ -18,6 +18,7 @@ data/gen_sessions.json
 data/model_bench_sessions.json
 data/requirements.json
 data/people.json
+data/ke_catalog.json
 data/model_bench_scenarios.json
 data/testdata_connections.json
 data/jdbc_drivers.json

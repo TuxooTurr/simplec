@@ -3,6 +3,27 @@
 import { useEffect, useRef, useState } from "react";
 import type { StandBooking, StandView } from "@/lib/standsApi";
 
+/** Установка на графике: команда + день + КЭ; внутри — фичи (брони), ради которых КЭ ставят. */
+export interface StandBlock { key: string; date: string; team: string; service: string; conflict: boolean; items: StandBooking[] }
+
+/** Статус (st) фичи из Jira tool: кружок и подпись; null — задачи нет в Jira tool. */
+export type FeatureStage = (taskKey: string) => { dot: string; text: string } | null;
+
+const keKey = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Брони дня одной команды → установки по КЭ (порядок — по названию КЭ). */
+export function blocksOf(bookings: StandBooking[], team: string, date: string): StandBlock[] {
+  const by = new Map<string, StandBlock>();
+  for (const b of bookings.filter(x => x.team === team)) {
+    const k = keKey(b.service);
+    const cur = by.get(k) ?? { key: `${date}|${team}|${k}`, date, team, service: b.service.trim(), conflict: false, items: [] };
+    cur.items.push(b);
+    cur.conflict = cur.conflict || b.conflict;
+    by.set(k, cur);
+  }
+  return [...by.values()].sort((a, b) => a.service.localeCompare(b.service, "ru"));
+}
+
 /** Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. */
 export const ZOOM = { day: 120, week: 44 } as const;
 const MIN_W = 10, MAX_W = 160;
@@ -23,19 +44,20 @@ const CONFLICT_CLS = "bg-red-100 text-red-800 ring-2 ring-red-500 dark:bg-red-95
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 /**
- * График стенда: строки — команды, по горизонтали — дни окна планирования. Бронь — блок в строке своей команды
- * (несколько броней одной команды в день — друг под другом), на блоке КЭ, при наведении — фичи и задача.
+ * График стенда: строки — команды, по горизонтали — дни окна планирования. Блок — установка: команда + день + КЭ
+ * (один КЭ по нескольким фичам — один блок со счётчиком фич; разные КЭ — друг под другом). При наведении — фичи:
+ * номер, название и статус (st) из Jira tool.
  * Конфликт (тот же КЭ в этот день у двух команд) — красный; заморозка — жёлтая полоса; дата релиза — пунктир;
  * выходные — серые; сегодня — рамка. Масштаб — кнопками снаружи (width) или Ctrl + колесо; перетаскивание —
  * прокрутка. Щелчок по пустому месту строки — новая бронь этой команде на этот день, по брони — она сама.
  */
-export default function StandTimeline({ v, width, onWidth, selected, onPickCell, onPickBooking }: {
+export default function StandTimeline({ v, width, onWidth, selected, onPickCell, onPickBlock, featureStage }: {
   v: StandView; width: number; onWidth: (w: number) => void; selected: string | null;
-  onPickCell: (date: string, team: string) => void; onPickBooking: (b: StandBooking) => void;
+  onPickCell: (date: string, team: string) => void; onPickBlock: (b: StandBlock) => void; featureStage: FeatureStage;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
-  const [hover, setHover] = useState<{ b: StandBooking; x: number; y: number } | null>(null);
+  const [hover, setHover] = useState<{ b: StandBlock; x: number; y: number } | null>(null);
 
   // Ctrl + колесо — масштаб вокруг курсора (обычное колесо — прокрутка страницы, как везде).
   useEffect(() => {
@@ -62,8 +84,9 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
   }, [v.stand]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const idx = new Map(v.days.map((d, i) => [d.date, i]));
-  // Раскладка: у команды в каждый день брони — друг под другом; высота строки — по самому загруженному дню.
-  const lanes = v.teams.map(t => Math.max(1, ...v.days.map(d => d.bookings.filter(b => b.team === t).length)));
+  // Раскладка: у команды в каждый день установки (КЭ) — друг под другом; высота строки — по самому загруженному дню.
+  const blocks = v.days.map(d => v.teams.map(t => blocksOf(d.bookings, t, d.date)));
+  const lanes = v.teams.map((_, ti) => Math.max(1, ...blocks.map(day => day[ti].length)));
   const tops: number[] = [];
   lanes.reduce((y, n, i) => { tops[i] = y; return y + n * LANE + 10; }, HEAD);
   const bodyH = tops.length ? tops[tops.length - 1] + lanes[lanes.length - 1] * LANE + 10 : HEAD;
@@ -141,41 +164,48 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
                 if (day && !day.weekend && day.status !== "ПРОШЁЛ") onPickCell(day.date, t);
               }} />
           ))}
-          {/* Брони */}
-          {v.days.flatMap((d, di) => v.teams.flatMap((t, ti) => d.bookings.filter(b => b.team === t).map((b, k) => (
-            <button key={b.id} type="button"
-              onClick={() => { if (!drag.current?.moved) onPickBooking(b); }}
+          {/* Установки: команда + день + КЭ */}
+          {blocks.flatMap((day, di) => day.flatMap((list, ti) => list.map((b, k) => (
+            <button key={b.key} type="button"
+              onClick={() => { if (!drag.current?.moved) onPickBlock(b); }}
               onMouseEnter={e => setHover({ b, x: e.clientX, y: e.clientY })} onMouseLeave={() => setHover(null)}
-              aria-label={`${b.team}: ${b.service}, ${d.date}${b.conflict ? ", конфликт" : ""}`}
-              className={`absolute rounded-md px-1 text-left text-[11px] font-medium truncate ${b.conflict ? CONFLICT_CLS : teamCls(b.team)}
-                ${selected === b.id ? "outline outline-2 outline-primary" : ""}`}
+              aria-label={`${b.team}: ${b.service}, ${b.date}, фич ${b.items.length}${b.conflict ? ", конфликт" : ""}`}
+              className={`absolute rounded-md px-1 text-left text-[11px] font-medium flex items-center gap-1 overflow-hidden ${b.conflict ? CONFLICT_CLS : teamCls(b.team)}
+                ${selected === b.key ? "outline outline-2 outline-primary" : ""}`}
               style={{ left: di * width + 2, width: width - 4, top: tops[ti] + 5 + k * LANE, height: LANE - 4 }}>
-              {width >= 30 ? b.service : ""}
+              {width >= 30 && <span className="truncate">{b.service}</span>}
+              {b.items.length > 1 && width >= 52 && <span className="ml-auto flex-shrink-0 px-1 rounded bg-black/10 dark:bg-white/15 text-[10px]">×{b.items.length}</span>}
             </button>
           ))))}
           {/* Установок за день; конфликт — красным */}
-          {v.days.map((d, i) => d.bookings.length > 0 && (
+          {v.days.map((d, i) => blocks[i].some(x => x.length) && (
             <div key={d.date} className={`absolute text-center text-[11px] tabular-nums ${d.conflicts.length ? "text-red-600 dark:text-red-400 font-bold" : "text-text-muted"}`}
               style={{ left: i * width, width, top: bodyH, height: FOOT, lineHeight: `${FOOT}px` }}
               title={d.conflicts.length ? `Конфликт: ${d.conflicts.map(c => `${c.service} — ${c.teams.join(", ")}`).join("; ")}` : undefined}>
-              {d.bookings.length}{v.limit ? `/${v.limit}` : ""}{d.conflicts.length ? "!" : ""}
+              {blocks[i].reduce((n, x) => n + x.length, 0)}{v.limit ? `/${v.limit}` : ""}{d.conflicts.length ? "!" : ""}
             </div>
           ))}
         </div>
       </div>
 
       {hover && (
-        <div className="fixed z-50 max-w-xs rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-2.5 text-xs pointer-events-none"
-          style={{ left: hover.x + 12, top: hover.y + 12 }}>
-          <p className="font-semibold text-text-main">{hover.b.service} · {hover.b.team}</p>
+        <div className="fixed z-[120] max-w-sm rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-2.5 text-xs pointer-events-none"
+          style={{ left: Math.min(hover.x + 12, (typeof window !== "undefined" ? window.innerWidth : 1600) - 400), top: hover.y + 12 }}>
+          <p className="font-semibold text-text-main">{hover.b.service} · {hover.b.team} · {hover.b.date.split("-").reverse().join(".")}</p>
           {hover.b.conflict && <p className="text-red-600 dark:text-red-400 font-semibold">Конфликт: этот КЭ в этот день ставит другая команда</p>}
-          <p className="text-text-muted">{hover.b.date.split("-").reverse().join(".")}{hover.b.task && ` · ${hover.b.task}`}</p>
-          {hover.b.features ? (
-            <ul className="mt-1 list-disc pl-4 text-text-main">
-              {hover.b.features.split(/[;\n]/).map(x => x.trim()).filter(Boolean).map(x => <li key={x}>{x}</li>)}
-            </ul>
-          ) : <p className="mt-1 text-text-muted">фичи не указаны</p>}
-          <p className="mt-1 text-text-muted">{hover.b.source === "comment" ? `заявка: ${hover.b.by}` : "из SimpleTest"}</p>
+          <p className="mt-1 text-text-muted">Фичи ({hover.b.items.length}):</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {hover.b.items.map(it => {
+              const st = it.task ? featureStage(it.task) : null;
+              return (
+                <li key={it.id} className="flex gap-1.5 text-text-main">
+                  <span className="font-mono text-primary whitespace-nowrap">{it.task || "—"}</span>
+                  <span className="min-w-0 flex-1">{it.features || <span className="text-text-muted">без названия</span>}</span>
+                  <span className="whitespace-nowrap text-text-muted">{st ? `${st.dot} ${st.text}` : ""}</span>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
     </div>

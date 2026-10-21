@@ -12,8 +12,9 @@ CFG = {"base_url": "https://confluence.example", "token": "t", "token_path": "",
 
 
 @pytest.fixture
-def conf(monkeypatch):
+def conf(monkeypatch, tmp_path):
     """Подставной Confluence: свойство страницы 42 с версией, комментарии, ответы, тело страницы."""
+    monkeypatch.setattr(st.ke_store, "KE_FILE", tmp_path / "ke_catalog.json")      # справочник КЭ — не в data/ проекта
     state = {"prop": None, "version": 0, "comments": [], "replies": [], "body": "", "page_version": 1, "conflict_once": False}
     monkeypatch.setattr(st, "today", lambda: TODAY)
     monkeypatch.setattr(st, "_load_cfg", lambda db: CFG)
@@ -156,10 +157,69 @@ def test_страница_таблица_дней_маркеры_фичи_рел
     _book("2026-10-23", "SC", "notify", "тема инцидента; фильтр по статусу", "SBER911-5")
     _book("2026-10-23", "B2C", "notify")
     body = conf["body"]
-    assert body.count("<tr><td") == 20 + 1                      # 20 рабочих дней окна, у 23.10 две брони — строк на одну больше
-    assert '<td rowspan="2">' in body and "notify (SC)" in body and "тема инцидента<br/>фильтр по статусу" in body
+    assert body.count("<tr><td") == 20 + 1                      # 20 рабочих дней окна; у 23.10 две установки (SC и B2C) — строк на одну больше
+    assert '<td rowspan="2">' in body and "notify (SC)" in body and "SBER911-5 — тема инцидента; фильтр по статусу" in body
     assert body.count(">КОНФЛИКТ<") >= 2 and "РЕЛИЗ Release 26" in body and "Окно планирования: 19.10.2026 — 13.11.2026" in body
     assert "Фичи: тема инцидента" in body and "<strong>ср 21.10</strong>" in body and "ПРОШЁЛ" in body
+
+
+def test_пачка_броней_из_списка_одной_записью(conf):
+    _settings()
+    pages_before = conf["page_version"]
+    items = [st.BookingBody(date="2026-10-22", team="SC", service=f"server-{n}", features="Миграция БД", task="SBER911-7") for n in range(30)]
+    items.append(st.BookingBody(date="2026-10-24", team="SC", service="weekend", task="SBER911-8"))     # выходной — отказ
+    v = st.add_bookings("Major-Check", st.BulkBookings(items=items), db=None)
+    assert v["added"] == 30 and v["rejected"] == [{"service": "weekend", "task": "SBER911-8", "reason": "выходной"}]
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert len(day["bookings"]) == 30 and {b["task"] for b in day["bookings"]} == {"SBER911-7"}
+    assert conf["page_version"] == pages_before + 1                       # страница пересобрана один раз
+    with pytest.raises(HTTPException):
+        st.add_bookings("Major-Check", st.BulkBookings(items=[]), db=None)
+
+def test_один_кэ_у_команды_по_разным_фичам_одна_установка_и_одна_строка_на_странице(conf):
+    _settings(limit=2)
+    _book("2026-10-22", "B2C", "rms-front", "Карточка инцидента", "SBER911-1")
+    _book("2026-10-22", "B2C", "rms-front", "Фильтр по статусу", "SBER911-2")
+    _book("2026-10-22", "B2C", "rms-front", "Тема инцидента", "SBER911-3")    # тот же КЭ — лимит 2 не съеден
+    v = _book("2026-10-22", "SC", "gateway")
+    assert v["days"][[d["date"] for d in v["days"]].index("2026-10-22")]["status"] == "ЛИМИТ"   # установок 2: rms-front (B2C) + gateway (SC)
+    body = conf["body"]
+    assert body.count("rms-front (B2C)") == 1
+    assert "SBER911-1 — Карточка инцидента<br/>SBER911-2 — Фильтр по статусу<br/>SBER911-3 — Тема инцидента" in body
+
+
+def test_заявка_с_несколькими_кэ_через_запятую(conf):
+    _settings()
+    conf["comments"] = [_comment("c1", "Сервис: rms-front, gateway; rms-front\nДата: 22.10\nКоманда: B2C\nФичи: тема\nЗадача: SBER911-9")]
+    v = st.pull("Major-Check", db=None)
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert sorted(b["service"] for b in day["bookings"]) == ["gateway", "rms-front"] and all(b["task"] == "SBER911-9" for b in day["bookings"])
+    assert dict(conf["replies"])["c1"] == "<p>Принято: rms-front, gateway, 22.10, B2C</p>"
+
+    _book("2026-10-26", "SC", "gateway")
+    conf["comments"] = [_comment("c2", "Сервис: x\nДата: 26.10\nКоманда: Космос")]          # команды нет — на рассмотрение
+    st.pull("Major-Check", db=None)
+    v = st.decide("Major-Check", "c2", st.PendingDecision(accept=True, team="B2C", service="rms-front, gateway"), db=None)
+    day = next(x for x in v["days"] if x["date"] == "2026-10-26")
+    assert sorted(b["service"] for b in day["bookings"] if b["team"] == "B2C") == ["gateway", "rms-front"]
+    reply = dict(conf["replies"])["c2"]
+    assert reply.startswith("<p>Принято: rms-front, gateway, 26.10, B2C") and "КОНФЛИКТ: gateway в этот день ставит также SC" in reply
+
+
+def test_справочник_кэ_файл_создание_и_базовый_список(tmp_path, monkeypatch):
+    from db import ke_store
+    monkeypatch.setattr(ke_store, "KE_FILE", tmp_path / "ke_catalog.json")
+    default = tmp_path / "default.json"
+    monkeypatch.setattr(ke_store, "DEFAULT_FILE", default)
+    default.write_text('["notify", "gateway"]', "utf-8")
+    assert st.get_ke_catalog() == {"ke": ["gateway", "notify"]}                       # базовый список — при первом чтении
+    assert st.add_ke(st.KeNames(ke=[" rms-front ", "NOTIFY", "Auth  service"]))["ke"] == ["Auth service", "gateway", "notify", "rms-front"]
+    with pytest.raises(HTTPException):
+        st.add_ke(st.KeNames(ke=["  "]))
+    assert st.put_ke_catalog(st.KeNames(ke=["rms-front", "gateway"]))["ke"] == ["gateway", "rms-front"]
+    assert st.get_ke_catalog()["ke"] == ["gateway", "rms-front"]                      # удалённый базовый notify не вернулся
+    default.write_text('["notify", "gateway", "search"]', "utf-8")
+    assert st.get_ke_catalog()["ke"] == ["gateway", "rms-front", "search"]            # новый в базовом списке — дописан
 
 
 def test_нет_страницы_стенда_понятная_ошибка(conf):

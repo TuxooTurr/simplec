@@ -5,7 +5,7 @@ import {
   Eye, EyeOff, Save, Settings, Plus, Trash2,
   Zap, Database, Shield, ChevronDown, Loader2,
   CheckCircle2, XCircle, AlertTriangle, Play,
-  Upload, RefreshCw, DatabaseBackup,
+  Upload, RefreshCw,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import {
@@ -19,7 +19,6 @@ import {
   getSystemConfig,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import BackupModal from "@/components/BackupModal";
 
 // ── Style constants ───────────────────────────────────────────────────────────
 
@@ -789,7 +788,6 @@ export default function SettingsSection() {
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
   const [customProviders, setCustomProviders] = useState<CustomLlmProvider[]>([]);
   const [gigachatOnly, setGigachatOnly] = useState(false);
-  const [backupOpen, setBackupOpen] = useState(false);
 
   // LLM provider statuses
   const [llmStatuses, setLlmStatuses] = useState<Record<string, TestResult>>({});
@@ -881,20 +879,6 @@ export default function SettingsSection() {
         <p className="text-sm text-text-muted">Все подключения и конфигурации в одном месте. Используйте кнопки «Тест» для проверки.</p>
       </div>
 
-      {/* Резервная копия — перед переустановкой (удаление папки стирает data/ и базу) */}
-      <div className="flex flex-wrap items-center gap-3 bg-bg-card border border-border-main rounded-xl px-5 py-4">
-        <div className="w-8 h-8 rounded-lg bg-primary/5 flex items-center justify-center flex-shrink-0">
-          <DatabaseBackup className="w-4 h-4 text-primary" />
-        </div>
-        <div className="flex-1 min-w-[16rem]">
-          <h2 className="text-sm font-semibold text-text-main">Резервная копия данных</h2>
-          <p className="text-xs text-text-muted mt-0.5">Все разделы или один — в файл .json и обратно. Перед удалением папки SimpleTest выгрузите всё, после установки — восстановите.</p>
-        </div>
-        <button type="button" onClick={() => setBackupOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-          <DatabaseBackup className="w-4 h-4" /> Выгрузить / восстановить</button>
-      </div>
-      <BackupModal open={backupOpen} onClose={() => setBackupOpen(false)} section="settings" />
 
       {/* ═══ 1. LLM Провайдеры ═══ */}
       <SectionCard

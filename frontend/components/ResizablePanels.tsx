@@ -5,6 +5,8 @@ import { usePathname } from "next/navigation";
 import { X, PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { SectionId } from "@/contexts/WorkspaceContext";
+import BackupButton from "./BackupButton";
+import { sectionOfPath } from "@/lib/backupApi";
 
 const SECTION_LABELS: Record<string, string> = {
   generation: "Генерация",
@@ -20,6 +22,7 @@ const SECTION_LABELS: Record<string, string> = {
 // ─── Panel Chrome ─────────────────────────────────────────────────────────────
 function PanelChrome({
   title,
+  section,
   onClose,
   children,
   dropTarget,
@@ -28,6 +31,8 @@ function PanelChrome({
   onDrop,
 }: {
   title: string;
+  /** Раздел панели — для «Резервная копия → только этот раздел». */
+  section: string;
   onClose: () => void;
   children: React.ReactNode;
   dropTarget?: boolean;
@@ -50,13 +55,16 @@ function PanelChrome({
         <span className="text-sm font-semibold text-text-main tracking-wide">
           {title}
         </span>
-        <button
-          onClick={onClose}
-          className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
-          title="Закрыть панель"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <BackupButton section={section} />
+          <button
+            onClick={onClose}
+            className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
+            title="Закрыть панель"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">{children}</div>
@@ -205,6 +213,7 @@ export default function ResizablePanels({
         <div className="flex-1 h-full flex flex-col animate-panel-in-right">
           <PanelChrome
             title={rightTitle}
+            section={rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings"}
             onClose={closeRight}
             dropTarget
             isDraggingSection={!!sectionDragging}
@@ -234,6 +243,7 @@ export default function ResizablePanels({
         >
           <PanelChrome
             title={leftTitle}
+            section={sectionOfPath(pathname ?? "")}
             onClose={() => setLeftVisible(false)}
           >
             {left}
@@ -258,6 +268,7 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={leftTitle}
+          section={sectionOfPath(pathname ?? "")}
           onClose={() => setLeftVisible(false)}
         >
           {left}
@@ -281,6 +292,7 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={rightTitle}
+          section={rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings"}
           onClose={closeRight}
           dropTarget
           isDraggingSection={!!sectionDragging}

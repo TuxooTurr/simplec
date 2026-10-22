@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
 import { parseCellIcon, useIcons } from "@/lib/cellIcon";
 import Floating from "./Floating";
+import ServicePicker from "@/components/stands/ServicePicker";
 
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
@@ -568,6 +569,52 @@ export const reqDocHref = (id: string) => `/etalons?req=${encodeURIComponent(id)
  * в новой вкладке; карандаш (и пустая ячейка) — редактирование: ссылка сверху, документы с галочками ниже.
  * Окно поверх таблицы (fixed): внутри ячейки его обрезала бы прокрутка; при прокрутке таблицы закрывается.
  */
+/**
+ * Микросервисы задачи (st): чипы в ячейке; правка — окно с выбором из справочника микросервисов (поиск по имени и
+ * описанию, несколько сразу, нет нужного — «+ Создать»: сохранится в справочник у всех). Справочник общий с графиком
+ * стендов: оттуда же микросервисы подставляются в бронь.
+ */
+export function MsCell({ value, catalog, info, onChange, onCreate }: {
+  value: string[];
+  catalog: string[];
+  info: Record<string, string>;
+  onChange: (names: string[]) => void;
+  onCreate: (names: string[]) => Promise<void>;
+}) {
+  const [pos, setPos] = useState(false);
+  const anchor = useRef<HTMLSpanElement>(null);
+  return (
+    <>
+      <span ref={anchor} className="group/ms flex items-start gap-1 min-h-[24px] w-full px-1 py-0.5">
+        {!value.length ? (
+          <button type="button" onClick={() => setPos(p => !p)} aria-expanded={pos} aria-label="Микросервисы (st): добавить"
+            className="flex-1 text-left text-text-muted/50 text-sm hover:text-primary">—</button>
+        ) : (
+          <span className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
+            {value.map(n => (
+              <span key={n} title={info[n] ? `${n} — ${info[n]}` : n}
+                className="max-w-full truncate px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-700 dark:text-sky-300 text-[11px] font-mono">{n}</span>
+            ))}
+          </span>
+        )}
+        {!!value.length && (
+          <button type="button" onClick={() => setPos(p => !p)} aria-expanded={pos} aria-label="Микросервисы (st): изменить" title="Изменить микросервисы"
+            className={`p-0.5 rounded text-text-muted hover:text-text-main focus-visible:opacity-100 ${pos ? "opacity-100" : "opacity-0 group-hover/ms:opacity-100 group-hover/row:opacity-100"}`}>
+            <Pencil className="w-3 h-3" />
+          </button>
+        )}
+      </span>
+      {pos && (
+        <Floating anchor={anchor} onClose={() => setPos(false)} width={340} className="p-1.5 space-y-1">
+          <p className="px-0.5 text-[11px] font-semibold text-text-muted">Микросервисы — несколько сразу; нет нужного — создайте</p>
+          <ServicePicker value={value} onChange={onChange} catalog={catalog} info={info} onCreate={onCreate} autoFocus inlineList
+            placeholder={catalog.length ? "найти по имени или описанию" : "имя микросервиса"} className="w-full" />
+        </Floating>
+      )}
+    </>
+  );
+}
+
 export function ReqCell({ value, url, options, onChange, onUrl }: {
   value: string[];
   url: string;

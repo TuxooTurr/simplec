@@ -10,6 +10,7 @@ import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker"
 import ListTable, { sortIssues, type SortState } from "@/components/jiratool/ListTable";
 import type { FilterOption } from "@/components/jiratool/ColumnFilter";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
+import MsAssignModal from "@/components/jiratool/MsAssignModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import ListsNav from "@/components/jiratool/ListsNav";
 import type { ReqOption } from "@/components/jiratool/ListCells";
@@ -25,6 +26,7 @@ import ImportStructureModal, { type StructureImport } from "@/components/jiratoo
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import BackupModal from "@/components/BackupModal";
 import { downloadBacklog } from "@/lib/backlogExport";
+import { addMs, getMsCatalog } from "@/lib/standsApi";
 import { isBackup } from "@/lib/backupApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
@@ -35,7 +37,7 @@ import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -61,7 +63,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "load" | "loadDetails" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "load" | "loadDetails" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -104,6 +106,13 @@ export default function JiraToolSection() {
   const [ioNote, setIoNote] = useState<{ ok: boolean; text: string } | null>(null);
   /** Резервная копия всего SimpleTest: окно открыто; файл, который импорт узнал как резервную копию. */
   const [backup, setBackup] = useState<{ file: File | null } | null>(null);
+  /** Справочник микросервисов (общий с графиком стендов) — для поля «Микросервисы (st)». */
+  const [msCatalog, setMsCatalog] = useState<{ ms: string[]; info: Record<string, string> }>({ ms: [], info: {} });
+  useEffect(() => { getMsCatalog().then(setMsCatalog).catch(() => { /* бэкенд недоступен — поле работает без списка */ }); }, []);
+  const createMs = async (names: string[]) => {
+    const r = await addMs(names);
+    setMsCatalog(c => ({ ...c, ms: r.ms }));
+  };
   /** Формат трудозатрат («ч · мин» / «д · ч · мин»): сам формат — в lib/jiraTool, состояние — чтобы перерисовать таблицу. */
   const [timeFmt, setTimeFmtState] = useState<TimeFmt>(getTimeFmt);
   /** Создание дефекта из окна «Дефекты» задачи: эпику — Epic Link, стори и прочим — связь после создания. */
@@ -403,6 +412,7 @@ export default function JiraToolSection() {
   const ctx: ColCtx | null = list ? {
     list, participants: state.participants, stageOf, defectsOf,
     reqsOf: key => (state.reqLinks[key] ?? []).map(id => reqName.get(id) ?? "удалён"),
+    msOf: key => state.msLinks[key] ?? [],
   } : null;
 
   /* ── Колонки и группировка: поля проекта списка ── */
@@ -412,7 +422,7 @@ export default function JiraToolSection() {
                                      hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
     // Поля, которые считает SimpleTest, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
-    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, ...(hasFolders ? [FOLDER_COL] : [])]
+    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, MS_COL, ...(hasFolders ? [FOLDER_COL] : [])]
       .map(c => ({ value: c, label: colLabel(c, list), group: "Поля SimpleTest", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
   ] : [];
@@ -683,6 +693,20 @@ export default function JiraToolSection() {
     folders: Object.fromEntries(Object.entries(l.folders ?? {}).filter(([, f]) => f !== name)),
   }));
   /** Требования по задачам: на уровне SimpleTest (общие на все списки). */
+  /** Микросервисы задач: «set» — значение ячейки; add / replace / remove — массово для выбранных (как требования). */
+  const setMs = (keys: string[], names: string[], mode: ReqAssignMode | "set") => update(s => {
+    const links = { ...s.msLinks };
+    const key = (n: string) => n.trim().toLowerCase();
+    for (const k of keys) {
+      const cur = links[k] ?? [];
+      const next = mode === "set" || mode === "replace" ? names
+        : mode === "add" ? [...cur, ...names.filter(n => !cur.some(c => key(c) === key(n)))]
+        : cur.filter(c => !names.some(n => key(n) === key(c)));
+      if (next.length) links[k] = next; else delete links[k];
+    }
+    return { ...s, msLinks: links };
+  });
+
   const setReqs = (keys: string[], ids: string[], mode: ReqAssignMode | "set") => update(s => {
     const links = { ...s.reqLinks };
     for (const k of keys) {
@@ -1322,6 +1346,9 @@ export default function JiraToolSection() {
                     className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
                   <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Требования…</button>
+                  <button type="button" onClick={() => setModal("ms")} disabled={!selected.size}
+                    title="Добавить, заменить или снять микросервисы у выбранных задач"
+                    className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Микросервисы…</button>
                   <select value="" disabled={!selected.size} aria-label="Нагрузка для выбранных"
                     onChange={e => { if (e.target.value) { setNoLoad([...selected], e.target.value === "skip"); setSelected(new Set()); } }}
                     className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)] disabled:opacity-40">
@@ -1446,6 +1473,8 @@ export default function JiraToolSection() {
                     onAddPerson={addPerson} onLeaveDirection={leaveDirection}
                     onNoLoad={(key, skip) => setNoLoad([key], skip)}
                     reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
+                    msLinks={state.msLinks} msCatalog={msCatalog.ms} msInfo={msCatalog.info} onCreateMs={createMs}
+                    onMs={(key, names) => setMs([key], names, "set")}
                     onReqUrl={(key, u) => update(s => {
                       const m = { ...s.reqUrls };
                       if (u) m[key] = u; else delete m[key];
@@ -1527,6 +1556,10 @@ export default function JiraToolSection() {
             const lists = s.lists.map(l => ({ ...l, assignees: Object.fromEntries(Object.entries(l.assignees).filter(([, p]) => ids.has(p))) }));
             return { ...s, participants, lists };
           })} />
+      )}
+      {modal === "ms" && (
+        <MsAssignModal open count={selected.size} catalog={msCatalog.ms} info={msCatalog.info} onCreate={createMs}
+          onClose={() => setModal(null)} onApply={(names, mode) => setMs([...selected], names, mode)} />
       )}
       {modal === "reqs" && (
         <ReqAssignModal open count={selected.size} options={reqOptions} onClose={() => setModal(null)}

@@ -179,8 +179,10 @@ export interface RoleValue { name?: string; pid?: string; state?: RoleState; pla
 export const LOAD_COL: ColRef = "load";
 /** Требования из раздела «Данные», привязанные к задаче (хранятся у SimpleTest, общие на все списки). */
 export const REQ_COL: ColRef = "reqs";
+/** Микросервисы задачи (справочник микросервисов SimpleTest — тот же, что на графике стендов); общие на все списки. */
+export const MS_COL: ColRef = "ms";
 
-export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, FOLDER_COL];
+export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, MS_COL, FOLDER_COL];
 
 /**
  * Норма по умолчанию для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч —
@@ -549,6 +551,11 @@ export interface ToolState {
   /** Исходник требований по задаче (Confluence, Figma, Google Docs…): ключ → ссылка. Рядом с документами из «Данных». */
   reqUrls: Record<string, string>;
   /**
+   * Микросервисы по задачам: ключ → имена из справочника микросервисов. На уровне SimpleTest, как требования:
+   * задача в нескольких списках трогает одни и те же сервисы. Из них подставляются микросервисы в бронь стенда.
+   */
+  msLinks: Record<string, string[]>;
+  /**
    * Статус (st), выставленный руками: ключ → этап. Нижняя планка — действует, пока Jira не покажет
    * этап выше (см. makeStageResolver). На уровне SimpleTest: реальность у задачи одна во всех списках.
    */
@@ -613,7 +620,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, reqUrls: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, reqUrls: {}, msLinks: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -642,6 +649,7 @@ export function loadState(): ToolState {
           templates: s.templates ?? [],
           reqLinks: s.reqLinks ?? {},
           reqUrls: s.reqUrls ?? {},
+          msLinks: s.msLinks ?? {},
           stageManual: s.stageManual ?? {},
           loadSettings: normLoadSettings(s.loadSettings),
         };
@@ -716,6 +724,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
     ...s,
     reqLinks: remap(s.reqLinks) ?? {},
     reqUrls: remap(s.reqUrls) ?? {},
+    msLinks: remap(s.msLinks) ?? {},
     stageManual: remap(s.stageManual) ?? {},
     created: s.created.map(i => (i.key === draftKey ? issue : i)),
     lists: s.lists.map(l => ({
@@ -743,6 +752,8 @@ export interface ColCtx {
   defectsOf: (issue: Issue) => Issue[] | null;
   /** Названия требований задачи (поле «Требования (st)»). */
   reqsOf?: (key: string) => string[];
+  /** Микросервисы задачи (поле «Микросервисы (st)»). */
+  msOf?: (key: string) => string[];
 }
 
 /** Дефекты задачи по индексу из defectIndex(); у самих дефектов — null. */
@@ -776,6 +787,7 @@ export function colLabel(ref: ColRef, list: TaskList): string {
   if (ref === FACT_COL) return "Траты факт (st)";
   if (ref === LOAD_COL) return "Нагрузка (st)";
   if (ref === REQ_COL) return "Требования (st)";
+  if (ref === MS_COL) return "Микросервисы (st)";
   if (isRoleCol(ref)) return `${ROLE_FIELDS.find(f => roleCol(f.id) === ref)?.label ?? ref.slice(5)} (st)`;
   if (ref.startsWith("jira:")) return FIELD_BY_ID[ref.slice(5)]?.name ?? ref.slice(5);
   if (ref.startsWith("own:")) return list.ownFields.find(f => f.id === ref.slice(4))?.name ?? "Удалённое поле";
@@ -809,6 +821,8 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
     v = ctx.list.spend?.[issue.key]?.[ref === START_COL ? "start" : "end"] ?? null;
   } else if (ref === REQ_COL) {
     v = ctx.reqsOf?.(issue.key) ?? null;
+  } else if (ref === MS_COL) {
+    v = ctx.msOf?.(issue.key) ?? null;
   } else if (ref === LOAD_COL) {
     const why = loadSkip(ctx.list, issue, ctx.stageOf);
     v = why === "manual" ? "Не учитывается (вручную)" : why === "stage" ? "Не учитывается (статус)" : "Учитывается";
@@ -1296,6 +1310,8 @@ export interface ExportFile {
   reqLinks: Record<string, string[]>;
   /** Ссылки на исходники требований; в старых файлах нет. */
   reqUrls?: Record<string, string>;
+  /** Микросервисы задач файла; в старых файлах нет. */
+  msLinks?: Record<string, string[]>;
   /** Ручные статусы (st) задач файла; в старых файлах нет. */
   stageManual?: Record<string, Stage>;
   /** Резервы нагрузки участников файла; в старых файлах нет. */
@@ -1321,6 +1337,7 @@ export function exportLists(s: ToolState, listIds: string[]): ExportFile {
     roleNames: s.roleNames,
     reqLinks: Object.fromEntries(Object.entries(s.reqLinks).filter(([k]) => keys.has(k))),
     reqUrls: Object.fromEntries(Object.entries(s.reqUrls).filter(([k]) => keys.has(k))),
+    msLinks: Object.fromEntries(Object.entries(s.msLinks).filter(([k]) => keys.has(k))),
     stageManual: Object.fromEntries(Object.entries(s.stageManual).filter(([k]) => keys.has(k))),
     loadReserves: s.loadSettings.reserves,
     drafts: s.created.filter(i => keys.has(i.key)),
@@ -1347,6 +1364,7 @@ export function parseExportFile(text: string): ExportFile {
     format: EXPORT_FORMAT, version: f.version, exportedAt: f.exportedAt ?? "",
     lists: f.lists, participants: f.participants ?? [], roleNames: f.roleNames ?? {}, reqLinks: f.reqLinks ?? {},
     reqUrls: f.reqUrls ?? {},
+    msLinks: f.msLinks ?? {},
     stageManual: f.stageManual ?? {},
     loadReserves: f.loadReserves ?? [],
     drafts: f.drafts ?? [], customStages: f.customStages ?? [], stageStyles: f.stageStyles ?? {},
@@ -1421,6 +1439,7 @@ export function importLists(s: ToolState, f: ExportFile): { state: ToolState; na
       roleNames,
       reqLinks: { ...remapKeys(f.reqLinks), ...s.reqLinks },
       reqUrls: { ...remapKeys(f.reqUrls), ...s.reqUrls },
+      msLinks: { ...remapKeys(f.msLinks), ...s.msLinks },
       // Свой ручной статус важнее чужого: у себя человек видит задачу ближе.
       stageManual: { ...remapKeys(f.stageManual), ...s.stageManual },
       // Резервы файла, которых у нас нет (по id), — с участниками, переведёнными на наших. Норму дня не трогаем.

@@ -4,13 +4,13 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  LOAD_COL, REQ_COL, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
+  LOAD_COL, REQ_COL, MS_COL, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
 import ColumnFilter, { type FilterOption } from "./ColumnFilter";
-import { BlockCell, DefectsCell, FactCell, JiraCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
+import { BlockCell, DefectsCell, FactCell, JiraCell, MsCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
 export type Place = "before" | "after";
@@ -52,6 +52,7 @@ export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
   if (isRoleCol(ref)) return 230;
   if (ref === LOAD_COL) return 150;
   if (ref === REQ_COL) return 220;
+  if (ref === MS_COL) return 220;
   if (ref.startsWith("own:")) {
     const t = ctx.list.ownFields.find(f => f.id === ref.slice(4))?.type;
     return t === "link" ? 90 : t === "datetime" ? 200 : t === "date" ? 150 : t === "multiselect" ? 190 : 170;
@@ -74,7 +75,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, reqOptions, onReqs, onReqUrl, onClearMark,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -146,6 +147,12 @@ export default function ListTable({
   onReqUrl: (key: string, url: string) => void;
   reqOptions: ReqOption[];
   onReqs: (key: string, ids: string[]) => void;
+  /** Микросервисы задач (ключ → имена), справочник с описаниями, правка и создание нового в справочнике. */
+  msLinks: Record<string, string[]>;
+  msCatalog: string[];
+  msInfo: Record<string, string>;
+  onMs: (key: string, names: string[]) => void;
+  onCreateMs: (names: string[]) => Promise<void>;
   /** Снять отметку «n» (если папок в списке нет — переложить задачу некуда). */
   onClearMark: (key: string) => void;
 }) {
@@ -447,6 +454,9 @@ export default function ListTable({
             ) : c === REQ_COL ? (
               <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
                 onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />
+            ) : c === MS_COL ? (
+              <MsCell value={msLinks[issue.key] ?? []} catalog={msCatalog} info={msInfo}
+                onChange={names => onMs(issue.key, names)} onCreate={onCreateMs} />
             ) : c === LOAD_COL ? (
               <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />
             ) : isRoleCol(c) ? (

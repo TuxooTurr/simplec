@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
@@ -71,6 +71,8 @@ type Panel = "columns" | "group" | null;
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
 const ASIDE_KEY = "st_jira_tool_aside";
+/** Раскрыта ли «Настройка списка» вверху колонки — тоже удобство одного браузера. */
+const LIST_SETUP_KEY = "st_jira_tool_list_setup";
 
 function shortName(name: string): string {
   const words = name.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
@@ -100,6 +102,9 @@ export default function JiraToolSection() {
   const stopSelecting = () => { setSelecting(false); setSelected(new Set()); };
   const [modal, setModal] = useState<ModalState>(null);
   const [collapsed, setCollapsed] = useState(false);
+  /** Настройка списка раскрыта (сверху колонки, по умолчанию — свёрнутая полоса). */
+  const [listSetupOpen, setListSetupOpen] = useState(false);
+  const toggleListSetup = (on: boolean) => { setListSetupOpen(on); try { localStorage.setItem(LIST_SETUP_KEY, on ? "1" : "0"); } catch { /* не запомнится */ } };
   const [panel, setPanel] = useState<Panel>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
@@ -175,6 +180,7 @@ export default function JiraToolSection() {
     setCache({ ...c.issues }); setMissingState(new Set(c.missing)); setRefreshedAt(c.refreshedAt);
     relatedDone.current = c.related;
     try { setCollapsed(localStorage.getItem(ASIDE_KEY) === "1"); } catch { /* развёрнута по умолчанию */ }
+    try { setListSetupOpen(localStorage.getItem(LIST_SETUP_KEY) === "1"); } catch { /* свёрнута по умолчанию */ }
   }, []);
 
   const connect = (refresh = false) => {
@@ -934,6 +940,203 @@ export default function JiraToolSection() {
         ) : (
           /* ── Развёрнутая колонка ── */
           <aside className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-y-auto scrollbar-thin pr-0.5 animate-fade-in">
+            {/*
+              Настройка списка — самой верхней полосой, свёрнута по умолчанию (экономит место): щелчок — раскрывается
+              привычный виджет, всё ниже сдвигается. Раскрыта ли — удобство одного браузера (LIST_SETUP_KEY).
+            */}
+            {list && (
+              <div className={`bg-bg-card border rounded-xl flex flex-col ${listSetupOpen ? "border-primary/30" : "border-border-main"}`}>
+                <button type="button" onClick={() => toggleListSetup(!listSetupOpen)} aria-expanded={listSetupOpen}
+                  title={listSetupOpen ? "Свернуть настройку списка" : "Колонки, группировка, папки, свои поля, шаблон"}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left rounded-xl hover:bg-bg-subtle/60">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">Настройка списка</span>
+                  <span className="min-w-0 flex-1 text-xs text-text-main truncate text-right">{listSetupOpen ? "" : list.name}</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform flex-shrink-0 ${listSetupOpen ? "rotate-180" : ""}`} />
+                </button>
+                {listSetupOpen && (
+                  <div className="px-3 pb-3 flex flex-col gap-3 animate-fade-in">
+                  <div className="flex items-center gap-1 min-w-0">
+                    {renaming !== null ? (
+                      <input autoFocus value={renaming} onChange={e => setRenaming(e.target.value)} aria-label="Название списка"
+                        onBlur={() => { if (renaming.trim()) updateList(l => ({ ...l, name: renaming.trim() })); setRenaming(null); }}
+                        onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setRenaming(null); }}
+                        className="min-w-0 flex-1 text-sm font-semibold bg-[var(--color-input-bg)] border border-primary/40 rounded-lg px-2 py-1 text-text-main focus:outline-none" />
+                    ) : (
+                      <p className="min-w-0 flex-1 text-sm font-semibold text-text-main truncate" title={list.name}>{list.name}</p>
+                    )}
+                    <button type="button" onClick={() => setTplName(t => (t === null ? list.name : null))} aria-label="Сохранить как шаблон"
+                      aria-pressed={tplName !== null} title="Сохранить как шаблон: колонки, свои поля и папки (без задач)"
+                      className={`p-1 rounded-md hover:text-primary ${tplName !== null ? "text-primary" : "text-text-muted"}`}>
+                      <LayoutTemplate className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => setRenaming(list.name)} aria-label="Переименовать список" title="Переименовать список"
+                      className="p-1 rounded-md text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={() => setAskDelete(true)} aria-label="Удалить список" title="Удалить список"
+                      className="p-1 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </div>
+                  {tplName !== null && (
+                    <div className="flex flex-col gap-1.5 -mt-1 p-2 rounded-lg bg-bg-subtle">
+                      <p className="text-[11px] text-text-muted">
+                        В шаблон попадут колонки по порядку ({list.columns.length}), свои поля ({list.ownFields.length}) и папки
+                        ({list.folderList?.length ?? 0}). Задачи и значения — нет.
+                      </p>
+                      <div className="flex gap-1.5">
+                        <input autoFocus value={tplName} onChange={e => setTplName(e.target.value)} maxLength={60}
+                          onKeyDown={e => { if (e.key === "Enter") saveTemplate(); if (e.key === "Escape") setTplName(null); }}
+                          placeholder="Название шаблона" aria-label="Название шаблона"
+                          className="min-w-0 flex-1 text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                        <button type="button" onClick={saveTemplate} disabled={!tplName.trim()}
+                          className="px-2.5 rounded-md bg-primary text-white text-xs font-semibold disabled:opacity-40">Сохранить</button>
+                      </div>
+                      {state.templates.some(t => t.name === tplName.trim()) && (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-300">Шаблон с таким названием есть — он будет заменён.</p>
+                      )}
+                    </div>
+                  )}
+                  {tplNote && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 -mt-1" role="status">{tplNote}</p>}
+                  {askDelete && (
+                    <div className="flex items-center gap-1.5 text-xs -mt-1">
+                      <span className="text-text-muted flex-1">Удалить список? Задачи в Jira останутся.</span>
+                      <button type="button" onClick={() => {
+                        update(s => ({ ...s, lists: s.lists.filter(l => l.id !== list.id) }));
+                        openList(state.lists.find(l => l.id !== list.id)?.id ?? "");
+                      }} className="px-2 py-1 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
+                      <button type="button" onClick={() => setAskDelete(false)} className="px-2 py-1 rounded-md border border-border-main text-text-muted">Нет</button>
+                    </div>
+                  )}
+
+                  <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)]
+                    focus-within:ring-2 focus-within:ring-primary/30">
+                    <Search className="w-3.5 h-3.5 text-text-muted" />
+                    <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Найти в списке" aria-label="Найти в списке"
+                      className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
+                    {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
+                  </label>
+                  {activeFilters.length > 0 && (
+                    <p className="flex items-center gap-1.5 px-1 text-[11px] text-primary">
+                      <ListFilter className="w-3.5 h-3.5" />
+                      Фильтр по колонкам: {activeFilters.map(([c]) => colLabel(c, list)).join(", ")}
+                      <button type="button" onClick={() => setColFilters({})} className="ml-auto text-text-muted hover:text-text-main underline">сбросить</button>
+                    </p>
+                  )}
+
+                  <Section icon={<Columns3 className="w-4 h-4" />} title="Колонки" note={`${list.columns.length}`}
+                    open={panel === "columns"} onToggle={() => setPanel(p => (p === "columns" ? null : "columns"))}>
+                    <PickerPanel label="Колонки" options={fieldOptions} selected={list.columns} listHeight="max-h-64"
+                      onChange={columns => updateList(l => ({ ...l, columns }))}
+                      footer={
+                        <button type="button" onClick={() => setModal({ own: null })}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
+                          <FilePlus2 className="w-4 h-4" /> Своё поле…
+                        </button>
+                      } />
+                  </Section>
+
+                  <Section icon={<Layers className="w-4 h-4" />} title="Группировка"
+                    note={list.groupBy.length ? list.groupBy.map(g => colLabel(g, list)).join(" → ") : "нет"}
+                    open={panel === "group"} onToggle={() => setPanel(p => (p === "group" ? null : "group"))}>
+                    <PickerPanel label="Группировка" options={groupOptions} selected={list.groupBy} max={3} ordered listHeight="max-h-64"
+                      onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
+                  </Section>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-semibold text-text-main">Папки</p>
+                      <button type="button" onClick={() => setNewFolder("")} className="text-xs text-primary hover:underline">+ папка</button>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {!list.folderList?.length && newFolder === null && (
+                        <span className="text-[11px] text-text-muted">Нет. Папки делят список на разделы; группировка — внутри каждой.</span>
+                      )}
+                      {(list.folderList ?? []).map(f => {
+                        const n = list.keys.filter(k => list.folders?.[k] === f).length;
+                        return askDeleteFolder === f ? (
+                          <div key={f} className="flex flex-col gap-1 px-2 py-1.5 rounded-md bg-red-50 dark:bg-red-950/40 text-xs">
+                            <span className="text-text-main">
+                              Удалить папку «{f}»?{n > 0 && <> Задачи ({n}) останутся в списке — в разделе «{NO_FOLDER}».</>}
+                            </span>
+                            <span className="flex gap-1.5">
+                              <button type="button" onClick={() => { deleteFolder(f); setAskDeleteFolder(null); }}
+                                className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
+                              <button type="button" onClick={() => setAskDeleteFolder(null)}
+                                className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
+                            </span>
+                          </div>
+                        ) : (
+                          <span key={f} className="group/fd flex items-center gap-1.5 text-xs text-text-main px-1 py-0.5 rounded-md hover:bg-bg-subtle">
+                            <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                            <span className="truncate flex-1">{f}</span>
+                            <span className="text-text-muted group-hover/fd:hidden">{n}</span>
+                            <button type="button" onClick={() => setAskDeleteFolder(f)} aria-label={`Удалить папку ${f}`} title="Удалить папку"
+                              className="hidden group-hover/fd:inline-flex focus-visible:inline-flex p-0.5 rounded text-text-muted hover:text-red-500">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                      {newFolder !== null && (
+                        <input autoFocus value={newFolder} onChange={e => setNewFolder(e.target.value)} aria-label="Название папки"
+                          onBlur={() => (newFolder.trim() ? addFolder() : setNewFolder(null))}
+                          onKeyDown={e => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") setNewFolder(null); }}
+                          placeholder="Название папки, Enter"
+                          className="text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs font-semibold text-text-main">Свои поля</p>
+                      <button type="button" onClick={() => setModal({ own: null })} className="text-xs text-primary hover:underline">+ поле</button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {list.ownFields.length === 0 && <span className="text-[11px] text-text-muted">Нет — добавьте дату ретеста, стенд и т.п.</span>}
+                      {list.ownFields.map(f => (
+                        <button key={f.id} type="button" onClick={() => setModal({ own: f })} title={`${OWN_TYPE_LABEL[f.type]} — изменить`}
+                          className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-subtle text-xs text-text-main hover:text-primary">
+                          <Pencil className="w-3 h-3" /> {f.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {!!list.sources?.length && (
+                    <div className="border-t border-border-main pt-2">
+                      <p className="text-xs font-semibold text-text-main mb-1"
+                        title="При обновлении из Jira (по кнопке и фоном раз в 30 минут) состав сверяется: новые — «n», выпавшие — «У»">
+                        Источники · сверка состава
+                      </p>
+                      <div className="flex flex-col gap-0.5">
+                        {list.sources.map(src => (
+                          <span key={src.id} className="group/src flex items-start gap-1.5 text-[11px] text-text-muted py-0.5"
+                            title={`${src.kind === "jql" ? "JQL" : "Релиз"}: ${src.name}\nЗадач в составе: ${src.keys.length} · сверено ${src.checkedAt}`}>
+                            {src.kind === "jql" ? <Search className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" /> : <Rocket className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />}
+                            <span className={`flex-1 min-w-0 truncate text-text-main ${src.kind === "jql" ? "font-mono" : ""}`}>{src.name}</span>
+                            <span className="flex-shrink-0">{src.keys.length}</span>
+                            <button type="button" aria-label={`Не отслеживать: ${src.name}`} title="Не отслеживать состав (задачи останутся в списке)"
+                              onClick={() => updateList(l => ({ ...l, sources: (l.sources ?? []).filter(x => x.id !== src.id) }))}
+                              className="hidden group-hover/src:inline-flex focus-visible:inline-flex p-0.5 rounded hover:text-red-500">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {STRUCTURE_ENABLED && list.structure && (
+                    <div className="text-[11px] text-text-muted flex items-start gap-1.5 border-t border-border-main pt-2">
+                      <FolderTree className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
+                      <span className="flex-1">Из структуры «{list.structure.name}» · {list.structure.importedAt}</span>
+                      <button type="button" onClick={refreshStructure} title="Подтянуть новые задачи и папки"
+                        className="p-0.5 rounded hover:text-primary"><RefreshCw className="w-3.5 h-3.5" /></button>
+                    </div>
+                  )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="bg-bg-card border border-border-main rounded-xl p-2 flex flex-col gap-0.5">
               <div className="flex items-center justify-between pl-2 pr-0.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted py-1">Списки</p>
@@ -1043,188 +1246,6 @@ export default function JiraToolSection() {
                 </div>
               )}
             </div>
-
-            {/* Настройка списка: всё, что меняет вид таблицы */}
-            {list && (
-              <div className="bg-bg-card border border-border-main rounded-xl p-3 flex flex-col gap-3">
-                <div className="flex items-center gap-1 min-w-0">
-                  {renaming !== null ? (
-                    <input autoFocus value={renaming} onChange={e => setRenaming(e.target.value)} aria-label="Название списка"
-                      onBlur={() => { if (renaming.trim()) updateList(l => ({ ...l, name: renaming.trim() })); setRenaming(null); }}
-                      onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setRenaming(null); }}
-                      className="min-w-0 flex-1 text-sm font-semibold bg-[var(--color-input-bg)] border border-primary/40 rounded-lg px-2 py-1 text-text-main focus:outline-none" />
-                  ) : (
-                    <p className="min-w-0 flex-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">Настройка списка</p>
-                  )}
-                  <button type="button" onClick={() => setTplName(t => (t === null ? list.name : null))} aria-label="Сохранить как шаблон"
-                    aria-pressed={tplName !== null} title="Сохранить как шаблон: колонки, свои поля и папки (без задач)"
-                    className={`p-1 rounded-md hover:text-primary ${tplName !== null ? "text-primary" : "text-text-muted"}`}>
-                    <LayoutTemplate className="w-3.5 h-3.5" />
-                  </button>
-                  <button type="button" onClick={() => setRenaming(list.name)} aria-label="Переименовать список" title="Переименовать список"
-                    className="p-1 rounded-md text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
-                  <button type="button" onClick={() => setAskDelete(true)} aria-label="Удалить список" title="Удалить список"
-                    className="p-1 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                </div>
-                {tplName !== null && (
-                  <div className="flex flex-col gap-1.5 -mt-1 p-2 rounded-lg bg-bg-subtle">
-                    <p className="text-[11px] text-text-muted">
-                      В шаблон попадут колонки по порядку ({list.columns.length}), свои поля ({list.ownFields.length}) и папки
-                      ({list.folderList?.length ?? 0}). Задачи и значения — нет.
-                    </p>
-                    <div className="flex gap-1.5">
-                      <input autoFocus value={tplName} onChange={e => setTplName(e.target.value)} maxLength={60}
-                        onKeyDown={e => { if (e.key === "Enter") saveTemplate(); if (e.key === "Escape") setTplName(null); }}
-                        placeholder="Название шаблона" aria-label="Название шаблона"
-                        className="min-w-0 flex-1 text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                      <button type="button" onClick={saveTemplate} disabled={!tplName.trim()}
-                        className="px-2.5 rounded-md bg-primary text-white text-xs font-semibold disabled:opacity-40">Сохранить</button>
-                    </div>
-                    {state.templates.some(t => t.name === tplName.trim()) && (
-                      <p className="text-[11px] text-amber-700 dark:text-amber-300">Шаблон с таким названием есть — он будет заменён.</p>
-                    )}
-                  </div>
-                )}
-                {tplNote && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 -mt-1" role="status">{tplNote}</p>}
-                {askDelete && (
-                  <div className="flex items-center gap-1.5 text-xs -mt-1">
-                    <span className="text-text-muted flex-1">Удалить список? Задачи в Jira останутся.</span>
-                    <button type="button" onClick={() => {
-                      update(s => ({ ...s, lists: s.lists.filter(l => l.id !== list.id) }));
-                      openList(state.lists.find(l => l.id !== list.id)?.id ?? "");
-                    }} className="px-2 py-1 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
-                    <button type="button" onClick={() => setAskDelete(false)} className="px-2 py-1 rounded-md border border-border-main text-text-muted">Нет</button>
-                  </div>
-                )}
-
-                <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)]
-                  focus-within:ring-2 focus-within:ring-primary/30">
-                  <Search className="w-3.5 h-3.5 text-text-muted" />
-                  <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Найти в списке" aria-label="Найти в списке"
-                    className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
-                  {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
-                </label>
-                {activeFilters.length > 0 && (
-                  <p className="flex items-center gap-1.5 px-1 text-[11px] text-primary">
-                    <ListFilter className="w-3.5 h-3.5" />
-                    Фильтр по колонкам: {activeFilters.map(([c]) => colLabel(c, list)).join(", ")}
-                    <button type="button" onClick={() => setColFilters({})} className="ml-auto text-text-muted hover:text-text-main underline">сбросить</button>
-                  </p>
-                )}
-
-                <Section icon={<Columns3 className="w-4 h-4" />} title="Колонки" note={`${list.columns.length}`}
-                  open={panel === "columns"} onToggle={() => setPanel(p => (p === "columns" ? null : "columns"))}>
-                  <PickerPanel label="Колонки" options={fieldOptions} selected={list.columns} listHeight="max-h-64"
-                    onChange={columns => updateList(l => ({ ...l, columns }))}
-                    footer={
-                      <button type="button" onClick={() => setModal({ own: null })}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
-                        <FilePlus2 className="w-4 h-4" /> Своё поле…
-                      </button>
-                    } />
-                </Section>
-
-                <Section icon={<Layers className="w-4 h-4" />} title="Группировка"
-                  note={list.groupBy.length ? list.groupBy.map(g => colLabel(g, list)).join(" → ") : "нет"}
-                  open={panel === "group"} onToggle={() => setPanel(p => (p === "group" ? null : "group"))}>
-                  <PickerPanel label="Группировка" options={groupOptions} selected={list.groupBy} max={3} ordered listHeight="max-h-64"
-                    onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
-                </Section>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-xs font-semibold text-text-main">Папки</p>
-                    <button type="button" onClick={() => setNewFolder("")} className="text-xs text-primary hover:underline">+ папка</button>
-                  </div>
-                  <div className="flex flex-col gap-0.5">
-                    {!list.folderList?.length && newFolder === null && (
-                      <span className="text-[11px] text-text-muted">Нет. Папки делят список на разделы; группировка — внутри каждой.</span>
-                    )}
-                    {(list.folderList ?? []).map(f => {
-                      const n = list.keys.filter(k => list.folders?.[k] === f).length;
-                      return askDeleteFolder === f ? (
-                        <div key={f} className="flex flex-col gap-1 px-2 py-1.5 rounded-md bg-red-50 dark:bg-red-950/40 text-xs">
-                          <span className="text-text-main">
-                            Удалить папку «{f}»?{n > 0 && <> Задачи ({n}) останутся в списке — в разделе «{NO_FOLDER}».</>}
-                          </span>
-                          <span className="flex gap-1.5">
-                            <button type="button" onClick={() => { deleteFolder(f); setAskDeleteFolder(null); }}
-                              className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
-                            <button type="button" onClick={() => setAskDeleteFolder(null)}
-                              className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
-                          </span>
-                        </div>
-                      ) : (
-                        <span key={f} className="group/fd flex items-center gap-1.5 text-xs text-text-main px-1 py-0.5 rounded-md hover:bg-bg-subtle">
-                          <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                          <span className="truncate flex-1">{f}</span>
-                          <span className="text-text-muted group-hover/fd:hidden">{n}</span>
-                          <button type="button" onClick={() => setAskDeleteFolder(f)} aria-label={`Удалить папку ${f}`} title="Удалить папку"
-                            className="hidden group-hover/fd:inline-flex focus-visible:inline-flex p-0.5 rounded text-text-muted hover:text-red-500">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </span>
-                      );
-                    })}
-                    {newFolder !== null && (
-                      <input autoFocus value={newFolder} onChange={e => setNewFolder(e.target.value)} aria-label="Название папки"
-                        onBlur={() => (newFolder.trim() ? addFolder() : setNewFolder(null))}
-                        onKeyDown={e => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") setNewFolder(null); }}
-                        placeholder="Название папки, Enter"
-                        className="text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <p className="text-xs font-semibold text-text-main">Свои поля</p>
-                    <button type="button" onClick={() => setModal({ own: null })} className="text-xs text-primary hover:underline">+ поле</button>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {list.ownFields.length === 0 && <span className="text-[11px] text-text-muted">Нет — добавьте дату ретеста, стенд и т.п.</span>}
-                    {list.ownFields.map(f => (
-                      <button key={f.id} type="button" onClick={() => setModal({ own: f })} title={`${OWN_TYPE_LABEL[f.type]} — изменить`}
-                        className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-subtle text-xs text-text-main hover:text-primary">
-                        <Pencil className="w-3 h-3" /> {f.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {!!list.sources?.length && (
-                  <div className="border-t border-border-main pt-2">
-                    <p className="text-xs font-semibold text-text-main mb-1"
-                      title="При обновлении из Jira (по кнопке и фоном раз в 30 минут) состав сверяется: новые — «n», выпавшие — «У»">
-                      Источники · сверка состава
-                    </p>
-                    <div className="flex flex-col gap-0.5">
-                      {list.sources.map(src => (
-                        <span key={src.id} className="group/src flex items-start gap-1.5 text-[11px] text-text-muted py-0.5"
-                          title={`${src.kind === "jql" ? "JQL" : "Релиз"}: ${src.name}\nЗадач в составе: ${src.keys.length} · сверено ${src.checkedAt}`}>
-                          {src.kind === "jql" ? <Search className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" /> : <Rocket className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />}
-                          <span className={`flex-1 min-w-0 truncate text-text-main ${src.kind === "jql" ? "font-mono" : ""}`}>{src.name}</span>
-                          <span className="flex-shrink-0">{src.keys.length}</span>
-                          <button type="button" aria-label={`Не отслеживать: ${src.name}`} title="Не отслеживать состав (задачи останутся в списке)"
-                            onClick={() => updateList(l => ({ ...l, sources: (l.sources ?? []).filter(x => x.id !== src.id) }))}
-                            className="hidden group-hover/src:inline-flex focus-visible:inline-flex p-0.5 rounded hover:text-red-500">
-                            <X className="w-3 h-3" />
-                          </button>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {STRUCTURE_ENABLED && list.structure && (
-                  <div className="text-[11px] text-text-muted flex items-start gap-1.5 border-t border-border-main pt-2">
-                    <FolderTree className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
-                    <span className="flex-1">Из структуры «{list.structure.name}» · {list.structure.importedAt}</span>
-                    <button type="button" onClick={refreshStructure} title="Подтянуть новые задачи и папки"
-                      className="p-0.5 rounded hover:text-primary"><RefreshCw className="w-3.5 h-3.5" /></button>
-                  </div>
-                )}
-              </div>
-            )}
 
             <div className="bg-bg-card border border-border-main rounded-xl p-3">
               <div className="flex items-center justify-between mb-2">

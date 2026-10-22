@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 export interface ModalProps {
@@ -38,11 +39,15 @@ export function Modal({ open, onClose, title, children, size = "max-w-md" }: Mod
     return () => window.removeEventListener("keydown", h);
   }, [open, onClose]);
 
-  if (!rendered) return null;
+  // На сервере (SSR) document нет — открытое окно появится после загрузки страницы.
+  if (!rendered || typeof document === "undefined") return null;
 
   const closing = !open;
 
-  return (
+  // Окно — в document.body, а не там, где его открыли: у предка с transform, filter или backdrop-filter
+  // (шапка панели с размытием фона) position: fixed считается от этого предка, а не от экрана, и окно уезжало
+  // за верх экрана (кнопка «Резервная копия» в шапке панели).
+  return createPortal(
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center p-4 t-modal-overlay ${closing ? "is-closing" : ""}`}
       style={{ backgroundColor: "var(--color-modal-overlay)" }}
@@ -75,7 +80,8 @@ export function Modal({ open, onClose, title, children, size = "max-w-md" }: Mod
           {children}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

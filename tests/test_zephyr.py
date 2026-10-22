@@ -968,3 +968,22 @@ def test_удаление_папки_убирает_её_из_дерева_ес�
     paths = [n["path"] for n in z.tree(project="SBER911", db=None)["folders"]]
     assert paths == ["/Платежи"]
     assert [m for m, p, _ in model if m == "DELETE"] == ["DELETE", "DELETE"]          # кейсы удалены в Jira
+
+
+def test_выгрузка_пачками_склеивается_в_тот_же_файл(jira):
+    """Файл выгрузки склеивается из кусков пачек (export/cases xml=true) и рамки (export/frame) — без отправки
+    всех кейсов обратно на сервер (прокси Next режет тело на 10 МБ)."""
+    keys = [f"T{i}" for i in range(5)]
+    for k in keys:
+        jira["routes"][f"/rest/atm/1.0/testcase/{k}"] = {"key": k, "name": f"Кейс {k}", "folder": "/A/B",
+                                                          "testScript": {"steps": [{"description": "шаг", "expectedResult": "ок"}]}}
+    parts, start = [], 0
+    for chunk in (keys[:2], keys[2:]):
+        r = z.export_cases(z.ExportKeys(project="SBER911", keys=chunk, xml=True, start=start), db=None)
+        parts.append(r["xml"]); start += r["count"]
+    frame = z.export_frame(z.ExportFrame(project="SBER911", folders=["/A", "/A/B"]))
+    glued = frame["head"] + "".join(parts) + frame["tail"]
+    back = z.parse_zephyr_xml(glued)
+    assert [c["name"] for c in back["cases"]] == [f"Кейс {k}" for k in keys]
+    assert back["folders"] == ["/A", "/A/B"] and back["cases"][4]["steps"][0]["expectedResult"] == "ок"
+    assert 'id="5"' in glued                                       # нумерация сквозная между пачками

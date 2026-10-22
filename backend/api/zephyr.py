@@ -2022,7 +2022,8 @@ def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
 #
 # Выгрузка: выбранная папка со всеми вложенными (или весь проект) → тот же Zephyr XML, что принимает «Новая модель
 # из XML» (parse_zephyr_xml): папки, кейсы со всеми полями, шагами, связями и пользовательскими полями. Индекс шагов
-# не хранит — полные кейсы берутся из Jira пачками (export/cases), фронт показывает прогресс.
+# не хранит — кейсы читаются из Jira пачками (export/cases, xml=true — сразу кусок XML), фронт показывает прогресс
+# и склеивает файл: начало и конец — export/frame, кейсы — куски пачек. Обратно на сервер ничего большого не уходит.
 # Удаление папки: публичный API папки не удаляет (id папок не отдаёт) — удаляются все её кейсы (с вложенными),
 # пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева SimpleTest уходит (folder/forget).
 
@@ -2047,6 +2048,9 @@ def folder_keys(body: FolderKeys, db: Session = Depends(get_db)) -> dict:
 class ExportKeys(BaseModel):
     project: str = Field(..., min_length=1)
     keys: list[str] = Field(..., min_length=1, max_length=200)
+    # xml=true — вместо кейсов готовый кусок XML этой пачки (<testCase>…); start — номер первого кейса пачки в файле.
+    xml: bool = False
+    start: int = Field(0, ge=0)
 
 
 def full_case(c: dict) -> dict:
@@ -2063,7 +2067,10 @@ def export_cases(body: ExportKeys, db: Session = Depends(get_db)) -> dict:
     got: dict[str, dict] = {}
     ok, errors = _each(body.keys, lambda k: got.__setitem__(k, full_case(_jira_request(cfg, "GET", f"{ATM}/testcase/{k}"))))
     order = list(dict.fromkeys(k.strip().upper() for k in body.keys))
-    return {"cases": [got[k] for k in order if k in got], "errors": errors}
+    rows = [got[k] for k in order if k in got]
+    if body.xml:
+        return {"xml": "".join(case_xml(c, body.start + i) + "\n" for i, c in enumerate(rows)), "count": len(rows), "errors": errors}
+    return {"cases": rows, "errors": errors}
 
 
 def _cdata(v: Any) -> str:
@@ -2086,51 +2093,61 @@ def _cf_xml(name: str, v: Any) -> str:
     return f"<customField name={quoteattr(name)} type={quoteattr(t)}><value>{_cdata(val)}</value></customField>"
 
 
-def build_zephyr_xml(project: str, folders: list[str], cases_: list[dict]) -> str:
-    """Кейсы и папки → Zephyr XML (формат выгрузки Zephyr Scale; его же разбирает parse_zephyr_xml)."""
+def xml_frame(project: str, folders: list[str]) -> tuple[str, str]:
+    """Начало Zephyr XML (проект, папки, открытый <testCases>) и конец — между ними встают кейсы (case_xml)."""
     from xml.sax.saxutils import escape, quoteattr
-    out = ['<?xml version="1.0" encoding="UTF-8"?>', "<project>", f"<projectKey>{escape(project)}</projectKey>",
-           f"<exportDate>{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}</exportDate>", "<folders>"]
-    out += [f'<folder fullPath={quoteattr(p.lstrip("/"))} index="{i}"/>' for i, p in enumerate(folders)]
-    out += ["</folders>", "<testCases>"]
-    for i, c in enumerate(cases_):
-        x = [f'<testCase id="{i + 1}" key={quoteattr(c.get("key", ""))}>']
-        x.append(f"<name>{_cdata(c.get('name'))}</name>")
-        for tag in ("objective", "precondition", "priority", "status", "owner", "component"):
-            if c.get(tag):
-                x.append(f"<{tag}>{_cdata(c[tag])}</{tag}>")
-        x.append(f"<folder>{_cdata((c.get('folder') or '').lstrip('/'))}</folder>")
-        if c.get("estimatedTime"):
-            x.append(f"<estimatedTime>{int(c['estimatedTime'])}</estimatedTime>")
-        if c.get("labels"):
-            x.append("<labels>" + "".join(f"<label>{_cdata(l)}</label>" for l in c["labels"]) + "</labels>")
-        if c.get("issueLinks"):
-            x.append("<issues>" + "".join(f"<issue><key>{escape(k)}</key></issue>" for k in c["issueLinks"]) + "</issues>")
-        cf = c.get("customFields") or {}
-        if cf:
-            x.append("<customFields>" + "".join(_cf_xml(n, v) for n, v in cf.items() if v not in (None, "", [])) + "</customFields>")
-        steps = c.get("steps") or []
-        x.append('<testScript type="steps"><steps>' + "".join(
-            f'<step index="{j}"><description>{_cdata(st.get("description"))}</description>'
-            f'<testData>{_cdata(st.get("testData"))}</testData><expectedResult>{_cdata(st.get("expectedResult"))}</expectedResult></step>'
-            for j, st in enumerate(steps)) + "</steps></testScript>")
-        x.append("</testCase>")
-        out.append("".join(x))
-    out += ["</testCases>", "</project>"]
-    return "\n".join(out)
+    head = ['<?xml version="1.0" encoding="UTF-8"?>', "<project>", f"<projectKey>{escape(project)}</projectKey>",
+            f"<exportDate>{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}</exportDate>", "<folders>"]
+    head += [f'<folder fullPath={quoteattr(p.lstrip("/"))} index="{i}"/>' for i, p in enumerate(folders)]
+    head += ["</folders>", "<testCases>"]
+    return "\n".join(head) + "\n", "</testCases>\n</project>"
 
 
-class ExportXml(BaseModel):
+def case_xml(c: dict, i: int) -> str:
+    """Один кейс → <testCase> (формат выгрузки Zephyr Scale; его же разбирает parse_zephyr_xml). i — номер в файле."""
+    from xml.sax.saxutils import escape, quoteattr
+    x = [f'<testCase id="{i + 1}" key={quoteattr(c.get("key", ""))}>']
+    x.append(f"<name>{_cdata(c.get('name'))}</name>")
+    for tag in ("objective", "precondition", "priority", "status", "owner", "component"):
+        if c.get(tag):
+            x.append(f"<{tag}>{_cdata(c[tag])}</{tag}>")
+    x.append(f"<folder>{_cdata((c.get('folder') or '').lstrip('/'))}</folder>")
+    if c.get("estimatedTime"):
+        x.append(f"<estimatedTime>{int(c['estimatedTime'])}</estimatedTime>")
+    if c.get("labels"):
+        x.append("<labels>" + "".join(f"<label>{_cdata(l)}</label>" for l in c["labels"]) + "</labels>")
+    if c.get("issueLinks"):
+        x.append("<issues>" + "".join(f"<issue><key>{escape(k)}</key></issue>" for k in c["issueLinks"]) + "</issues>")
+    cf = c.get("customFields") or {}
+    if cf:
+        x.append("<customFields>" + "".join(_cf_xml(n, v) for n, v in cf.items() if v not in (None, "", [])) + "</customFields>")
+    steps = c.get("steps") or []
+    x.append('<testScript type="steps"><steps>' + "".join(
+        f'<step index="{j}"><description>{_cdata(st.get("description"))}</description>'
+        f'<testData>{_cdata(st.get("testData"))}</testData><expectedResult>{_cdata(st.get("expectedResult"))}</expectedResult></step>'
+        for j, st in enumerate(steps)) + "</steps></testScript>")
+    x.append("</testCase>")
+    return "".join(x)
+
+
+def build_zephyr_xml(project: str, folders: list[str], cases_: list[dict]) -> str:
+    """Кейсы и папки → Zephyr XML целиком (xml_frame + case_xml)."""
+    head, tail = xml_frame(project, folders)
+    return head + "".join(case_xml(c, i) + "\n" for i, c in enumerate(cases_)) + tail
+
+
+class ExportFrame(BaseModel):
     project: str = Field(..., min_length=1)
     folders: list[str] = Field(default_factory=list)
-    cases: list[dict] = Field(default_factory=list)
 
 
-@router.post("/api/zephyr/export/xml")
-def export_xml(body: ExportXml):
-    from fastapi.responses import Response
-    xml = build_zephyr_xml(body.project.strip().upper(), body.folders, body.cases)
-    return Response(content=xml.encode("utf-8"), media_type="application/xml; charset=utf-8")
+@router.post("/api/zephyr/export/frame")
+def export_frame(body: ExportFrame) -> dict:
+    """Начало и конец файла выгрузки: кейсы между ними фронт склеивает из пачек export/cases (xml=true).
+    Весь файл одним запросом не собираем: тело с тысячами кейсов — десятки МБ, прокси dev-режима Next режет его
+    на 10 МБ (Internal Server Error на 3851 кейсе)."""
+    head, tail = xml_frame(body.project.strip().upper(), body.folders)
+    return {"head": head, "tail": tail}
 
 
 class FolderForget(BaseModel):

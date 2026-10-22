@@ -3,10 +3,7 @@
  * Этап 1: чтение и проверка API на стенде. Запись — после отчёта проверки.
  */
 
-import { authHeaders } from "./authApi";
 import { fetchJson } from "./jiraApi";
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export interface ZFolder { id?: number; name: string; path: string; count: number; children: ZFolder[] }
 
@@ -374,33 +371,31 @@ export const folderKeys = (project: string, folder: string) =>
 export const forgetFolder = (project: string, folder: string) =>
   post<{ folder: string; casesLeft: number }>("/api/zephyr/folder/forget", { project, folder });
 
-/** Кейс для выгрузки: всё, что уходит в XML. */
-export type ZExportCase = ZCaseFull & { customFields?: Record<string, unknown> };
-
 const EXPORT_CHUNK = 100;
 
 /**
  * Выгрузка папки со всеми вложенными (или всего проекта) в Zephyr XML — тот же формат, что принимает
- * «Новая модель из XML». Полные кейсы (с шагами) — из Jira пачками, с прогрессом; файл собирает бэкенд.
+ * «Новая модель из XML». Кейсы читаются из Jira пачками по 100 — бэкенд сразу отдаёт кусок XML пачки, файл
+ * склеивается здесь: начало и конец (папки) — export/frame. Весь файл на сервер обратно не отправляем: тысячи
+ * кейсов — десятки МБ, а прокси dev-режима Next режет тело запроса (на 3851 кейсе был Internal Server Error).
  */
 export async function exportFolderXml(project: string, folder: string, onProgress: (done: number, total: number) => void,
                                       cancelled: () => boolean = () => false) {
   const { keys, folders } = await folderKeys(project, folder);
-  const cases: ZExportCase[] = [];
+  const parts: string[] = [];
   const errors: { key: string; error: string }[] = [];
+  let exported = 0;
   onProgress(0, keys.length);
   for (let i = 0; i < keys.length; i += EXPORT_CHUNK) {
     if (cancelled()) throw new Error("Выгрузка отменена");
-    const r = await post<{ cases: ZExportCase[]; errors: { key: string; error: string }[] }>("/api/zephyr/export/cases",
-      { project, keys: keys.slice(i, i + EXPORT_CHUNK) });
-    cases.push(...r.cases); errors.push(...r.errors);
+    const r = await post<{ xml: string; count: number; errors: { key: string; error: string }[] }>("/api/zephyr/export/cases",
+      { project, keys: keys.slice(i, i + EXPORT_CHUNK), xml: true, start: exported });
+    parts.push(r.xml); exported += r.count; errors.push(...r.errors);
     onProgress(Math.min(i + EXPORT_CHUNK, keys.length), keys.length);
   }
-  const res = await fetch(`${API_BASE}/api/zephyr/export/xml`, {
-    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ project, folders, cases }),
-  });
-  if (!res.ok) throw new Error(`XML не собрался: ${(await res.text()).slice(0, 200)}`);
-  return { blob: await res.blob(), total: keys.length, exported: cases.length, folders: folders.length, errors };
+  const frame = await post<{ head: string; tail: string }>("/api/zephyr/export/frame", { project, folders });
+  const blob = new Blob([frame.head, ...parts, frame.tail], { type: "application/xml;charset=utf-8" });
+  return { blob, total: keys.length, exported, folders: folders.length, errors };
 }
 
 export interface CasesEditIn { status?: string; priority?: string; labelsAdd?: string[]; customFields?: Record<string, unknown> }

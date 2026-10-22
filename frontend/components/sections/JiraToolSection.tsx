@@ -47,7 +47,7 @@ import {
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
 import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields } from "@/lib/jiraToolApi";
-import { peopleFieldChanges } from "@/lib/jiraPeopleSync";
+import { dropSent, peopleFieldChanges, queuePeopleChanges } from "@/lib/jiraPeopleSync";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
@@ -319,21 +319,19 @@ export default function JiraToolSection() {
   const updateList = (fn: (l: TaskList) => TaskList) =>
     update(s => ({ ...s, lists: s.lists.map(l => (l.id === activeId ? fn(l) : l)) }));
   /**
-   * Правка списка, которая может поменять людей задач (тестировщик, поля направлений): кроме списка — пишем
-   * имена в Jira в поля направлений (lib/jiraPeopleSync.ts). Поля нет у задачи — молча остаётся в SimpleTest.
+   * Правка списка, которая может поменять людей задач (тестировщик, поля направлений): кроме списка — ставим
+   * в очередь запись имён в Jira (lib/jiraPeopleSync.ts). Очередь уходит при обновлении из Jira (flushPeople).
    */
-  const updateListPeople = (fn: (l: TaskList) => TaskList) => {
-    if (list && state && jira.state === "ok") {
-      const changes = peopleFieldChanges(list, fn(list), state.participants, jiraFields);
-      if (changes.length) {
-        writePeopleFields(changes).then(r => {
-          const bad = r.results.filter(x => x.ok === false);
-          setJiraPeopleErr(bad.length ? bad.map(b => `${b.key}: ${b.error}`).join("; ") : "");
-        }, e => setJiraPeopleErr((e as Error).message));
-      }
-    }
-    updateList(fn);
-  };
+  const updateListPeople = (fn: (l: TaskList) => TaskList) => update(s => {
+    const cur = s.lists.find(l => l.id === activeId);
+    if (!cur) return s;
+    const next = fn(cur);
+    const diff = peopleFieldChanges(cur, next, s.participants, jiraFields);
+    return {
+      ...s, lists: s.lists.map(l => (l.id === activeId ? next : l)),
+      jiraPending: diff.changes.length || diff.keep.length ? queuePeopleChanges(s.jiraPending ?? [], diff) : s.jiraPending,
+    };
+  });
 
   const allIssues = useMemo(() => [...Object.values(cache), ...(state?.created ?? [])], [cache, state?.created]);
   const byKey = useMemo(() => new Map(allIssues.map(i => [i.key, i])), [allIssues]);
@@ -361,6 +359,8 @@ export default function JiraToolSection() {
     };
   }, [defectIdx, byEpic]);
   const list = state?.lists.find(l => l.id === activeId) ?? null;
+  /** Изменений людей, ждущих записи в Jira (уйдут при обновлении). */
+  const pendingPeople = state?.jiraPending?.length ?? 0;
 
   // Задачи списка, которых ещё нет, — из Jira; у загруженных — связанные (один раз).
   const listKeys = list?.keys.join(",") ?? "";
@@ -382,14 +382,31 @@ export default function JiraToolSection() {
       .catch(() => { /* поля не загрузились — в выборе все поля сервера */ });
   }, [jira.state, listProject]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** «Обновить из Jira»: перечитать задачи списка и связанные, повторить упавшие. */
+  /**
+   * Людей из очереди — в поля Jira. Перед каждым обновлением из Jira (ручным и фоновым): после него в списке уже
+   * значения из Jira. Поля нет у задачи — молча; Jira отказала — баннер; Jira недоступна — очередь ждёт следующего раза.
+   */
+  const flushPeople = async () => {
+    const sent = stateRef.current?.jiraPending ?? [];
+    if (!sent.length) return;
+    try {
+      const r = await writePeopleFields(sent);
+      update(s => ({ ...s, jiraPending: dropSent(s.jiraPending ?? [], sent, r.results) }));
+      const bad = r.results.filter(x => x.ok === false);
+      setJiraPeopleErr(bad.length ? bad.map(b => `${b.key}: ${b.error}`).join("; ") : "");
+    } catch (e) {
+      setJiraPeopleErr(`${(e as Error).message}. Отправим при следующем обновлении`);
+    }
+  };
+
+  /** «Обновить из Jira»: отправить людей из очереди, перечитать задачи списка и связанные, повторить упавшие. */
   const refreshFromJira = () => {
     if (!list || !state) return;
     inflight.current.clear(); relatedDone.current.clear();
     setMissing(() => new Set());
     const drafts = new Set(state.created.map(i => i.key));
     const id = list.id;
-    void sync(list.keys.filter(k => !drafts.has(k)), []).then(() => checkSources([id]));
+    void flushPeople().then(() => sync(list.keys.filter(k => !drafts.has(k)), [])).then(() => checkSources([id]));
   };
 
   /**
@@ -399,6 +416,8 @@ export default function JiraToolSection() {
   const stateRef = useRef(state);
   stateRef.current = state;
   const refreshAll = async () => {
+    if (!stateRef.current) return;
+    await flushPeople();
     const st = stateRef.current;
     if (!st) return;
     const drafts = new Set(st.created.map(i => i.key));
@@ -1350,8 +1369,13 @@ export default function JiraToolSection() {
                     ))}
                   </span>
                   <button type="button" onClick={refreshFromJira} disabled={jira.state !== "ok"} aria-label="Обновить из Jira"
-                    title="Перечитать задачи списка из Jira" className="p-2 rounded-lg border border-border-main text-text-muted hover:text-primary disabled:opacity-40">
+                    title={pendingPeople ? `Отправить в Jira людей (изменений: ${pendingPeople}) и перечитать задачи списка` : "Перечитать задачи списка из Jira"}
+                    className="relative p-2 rounded-lg border border-border-main text-text-muted hover:text-primary disabled:opacity-40">
                     <RefreshCw className={`w-4 h-4 ${busy > 0 ? "animate-spin" : ""}`} />
+                    {pendingPeople > 0 && (
+                      <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-4 text-center">
+                        {pendingPeople}</span>
+                    )}
                   </button>
                   {STRUCTURE_ENABLED && (
                     <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"

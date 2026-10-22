@@ -115,7 +115,7 @@ export default function WhatsNewModal({ open, onClose }: {
         </div>
 
         <div className="space-y-7 border-t border-border-main pt-6">
-          {release.sections.map((s, i) => <Section key={s.area} section={s} index={i} />)}
+          {release.sections.map((s, i) => <Section key={`${s.area}-${s.subtitle}-${i}`} section={s} index={i} />)}
         </div>
 
         <div className="flex justify-end border-t border-border-main pt-4">

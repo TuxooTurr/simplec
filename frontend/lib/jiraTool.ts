@@ -16,6 +16,7 @@ import {
   projectKeyOfIssue,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
+import type { PersonFieldChange } from "./jiraToolApi";
 import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type Stage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
@@ -643,6 +644,11 @@ export interface ToolState {
   stageManual: Record<string, Stage>;
   /** Норма дня и резервы для нагрузки — общие для всех списков. */
   loadSettings: LoadSettings;
+  /**
+   * Люди, назначенные в списках, которых ещё надо записать в поля Jira (lib/jiraPeopleSync.ts).
+   * Уходят при обновлении из Jira — ручном и фоновом раз в 30 минут; не ушло (Jira недоступна) — ждут следующего.
+   */
+  jiraPending?: PersonFieldChange[];
 }
 
 /**
@@ -733,6 +739,7 @@ export function loadState(): ToolState {
           msLinks: s.msLinks ?? {},
           stageManual: s.stageManual ?? {},
           loadSettings: normLoadSettings(s.loadSettings),
+          jiraPending: Array.isArray(s.jiraPending) ? s.jiraPending : [],
         };
       }
       if (s && Array.isArray(s.lists)) return fromDemo(s);

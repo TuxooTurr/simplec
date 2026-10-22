@@ -53,8 +53,11 @@ _K_LABELS_SEEDED = "jira_labels_seeded"  # JSON-список лейблов по
 # Лейблы по умолчанию. Новый лейбл отсюда попадает в сохранённый список пресетов один раз:
 # убрали его в настройках Jira — обратно не вернётся.
 _DEFAULT_LABELS = ["Фокус911", "ПРМ", "Sber911-AI",
-                   "911-Команда-ОбщиеСервисы", "911-Команда-Агенты", "911-Команда-ITSM", "B2C_Маркин"]
+                   "911-Команда-БазовыеСервисы", "911-Команда-Агенты", "911-Команда-ITSM", "B2C_Маркин"]
 _FIRST_DEFAULTS = ["Фокус911", "ПРМ", "Sber911-AI"]   # были по умолчанию до учёта добавленных
+# Переименованные лейблы по умолчанию (старое → новое): в сохранённых пресетах меняются на месте; кто старый убрал —
+# новый тоже не получит (он считается уже предложенным).
+_RENAMED_LABELS = {"911-Команда-ОбщиеСервисы": "911-Команда-БазовыеСервисы"}
 
 # Имена полей в Jira, которые резолвим по названию (регистронезависимо).
 # Для каждого логического поля — варианты написания в корп. Jira.
@@ -101,9 +104,18 @@ def _load_cfg(db: Session) -> dict:
         except Exception:
             seeded = list(_FIRST_DEFAULTS)
         seen = {x.lower() for x in seeded}
+        renamed = False
+        for old, new in _RENAMED_LABELS.items():
+            if old.lower() in seen:
+                seen.add(new.lower())
+            if any(x.lower() == old.lower() for x in labels):
+                has_new = any(x.lower() == new.lower() for x in labels)
+                labels = [x for x in labels if not (has_new and x.lower() == old.lower())]
+                labels = [new if x.lower() == old.lower() else x for x in labels]
+                renamed = True
         have = {x.lower() for x in labels}
         fresh = [x for x in _DEFAULT_LABELS if x.lower() not in seen and x.lower() not in have]
-        if any(x.lower() not in seen for x in _DEFAULT_LABELS):
+        if renamed or any(x.lower() not in seen for x in _DEFAULT_LABELS):
             labels = [*labels, *fresh]
             _save_labels(db, labels)
             db.commit()

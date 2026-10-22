@@ -3,14 +3,14 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
-  BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
+  BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
   LOAD_COL, REQ_COL, MS_COL, ruleResult, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
 import ColumnFilter, { type FilterOption } from "./ColumnFilter";
-import { BlockCell, DefectsCell, FactCell, JiraCell, MsCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, SpendDateCell, StageCell, Tag } from "./ListCells";
+import { BlockCell, DefectsCell, JiraCell, MsCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
 export type Place = "before" | "after";
@@ -47,8 +47,6 @@ export function defaultWidth(ref: ColRef, ctx: ColCtx): number {
   if (ref === BLOCK_COL) return 90;
   if (ref === PARTICIPANT_COL) return 270;
   if (ref === FOLDER_COL) return 180;
-  if (ref === PLAN_COL || ref === FACT_COL) return 140;
-  if (ref === START_COL || ref === END_COL) return 200;
   if (isRoleCol(ref)) return 230;
   if (ref === LOAD_COL) return 150;
   if (ref === REQ_COL) return 220;
@@ -126,7 +124,7 @@ export default function ListTable({
   /** Черновик SimpleTest: открыть форму, чтобы поправить или отправить в Jira. */
   onOpenDraft: (issue: Issue) => void;
   /** Трудозатраты задачи: план (минуты; null — убрать), начало или конец теста. */
-  onSpend: (key: string, patch: { plan?: number | null; start?: string; end?: string }) => void;
+  onSpend: (key: string, patch: { plan?: number | null }) => void;
   /** Закрепить / открепить колонку. */
   onTogglePin: (col: ColRef) => void;
   /** Клик по статусу (st) эпика: его стори. */
@@ -188,17 +186,15 @@ export default function ListTable({
   const stick = (left: number, z = 2): React.CSSProperties => ({ position: "sticky", left, zIndex: z });
   // Граница справа у последней закреплённой (или у ключа, если закреплённых нет) — видно, где «стоп».
   const EDGE = "shadow-[inset_-1px_0_0_0_var(--color-border-main,#e2e8f0)]";
-  /** Суммы трудозатрат для заголовков групп и папок — для отчётности. */
+  /** Сумма плана тестировщиков для заголовков групп и папок — для отчётности (план вводится в ячейке «Тестировщик»). */
   const spendSum = (items: Issue[]) => {
-    if (!cols.includes(PLAN_COL) && !cols.includes(FACT_COL)) return "";
-    let plan = 0, fact = 0, hasPlan = false, hasFact = false;
+    if (!cols.includes(PARTICIPANT_COL)) return "";
+    let plan = 0, has = false;
     for (const i of items) {
-      const sp = list.spend?.[i.key];
-      if (sp?.plan != null) { plan += sp.plan; hasPlan = true; }
-      const f = factMinutes(sp, !!list.loadWeekends);
-      if (f != null && f >= 0) { fact += f; hasFact = true; }
+      const p = list.spend?.[i.key]?.plan;
+      if (p != null) { plan += p; has = true; }
     }
-    return [hasPlan ? `план ${fmtMinutes(plan)}` : "", hasFact ? `факт ${fmtMinutes(fact)}` : ""].filter(Boolean).join(" · ");
+    return has ? `план ${fmtMinutes(plan)}` : "";
   };
   // Слушатели мыши вешаются один раз; свежий колбэк — через ref.
   const onResizeRef = useRef(onResizeColumn);
@@ -446,13 +442,6 @@ export default function ListTable({
               <DefectsCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
             ) : c === BLOCK_COL ? (
               <BlockCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
-            ) : c === PLAN_COL ? (
-              <PlanCell value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} />
-            ) : c === START_COL || c === END_COL ? (
-              <SpendDateCell value={list.spend?.[issue.key]?.[c === START_COL ? "start" : "end"]} label={colLabel(c, list)}
-                onChange={v => onSpend(issue.key, c === START_COL ? { start: v } : { end: v })} />
-            ) : c === FACT_COL ? (
-              <FactCell spend={list.spend?.[issue.key]} weekends={!!list.loadWeekends} />
             ) : c === REQ_COL ? (
               <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
                 onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />

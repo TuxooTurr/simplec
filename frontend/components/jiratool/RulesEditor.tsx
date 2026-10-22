@@ -1,8 +1,14 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import { ArrowDown, ArrowUp, Plus, Smile, Trash2, X } from "lucide-react";
+import { parseCellIcon } from "@/lib/cellIcon";
 import { RULE_OP_LABEL, RULE_OP_NO_VALUE, newId, type FieldRule, type RuleCond, type RuleOp, type RuleResult } from "@/lib/jiraTool";
 import type { PickOption } from "./FieldPicker";
+import { RuleIcon } from "./ListCells";
+
+const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2 py-1.5 bg-[var(--color-input-bg)] text-text-main " +
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -22,13 +28,43 @@ function FieldSelect({ value, sources, onChange }: { value: string; sources: Pic
   );
 }
 
-/** Результат правила: символ (эмодзи или знак), текст, ссылка. */
+/** Значок результата — тот же выбор, что у ярлычка свободного ввода: иконки с цветом и эмодзи. */
+function IconChoice({ value, label, onChange }: { value?: string; label: string; onChange: (code: string | undefined) => void }) {
+  const [at, setAt] = useState<DOMRect | null>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  // Щелчок мимо окна выбора — закрыть (окно висит поверх формы, в body).
+  useEffect(() => {
+    if (!at) return;
+    const close = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (!box.current?.contains(t) && !btn.current?.contains(t)) setAt(null);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [at]);
+  return (
+    <>
+      <button ref={btn} type="button" aria-label={`${label}: значок`} aria-expanded={!!at}
+        title="Значок перед текстом: иконка или эмодзи (необязательно)"
+        onClick={() => setAt(a => (a ? null : btn.current?.getBoundingClientRect() ?? null))}
+        className={`${INPUT} w-12 h-[34px] flex items-center justify-center ${at ? "ring-2 ring-primary/30" : ""}`}>
+        {value ? <RuleIcon code={value} /> : <Smile className="w-4 h-4 text-text-muted" />}
+      </button>
+      {at && (
+        <IconPicker anchor={at} value={parseCellIcon(value) ? value : undefined} boxRef={box}
+          onPick={code => { onChange(code ?? undefined); setAt(null); }} onClose={() => setAt(null)} />
+      )}
+    </>
+  );
+}
+
+/** Результат правила: значок (иконка или эмодзи), текст, ссылка. */
 function ResultInputs({ value, onChange, label }: { value: RuleResult; onChange: (r: RuleResult) => void; label: string }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="text-xs font-semibold text-text-muted w-12">{label}</span>
-      <input value={value.icon ?? ""} onChange={e => onChange({ ...value, icon: e.target.value.slice(0, 4) || undefined })}
-        placeholder="знак" aria-label={`${label}: символ`} title="Символ или эмодзи перед текстом (необязательно)" className={`${INPUT} w-16 text-center placeholder:text-xs`} />
+      <IconChoice value={value.icon} label={label} onChange={icon => onChange({ ...value, icon })} />
       <input value={value.text} onChange={e => onChange({ ...value, text: e.target.value })}
         placeholder="текст в ячейке" aria-label={`${label}: текст`} className={`${INPUT} flex-1 min-w-[8rem]`} />
       <input value={value.link ?? ""} onChange={e => onChange({ ...value, link: e.target.value.trim() || undefined })}

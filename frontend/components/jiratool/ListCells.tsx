@@ -10,7 +10,7 @@ import ServicePicker from "@/components/stands/ServicePicker";
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
-  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, linkHref, tagColor, blockersOf, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RuleResult, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
 import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
@@ -410,12 +410,21 @@ function TagCell({ field, value, onChange }: { field: OwnField; value: string | 
 }
 
 /** Ячейка поля «По правилам»: символ и текст сработавшего правила; со ссылкой — текст ведёт по ней. Руками не правится. */
+/**
+ * Значок правила: ярлычок как у свободного ввода (код «i:Иконка:#цвет» или «e:эмодзи»). Правила, сохранённые до
+ * 23.10.2026, хранят знак как есть («🧪») — показываем его текстом.
+ */
+export function RuleIcon({ code }: { code?: string }) {
+  if (!code) return null;
+  return parseCellIcon(code) ? <CellIconView code={code} /> : <span className="leading-none">{code}</span>;
+}
+
 function RuleCell({ result }: { result: RuleResult | null }) {
   if (!result) return <span className="text-text-muted/50 px-1">—</span>;
   const href = result.link ? linkHref(result.link) : null;
-  const body = <>{result.icon && <span className="mr-1">{result.icon}</span>}{result.text}</>;
+  const body = <span className="inline-flex items-center gap-1 min-w-0 max-w-full"><RuleIcon code={result.icon} /><span className="truncate">{result.text}</span></span>;
   return (
-    <span className="block px-1 py-0.5 text-sm text-text-main truncate" title={`${result.icon ?? ""} ${result.text}`.trim() + " — по правилам поля"}>
+    <span className="block px-1 py-0.5 text-sm text-text-main truncate" title={`${result.text} — по правилам поля`}>
       {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{body}</a> : body}
     </span>
   );
@@ -796,7 +805,7 @@ export function IssueTypeBadge({ type }: { type: string }) {
 const UNIT_KEY = "st_plan_unit";
 
 /**
- * Траты план: показываем «1 ч 40 мин», храним минуты. При вводе — быстрый
+ * План трудозатрат (в ячейке «Тестировщик»): показываем «1 ч 40 мин», храним минуты. При вводе — быстрый
  * переключатель ч/мин: значение пересчитывается (100 мин → 1:40 ч) и под полем
  * сразу видно, как оно будет записано.
  */
@@ -894,30 +903,3 @@ export function PlanCell({ value, onChange, compact }: { value: number | undefin
   );
 }
 
-/** Начало / конец теста — дата и время. */
-export function SpendDateCell({ value, label, onChange }: { value: string | undefined; label: string; onChange: (v: string) => void }) {
-  return (
-    <input type="datetime-local" value={value ?? ""} onChange={e => onChange(e.target.value)} aria-label={label}
-      className="w-full bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:border-primary/40
-        focus:outline-none focus:bg-[var(--color-input-bg)] text-sm text-text-main" />
-  );
-}
-
-const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
-const WORK_HINT = `рабочее время: пн–пт ${hhmm(WORK_DAY.start)}–${hhmm(WORK_DAY.end)}, без обеда ${hhmm(WORK_DAY.lunch[0])}–${hhmm(WORK_DAY.lunch[1])}`;
-
-/** Траты факт = рабочее время между началом и концом; не заполнено хоть одно — пусто. Больше плана — подсвечиваем. */
-export function FactCell({ spend, weekends }: { spend: Spend | undefined; weekends?: boolean }) {
-  const f = factMinutes(spend, weekends);
-  if (f == null) {
-    return <span className="text-text-muted/50 text-sm" title="Заполните «Начало теста» и «Конец теста»">—</span>;
-  }
-  if (f < 0) return <span className="text-xs text-red-600 dark:text-red-400" title="Конец теста раньше начала">конец раньше начала</span>;
-  const over = spend?.plan != null && f > spend.plan;
-  return (
-    <span className={`text-sm whitespace-nowrap ${over ? "text-amber-700 dark:text-amber-300 font-medium" : "text-text-main"}`}
-      title={`${spend?.plan != null ? `План ${fmtMinutes(spend.plan)}${over ? ` — превышен на ${fmtMinutes(f - spend.plan)}` : ""}. ` : ""}Считается ${WORK_HINT}${weekends ? ", выходные тоже (переработка)" : ""}`}>
-      {fmtMinutes(f)}
-    </span>
-  );
-}

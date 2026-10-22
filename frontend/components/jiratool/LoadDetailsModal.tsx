@@ -10,7 +10,7 @@ import {
 import LoadRowView from "./LoadRowView";
 
 /**
- * Подробная нагрузка списка — по всем направлениям: тестирование (тестировщик + «Траты план») и поля направлений
+ * Подробная нагрузка списка — по всем направлениям: тестирование (тестировщик и его план) и поля направлений
  * (человек + план в ячейке). У каждого направления свой раздел: итог «план / ёмкость», люди с полосами загрузки
  * (глаз включает и выключает полосы — запоминается в списке), план без исполнителя и спрятанный перечень задач,
  * не учтённых в нагрузке. Здесь же галочки списка: считать ли выходные и не учитывать ли готовые задачи.
@@ -55,7 +55,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
         <div className="flex flex-col gap-1.5 text-sm text-text-main">
           <label className="flex items-start gap-2 cursor-pointer select-none">
             <input type="checkbox" className="mt-1" checked={!!list.loadWeekends} onChange={e => onWeekends(e.target.checked)} />
-            <span>Считать выходные <span className="text-text-muted">— переработка: выходные добавляются в ёмкость и в «Траты факт»; план сверх будней показывается отдельно</span></span>
+            <span>Считать выходные <span className="text-text-muted">— переработка: выходные добавляются в ёмкость; план сверх будней показывается отдельно</span></span>
           </label>
           <label className="flex items-start gap-2 cursor-pointer select-none">
             <input type="checkbox" className="mt-1" checked={list.loadAuto !== false} onChange={e => onAuto(e.target.checked)} />

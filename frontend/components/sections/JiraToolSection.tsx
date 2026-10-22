@@ -39,7 +39,7 @@ import { getPeople, savePeople, saveJiraPeopleFields, type JiraPeopleFields } fr
 import { copyToClipboard } from "@/lib/clipboard";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, checklistReport, folderSections, loadSkip,
-  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
+  type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve, ownStageInfo,
@@ -472,7 +472,7 @@ export default function JiraToolSection() {
                                      hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
     // Поля, которые считает SimpleTest, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
-    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, MS_COL, ...(hasFolders ? [FOLDER_COL] : [])]
+    ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, LOAD_COL, REQ_COL, MS_COL, ...(hasFolders ? [FOLDER_COL] : [])]
       .map(c => ({ value: c, label: colLabel(c, list), group: "Поля SimpleTest", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
   ] : [];
@@ -481,7 +481,7 @@ export default function JiraToolSection() {
   // Ссылки тоже не группируем — у каждой задачи своя.
   const linkCols = list ? list.ownFields.filter(f => f.type === "link").map(f => `own:${f.id}`) : [];
   const groupOptions = fieldOptions.filter(o => ![
-    "jira:summary", "jira:description", "jira:environment", DEFECTS_COL, FOLDER_COL, ...SPEND_COLS, ...linkCols,
+    "jira:summary", "jira:description", "jira:environment", DEFECTS_COL, FOLDER_COL, ...linkCols,
   ].includes(o.value));
 
   /* ── Задачи текущего списка с фильтром ── */
@@ -1547,8 +1547,6 @@ export default function JiraToolSection() {
                     onSpend={(key, patch) => updateList(l => {
                       const cur = { ...l.spend?.[key] };
                       if ("plan" in patch) { if (patch.plan == null) delete cur.plan; else cur.plan = patch.plan; }
-                      if ("start" in patch) { if (patch.start) cur.start = patch.start; else delete cur.start; }
-                      if ("end" in patch) { if (patch.end) cur.end = patch.end; else delete cur.end; }
                       return { ...l, spend: { ...l.spend, [key]: cur } };
                     })}
                     onTogglePin={col => updateList(l => {
@@ -1720,7 +1718,7 @@ export default function JiraToolSection() {
 }
 
 /**
- * Нагрузка по списку — только команда тестирования: у каждого тестировщика сумма «Траты план (st)» его задач
+ * Нагрузка по списку — только команда тестирования: у каждого тестировщика сумма плана (ячейка «Тестировщик») его задач
  * в этом списке против нормы за период (дни × норма дня минус резервы). Превышение — красным; если в списке
  * считаются выходные — сколько из плана уходит на выходные (переработка). Остальные направления, галочки
  * «выходные» и «готовые не считать» — в подробной нагрузке.

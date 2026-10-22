@@ -48,7 +48,10 @@ export const RULE_OP_NO_VALUE: RuleOp[] = ["empty", "nempty"];
 
 /** Условие: поле задачи (любая колонка списка), оператор, значение. */
 export interface RuleCond { ref: ColRef; op: RuleOp; value: string }
-/** Что показать, если правило сработало: текст, символ или эмодзи перед ним, ссылка (текст становится ссылкой). */
+/**
+ * Что показать, если правило сработало: текст, значок перед ним, ссылка (текст становится ссылкой).
+ * icon — ярлычок как у свободного ввода (lib/cellIcon.ts: «i:Иконка:#цвет», «e:эмодзи»); у старых правил — знак как есть.
+ */
 export interface RuleResult { text: string; icon?: string; link?: string }
 /** Правило: все условия через «И» → результат. */
 export interface FieldRule { id: string; conds: RuleCond[]; result: RuleResult }
@@ -190,12 +193,13 @@ export const DEFECTS_COL: ColRef = "defects";
 export const BLOCK_COL: ColRef = "block";
 
 /** Поля, которые считает SimpleTest: в списке полей у них пометка «st». */
-/** Трудозатраты: план (вводится), начало и конец теста (дата и время), факт = конец − начало. */
-export const PLAN_COL: ColRef = "plan";
-export const START_COL: ColRef = "test_start";
-export const END_COL: ColRef = "test_end";
-export const FACT_COL: ColRef = "fact";
-export const SPEND_COLS: ColRef[] = [PLAN_COL, START_COL, END_COL, FACT_COL];
+/**
+ * Колонки трудозатрат «Траты план», «Начало теста», «Конец теста», «Траты факт» убраны 23.10.2026 (решение Стефана):
+ * план вводится в ячейке «Тестировщик», начало/конец/факт не нужны. Из сохранённых списков и шаблонов их колонки
+ * убираются при загрузке (dropRemovedCols).
+ */
+const REMOVED_COLS = new Set<ColRef>(["plan", "test_start", "test_end", "fact"]);
+const dropRemovedCols = (cols: ColRef[]) => cols.filter(c => !REMOVED_COLS.has(c));
 
 /**
  * Поля направлений (st): кто ведёт задачу в аналитике, дизайне, бэке и т.д. и в каком она там состоянии.
@@ -211,7 +215,7 @@ export const ROLE_FIELDS: { id: string; label: string }[] = [
   { id: "sup", label: "Support" },
 ];
 
-/** Направления нагрузки: тестирование (колонка «Тестировщик» + «Траты план») и поля направлений. */
+/** Направления нагрузки: тестирование (колонка «Тестировщик» с планом трудозатрат) и поля направлений. */
 export const TESTING = "testing";
 export const DIRECTIONS: { id: string; label: string }[] = [{ id: TESTING, label: "Testing" }, ...ROLE_FIELDS];
 /** Метка по умолчанию для человека, перенесённого из старого списка фамилий направления. */
@@ -264,7 +268,7 @@ export const REQ_COL: ColRef = "reqs";
 /** Микросервисы задачи (справочник микросервисов SimpleTest — тот же, что на графике стендов); общие на все списки. */
 export const MS_COL: ColRef = "ms";
 
-export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, ...SPEND_COLS, LOAD_COL, REQ_COL, MS_COL, FOLDER_COL];
+export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, LOAD_COL, REQ_COL, MS_COL, FOLDER_COL];
 
 /**
  * Норма по умолчанию для расчёта нагрузки: будни 9:00–18:00 минус час обеда и час утренних встреч —
@@ -358,7 +362,7 @@ export function loadSkip(list: TaskList, issue: Issue | undefined, stageOf: (i: 
 }
 
 /**
- * Кто ведёт задачу в направлении и сколько у него плана: тестирование — «Тестировщик» и «Траты план (st)»;
+ * Кто ведёт задачу в направлении и сколько у него плана: тестирование — «Тестировщик» и его план;
  * остальные — поле направления (человек по id из справочника, у старых записей — по имени).
  */
 export function directionAssignment(list: TaskList, dir: string, key: string, people: Participant[]): { pid?: string; plan?: number } {
@@ -429,8 +433,8 @@ export function listLoad(list: TaskList, participants: Participant[], range: { f
   return directionLoad(list, DIRECTIONS[0], participants, range, skip, settings).rows;
 }
 
-/** Трудозатраты задачи в списке: план в минутах, начало и конец теста — «ГГГГ-ММ-ДДTчч:мм». */
-export interface Spend { plan?: number; start?: string; end?: string }
+/** Трудозатраты тестировщика по задаче: план в минутах (в ячейке «Тестировщик»). */
+export interface Spend { plan?: number }
 
 /**
  * Как показывать трудозатраты: «ч · мин» (100 → «1 ч 40 мин») или «д · ч · мин» (по норме рабочего дня из настроек
@@ -483,40 +487,6 @@ export function parseDuration(text: string, unit: "h" | "m" | "d", day: number =
   const n = Number(t);
   if (!Number.isFinite(n) || n < 0) return null;
   return Math.round(unit === "d" ? n * day : unit === "h" ? n * 60 : n);
-}
-
-/**
- * Рабочее время для «Траты факт»: пн–пт, 9:00–18:00, обед 13:00–14:00 не считается
- * (8 рабочих часов в день). Праздники пока не учитываются. Меняется здесь.
- */
-export const WORK_DAY = { start: 9 * 60, end: 18 * 60, lunch: [13 * 60, 14 * 60] as [number, number], days: [1, 2, 3, 4, 5] };
-
-/** Рабочие минуты между двумя моментами (по местному времени). weekends — считать и субботу с воскресеньем. */
-export function workingMinutes(fromMs: number, toMs: number, weekends = false): number {
-  if (toMs <= fromMs) return 0;
-  const intervals: [number, number][] = [[WORK_DAY.start, WORK_DAY.lunch[0]], [WORK_DAY.lunch[1], WORK_DAY.end]];
-  let total = 0;
-  const day = new Date(fromMs); day.setHours(0, 0, 0, 0);
-  for (; day.getTime() < toMs; day.setDate(day.getDate() + 1)) {
-    if (!weekends && !WORK_DAY.days.includes(day.getDay())) continue;
-    const base = day.getTime();
-    for (const [a, b] of intervals) {
-      const s = Math.max(fromMs, base + a * 60000), e = Math.min(toMs, base + b * 60000);
-      if (e > s) total += (e - s) / 60000;
-    }
-  }
-  return Math.round(total);
-}
-
-/**
- * Факт = рабочие минуты между началом и концом теста. Не заполнено хоть одно — не считаем (null).
- * Конец раньше начала — отрицательное значение (показываем как ошибку ввода).
- */
-export function factMinutes(s: Spend | undefined, weekends = false): number | null {
-  if (!s?.start || !s?.end) return null;
-  const a = Date.parse(s.start), b = Date.parse(s.end);
-  if (Number.isNaN(a) || Number.isNaN(b)) return null;
-  return b < a ? -workingMinutes(b, a, weekends) || -1 : workingMinutes(a, b, weekends);
 }
 
 /**
@@ -584,7 +554,7 @@ export interface TaskList {
   noLoad?: Record<string, boolean>;
   /** false — не исключать автоматически задачи в «Готово к релизу» и дальше (по умолчанию исключаем) */
   loadAuto?: boolean;
-  /** true — выходные считаются рабочими: и в ёмкости нагрузки, и в «Траты факт» (переработка). */
+  /** true — выходные считаются рабочими в ёмкости нагрузки (переработка). */
   loadWeekends?: boolean;
   /** Подробная нагрузка: у каких направлений показывать полосы загрузки людей (id направления → да/нет). */
   loadBars?: Record<string, boolean>;
@@ -680,7 +650,7 @@ export function listFromTemplate(name: string, project: string, tpl: ListTemplat
   return {
     ...emptyList(name, project),
     // Колонка своего поля, которого в шаблоне нет, — мусор; колонка папки без папок не нужна.
-    columns: tpl.columns.filter(c => (!c.startsWith("own:") || ownIds.has(c.slice(4))) && (c !== FOLDER_COL || tpl.folderList.length > 0)),
+    columns: dropRemovedCols(tpl.columns).filter(c => (!c.startsWith("own:") || ownIds.has(c.slice(4))) && (c !== FOLDER_COL || tpl.folderList.length > 0)),
     ownFields: tpl.ownFields.map(f => ({ ...f, options: [...f.options], colors: f.colors ? { ...f.colors } : undefined })),
     folderList: tpl.folderList.length ? [...tpl.folderList] : undefined,
   };
@@ -788,6 +758,10 @@ function fromDemo(s: Partial<ToolState>): ToolState {
 function migrateList(l: TaskList): TaskList {
   const out: TaskList = { ...l, project: l.project ?? DEFAULT_PROJECT };
   if (out.groupBy.includes(FOLDER_COL)) out.groupBy = out.groupBy.filter(g => g !== FOLDER_COL);
+  if (out.columns.some(c => REMOVED_COLS.has(c)) || out.pinned?.some(c => REMOVED_COLS.has(c))) {
+    out.columns = dropRemovedCols(out.columns);
+    if (out.pinned) out.pinned = dropRemovedCols(out.pinned);
+  }
   if (!out.folderList && out.folders && Object.keys(out.folders).length) {
     out.folderList = Array.from(new Set(out.keys.map(k => out.folders![k]).filter(Boolean)));
   }
@@ -869,10 +843,6 @@ export function colLabel(ref: ColRef, list: TaskList): string {
   if (ref === FOLDER_COL) return "Папка (st)";
   if (ref === DEFECTS_COL) return "Дефекты (st)";
   if (ref === BLOCK_COL) return "Блок (st)";
-  if (ref === PLAN_COL) return "Траты план (st)";
-  if (ref === START_COL) return "Начало теста (st)";
-  if (ref === END_COL) return "Конец теста (st)";
-  if (ref === FACT_COL) return "Траты факт (st)";
   if (ref === LOAD_COL) return "Нагрузка (st)";
   if (ref === REQ_COL) return "Требования (st)";
   if (ref === MS_COL) return "Микросервисы (st)";
@@ -899,14 +869,6 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
   } else if (ref === BLOCK_COL) {
     const d = ctx.defectsOf(issue);
     v = d === null ? null : blockersOf(d).length ? "Есть блокирующие" : "Нет";
-  } else if (ref === PLAN_COL) {
-    const p = ctx.list.spend?.[issue.key]?.plan;
-    v = p == null ? null : String(p);
-  } else if (ref === FACT_COL) {
-    const f = factMinutes(ctx.list.spend?.[issue.key], !!ctx.list.loadWeekends);
-    v = f == null ? null : String(f);
-  } else if (ref === START_COL || ref === END_COL) {
-    v = ctx.list.spend?.[issue.key]?.[ref === START_COL ? "start" : "end"] ?? null;
   } else if (ref === REQ_COL) {
     v = ctx.reqsOf?.(issue.key) ?? null;
   } else if (ref === MS_COL) {

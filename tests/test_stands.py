@@ -295,7 +295,7 @@ def test_время_установки_конфликт_только_при_пе
     assert next(x for x in v["days"] if x["date"] == "2026-10-23")["status"] == "КОНФЛИКТ"        # без времени — весь день
     bad = _bulk(B(date="2026-10-26", team="SC", service="x", timeFrom="12:00", timeTo="11:00"),
                 B(date="2026-10-26", team="SC", service="y", timeFrom="25:00", timeTo="26:00"))
-    assert [r["reason"] for r in bad["rejected"]] == ["время окончания раньше начала", "время — ЧЧ:ММ, укажите начало и конец"]
+    assert [r["reason"] for r in bad["rejected"]] == ["время окончания раньше начала", "время — ЧЧ:ММ"]
     assert "SBER911-1 — (10:00–12:00)" not in conf["body"] and "SBER911-1 (10:00–12:00)" in conf["body"]
 
 
@@ -306,7 +306,7 @@ def test_заявка_с_периодом_и_временем(conf):
     v = st.pull("Major-Check", db=None)
     stored = [b for b in conf["prop"]["bookings"] if b["task"] == "SBER911-9"]
     assert len(stored) == 1 and stored[0]["dateTo"] == "2026-10-27" and stored[0]["timeFrom"] == "10:00"
-    assert dict(conf["replies"])["c1"] == "<p>Принято: rms-front, 22.10–27.10 10:00–12:00, B2C</p>"
+    assert dict(conf["replies"])["c1"] == "<p>Принято: rms-front, 22.10 10:00 – 27.10 12:00, B2C</p>"
     assert "не понял время" in next(p["reason"] for p in v["pending"] if p["cid"] == "c2")
     assert st.parse_date_range("с 28.12 по 05.01", TODAY) == (date(2026, 12, 28), date(2027, 1, 5))
     assert st.parse_date_range("2026-10-23", TODAY) == (date(2026, 10, 23), date(2026, 10, 23))
@@ -349,3 +349,31 @@ def test_базовый_справочник_микросервисов_из_р�
     assert info["release-calendar-ms"] == "Микросервис Календарь внедрений" and "agent_analiytics" not in info
     assert set(info) <= set(base)
     assert st.get_ms_catalog()["info"]["zpi-ms"] == "Микросервис ЗПИ."
+
+
+def test_время_периода_начало_в_первый_день_конец_в_последний(conf):
+    """13.11 09:00 — 17.11 18:00: стоит непрерывно, а не каждый день с 9 до 18 (решение Стефана 23.10.2026)."""
+    b = {"date": "2026-11-13", "dateTo": "2026-11-17", "timeFrom": "09:00", "timeTo": "18:00"}
+    assert st.interval(b, date(2026, 11, 13)) == (540, st.DAY_MIN)
+    assert st.interval(b, date(2026, 11, 16)) == (0, st.DAY_MIN)
+    assert st.interval(b, date(2026, 11, 17)) == (0, 1080)
+    # В период конец может быть «раньше» начала по часам — это другой день.
+    assert st.check_times("18:00", "09:00", single=False) is None
+    assert st.check_times("18:00", "09:00") == "время окончания раньше начала"
+    # Можно только начало или только конец.
+    assert st.check_times("09:00", "") is None and st.check_times("", "18:00") is None
+    assert st.parse_time_range("с 9:00") == ("09:00", "") and st.parse_time_range("до 18.00") == ("", "18:00")
+    assert st.time_label({**b}) == "13.11 09:00 – 17.11 18:00"
+    assert st.time_label({"date": "2026-11-13", "timeFrom": "09:00"}) == "с 09:00"
+
+    _settings()
+    B = st.BookingBody
+    # Другая команда ставит тот же сервис 17.11 в 19:00 — после конца периода: не конфликт; в 10:00 — конфликт.
+    v = _bulk(B(date="2026-10-22", dateTo="2026-10-26", team="B2C", service="notify", timeFrom="18:00", timeTo="09:00"),
+              B(date="2026-10-26", team="SC", service="notify", timeFrom="10:00", timeTo="11:00"),
+              B(date="2026-10-22", team="Агенты", service="notify", timeFrom="10:00", timeTo="12:00"))
+    assert not v["rejected"]
+    flags = {(b["team"], d["date"]): b["conflict"] for d in v["days"] for b in d["bookings"]}
+    assert flags[("Агенты", "2026-10-22")] is False      # в первый день B2C ставит с 18:00
+    assert flags[("SC", "2026-10-26")] is False          # в последний день B2C стоит до 09:00
+    assert flags[("B2C", "2026-10-23")] is False

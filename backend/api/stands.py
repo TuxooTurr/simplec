@@ -7,7 +7,9 @@
   • окно планирования — даты, которые выбирают сами (к спринтам не привязано), плюс отметки дат релизов;
     посмотреть можно и другой период — например, последние 3 месяца (GET ?start=&end=, до 200 дней);
   • строка графика — команда; бронь — микросервис (с 22.10.2026 вместо КЭ), день или период «с — по» (одна запись,
-    стоит в каждый рабочий день) и необязательное время установки «с — до» (каждый день; без времени — весь день);
+    стоит в каждый рабочий день) и необязательное время: начало — в первый день, конец — в последний (с 23.10.2026;
+    13.11 09:00 — 17.11 18:00 — стоит непрерывно, а не каждый день с 9 до 18). Нет начала — с начала первого дня,
+    нет конца — до конца последнего;
   • конфликт — один и тот же микросервис у двух команд в один день и в пересекающееся время: бронь не блокируется,
     а красится; общего лимита на стенд по умолчанию нет — его можно включить;
   • у брони — фича (номер и название): на графике при наведении, в Confluence — отдельным столбцом;
@@ -253,20 +255,25 @@ def norm_time(t: str) -> str:
     return f"{m // 60:02d}:{m % 60:02d}" if m is not None else ""
 
 
-def interval(b: dict) -> tuple[int, int]:
-    """Время установки брони в минутах от начала дня; без времени — весь день."""
-    a, z = time_min(b.get("timeFrom", "")), time_min(b.get("timeTo", ""))
-    return (a, z) if a is not None and z is not None and a < z else (0, DAY_MIN)
+def interval(b: dict, d: Optional[date] = None) -> tuple[int, int]:
+    """Сколько бронь стоит в день d, в минутах от начала дня. Начало (timeFrom) — в первый день брони, конец (timeTo) —
+    в последний; между ними — весь день. Без d — как в первый день однодневной брони."""
+    first, last = b.get("date", ""), b.get("dateTo") or b.get("date", "")
+    iso = d.isoformat() if d else first
+    a = time_min(b.get("timeFrom", "")) if iso == first or not d else None
+    z = time_min(b.get("timeTo", "")) if iso == last or not d else None
+    a, z = a if a is not None else 0, z if z is not None else DAY_MIN
+    return (a, z) if a < z else (0, DAY_MIN)
 
 
-def check_times(t_from: str, t_to: str) -> Optional[str]:
-    """Время «с — до» корректно (или не указано вовсе); иначе — что не так."""
-    if not (t_from or "").strip() and not (t_to or "").strip():
-        return None
-    a, z = time_min(t_from), time_min(t_to)
-    if a is None or z is None:
-        return "время — ЧЧ:ММ, укажите начало и конец"
-    if a >= z:
+def check_times(t_from: str, t_to: str, single: bool = True) -> Optional[str]:
+    """Время корректно (можно только начало, только конец или ничего); иначе — что не так.
+    В один день конец позже начала; в период — начало в первый день, конец в последний, сравнивать нечего."""
+    f, t = (t_from or "").strip(), (t_to or "").strip()
+    a, z = time_min(f), time_min(t)
+    if (f and a is None) or (t and z is None):
+        return "время — ЧЧ:ММ"
+    if single and a is not None and z is not None and a >= z:
         return "время окончания раньше начала"
     return None
 
@@ -281,7 +288,7 @@ def conflict_ids(data: dict, d: date) -> set[str]:
         for i, a in enumerate(items):
             for b in items[i + 1:]:
                 if a["team"] != b["team"]:
-                    (x1, y1), (x2, y2) = interval(a), interval(b)
+                    (x1, y1), (x2, y2) = interval(a, d), interval(b, d)
                     if x1 < y2 and x2 < y1:
                         out.update((a["id"], b["id"]))
     return out
@@ -332,11 +339,14 @@ def nearest_free(data: dict, after: date, now: Optional[date] = None) -> Optiona
     return next((d for d in window_days(data) if d >= after and check(data, d, now=now) is None), None)
 
 
-def conflict_note(data: dict, d: date, service: str, team: str, t_from: str = "", t_to: str = "") -> str:
-    """Предупреждение о конфликте для ответа на заявку: этот сервис в это время ставит другая команда."""
-    x1, y1 = interval({"timeFrom": t_from, "timeTo": t_to})
+def conflict_note(data: dict, d: date, service: str, team: str, t_from: str = "", t_to: str = "",
+                  start: Optional[date] = None, end: Optional[date] = None) -> str:
+    """Предупреждение о конфликте для ответа на заявку: этот сервис в это время ставит другая команда.
+    start/end — период новой брони (время начала — в первый его день, конца — в последний)."""
+    first = start or d
+    x1, y1 = interval({"date": first.isoformat(), "dateTo": (end or first).isoformat(), "timeFrom": t_from, "timeTo": t_to}, d)
     others = sorted({b["team"] for b in bookings_on(data, d) if _ke(b["service"]) == _ke(service) and b["team"] != team
-                     and interval(b)[0] < y1 and x1 < interval(b)[1]})
+                     and interval(b, d)[0] < y1 and x1 < interval(b, d)[1]})
     when = "в это время" if (t_from or t_to) else "в этот день"
     return f" — КОНФЛИКТ: {service} {when} ставит также {', '.join(others)}" if others else ""
 
@@ -344,8 +354,10 @@ def conflict_note(data: dict, d: date, service: str, team: str, t_from: str = ""
 def _new_booking(d: date, team: str, service: str, task: str, by: str, source: str, comment: str = "", features: str = "",
                  to: Optional[date] = None, t_from: str = "", t_to: str = "") -> dict:
     extra: dict[str, str] = {"dateTo": to.isoformat()} if to and to > d else {}
-    if norm_time(t_from) and norm_time(t_to):
-        extra.update(timeFrom=norm_time(t_from), timeTo=norm_time(t_to))
+    if norm_time(t_from):
+        extra["timeFrom"] = norm_time(t_from)
+    if norm_time(t_to):
+        extra["timeTo"] = norm_time(t_to)
     return {"id": "bk-" + uuid.uuid4().hex[:8], "date": d.isoformat(), **extra, "team": team, "service": service.strip(),
             "features": features.strip(), "task": task.strip().upper(), "by": by, "source": source, "comment": comment,
             "createdAt": datetime.now().strftime("%Y-%m-%d %H:%M")}
@@ -404,12 +416,20 @@ def parse_date_range(text: str, now: Optional[date] = None) -> Optional[tuple[da
     return (a, b) if b >= a else None
 
 
-def parse_time_range(text: str) -> Optional[tuple[str, str]]:
-    """«10:00–12:00», «10.00 - 12.30», «с 10:00 до 12:00» → ("10:00", "12:00"); не разобралось — None."""
-    m = re.fullmatch(r"\s*(?:с\s+)?(\d{1,2}[:.]\d{2})\s*(?:—|–|-|до)\s*(\d{1,2}[:.]\d{2})\s*", text or "", flags=re.I)
-    if not m or check_times(m[1], m[2]):
-        return None
-    return norm_time(m[1]), norm_time(m[2])
+def parse_time_range(text: str, single: bool = True) -> Optional[tuple[str, str]]:
+    """«10:00–12:00», «10.00 - 12.30», «с 10:00 до 12:00», «с 10:00», «до 18:00» → ("10:00", "12:00") / ("10:00", "") /
+    ("", "18:00"); не разобралось — None. В период начало — в первый день, конец — в последний."""
+    t = (text or "").strip()
+    m = re.fullmatch(r"(?:с\s+)?(\d{1,2}[:.]\d{2})\s*(?:—|–|-|до)\s*(\d{1,2}[:.]\d{2})", t, flags=re.I)
+    if m:
+        return None if check_times(m[1], m[2], single) else (norm_time(m[1]), norm_time(m[2]))
+    m = re.fullmatch(r"с\s+(\d{1,2}[:.]\d{2})", t, flags=re.I)
+    if m and time_min(m[1]) is not None:
+        return norm_time(m[1]), ""
+    m = re.fullmatch(r"до\s+(\d{1,2}[:.]\d{2})", t, flags=re.I)
+    if m and time_min(m[1]) is not None:
+        return "", norm_time(m[1])
+    return None
 
 
 def parse_request(text: str, now: Optional[date] = None) -> dict:
@@ -434,9 +454,9 @@ def parse_request(text: str, now: Optional[date] = None) -> dict:
         return out
     out["date"], out["dateTo"] = rng
     if got.get("time", "").strip():
-        tr = parse_time_range(got["time"])
+        tr = parse_time_range(got["time"], single=out["date"] == out["dateTo"])
         if not tr:
-            out["error"] = f"не понял время «{got['time']}» — пример: 10:00–12:00"
+            out["error"] = f"не понял время «{got['time']}» — пример: 10:00–12:00, с 09:00, до 18:00"
             return out
         out["timeFrom"], out["timeTo"] = tr
     return out
@@ -469,9 +489,25 @@ def _reply(cfg: dict, pid: str, cid: str, text: str) -> Optional[str]:
 
 
 def _when(a: date, b: Optional[date], t_from: str = "", t_to: str = "") -> str:
-    """«23.10» / «23.10–28.10» и время, если есть."""
-    s_ = a.strftime("%d.%m") + (f"–{b.strftime('%d.%m')}" if b and b != a else "")
-    return s_ + (f" {t_from}–{t_to}" if t_from and t_to else "")
+    """«23.10», «23.10 10:00–12:00», «13.11 09:00 – 17.11 18:00», «23.10–28.10» (время начала — в первый день, конца — в последний)."""
+    if not b or b == a:
+        if t_from and t_to:
+            return f"{a.strftime('%d.%m')} {t_from}–{t_to}"
+        return a.strftime("%d.%m") + (f" с {t_from}" if t_from else "") + (f" до {t_to}" if t_to else "")
+    if not t_from and not t_to:
+        return f"{a.strftime('%d.%m')}–{b.strftime('%d.%m')}"
+    return f"{a.strftime('%d.%m')}{' ' + t_from if t_from else ''} – {b.strftime('%d.%m')}{' ' + t_to if t_to else ''}"
+
+
+def time_label(b: dict) -> str:
+    """Время брони для страницы (строка дня уже с датой): «10:00–12:00», «с 09:00» в один день,
+    «13.11 09:00 – 17.11 18:00» — в период."""
+    f, t = b.get("timeFrom", ""), b.get("timeTo", "")
+    if not f and not t:
+        return ""
+    if not b.get("dateTo") or b["dateTo"] == b["date"]:
+        return f"{f}–{t}" if f and t else (f"с {f}" if f else f"до {t}")
+    return _when(date.fromisoformat(b["date"]), date.fromisoformat(b["dateTo"]), f, t)
 
 
 def split_ke(text: str) -> list[str]:
@@ -513,7 +549,8 @@ def apply_requests(data: dict, comments: list[dict], now: Optional[date] = None)
         # «Сервис: notify, gateway» — бронь на каждый сервис (одна фича трогает несколько сервисов).
         kes = split_ke(req["service"])
         days = range_days(req["date"], req["dateTo"]) or [req["date"]]
-        notes = "".join(dict.fromkeys(conflict_note(data, d, k, team, req["timeFrom"], req["timeTo"]) for d in days for k in kes))
+        notes = "".join(dict.fromkeys(conflict_note(data, d, k, team, req["timeFrom"], req["timeTo"], req["date"], req["dateTo"])
+                                      for d in days for k in kes))
         for k in kes:
             data["bookings"].append(_new_booking(req["date"], team, k, req["task"], c["author"], "comment", c["id"], req["features"],
                                                  req["dateTo"], req["timeFrom"], req["timeTo"]))
@@ -561,7 +598,8 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         "<h2>Как подать заявку</h2><p>Оставьте комментарий к этой странице — каждая строка «Название: значение»:</p>"
         "<p><code>Сервис: notify, gateway</code> (несколько микросервисов — через запятую)<br/>"
         "<code>Дата: 23.10</code> или период <code>Дата: 23.10–28.10</code><br/>"
-        "<code>Время: 10:00–12:00</code> (необязательно; без него — весь день)<br/>"
+        "<code>Время: 10:00–12:00</code>, <code>с 09:00</code> или <code>до 18:00</code> (необязательно; в период начало — "
+        "в первый день, конец — в последний: стоит непрерывно; без времени — весь день)<br/>"
         f"<code>Команда: {e(' / '.join(data['teams']))}</code><br/><code>Фичи: тема инцидента на карточке; фильтр по статусу</code><br/>"
         "<code>Задача: SBER911-12345</code> (необязательно)<br/><code>Хотфикс: да</code> (только для установки в заморозку)</p>"
         "<p>Если один и тот же микросервис в одно время ставят две команды — это конфликт: строка отмечается красным, договоритесь между собой. "
@@ -605,7 +643,7 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
             feats = "<br/>".join(
                 " ".join(x for x in (
                     e(" — ".join(x for x in (b.get("task") or "", (b.get("features") or "").strip()) if x)),
-                    f"({b['timeFrom']}–{b['timeTo']})" if b.get("timeFrom") and b.get("timeTo") else "") if x) or "—"
+                    f"({e(time_label(b))})" if time_label(b) else "") if x) or "—"
                 for b in items)
             lead = f"<td rowspan=\"{len(groups)}\">{day}</td><td rowspan=\"{len(groups)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
             parts.append(f"<tr>{lead}<td>{ke}</td><td>{feats}</td></tr>")
@@ -801,7 +839,7 @@ def put_ms_catalog(body: KeNames) -> dict:
 class BookingBody(BaseModel):
     date: str
     dateTo: str = ""          # конец диапазона (включительно); пусто — один день
-    timeFrom: str = ""        # время установки «ЧЧ:ММ» — каждый день диапазона; пусто — весь день
+    timeFrom: str = ""        # «ЧЧ:ММ»: начало — в первый день, конец — в последний; пусто — с начала / до конца дня
     timeTo: str = ""
     team: str = Field(..., min_length=1)
     service: str = Field(..., min_length=1)
@@ -860,7 +898,7 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
                 continue
             team = match_team(data, it.team)
             why = None if team else f"нет команды «{it.team}»"
-            why = why or check_times(it.timeFrom, it.timeTo)
+            why = why or check_times(it.timeFrom, it.timeTo, single=to == d)
             why = why or (check(data, d, it.hotfix) if to == d else check_range(data, d, to, it.hotfix))
             if why:
                 rejected.append({"service": it.service, "task": it.task, "reason": why})
@@ -947,7 +985,7 @@ def decide(stand: str, cid: str, body: PendingDecision, db: Session = Depends(ge
             except ValueError:
                 raise HTTPException(422, "Укажите дату заявки")
             t_from, t_to = (body.timeFrom, body.timeTo) if body.timeFrom or body.timeTo else (item.get("timeFrom", ""), item.get("timeTo", ""))
-            bad = check_times(t_from, t_to) or ("конец периода раньше начала" if to < d else None)
+            bad = check_times(t_from, t_to, single=to == d) or ("конец периода раньше начала" if to < d else None)
             if bad:
                 raise HTTPException(422, bad)
             team = match_team(data, body.team or item["team"])
@@ -958,7 +996,7 @@ def decide(stand: str, cid: str, body: PendingDecision, db: Session = Depends(ge
             days = range_days(d, to)
             if not days:
                 raise HTTPException(422, "Это выходной")
-            notes = "".join(dict.fromkeys(conflict_note(data, x, ke, team, t_from, t_to) for x in days for ke in kes))
+            notes = "".join(dict.fromkeys(conflict_note(data, x, ke, team, t_from, t_to, d, to) for x in days for ke in kes))
             for ke in kes:
                 data["bookings"].append(_new_booking(d, team, ke, body.task or item["task"], item["author"], "comment", cid,
                                                      body.features or item.get("features", ""), to, t_from, t_to))

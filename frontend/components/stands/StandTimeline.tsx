@@ -3,16 +3,28 @@
 import { useEffect, useRef, useState } from "react";
 import { keKey, type StandBooking, type StandView } from "@/lib/standsApi";
 
-/** Установка на графике: команда + день + микросервис; внутри — фичи (брони), ради которых его ставят. */
-export interface StandBlock { key: string; date: string; team: string; service: string; conflict: boolean; items: StandBooking[] }
+/** Установки дня: команда + день + микросервис; внутри — фичи. Для счётчика «Установок» под графиком. */
+export interface StandDayBlock { key: string; date: string; team: string; service: string; conflict: boolean; items: StandBooking[] }
+
+/**
+ * Полоса на графике: команда + микросервис, непрерывно от start до end (минуты от начала показанного периода).
+ * Внутри — фичи, которые стоят всё это время. Добавилась или ушла фича — полоса обрывается и продолжается новой.
+ */
+export interface StandBlock extends StandDayBlock {
+  /** date — день начала полосы; dateTo — день конца. */
+  dateTo: string;
+  start: number; end: number;
+  /** Строка внутри строки команды (полосы, идущие одновременно, — друг под другом). */
+  lane: number;
+}
 
 /** Статус (st) фичи из Jira tool: кружок и подпись; null — задачи нет в Jira tool. */
 export type FeatureStage = (taskKey: string) => { dot: string; text: string } | null;
 
 
 /** Брони дня одной команды → установки по микросервису (порядок — по названию). */
-export function blocksOf(bookings: StandBooking[], team: string, date: string): StandBlock[] {
-  const by = new Map<string, StandBlock>();
+export function blocksOf(bookings: StandBooking[], team: string, date: string): StandDayBlock[] {
+  const by = new Map<string, StandDayBlock>();
   for (const b of bookings.filter(x => x.team === team)) {
     const k = keKey(b.service);
     const cur = by.get(k) ?? { key: `${date}|${team}|${k}`, date, team, service: b.service.trim(), conflict: false, items: [] };
@@ -30,17 +42,110 @@ export const toMin = (t?: string): number | null => {
 };
 const DAY = 24 * 60;
 
-/** Время установки блока: от самого раннего начала до самого позднего конца; есть бронь без времени — весь день. */
-export function spanOf(items: StandBooking[]): [number, number] {
-  let a = DAY, z = 0;
-  for (const it of items) {
-    const f = toMin(it.timeFrom), t = toMin(it.timeTo);
-    if (f == null || t == null || f >= t) return [0, DAY];
-    a = Math.min(a, f); z = Math.max(z, t);
+const ddmm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}`;
+
+/** Когда стоит бронь: «13.11», «13.11 10:00–12:00», «13.11 09:00 – 17.11 18:00», «13.11–17.11». */
+export function bookingWhen(b: Pick<StandBooking, "date" | "dateTo" | "timeFrom" | "timeTo">): string {
+  const f = b.timeFrom ?? "", t = b.timeTo ?? "";
+  if (!b.dateTo || b.dateTo === b.date) {
+    return f && t ? `${ddmm(b.date)} ${f}–${t}` : `${ddmm(b.date)}${f ? ` с ${f}` : ""}${t ? ` до ${t}` : ""}`;
   }
-  return a < z ? [a, z] : [0, DAY];
+  return f || t ? `${ddmm(b.date)}${f ? ` ${f}` : ""} – ${ddmm(b.dateTo)}${t ? ` ${t}` : ""}` : `${ddmm(b.date)}–${ddmm(b.dateTo)}`;
+}
+
+/** Когда стоит полоса: «13.11 09:00 – 17.11 18:00»; целые дни — без времени. */
+export function barWhen(base: string, b: StandBlock): string {
+  const whole = b.start % DAY === 0 && b.end % DAY === 0;
+  if (whole) return b.date === b.dateTo ? ddmm(b.date) : `${ddmm(b.date)}–${ddmm(b.dateTo)}`;
+  if (b.date === b.dateTo) return `${ddmm(b.date)} ${hhmm(b.start % DAY)}–${hhmm(b.end - Math.floor((b.end - 1) / DAY) * DAY)}`;
+  // Конец в полночь — «16.11 00:00», а не «15.11 24:00».
+  return `${momentLabel(base, b.start)} – ${momentLabel(base, b.end)}`;
 }
 const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+
+const DAY_MS = 86_400_000;
+const isoAt = (base: string, dayIdx: number) => {
+  const d = new Date(new Date(`${base}T00:00`).getTime() + dayIdx * DAY_MS + 3_600_000);   // +1 ч — мимо перевода часов
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const dayIdxOf = (base: string, iso: string) =>
+  Math.round((new Date(`${iso}T00:00`).getTime() - new Date(`${base}T00:00`).getTime()) / DAY_MS);
+
+/** Момент на графике (минуты от начала периода) → «13.11 09:00». */
+export function momentLabel(base: string, m: number): string {
+  const iso = isoAt(base, Math.floor(m / DAY));
+  return `${iso.slice(8, 10)}.${iso.slice(5, 7)} ${hhmm(m % DAY)}`;
+}
+
+/**
+ * Брони → полосы. Бронь стоит непрерывно: с даты начала в timeFrom (нет — с 00:00) до даты конца в timeTo (нет — до
+ * конца дня), через выходные тоже. У команды по микросервису полоса идёт, пока не меняется набор фич: в тот же
+ * микросервис той же командой добавилась фича в другой день — полоса обрывается, дальше новая (с обеими фичами).
+ */
+export function barsOf(v: StandView): StandBlock[] {
+  const total = v.days.length * DAY;
+  const base = v.range.from;
+  const byId = new Map<string, StandBooking>();
+  const conflictDays = new Map<string, Set<number>>();
+  v.days.forEach((d, i) => d.bookings.forEach(b => {
+    byId.set(b.id, b);
+    if (b.conflict) conflictDays.set(b.id, (conflictDays.get(b.id) ?? new Set()).add(i));
+  }));
+  type Span = { b: StandBooking; s: number; e: number };
+  const groups = new Map<string, Span[]>();
+  for (const b of byId.values()) {
+    const last = b.dateTo || b.date;
+    let s = dayIdxOf(base, b.date) * DAY + (toMin(b.timeFrom) ?? 0);
+    let e = dayIdxOf(base, last) * DAY + (toMin(b.timeTo) ?? DAY);
+    if (e <= s) { s = dayIdxOf(base, b.date) * DAY; e = dayIdxOf(base, last) * DAY + DAY; }   // как на бэкенде: весь день
+    s = Math.max(0, s); e = Math.min(total, e);
+    if (e <= s) continue;
+    const k = `${b.team}|${keKey(b.service)}`;
+    groups.set(k, [...(groups.get(k) ?? []), { b, s, e }]);
+  }
+  const bars: Omit<StandBlock, "lane">[] = [];
+  for (const [k, spans] of groups) {
+    const cuts = [...new Set(spans.flatMap(x => [x.s, x.e]))].sort((a, b) => a - b);
+    let cur: Omit<StandBlock, "lane"> | null = null;
+    for (let i = 0; i + 1 < cuts.length; i++) {
+      const p = cuts[i], q = cuts[i + 1];
+      const on = spans.filter(x => x.s <= p && x.e >= q).map(x => x.b);
+      const ids = on.map(x => x.id).sort().join(",");
+      if (cur && cur.end === p && cur.items.map(x => x.id).sort().join(",") === ids) { cur.end = q; continue; }
+      if (cur) bars.push(cur);
+      cur = on.length ? {
+        key: `${k}|${p}`, date: isoAt(base, Math.floor(p / DAY)), dateTo: "", team: on[0].team, service: on[0].service.trim(),
+        conflict: false, items: on, start: p, end: q,
+      } : null;
+    }
+    if (cur) bars.push(cur);
+  }
+  // Конфликт полосы — в её дни у её фич; ключ — по моменту начала, чтобы выбор держался при смене периода.
+  for (const b of bars) {
+    b.dateTo = isoAt(base, Math.floor((b.end - 1) / DAY));
+    const d0 = Math.floor(b.start / DAY), d1 = Math.floor((b.end - 1) / DAY);
+    b.conflict = b.items.some(it => [...(conflictDays.get(it.id) ?? [])].some(d => d >= d0 && d <= d1));
+    b.key = `${b.team}|${keKey(b.service)}|${b.date}T${hhmm(b.start % DAY)}`;
+  }
+  // Строки внутри команды: одновременные полосы — друг под другом; продолжение того же микросервиса — в его строке.
+  const out: StandBlock[] = [];
+  const byTeam = new Map<string, Omit<StandBlock, "lane">[]>();
+  for (const b of bars) byTeam.set(b.team, [...(byTeam.get(b.team) ?? []), b]);
+  for (const list of byTeam.values()) {
+    list.sort((a, b) => a.start - b.start || a.service.localeCompare(b.service, "ru"));
+    const laneEnd: number[] = [];
+    const lastLane = new Map<string, number>();
+    for (const b of list) {
+      const prev = lastLane.get(keKey(b.service));
+      let lane = prev != null && laneEnd[prev] <= b.start ? prev : laneEnd.findIndex(e => e <= b.start);
+      if (lane < 0) lane = laneEnd.length;
+      laneEnd[lane] = b.end;
+      lastLane.set(keKey(b.service), lane);
+      out.push({ ...b, lane });
+    }
+  }
+  return out;
+}
 
 /**
  * Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. С HOURS_FROM px день делится на часы:
@@ -66,8 +171,9 @@ const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "и�
 
 /**
  * График стенда: строки — команды, по горизонтали — дни показанного периода (окно планирования или, например,
- * последние 3 месяца; дни вне окна заштрихованы — только просмотр). Блок — установка: команда + день + микросервис
- * (один микросервис по нескольким фичам — один блок со счётчиком фич; разные — друг под другом). При наведении —
+ * последние 3 месяца; дни вне окна заштрихованы — только просмотр). Полоса — установка: команда + микросервис,
+ * сплошная от начала до конца брони (13.11 09:00 — 17.11 18:00 — одна линия через выходные; barsOf). Несколько фич
+ * в одном микросервисе — одна полоса со счётчиком; добавилась фича в другой день — полоса обрывается, дальше новая. При наведении —
  * фичи: номер, название, период, время и статус (st) из Jira tool.
  * Масштаб — от часов внутри дня (сетка по часам, бронь со временем стоит на своих часах, линия «сейчас») до
  * квартала: кнопками снаружи (width) или Ctrl + колесо; перетаскивание — прокрутка.
@@ -113,9 +219,11 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
   }, [v.stand, v.range.from, v.range.to, hourMode]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const idx = new Map(v.days.map((d, i) => [d.date, i]));
-  // Раскладка: у команды в каждый день установки (микросервисы) — друг под другом; высота строки — по самому загруженному дню.
+  // Полосы: команда + микросервис, непрерывно от начала до конца; одновременные — друг под другом.
+  const bars = barsOf(v);
+  const lanes = v.teams.map(t => Math.max(1, ...bars.filter(b => b.team === t).map(b => b.lane + 1)));
+  // Установок за день — как считает бэкенд: команда + микросервис в рабочий день.
   const blocks = v.days.map(d => v.teams.map(t => blocksOf(d.bookings, t, d.date)));
-  const lanes = v.teams.map((_, ti) => Math.max(1, ...blocks.map(day => day[ti].length)));
   const tops: number[] = [];
   lanes.reduce((y, n, i) => { tops[i] = y; return y + n * LANE + 10; }, HEAD);
   const bodyH = tops.length ? tops[tops.length - 1] + lanes[lanes.length - 1] * LANE + 10 : HEAD;
@@ -243,26 +351,27 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
                 if (day && !day.weekend && day.inWindow && day.status !== "ПРОШЁЛ") onPickCell(day.date, t, minute);
               }} />
           ))}
-          {/* Установки: команда + день + микросервис; в часовом масштабе — на своих часах */}
-          {blocks.flatMap((day, di) => day.flatMap((list, ti) => list.map((b, k) => {
-            const [a, z] = spanOf(b.items);
-            const timed = z - a < DAY;
-            const left = hourMode ? di * width + (a / DAY) * width + 1 : di * width + 2;
-            const w = hourMode ? Math.max(14, ((z - a) / DAY) * width - 2) : width - 4;
+          {/* Полосы: команда + микросервис от начала до конца; набор фич сменился — новая полоса */}
+          {bars.map(b => {
+            const ti = v.teams.indexOf(b.team);
+            if (ti < 0) return null;
+            const left = (b.start / DAY) * width + 1;
+            const w = Math.max(6, ((b.end - b.start) / DAY) * width - 2);
+            const when = barWhen(v.range.from, b);
             return (
               <button key={b.key} type="button"
                 onClick={() => { if (!drag.current?.moved) onPickBlock(b); }}
                 onMouseEnter={e => setHover({ b, x: e.clientX, y: e.clientY })} onMouseLeave={() => setHover(null)}
-                aria-label={`${b.team}: ${b.service}, ${b.date}${timed ? ` ${hhmm(a)}–${hhmm(z)}` : ""}, фич ${b.items.length}${b.conflict ? ", конфликт" : ""}`}
+                aria-label={`${b.team}: ${b.service}, ${when}, фич ${b.items.length}${b.conflict ? ", конфликт" : ""}`}
                 className={`absolute rounded-md px-1 text-left text-[11px] font-medium flex items-center gap-1 overflow-hidden ${b.conflict ? CONFLICT_CLS : teamCls(b.team)}
                   ${selected === b.key ? "outline outline-2 outline-primary" : ""}`}
-                style={{ left, width: w, top: tops[ti] + 5 + k * LANE, height: LANE - 4 }}>
+                style={{ left, width: w, top: tops[ti] + 5 + b.lane * LANE, height: LANE - 4 }}>
                 {w >= 30 && <span className="truncate">{b.service}</span>}
-                {timed && w >= 110 && <span className="flex-shrink-0 text-[10px] opacity-75 tabular-nums">{hhmm(a)}–{hhmm(z)}</span>}
+                {w >= 200 && <span className="flex-shrink-0 text-[10px] opacity-75 tabular-nums">{when}</span>}
                 {b.items.length > 1 && w >= 52 && <span className="ml-auto flex-shrink-0 px-1 rounded bg-black/10 dark:bg-white/15 text-[10px]">×{b.items.length}</span>}
               </button>
             );
-          })))}
+          })}
           {/* Установок за день; конфликт — красным */}
           {v.days.map((d, i) => blocks[i].some(x => x.length) && (
             <div key={d.date} className={`absolute text-center text-[11px] tabular-nums ${d.conflicts.length ? "text-red-600 dark:text-red-400 font-bold" : "text-text-muted"}`}
@@ -278,7 +387,7 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
       {hover && (
         <div className="fixed z-[120] max-w-sm rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-2.5 text-xs pointer-events-none"
           style={{ left: Math.min(hover.x + 12, (typeof window !== "undefined" ? window.innerWidth : 1600) - 400), top: hover.y + 12 }}>
-          <p className="font-semibold text-text-main">{hover.b.service} · {hover.b.team} · {hover.b.date.split("-").reverse().join(".")}</p>
+          <p className="font-semibold text-text-main">{hover.b.service} · {hover.b.team} · {barWhen(v.range.from, hover.b)}</p>
           {hover.b.conflict && <p className="text-red-600 dark:text-red-400 font-semibold">Конфликт: этот микросервис в это время ставит другая команда</p>}
           <p className="mt-1 text-text-muted">Фичи ({hover.b.items.length}):</p>
           <ul className="mt-0.5 space-y-0.5">
@@ -288,8 +397,7 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
                 <li key={it.id} className="flex gap-1.5 text-text-main">
                   <span className="font-mono text-primary whitespace-nowrap">{it.task || "—"}</span>
                   <span className="min-w-0 flex-1">{it.features || <span className="text-text-muted">без названия</span>}
-                    {it.dateTo && <span className="text-text-muted"> · {it.date.slice(8, 10)}.{it.date.slice(5, 7)}–{it.dateTo.slice(8, 10)}.{it.dateTo.slice(5, 7)}</span>}
-                    {it.timeFrom && it.timeTo && <span className="text-text-muted"> · {it.timeFrom}–{it.timeTo}</span>}</span>
+                    <span className="text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="whitespace-nowrap text-text-muted">{st ? `${st.dot} ${st.text}` : ""}</span>
                 </li>
               );

@@ -8,7 +8,7 @@ import {
   pullStandRequests, saveStandSettings, saveStandsConfig, addMs, saveMsCatalog,
   keKey, type NewBooking, type StandPending, type StandSettings, type StandView,
 } from "@/lib/standsApi";
-import StandTimeline, { blocksOf, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
+import StandTimeline, { barWhen, barsOf, bookingWhen, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
 import ImportFromList, { type PickedFeature } from "./ImportFromList";
 import ServicePicker from "./ServicePicker";
 import { useFeatureStage } from "./useFeatureStage";
@@ -108,9 +108,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
   // Выбранная установка — пересчитывается из свежих данных (удалили фичу — карточка обновилась, удалили все — закрылась).
   const picked = useMemo<StandBlock | null>(() => {
     if (!v || !pickedKey) return null;
-    const [date, team] = pickedKey.split("|");
-    const day = v.days.find(d => d.date === date);
-    return day ? blocksOf(day.bookings, team, date).find(b => b.key === pickedKey) ?? null : null;
+    return barsOf(v).find(b => b.key === pickedKey) ?? null;
   }, [v, pickedKey]);
 
   if (!pageId) return <BindPage stand={stand} onBound={onPageBound} />;
@@ -232,9 +230,9 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
                 ? `; не встали ${rejected.length}: ${rejected.slice(0, 3).map(j => `${j.task || j.service} — ${j.reason}`).join("; ")}` : "");
               // Защита от старого бэкенда: он молча ставит бронь на первый день и без времени.
               const all = r.days.flatMap(d => d.bookings);
-              const lost = items.filter(it => (it.dateTo || it.timeFrom) && !rejected.some(j => j.service === it.service && j.task === it.task)
+              const lost = items.filter(it => (it.dateTo || it.timeFrom || it.timeTo) && !rejected.some(j => j.service === it.service && j.task === it.task)
                 && !all.some(b => b.team === it.team && b.service === it.service && b.date === it.date
-                  && (b.dateTo ?? "") === (it.dateTo ?? "") && (b.timeFrom ?? "") === (it.timeFrom ?? "")));
+                  && (b.dateTo ?? "") === (it.dateTo ?? "") && (b.timeFrom ?? "") === (it.timeFrom ?? "") && (b.timeTo ?? "") === (it.timeTo ?? "")));
               return lost.length
                 ? { ok: false, text: `${text}. Но сервер сохранил их без периода или времени — бэкенд старой версии: перезапустите его (start.sh) и поставьте брони заново.` }
                 : text;
@@ -247,7 +245,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
           <div className="flex flex-wrap items-center gap-2">
             <span className={`px-2 py-0.5 rounded-md text-xs font-semibold ${teamCls(picked.team)}`}>{picked.team}</span>
             <b className="text-text-main">{picked.service}</b>
-            <span className="text-text-muted">{ddmm(picked.date)} · фич {picked.items.length}</span>
+            <span className="text-text-muted">{barWhen(v.range.from, picked)} · фич {picked.items.length}</span>
             {picked.conflict && <span className="text-xs font-semibold text-red-600 dark:text-red-400">конфликт: этот микросервис в это время ставит другая команда</span>}
             <button type="button" onClick={() => setPickedKey(null)} aria-label="Закрыть" className="ml-auto p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
           </div>
@@ -258,8 +256,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
                 <li key={it.id} className="flex flex-wrap items-center gap-2 px-2.5 py-1.5">
                   <span className="font-mono text-primary">{it.task || "—"}</span>
                   <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}
-                    {it.dateTo && <span className="text-xs text-text-muted"> · {ddmm(it.date)}–{ddmm(it.dateTo)}</span>}
-                    {it.timeFrom && it.timeTo && <span className="text-xs text-text-muted"> · {it.timeFrom}–{it.timeTo}</span>}</span>
+                    <span className="text-xs text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
                   <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "SimpleTest"}</span>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
@@ -296,7 +293,8 @@ const hm = (min: number) => `${String(Math.floor(min / 60) % 24).padStart(2, "0"
 
 /**
  * Черновик брони: команда, дни «с — по» (или второй щелчок по графику в той же строке), время установки «с — до»
- * (необязательно; каждый день периода; без него — весь день), фичи с их микросервисами. Фичи — руками или
+ * (необязательно; начало — в первый день, конец — в последний: стоит непрерывно; без него — весь день), фичи с их
+ * микросервисами. Фичи — руками или
  * «Из списка Jira tool» (номер и название подставляются). «Микросервисы для всех фич» добавляются к каждой.
  * В Confluence ничего не уходит, пока не нажата «Опубликовать»: бронь на пару фича × микросервис, одна на весь период.
  */
@@ -329,14 +327,15 @@ function BookingForm({ date, minute, end, team: team0, teams, freezes, window: w
   const days = workDays(from, to);
   const frozen = days.filter(d => freezes.some(f => f.from <= d && d <= f.to));
   const rangeTo = to > from ? to : "";
-  const timeErr = !tFrom && !tTo ? "" : !tFrom || !tTo ? "укажите начало и конец времени" : tFrom >= tTo ? "конец раньше начала" : "";
+  // Время: начало — в первый день, конец — в последний (можно одно из двух). В один день конец позже начала.
+  const timeErr = !rangeTo && tFrom && tTo && tFrom >= tTo ? "конец раньше начала" : "";
   // Фичи не заполнены, а микросервисы для всех указаны — бронь микросервиса без фичи (одна пустая строка).
   const touched = rows.filter(r => r.task.trim() || r.name.trim() || r.ms.length);
   const filled = touched.length ? touched : common.length ? rows.slice(0, 1) : [];
   const msOf = (r: DraftRow) => [...r.ms, ...common].filter((k, i, a) => a.findIndex(x => norm(x) === norm(k)) === i);
   const noMs = filled.filter(r => !msOf(r).length);
   const items: NewBooking[] = filled.flatMap(r => msOf(r).map(service => ({
-    date: from, dateTo: rangeTo, ...(tFrom && tTo ? { timeFrom: tFrom, timeTo: tTo } : {}),
+    date: from, dateTo: rangeTo, ...(tFrom ? { timeFrom: tFrom } : {}), ...(tTo ? { timeTo: tTo } : {}),
     team, service, features: r.name.trim(), task: r.task.trim().toUpperCase(), hotfix,
   })));
   const pick = (picked: PickedFeature[]) => setRows(rs => {
@@ -374,7 +373,9 @@ function BookingForm({ date, minute, end, team: team0, teams, freezes, window: w
           <input type="time" step={900} value={tTo} onChange={e => setTTo(e.target.value)} aria-label="Время до" className={INPUT} /></label>
         {(tFrom || tTo) && <button type="button" onClick={() => { setTFrom(""); setTTo(""); }} className="text-xs text-primary hover:underline">весь день</button>}
         <span className={`text-xs ${timeErr ? "text-red-600 dark:text-red-400" : "text-text-muted"}`}>
-          {timeErr || (tFrom && tTo ? (days.length > 1 ? "каждый день периода" : "") : "не указано — весь день")}</span>
+          {timeErr || (!tFrom && !tTo ? (rangeTo ? "не указано — весь период, сплошной полосой" : "не указано — весь день")
+            : rangeTo ? `стоит непрерывно: ${bookingWhen({ date: from, dateTo: rangeTo, timeFrom: tFrom, timeTo: tTo })}`
+            : !tFrom ? "с начала дня" : !tTo ? "до конца дня" : "")}</span>
       </div>
 
       <div className="space-y-1.5">
@@ -443,7 +444,7 @@ function PendingRow({ p, teams, busy, onDecide }: {
       <pre className="whitespace-pre-wrap text-xs text-text-muted bg-bg-subtle rounded-md p-2">{p.text}</pre>
       {(p.dateTo || p.timeFrom) && (
         <p className="text-xs text-text-muted">Из заявки: {p.dateTo ? `период до ${ddmm(p.dateTo)}` : ""}{p.dateTo && p.timeFrom ? ", " : ""}
-          {p.timeFrom ? `время ${p.timeFrom}–${p.timeTo}` : ""} — при принятии сохранятся</p>
+          {p.timeFrom || p.timeTo ? `время ${bookingWhen(p)}` : ""} — при принятии сохранятся</p>
       )}
       <div className="flex flex-wrap items-center gap-2">
         <input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Дата" className={INPUT} />

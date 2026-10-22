@@ -207,7 +207,7 @@ export function storiesByEpic(allIssues: Issue[]): Map<string, Issue[]> {
   return out;
 }
 
-/** Блокирующие активные дефекты: «Подтверждено исправление», «Исключено», «Отложен», «Закрыт» — уже не блокируют. */
+/** Блокирующие активные дефекты: «Подтверждено исправление», «Исключено», «Отложен», «Отклонен исполнителем», «Закрыт» — уже не блокируют. */
 const activeBlockers = (defects: Issue[] | undefined) => (defects ?? []).filter(d => isBlocker(d) && !isResolvedDefect(d));
 
 /**

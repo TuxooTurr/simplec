@@ -20,6 +20,8 @@ export interface ZCase {
   issueLinks: string[];
   /** Длительность кейса (расчётное время Zephyr), мс. */
   estimatedTime?: number | null;
+  /** Пользовательские поля: строка (флажок — «Да»/«Нет») или несколько значений списком. */
+  customFields?: Record<string, string | string[]>;
 }
 
 export interface ZStep { index: number; description: string; testData: string; expectedResult: string }
@@ -104,7 +106,7 @@ export const refreshFolder = (project: string, folder: string) =>
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, folder }),
   });
 
-/** Кейсы папки; children — и всех вложенных папок на любой глубине. Показываем до 2000, total — сколько всего. */
+/** Кейсы папки (все, с пользовательскими полями); children — и всех вложенных папок на любой глубине. */
 export const getCases = (project: string, folder: string, text = "", children = false) =>
   fetchJson<{ cases: ZCase[]; total: number }>(`/api/zephyr/cases?${q({ project, folder, text, children: String(children) })}`);
 
@@ -190,8 +192,20 @@ export const DEFAULT_CRITERIA: CritCriteria = {
 };
 
 /** Значения для выпадающих списков «Условий» — по модели проекта. */
-export const getFieldValues = (project: string) =>
-  fetchJson<{ statuses: string[]; fields: Record<string, string[]> }>(`/api/zephyr/field-values?${q({ project })}`);
+/** Тип пользовательского поля по значениям в модели: флажок, несколько значений, число, строка / список выбора. */
+export type ZFieldKind = "bool" | "multi" | "number" | "text";
+
+export interface ZFieldValues {
+  statuses: string[];
+  priorities?: string[];
+  owners?: string[];
+  labels?: string[];
+  /** Пользовательское поле → значения, которые встречаются в модели (самые частые первыми). */
+  fields: Record<string, string[]>;
+  kinds?: Record<string, ZFieldKind>;
+}
+
+export const getFieldValues = (project: string) => fetchJson<ZFieldValues>(`/api/zephyr/field-values?${q({ project })}`);
 
 /* ── Релизы: строки с маркерами ───────────────────────────────────────────── */
 
@@ -398,7 +412,13 @@ export async function exportFolderXml(project: string, folder: string, onProgres
   return { blob, total: keys.length, exported, folders: folders.length, errors };
 }
 
-export interface CasesEditIn { status?: string; priority?: string; labelsAdd?: string[]; customFields?: Record<string, unknown> }
+export interface CasesEditIn {
+  status?: string; priority?: string; owner?: string; objective?: string; precondition?: string;
+  /** мс */
+  estimatedTime?: number;
+  labelsAdd?: string[]; labelsRemove?: string[]; issueLinksAdd?: string[];
+  customFields?: Record<string, unknown>;
+}
 
 export const editCases = (project: string, keys: string[], edit: CasesEditIn) =>
   post<{ updated: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/edit", { project, keys, ...edit });

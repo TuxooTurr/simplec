@@ -476,6 +476,29 @@ def _key_num(k: str) -> tuple[str, int]:
     return (m.group(1), int(m.group(2))) if m else (k, 0)
 
 
+MAX_CASES_LIST = 20000      # кейсов папки в ответе списка: вся модель (~4000) с запасом
+
+
+def _cf_text(x: Any) -> str:
+    return ("Да" if x else "Нет") if isinstance(x, bool) else _name(x) if isinstance(x, dict) else "" if x is None else str(x).strip()
+
+
+def cf_plain(cf: Any) -> dict[str, Any]:
+    """Пользовательские поля кейса → {имя: строка | [строки]}: флажок — «Да»/«Нет», объект — его имя, пустое — нет."""
+    pairs = cf.items() if isinstance(cf, dict) else [(f.get("name", ""), f.get("value")) for f in (cf or []) if isinstance(f, dict)]
+    out: dict[str, Any] = {}
+    for name, v in pairs:
+        if isinstance(v, list):
+            vals = [t for t in (_cf_text(x) for x in v) if t]
+            if vals:
+                out[str(name)] = vals
+        else:
+            t = _cf_text(v)
+            if t:
+                out[str(name)] = t
+    return out
+
+
 def in_folder(case_folder: str, folder: str, children: bool) -> bool:
     """Кейс в папке: точно в ней или (children) в ней и во всех вложенных на любой глубине. "" — весь проект."""
     if not folder:
@@ -487,14 +510,16 @@ def in_folder(case_folder: str, folder: str, children: bool) -> bool:
 @router.get("/api/zephyr/cases")
 def cases(project: str = Query(..., min_length=1), folder: str = "", text: str = "", children: bool = False,
           db: Session = Depends(get_db)) -> dict:
-    """Кейсы папки (children=true — и всех вложенных) или поиск по названию/ключу — по индексу, без запроса в Jira."""
+    """Кейсы папки (children=true — и всех вложенных) или поиск по названию/ключу — по индексу, без запроса в Jira.
+    Все кейсы папки, с пользовательскими полями (значения — строкой, флажок — «Да»/«Нет», несколько — списком):
+    по ним фронт сортирует и фильтрует — фильтр работает на уровне выбранной папки."""
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper())
     t = text.strip().lower()
     out = [c for c in idx["cases"].values()
            if in_folder(c.get("folder") or "", folder, children) and (not t or t in c["name"].lower() or t in c["key"].lower())]
     out.sort(key=lambda c: _key_num(c["key"]))
-    return {"cases": [{k: v for k, v in c.items() if k != "customFields"} for c in out[:2000]], "total": len(out)}
+    return {"cases": [{**c, "customFields": cf_plain(c.get("customFields"))} for c in out[:MAX_CASES_LIST]], "total": len(out)}
 
 
 @router.get("/api/zephyr/case/{key}")
@@ -961,26 +986,46 @@ def crit_cases(body: CritBody, db: Session = Depends(get_db)) -> dict:
 
 @router.get("/api/zephyr/field-values")
 def field_values(project: str = Query(..., min_length=1), db: Session = Depends(get_db)) -> dict:
-    """Значения для выпадающих списков «Условий»: статусы кейсов и значения пользовательских полей — по модели."""
+    """Значения полей по модели — для выпадающих списков «Условий», фильтров и массовой правки: статусы, приоритеты,
+    владельцы, метки и пользовательские поля с типом (kinds: bool — флажок, multi — несколько значений,
+    number — число, text — строка/список выбора)."""
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper())
+    def count(d: dict[str, int], t: str) -> None:
+        if t:
+            d[t] = d.get(t, 0) + 1
+
     statuses: dict[str, int] = {}
+    priorities: dict[str, int] = {}
+    owners: dict[str, int] = {}
+    labels: dict[str, int] = {}
     fields: dict[str, dict[str, int]] = {}
+    kinds: dict[str, str] = {}
     for c in idx["cases"].values():
-        st = _name(c.get("status"))
-        if st:
-            statuses[st] = statuses.get(st, 0) + 1
+        count(statuses, _name(c.get("status")))
+        count(priorities, _name(c.get("priority")))
+        count(owners, _name(c.get("owner")))
+        for l in c.get("labels") or []:
+            count(labels, str(l).strip())
         cf = c.get("customFields") or {}
         pairs = cf.items() if isinstance(cf, dict) else [(f.get("name", ""), f.get("value")) for f in cf if isinstance(f, dict)]
         for name, v in pairs:
-            vals = fields.setdefault(str(name), {})
+            name = str(name)
+            vals = fields.setdefault(name, {})
+            kind = "multi" if isinstance(v, list) else "bool" if isinstance(v, bool) else \
+                "number" if isinstance(v, (int, float)) else "text" if v is not None else ""
+            if kind:
+                # Разный тип у разных кейсов: где-то списком — поле на несколько значений, иначе — строка.
+                prev = kinds.get(name)
+                kinds[name] = kind if prev in (None, kind) else "multi" if "multi" in (prev, kind) else "text"
             for x in (v if isinstance(v, list) else [v]):
-                t = ("Да" if x else "Нет") if isinstance(x, bool) else _name(x) if isinstance(x, dict) else "" if x is None else str(x).strip()
-                if t and len(vals) < 200:
+                t = _cf_text(x)
+                if t and (t in vals or len(vals) < 200):
                     vals[t] = vals.get(t, 0) + 1
     top = lambda d: [k for k, _ in sorted(d.items(), key=lambda x: (-x[1], x[0]))]
-    return {"statuses": top(statuses),
-            "fields": {k: top(v)[:100] for k, v in sorted(fields.items(), key=lambda x: -sum(x[1].values()))}}
+    return {"statuses": top(statuses), "priorities": top(priorities), "owners": top(owners), "labels": top(labels)[:300],
+            "fields": {k: top(v)[:100] for k, v in sorted(fields.items(), key=lambda x: -sum(x[1].values()))},
+            "kinds": kinds}
 
 
 # ── Релизы: строки с маркерами, стори и их прогоны ───────────────────────────
@@ -1985,32 +2030,46 @@ def delete_cases(body: CasesBulk, db: Session = Depends(get_db)) -> dict:
 class CasesEdit(CasesBulk):
     status: Optional[str] = None
     priority: Optional[str] = None
+    owner: Optional[str] = None
+    objective: Optional[str] = None
+    precondition: Optional[str] = None
+    estimatedTime: Optional[int] = None                    # мс
     labelsAdd: list[str] = Field(default_factory=list)     # добавить метки к уже стоящим
+    labelsRemove: list[str] = Field(default_factory=list)  # убрать метки
+    issueLinksAdd: list[str] = Field(default_factory=list) # добавить связи с задачами к уже стоящим
     customFields: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post("/api/zephyr/cases/edit")
 def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
-    """Изменить несколько кейсов разом: статус, приоритет, метки (добавляются), пользовательские поля."""
+    """Изменить несколько кейсов разом: любые поля — статус, приоритет, владелец, цель, предусловие, длительность,
+    метки (добавить / убрать), связи (добавить), пользовательские поля. Не переданное — не трогаем."""
     cfg = _load_cfg(db)
     project = body.project.strip().upper()
     base: dict[str, Any] = {}
-    if body.status and body.status.strip():
-        base["status"] = body.status.strip()
-    if body.priority and body.priority.strip():
-        base["priority"] = body.priority.strip()
+    for k in ("status", "priority", "owner", "objective", "precondition"):
+        v = getattr(body, k)
+        if v is not None and v.strip():
+            base[k] = v.strip()
+    if body.estimatedTime is not None and body.estimatedTime >= 0:
+        base["estimatedTime"] = body.estimatedTime
     if body.customFields:
         base["customFields"] = body.customFields
     add = [x.strip() for x in body.labelsAdd if x.strip()]
-    if not base and not add:
+    drop = {x.strip().lower() for x in body.labelsRemove if x.strip()}
+    links = [x.strip().upper() for x in body.issueLinksAdd if x.strip()]
+    if not base and not add and not drop and not links:
         raise HTTPException(422, "Нечего менять — выберите хотя бы одно поле")
     idx = get_index(cfg, project)["cases"]
     fresh: list[dict] = []
 
     def one(k: str) -> None:
         payload = dict(base)
-        if add:
-            payload["labels"] = list(dict.fromkeys([*((idx.get(k) or {}).get("labels") or []), *add]))
+        if add or drop:
+            cur = [*((idx.get(k) or {}).get("labels") or []), *add]
+            payload["labels"] = [l for l in dict.fromkeys(cur) if l.strip().lower() not in drop]
+        if links:
+            payload["issueLinks"] = list(dict.fromkeys([*((idx.get(k) or {}).get("issueLinks") or []), *links]))
         _jira_request(cfg, "PUT", f"{ATM}/testcase/{k}", json_body=payload)
         fresh.append(_slim(_jira_request(cfg, "GET", f"{ATM}/testcase/{k}")))
     ok, errors = _each(body.keys, one)

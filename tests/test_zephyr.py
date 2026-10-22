@@ -987,3 +987,47 @@ def test_выгрузка_пачками_склеивается_в_тот_же_�
     assert [c["name"] for c in back["cases"]] == [f"Кейс {k}" for k in keys]
     assert back["folders"] == ["/A", "/A/B"] and back["cases"][4]["steps"][0]["expectedResult"] == "ок"
     assert 'id="5"' in glued                                       # нумерация сквозная между пачками
+
+
+# ── Фильтры, сортировка и массовая правка ────────────────────────────────────
+
+def test_список_кейсов_с_пользовательскими_полями_без_обрезки(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": f"T{i}", "folder": "/A", "name": f"К{i}", "customFields": {"Крит. регресс": i % 2 == 0, "КЭ": ["CI1", "CI2"], "Пусто": None}}
+        for i in range(2500)] if p["startAt"] == 0 else []
+    r = z.cases(project="SBER911", folder="/A", db=None)
+    assert r["total"] == 2500 and len(r["cases"]) == 2500                    # раньше — первые 2000
+    assert r["cases"][0]["customFields"] == {"Крит. регресс": "Да", "КЭ": ["CI1", "CI2"]}
+
+
+def test_значения_полей_с_типами(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "T1", "status": "Approved", "priority": "High", "owner": "ivanov", "labels": ["web"],
+         "customFields": {"Крит": True, "КЭ": ["CI1"], "Баллы": 3, "Команда": "QA"}},
+        {"key": "T2", "status": "Draft", "priority": "Normal", "customFields": {"Крит": False, "КЭ": "CI2", "Команда": "Dev"}},
+    ] if p["startAt"] == 0 else []
+    r = z.field_values(project="SBER911", db=None)
+    assert r["kinds"] == {"Крит": "bool", "КЭ": "multi", "Баллы": "number", "Команда": "text"}
+    assert set(r["priorities"]) == {"High", "Normal"} and r["owners"] == ["ivanov"] and r["labels"] == ["web"]
+    assert set(r["fields"]["КЭ"]) == {"CI1", "CI2"}
+
+
+def test_массовая_правка_любых_полей(jira, monkeypatch):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "T1", "labels": ["старая", "убрать"], "issueLinks": ["SBER911-1"]}] if p["startAt"] == 0 else []
+    z.get_index(CFG, "SBER911")
+    puts = {}
+
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        k = path.rsplit("/", 1)[1]
+        if method == "PUT":
+            puts[k] = json_body
+            return {}
+        return {"key": k, **puts.get(k, {})}
+    monkeypatch.setattr(z, "_jira_request", req)
+    r = z.edit_cases(z.CasesEdit(project="SBER911", keys=["T1"], owner="petrov", estimatedTime=600000, objective="Цель",
+                                 labelsAdd=["новая"], labelsRemove=["Убрать"], issueLinksAdd=["sber911-2"],
+                                 customFields={"КЭ": ["CI1", "CI2"]}), db=None)
+    assert r["updated"] == ["T1"]
+    assert puts["T1"] == {"owner": "petrov", "objective": "Цель", "estimatedTime": 600000, "customFields": {"КЭ": ["CI1", "CI2"]},
+                          "labels": ["старая", "новая"], "issueLinks": ["SBER911-1", "SBER911-2"]}

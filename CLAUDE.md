@@ -172,7 +172,8 @@ SimpleTest/
 - `st_zephyr_project` — проект Zephyr Tool (по умолчанию SBER911); `st_zephyr_crit` — условия отбора крит регресса;
   `st_zephyr_staging:<проект>` — черновик новой модели (раскладка до «Применить»); sessionStorage `st_zephyr_import` — XML из генерации;
   `st_zephyr_panes` — ширины раздвигаемых зон (дерево, список прогонов); `st_zephyr_case_cols` — видимые колонки списка
-  кейсов; `st_zephyr_runs_sort` — сортировка прогонов (новые/старые); `st_zephyr_children` — тумблер «Кейсы вложенных папок»
+  кейсов; `st_zephyr_runs_sort` — сортировка прогонов (новые/старые); `st_zephyr_children` — тумблер «Кейсы вложенных папок»;
+  `st_zephyr_filter_tpls` — шаблоны фильтров списка кейсов
 - `st_jira_tool_list_setup` — раскрыта ли «Настройка списка» вверху левой колонки Jira tool
 - `st_cell_icon_recent`, `st_cell_icon_color` — недавние ярлычки ячеек и выбранный цвет иконок (удобство одного браузера)
 - `st_jira_tool_cache` — **sessionStorage**: кэш задач Jira tool на сессию (задачи из Jira, связанные, ненайденные);

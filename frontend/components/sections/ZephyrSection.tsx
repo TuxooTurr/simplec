@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, Pencil, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Trash2, Upload, X } from "lucide-react";
+import { Download, FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Upload, X } from "lucide-react";
 import FolderTree from "@/components/zephyr/FolderTree";
 import RunsView from "@/components/zephyr/RunsView";
 import ReleasesView from "@/components/zephyr/ReleasesView";
 import CaseDialog from "@/components/zephyr/CaseDialog";
 import { Resizer, usePaneSize } from "@/components/zephyr/Resizer";
-import { BulkEditModal, CaseStatus, ColumnsMenu, DeleteCasesModal, useCaseCols } from "@/components/zephyr/CaseBulk";
+import { BulkEditModal, ColumnsMenu, DeleteCasesModal, useCaseCols } from "@/components/zephyr/CaseBulk";
+import CaseTable from "@/components/zephyr/CaseTable";
+import { customFieldNames } from "@/lib/zephyrCaseFilter";
 import ProbeModal from "@/components/zephyr/ProbeModal";
 import { CaseCard, NewCaseCard } from "@/components/zephyr/parts";
 import Modal from "@/components/ui/Modal";
@@ -15,7 +17,7 @@ import { ApplyDialog, StagedCaseCard } from "@/components/zephyr/StagingParts";
 import { DeleteFolderModal, DeleteStagedFolderModal, ExportFolderModal } from "@/components/zephyr/FolderOps";
 import { dropStagedFolder, loadStaging, saveStaging, stagedFolderSize, stagingFromXml, takeHandoff, usedFolders, type ApplyResult, type Parent, type Staging } from "@/lib/zephyrStaging";
 import { getJiraSettings } from "@/lib/jiraApi";
-import { DRAG_CASES, fmtDate, fmtDuration, createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
+import { createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
 
 /** Узел дерева по пути — для подтверждения переноса (сколько кейсов уедет). */
 function findNode(nodes: ZFolder[], path: string): ZFolder | null {
@@ -82,7 +84,6 @@ export default function ZephyrSection() {
   const [stagedDel, setStagedDel] = useState<string | null>(null);
   /** Черновик на момент «Применить»: окно живёт, даже когда все кейсы созданы и черновик опустел. */
   const [applySnap, setApplySnap] = useState<Staging | null>(null);
-  const [casesTotal, setCasesTotal] = useState(0);
   const [cases, setCases] = useState<ZCase[] | null>(null);
   const [casesErr, setCasesErr] = useState("");
   const [q, setQ] = useState("");
@@ -155,7 +156,7 @@ export default function ZephyrSection() {
     let live = true;
     setCases(null); setCasesErr("");
     getCases(project, folder, text, withChildren)
-      .then(r => { if (live) { setCases(r.cases); setCasesTotal(r.total ?? r.cases.length); } })
+      .then(r => { if (live) setCases(r.cases); })
       .catch(e => live && setCasesErr((e as Error).message));
     return () => { live = false; };
   }, [project, folder, text, reloadKey, withChildren]);
@@ -210,6 +211,8 @@ export default function ZephyrSection() {
   };
 
   const crumbs = useMemo(() => folder.split("/").filter(Boolean), [folder]);
+  /** Пользовательские поля у кейсов списка — в «Колонки»: по каждой колонке есть сортировка и фильтр. */
+  const customFields = useMemo(() => customFieldNames(cases ?? []), [cases]);
   const tabCls = (on: boolean) => `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${on ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main hover:bg-bg-subtle"}`;
 
   return (
@@ -330,7 +333,7 @@ export default function ZephyrSection() {
                   title={folder ? "Выгрузить папку со всеми вложенными в Zephyr XML" : "Выгрузить всю модель проекта в Zephyr XML"}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle whitespace-nowrap">
                   <Download className="w-3.5 h-3.5" /> Выгрузить XML</button>
-                <ColumnsMenu cols={cols} onToggle={toggleCol} />
+                <ColumnsMenu cols={cols} custom={customFields} onToggle={toggleCol} />
                 <label className="flex items-center gap-2 w-64 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
                   <Search className="w-3.5 h-3.5 text-text-muted" />
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Название кейса" aria-label="Найти кейс"
@@ -338,80 +341,15 @@ export default function ZephyrSection() {
                   {q && <button type="button" onClick={() => setQ("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
                 </label>
               </div>
-              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-                {casesErr && <p className="p-4 text-sm text-red-600 dark:text-red-400">Кейсы не загрузились: {casesErr}</p>}
-                {!cases && !casesErr && <p className="flex items-center gap-2 p-4 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю кейсы…</p>}
-                {cases && (
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-bg-card text-[11px] uppercase tracking-wide text-text-muted">
-                      <tr><th className="w-9 pl-3" title="Отметьте кейсы и перетащите их на папку в дереве">
-                        <input type="checkbox" aria-label="Выбрать все кейсы" checked={!!cases.length && cases.every(c => checked.has(c.key))}
-                          onChange={e => setChecked(e.target.checked ? new Set(cases.map(c => c.key)) : new Set())} /></th>
-                        <th className="text-left px-3 py-2 w-36">Ключ</th><th className="text-left px-3 py-2">Название</th>
-                        {cols.has("status") && <th className="text-left px-3 py-2 w-28">Статус</th>}
-                        {cols.has("priority") && <th className="text-left px-3 py-2 w-24">Приоритет</th>}
-                        {cols.has("duration") && <th className="text-left px-3 py-2 w-28">Длительность</th>}
-                        {cols.has("owner") && <th className="text-left px-3 py-2 w-40">Владелец</th>}
-                        {cols.has("folder") && <th className="text-left px-3 py-2 w-56">Папка</th>}
-                        {cols.has("labels") && <th className="text-left px-3 py-2 w-40">Метки</th>}
-                        {cols.has("updated") && <th className="text-left px-3 py-2 w-28">Изменён</th>}</tr>
-                    </thead>
-                    <tbody>
-                      {cases.length === 0 && (
-                        <tr><td colSpan={3 + cols.size} className="px-4 py-6 text-center text-text-muted">
-                          {text ? `По «${text}» кейсов нет.` : folder
-                            ? (withChildren ? "В этой папке и вложенных кейсов нет." : "В этой папке кейсов нет. Кейсы вложенных папок — включите «Кейсы вложенных папок» над деревом.")
-                            : "Кейсов нет."}</td></tr>
-                      )}
-                      {cases.map(c => (
-                        <tr key={c.key} onClick={() => { setCaseKey(c.key); setEditOpen(false); setNewCaseIn(null); }} aria-selected={caseKey === c.key}
-                          // Перетащить на папку дерева: отмеченные кейсы (если строка среди них) или только эту строку.
-                          draggable onDragStart={e => {
-                            const keys = checked.has(c.key) ? [...checked] : [c.key];
-                            e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData(DRAG_CASES, JSON.stringify(keys)); e.dataTransfer.setData("text/plain", keys.join(", "));
-                          }}
-                          title="Перетащите на папку в дереве, чтобы перенести"
-                          className={`border-t border-border-main cursor-pointer ${caseKey === c.key ? "bg-primary/5" : checked.has(c.key) ? "bg-primary/[0.03]" : "hover:bg-bg-subtle/60"}`}>
-                          <td className="pl-3" onClick={e => e.stopPropagation()}>
-                            <input type="checkbox" aria-label={`Выбрать ${c.key}`} checked={checked.has(c.key)}
-                              onChange={() => setChecked(o => { const n = new Set(o); if (n.has(c.key)) n.delete(c.key); else n.add(c.key); return n; })} /></td>
-                          <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{c.key}</td>
-                          <td className="px-3 py-1.5 text-text-main">
-                            <span className="block truncate max-w-[520px]">{c.name}</span>
-                            {(!folder || (withChildren && c.folder !== folder)) && c.folder && !cols.has("folder") && (
-                              <span className="block text-[11px] text-text-muted truncate">{folder && c.folder.startsWith(folder + "/") ? `…${c.folder.slice(folder.length)}` : c.folder}</span>
-                            )}
-                          </td>
-                          {cols.has("status") && <td className="px-3 py-1.5"><CaseStatus status={c.status} /></td>}
-                          {cols.has("priority") && <td className="px-3 py-1.5 text-text-main whitespace-nowrap">{c.priority || "—"}</td>}
-                          {cols.has("duration") && <td className="px-3 py-1.5 text-text-main whitespace-nowrap tabular-nums">{fmtDuration(c.estimatedTime)}</td>}
-                          {cols.has("owner") && <td className="px-3 py-1.5 text-text-muted truncate">{c.owner || "—"}</td>}
-                          {cols.has("folder") && <td className="px-3 py-1.5 text-xs text-text-muted"><span className="block truncate max-w-[220px]" title={c.folder}>{c.folder || "—"}</span></td>}
-                          {cols.has("labels") && <td className="px-3 py-1.5 text-xs text-text-muted truncate">{c.labels.join(", ") || "—"}</td>}
-                          {cols.has("updated") && <td className="px-3 py-1.5 text-xs text-text-muted whitespace-nowrap">{c.updated ? fmtDate(c.updated) : "—"}</td>}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              {cases && casesTotal > cases.length && (
-                <p className="px-4 py-2 text-xs text-text-muted">Показаны первые {cases.length} из {casesTotal}. Выгрузка и удаление папки берут все кейсы.</p>
+              {casesErr && <p className="p-4 text-sm text-red-600 dark:text-red-400">Кейсы не загрузились: {casesErr}</p>}
+              {!cases && !casesErr && <p className="flex items-center gap-2 p-4 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю кейсы…</p>}
+              {cases && (
+                <CaseTable key={project} cases={cases} cols={cols} folder={folder} withChildren={withChildren} text={text}
+                  checked={checked} setChecked={setChecked} caseKey={caseKey}
+                  onOpen={k => { setCaseKey(k); setEditOpen(false); setNewCaseIn(null); }}
+                  onEdit={() => { if (checked.size === 1) { setCaseKey([...checked][0]); setEditOpen(true); setNewCaseIn(null); } else setBulk("edit"); }}
+                  onDelete={() => setBulk("delete")} />
               )}
-              {checked.size > 0 && (
-                // Панель выбора — поверх низа списка, а не над ним: строки не сдвигаются, пока отмечаешь кейсы.
-                <div className="sticky bottom-3 z-10 mx-4 flex items-center gap-2 rounded-xl border border-primary/40 bg-bg-card shadow-lg px-4 py-2 text-sm">
-                  <span className="text-text-main">Выбрано: <b>{checked.size}</b></span>
-                  <button type="button" onClick={() => { if (checked.size === 1) { setCaseKey([...checked][0]); setEditOpen(true); setNewCaseIn(null); } else setBulk("edit"); }}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-white text-xs font-semibold hover:opacity-90">
-                    <Pencil className="w-3.5 h-3.5" /> Изменить</button>
-                  <button type="button" onClick={() => setBulk("delete")}
-                    className="flex items-center gap-1 px-2.5 py-1 rounded-md border border-red-300 dark:border-red-900 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
-                    <Trash2 className="w-3.5 h-3.5" /> Удалить</button>
-                  <span className="text-xs text-text-muted">или перетащите на папку в дереве</span>
-                  <button type="button" onClick={() => setChecked(new Set())} className="ml-auto text-xs text-text-muted hover:text-text-main underline">Снять выбор</button>
-                </div>
-              )}
-              </div>
             </div>
 
             {caseKey ? (

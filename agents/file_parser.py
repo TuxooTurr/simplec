@@ -58,25 +58,38 @@ def parse_file(data: bytes, filename: str) -> str:
         return data.decode("utf-8", errors="ignore")
 
 
-def _parse_pdf(data: bytes) -> str:
-    # Ошибки поднимаем, а не возвращаем заглушкой: иначе в LLM молча уходит
-    # «[PDF: текст не извлечён]» вместо содержимого, и модель «не видит файл».
+def _pdf_pages_library(data: bytes) -> list[str] | None:
+    """Текст страниц через PyPDF2 / pypdf, если библиотека установлена; нет ни одной — None."""
     try:
         from PyPDF2 import PdfReader
     except ImportError:
-        raise ValueError("PDF не обработан: на сервере не установлен PyPDF2")
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return None
+    reader = PdfReader(io.BytesIO(data))
+    return [page.extract_text() or "" for page in reader.pages]
+
+
+def _parse_pdf(data: bytes) -> str:
+    # Ошибки поднимаем, а не возвращаем заглушкой: иначе в LLM молча уходит
+    # «[PDF: текст не извлечён]» вместо содержимого, и модель «не видит файл».
+    # PyPDF2 не входит в requirements, а скачать его в корп. сети нельзя — тогда (и если библиотека не нашла
+    # текста) работает встроенный разбор agents/pdf_text.py без сторонних библиотек.
+    pages: list[str] = []
     try:
-        reader = PdfReader(io.BytesIO(data))
+        pages = _pdf_pages_library(data) or []
+    except Exception:
         pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text()
-            if text:
-                pages.append(
-                    "--- Страница " + str(i + 1) + " ---\n" + text
-                )
-        result = "\n\n".join(pages)
-    except Exception as e:
-        raise ValueError("Не удалось прочитать PDF: " + str(e)[:200])
+    if not any(p.strip() for p in pages):
+        from agents.pdf_text import extract_pages
+        try:
+            pages = extract_pages(data)
+        except ValueError as e:
+            raise ValueError("Не удалось прочитать PDF: " + str(e)[:200])
+        except Exception as e:
+            raise ValueError("Не удалось прочитать PDF: " + type(e).__name__ + ": " + str(e)[:200])
+    result = "\n\n".join("--- Страница " + str(i + 1) + " ---\n" + t for i, t in enumerate(pages) if t.strip())
     if not result.strip():
         raise ValueError(
             "В PDF нет текстового слоя (похоже, это скан). "

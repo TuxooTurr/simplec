@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
@@ -47,7 +47,8 @@ import {
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
 import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields } from "@/lib/jiraToolApi";
-import { dropSent, peopleFieldChanges, queuePeopleChanges } from "@/lib/jiraPeopleSync";
+import { describeNotes, dropSent, peopleFieldChanges, peopleSnapshot, queuePeopleChanges } from "@/lib/jiraPeopleSync";
+import { FIELD_BY_ID } from "@/lib/jiraModel";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
@@ -208,6 +209,8 @@ export default function JiraToolSection() {
   /** Направление → поле Jira, куда пишется имя человека в Jira (хранится в справочнике людей на бэкенде). */
   const [jiraFields, setJiraFields] = useState<JiraPeopleFields>({});
   const [jiraPeopleErr, setJiraPeopleErr] = useState("");
+  /** Почему смена людей не ушла или не уйдёт в Jira (не ошибка Jira, а настройка или экран задачи). */
+  const [jiraPeopleInfo, setJiraPeopleInfo] = useState("");
   const hasState = !!state;
   useEffect(() => {
     if (!hasState || peopleSaved.current !== null) return;
@@ -328,16 +331,23 @@ export default function JiraToolSection() {
    * Правка списка, которая может поменять людей задач (тестировщик, поля направлений): кроме списка — ставим
    * в очередь запись имён в Jira (lib/jiraPeopleSync.ts). Очередь уходит при обновлении из Jira (flushPeople).
    */
-  const updateListPeople = (fn: (l: TaskList) => TaskList) => update(s => {
-    const cur = s.lists.find(l => l.id === activeId);
-    if (!cur) return s;
-    const next = fn(cur);
-    const diff = peopleFieldChanges(cur, next, s.participants, jiraFields);
-    return {
-      ...s, lists: s.lists.map(l => (l.id === activeId ? next : l)),
-      jiraPending: diff.changes.length || diff.keep.length ? queuePeopleChanges(s.jiraPending ?? [], diff) : s.jiraPending,
-    };
-  });
+  const updateListPeople = (fn: (l: TaskList) => TaskList) => {
+    // Почему смена не уйдёт в Jira (нет имени в Jira, не выбрано поле) — сразу строкой над списком, а не молча.
+    if (list && state) {
+      const pre = peopleFieldChanges(list, fn(list), state.participants, jiraFields);
+      setJiraPeopleInfo(pre.notes.length ? `В Jira не уйдёт: ${describeNotes(pre.notes)}.` : "");
+    }
+    update(s => {
+      const cur = s.lists.find(l => l.id === activeId);
+      if (!cur) return s;
+      const next = fn(cur);
+      const diff = peopleFieldChanges(cur, next, s.participants, jiraFields);
+      return {
+        ...s, lists: s.lists.map(l => (l.id === activeId ? next : l)),
+        jiraPending: diff.changes.length || diff.keep.length ? queuePeopleChanges(s.jiraPending ?? [], diff) : s.jiraPending,
+      };
+    });
+  };
 
   const allIssues = useMemo(() => [...Object.values(cache), ...(state?.created ?? [])], [cache, state?.created]);
   const byKey = useMemo(() => new Map(allIssues.map(i => [i.key, i])), [allIssues]);
@@ -390,7 +400,9 @@ export default function JiraToolSection() {
 
   /**
    * Людей из очереди — в поля Jira. Перед каждым обновлением из Jira (ручным и фоновым): после него в списке уже
-   * значения из Jira. Поля нет у задачи — молча; Jira отказала — баннер; Jira недоступна — очередь ждёт следующего раза.
+   * значения из Jira. Jira отказала — красный баннер; Jira недоступна — очередь ждёт следующего раза.
+   * Поля нет на экране редактирования задачи (у дефекта нет «Аналитика», у стори поле не на экране или нет прав) —
+   * не ошибка, но и не молча: строкой, у каких задач и какое поле не записалось.
    */
   const flushPeople = async () => {
     const sent = stateRef.current?.jiraPending ?? [];
@@ -400,9 +412,27 @@ export default function JiraToolSection() {
       update(s => ({ ...s, jiraPending: dropSent(s.jiraPending ?? [], sent, r.results) }));
       const bad = r.results.filter(x => x.ok === false);
       setJiraPeopleErr(bad.length ? bad.map(b => `${b.key}: ${b.error}`).join("; ") : "");
+      const skipped = r.results.filter(x => x.skipped);
+      const byField = new Map<string, string[]>();
+      for (const x of skipped) byField.set(x.field, [...(byField.get(x.field) ?? []), x.key]);
+      setJiraPeopleInfo([
+        r.done ? `В Jira записано людей: ${r.done}.` : "",
+        ...[...byField].map(([f, keys]) => `Поле «${FIELD_BY_ID[f]?.name ?? f}» не на экране редактирования задачи (или нет прав на него) — не записано: ${keys.join(", ")}.`),
+      ].filter(Boolean).join(" "));
     } catch (e) {
       setJiraPeopleErr(`${(e as Error).message}. Отправим при следующем обновлении`);
     }
+  };
+
+  /** Записать в Jira всех текущих людей списка (у кого есть имя в Jira) и сразу обновить из Jira. */
+  const pushAllPeople = () => {
+    if (!list || !state) return;
+    const snap = peopleSnapshot(list, state.participants, jiraFields);
+    const queued = queuePeopleChanges(state.jiraPending ?? [], snap);
+    stateRef.current = { ...state, jiraPending: queued };      // flushPeople читает очередь отсюда — до перерисовки
+    update(s => ({ ...s, jiraPending: queuePeopleChanges(s.jiraPending ?? [], snap) }));
+    setJiraPeopleInfo(snap.notes.length ? `Не уйдёт в Jira: ${describeNotes(snap.notes)}.` : "");
+    refreshFromJira();
   };
 
   /** «Обновить из Jira»: отправить людей из очереди, перечитать задачи списка и связанные, повторить упавшие. */
@@ -1331,6 +1361,17 @@ export default function JiraToolSection() {
               <button type="button" onClick={() => setLoadErr("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
             </div>
           )}
+          {jiraPeopleInfo && (
+            <div role="status" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/40 text-sm">
+              <Info className="w-4 h-4 text-sky-600 dark:text-sky-400 flex-shrink-0" />
+              <span className="min-w-0 flex-1 text-text-main">{jiraPeopleInfo}</span>
+              {jira.state === "ok" && (
+                <button type="button" onClick={pushAllPeople} title="Отправить в Jira текущих людей всех задач списка — у кого есть «Имя в Jira»"
+                  className="px-2.5 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-subtle whitespace-nowrap">Записать людей списка в Jira</button>
+              )}
+              <button type="button" onClick={() => setJiraPeopleInfo("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+            </div>
+          )}
           {jiraPeopleErr && jira.state === "ok" && (
             <div role="alert" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-sm">
               <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
@@ -1638,7 +1679,7 @@ export default function JiraToolSection() {
       {backup && <BackupModal open section="bugs" file={backup.file} onClose={() => setBackup(null)} />}
       {modal === "participants" && (
         <ParticipantsModal open participants={state.participants} usage={usage} onClose={() => setModal(null)}
-          jiraOk={jira.state === "ok"} jiraFields={jiraFields}
+          jiraOk={jira.state === "ok"} jiraFields={jiraFields} onPushAll={() => { setModal(null); pushAllPeople(); }}
           onJiraFields={f => {
             const prev = jiraFields;
             setJiraFields(f);

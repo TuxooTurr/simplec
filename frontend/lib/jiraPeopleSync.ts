@@ -27,27 +27,39 @@ function personOf(list: TaskList, key: string, dir: string, people: Participant[
   return name ? people.find(p => p.name.trim().toLowerCase() === name) : undefined;
 }
 
+/** Почему смена человека не уйдёт в Jira — показываем, а не молчим. */
+export type PeopleNote = { key: string; dir: string; reason: "no-field" | "no-login"; person: string };
+
 /** Что сделать с полями Jira после правки списка: записать (changes) или оставить как было в Jira (keep). */
 export interface PeopleDiff {
   changes: PersonFieldChange[];
   /** Поставили человека без имени в Jira — поле Jira не трогаем, ждущая в очереди запись отменяется. */
   keep: { key: string; field: string }[];
+  /** Смены людей, которые в Jira не уйдут: у направления не выбрано поле Jira или у человека нет имени в Jira. */
+  notes: PeopleNote[];
 }
 
 export function peopleFieldChanges(before: TaskList, after: TaskList, people: Participant[],
                                    fields: JiraPeopleFields): PeopleDiff {
-  const out: PeopleDiff = { changes: [], keep: [] };
+  const out: PeopleDiff = { changes: [], keep: [], notes: [] };
   for (const key of after.keys) {
     if (isDraftKey(key)) continue;
     for (const { id: dir } of DIRECTIONS) {
-      const field = fields[dir];
-      if (!field) continue;
       const was = personOf(before, key, dir, people);
       const now = personOf(after, key, dir, people);
       if (was?.id === now?.id) continue;
+      const field = fields[dir];
+      if (!field) {
+        out.notes.push({ key, dir, reason: "no-field", person: now?.name ?? "" });
+        continue;
+      }
       const user = now?.jiraName?.trim() ?? "";
       const prev = was?.jiraName?.trim() ?? "";
-      if (now && !user) { out.keep.push({ key, field }); continue; }   // нового человека Jira не знает
+      if (now && !user) {                                  // нового человека Jira не знает
+        out.keep.push({ key, field });
+        out.notes.push({ key, dir, reason: "no-login", person: now.name });
+        continue;
+      }
       if (!now && !prev) continue;          // сняли того, кого в Jira и не писали
       if (user === prev) continue;
       out.changes.push({ key, field, user, display: now?.jiraDisplay?.trim() ?? "", prev });
@@ -86,4 +98,36 @@ export function dropSent(queue: PersonFieldChange[], sent: PersonFieldChange[], 
       return d ? { ...q, prev: d.user } : q;
     })
     .filter(q => q.user !== q.prev);
+}
+
+/**
+ * Все текущие люди списка → записи в Jira (кнопка «Записать людей списка в Jira»): догнать Jira после того, как
+ * заполнили «Имя в Jira» или выбрали поле направления — прежние смены тогда не уходили. Прежний человек неизвестен
+ * (prev пусто): поле на одного человека заменяется, в поле на нескольких — новый добавляется.
+ */
+export function peopleSnapshot(list: TaskList, people: Participant[], fields: JiraPeopleFields): PeopleDiff {
+  const out: PeopleDiff = { changes: [], keep: [], notes: [] };
+  for (const key of list.keys) {
+    if (isDraftKey(key)) continue;
+    for (const { id: dir } of DIRECTIONS) {
+      const now = personOf(list, key, dir, people);
+      if (!now) continue;
+      const field = fields[dir];
+      const user = now.jiraName?.trim() ?? "";
+      if (!field) out.notes.push({ key, dir, reason: "no-field", person: now.name });
+      else if (!user) out.notes.push({ key, dir, reason: "no-login", person: now.name });
+      else out.changes.push({ key, field, user, display: now.jiraDisplay?.trim() ?? "", prev: "" });
+    }
+  }
+  return out;
+}
+
+/** Пояснение, почему смены людей не ушли в Jira: «Беззубов — нет имени в Jira…», «Back-end — не выбрано поле Jira…». */
+export function describeNotes(notes: PeopleNote[]): string {
+  const noLogin = [...new Set(notes.filter(n => n.reason === "no-login").map(n => n.person))];
+  const noField = [...new Set(notes.filter(n => n.reason === "no-field").map(n => DIRECTIONS.find(d => d.id === n.dir)?.label ?? n.dir))];
+  return [
+    noLogin.length ? `${noLogin.join(", ")} — нет «Имени в Jira» в справочнике людей, поле в Jira не меняем` : "",
+    noField.length ? `${noField.join(", ")} — в справочнике людей не выбрано поле Jira для направления` : "",
+  ].filter(Boolean).join("; ");
 }

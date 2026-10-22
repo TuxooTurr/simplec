@@ -31,7 +31,7 @@ function peopleFieldOptions(dir: string): { similar: JiraFieldDef[]; users: Jira
  * (QA, BE, BA…; видна в цветной метке у ФИО) и направления: тестировщики стоят в колонке «Тестировщик»,
  * люди направлений — в полях направлений. Один человек может работать в нескольких направлениях.
  */
-export default function ParticipantsModal({ open, participants, usage, onChange, onClose, jiraOk = false, jiraFields = {}, onJiraFields }: {
+export default function ParticipantsModal({ open, participants, usage, onChange, onClose, jiraOk = false, jiraFields = {}, onJiraFields, onPushAll }: {
   open: boolean;
   participants: Participant[];
   /** id участника → сколько задач на нём во всех списках */
@@ -43,6 +43,8 @@ export default function ParticipantsModal({ open, participants, usage, onChange,
   /** Направление → поле Jira, куда пишется имя человека в Jira при назначении. */
   jiraFields?: JiraPeopleFields;
   onJiraFields?: (next: JiraPeopleFields) => void;
+  /** Записать в Jira текущих людей списка — после того как заполнили имена в Jira и поля направлений. */
+  onPushAll?: () => void;
 }) {
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [name, setName] = useState("");
@@ -96,6 +98,11 @@ export default function ParticipantsModal({ open, participants, usage, onChange,
                   (например, «Аналитик» у дефекта) — ничего не отправляем, человек остаётся только в SimpleTest.
                   {!jiraOk && " Jira не подключена — список полей неполный."}
                 </p>
+                {onPushAll && jiraOk && Object.keys(jiraFields).length > 0 && (
+                  <button type="button" onClick={onPushAll}
+                    title="Новые смены людей уходят в Jira сами при обновлении. Эта кнопка догоняет Jira за прошлые — до того, как заполнили имена в Jira"
+                    className="text-xs text-primary hover:underline">Записать текущих людей открытого списка в Jira</button>
+                )}
                 {DIRECTIONS.map(d => {
                   const cur = jiraFields[d.id] ?? "";
                   const o = peopleFieldOptions(d.id);

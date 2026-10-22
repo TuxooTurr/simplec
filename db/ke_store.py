@@ -50,17 +50,20 @@ def clean(names: list[str]) -> list[str]:
     return sorted(out.values(), key=str.lower)
 
 
-def _defaults() -> list[str]:
+# Общая механика справочника «файл + базовый список» — ею же пользуется справочник микросервисов (db/ms_store.py).
+# Пути передаются явно; у КЭ — модульные KE_FILE / DEFAULT_FILE (их подменяют тесты).
+
+def _defaults_at(default_file: Path) -> list[str]:
     try:
-        data = json.loads(DEFAULT_FILE.read_text("utf-8"))
+        data = json.loads(default_file.read_text("utf-8"))
         return clean(data) if isinstance(data, list) else []
     except (OSError, ValueError):
         return []
 
 
-def _read() -> dict:
+def _read_at(file: Path) -> dict:
     try:
-        data = json.loads(KE_FILE.read_text("utf-8"))
+        data = json.loads(file.read_text("utf-8"))
         if isinstance(data, dict) and isinstance(data.get("ke"), list):
             return {"ke": clean(data["ke"]), "seeded": [str(x) for x in data.get("seeded") or []]}
     except (OSError, ValueError):
@@ -68,41 +71,53 @@ def _read() -> dict:
     return {"ke": [], "seeded": []}
 
 
-def _write(data: dict) -> None:
-    KE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = KE_FILE.with_suffix(".tmp")
+def _write_at(file: Path, data: dict) -> None:
+    file.parent.mkdir(parents=True, exist_ok=True)
+    tmp = file.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-    tmp.replace(KE_FILE)
+    tmp.replace(file)
 
 
-def load() -> list[str]:
-    """Справочник; новые КЭ из базового списка дописываются один раз."""
+def load_at(file: Path, default_file: Path) -> list[str]:
+    """Справочник; новые значения из базового списка дописываются один раз."""
     with _lock:
-        data = _read()
+        data = _read_at(file)
         seen = {_key(x) for x in data["seeded"]}
-        fresh = [k for k in _defaults() if _key(k) not in seen]
+        fresh = [k for k in _defaults_at(default_file) if _key(k) not in seen]
         if fresh:
             data["ke"] = clean([*data["ke"], *fresh])
             data["seeded"] = [*data["seeded"], *fresh]
-            _write(data)
+            _write_at(file, data)
         return data["ke"]
+
+
+def add_at(file: Path, default_file: Path, names: list[str]) -> list[str]:
+    """Дописать новые значения (повторы без учёта регистра пропускаются)."""
+    load_at(file, default_file)
+    with _lock:
+        data = _read_at(file)
+        data["ke"] = clean([*data["ke"], *names])
+        _write_at(file, data)
+        return data["ke"]
+
+
+def replace_at(file: Path, default_file: Path, names: list[str]) -> list[str]:
+    """Сохранить справочник целиком (правка списком)."""
+    load_at(file, default_file)
+    with _lock:
+        data = _read_at(file)
+        data["ke"] = clean(names)
+        _write_at(file, data)
+        return data["ke"]
+
+
+def load() -> list[str]:
+    return load_at(KE_FILE, DEFAULT_FILE)
 
 
 def add(names: list[str]) -> list[str]:
-    """Дописать новые КЭ (повторы без учёта регистра пропускаются)."""
-    load()
-    with _lock:
-        data = _read()
-        data["ke"] = clean([*data["ke"], *names])
-        _write(data)
-        return data["ke"]
+    return add_at(KE_FILE, DEFAULT_FILE, names)
 
 
 def replace(names: list[str]) -> list[str]:
-    """Сохранить справочник целиком (правка списком в настройках)."""
-    load()
-    with _lock:
-        data = _read()
-        data["ke"] = clean(names)
-        _write(data)
-        return data["ke"]
+    return replace_at(KE_FILE, DEFAULT_FILE, names)

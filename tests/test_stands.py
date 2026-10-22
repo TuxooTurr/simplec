@@ -15,6 +15,7 @@ CFG = {"base_url": "https://confluence.example", "token": "t", "token_path": "",
 def conf(monkeypatch, tmp_path):
     """Подставной Confluence: свойство страницы 42 с версией, комментарии, ответы, тело страницы."""
     monkeypatch.setattr(st.ke_store, "KE_FILE", tmp_path / "ke_catalog.json")      # справочник КЭ — не в data/ проекта
+    monkeypatch.setattr(st.ms_store, "MS_FILE", tmp_path / "ms_catalog.json")     # и микросервисов
     state = {"prop": None, "version": 0, "comments": [], "replies": [], "body": "", "page_version": 1, "conflict_once": False}
     monkeypatch.setattr(st, "today", lambda: TODAY)
     monkeypatch.setattr(st, "_load_cfg", lambda db: CFG)
@@ -271,3 +272,80 @@ def test_базовый_справочник_кэ_из_репозитория():
     assert len(base) == 83 and "Чат [CI04663753]" in base and "Чат [CI04510531]" in base
     assert not any("Удалить" in k for k in base)
     assert len({ke_store.ke_key(k) for k in base}) == len(base)                                       # коды уникальны
+
+
+def _bulk(*items):
+    return st.add_bookings("Major-Check", st.BulkBookings(items=list(items)), db=None)
+
+
+def test_время_установки_конфликт_только_при_пересечении(conf):
+    _settings()
+    B = st.BookingBody
+    v = _bulk(B(date="2026-10-22", team="B2C", service="notify", timeFrom="10:00", timeTo="12:00", task="SBER911-1"),
+              B(date="2026-10-22", team="SC", service="notify", timeFrom="14:00", timeTo="16:00", task="SBER911-2"))
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    assert day["status"] == "МОЖНО" and not any(b["conflict"] for b in day["bookings"])           # разное время — не конфликт
+    assert {(b["timeFrom"], b["timeTo"]) for b in day["bookings"]} == {("10:00", "12:00"), ("14:00", "16:00")}
+    v = _bulk(B(date="2026-10-22", team="Агенты", service="Notify", timeFrom="11:30", timeTo="13:00", task="SBER911-3"))
+    day = next(x for x in v["days"] if x["date"] == "2026-10-22")
+    flags = {b["task"]: b["conflict"] for b in day["bookings"]}
+    assert flags == {"SBER911-1": True, "SBER911-2": False, "SBER911-3": True}
+    assert day["conflicts"] == [{"service": "notify", "teams": ["B2C", "Агенты"]}]
+    v = _bulk(B(date="2026-10-23", team="B2C", service="gateway"), B(date="2026-10-23", team="SC", service="gateway", timeFrom="09:00", timeTo="10:00"))
+    assert next(x for x in v["days"] if x["date"] == "2026-10-23")["status"] == "КОНФЛИКТ"        # без времени — весь день
+    bad = _bulk(B(date="2026-10-26", team="SC", service="x", timeFrom="12:00", timeTo="11:00"),
+                B(date="2026-10-26", team="SC", service="y", timeFrom="25:00", timeTo="26:00"))
+    assert [r["reason"] for r in bad["rejected"]] == ["время окончания раньше начала", "время — ЧЧ:ММ, укажите начало и конец"]
+    assert "SBER911-1 — (10:00–12:00)" not in conf["body"] and "SBER911-1 (10:00–12:00)" in conf["body"]
+
+
+def test_заявка_с_периодом_и_временем(conf):
+    _settings()
+    conf["comments"] = [_comment("c1", "Сервис: rms-front\nДата: 22.10–27.10\nВремя: 10:00-12:00\nКоманда: B2C\nЗадача: SBER911-9"),
+                        _comment("c2", "Сервис: x\nДата: 22.10\nВремя: утром\nКоманда: SC")]
+    v = st.pull("Major-Check", db=None)
+    stored = [b for b in conf["prop"]["bookings"] if b["task"] == "SBER911-9"]
+    assert len(stored) == 1 and stored[0]["dateTo"] == "2026-10-27" and stored[0]["timeFrom"] == "10:00"
+    assert dict(conf["replies"])["c1"] == "<p>Принято: rms-front, 22.10–27.10 10:00–12:00, B2C</p>"
+    assert "не понял время" in next(p["reason"] for p in v["pending"] if p["cid"] == "c2")
+    assert st.parse_date_range("с 28.12 по 05.01", TODAY) == (date(2026, 12, 28), date(2027, 1, 5))
+    assert st.parse_date_range("2026-10-23", TODAY) == (date(2026, 10, 23), date(2026, 10, 23))
+
+
+def test_график_за_период_последние_3_месяца(conf):
+    _settings()
+    conf["prop"]["bookings"].append(st._new_booking(date(2026, 8, 3), "SC", "notify", "SBER911-7", "SimpleTest", "simpletest"))
+    v = st.get_stand("Major-Check", start="2026-07-21", end="2026-11-13", db=None)
+    assert v["range"] == {"from": "2026-07-21", "to": "2026-11-13"} and len(v["days"]) == 116
+    aug = next(x for x in v["days"] if x["date"] == "2026-08-03")
+    assert aug["bookings"][0]["task"] == "SBER911-7" and aug["status"] == "ПРОШЁЛ" and not aug["inWindow"]
+    assert next(x for x in v["days"] if x["date"] == "2026-10-21")["inWindow"]
+    assert len(st.get_stand("Major-Check", start="2026-01-01", end="2026-12-31", db=None)["days"]) == st.MAX_VIEW_DAYS
+    with pytest.raises(HTTPException):
+        st.get_stand("Major-Check", start="вчера", db=None)
+
+
+def test_справочник_микросервисов(tmp_path, monkeypatch, conf):
+    from db import ms_store
+    monkeypatch.setattr(ms_store, "MS_FILE", tmp_path / "ms.json")
+    monkeypatch.setattr(ms_store, "DEFAULT_FILE", tmp_path / "ms_default.json")
+    assert st.add_ms(st.KeNames(ke=["rms-front", " Notify ", "notify"]))["ms"] == ["Notify", "rms-front"]
+    assert st.put_ms_catalog(st.KeNames(ke=["gateway"]))["ms"] == ["gateway"]
+    _settings()
+    v = st.get_stand("Major-Check", db=None)
+    assert v["msCatalog"] == ["gateway"] and "keCatalog" not in v
+    with pytest.raises(HTTPException):
+        st.add_ms(st.KeNames(ke=[" "]))
+
+
+def test_базовый_справочник_микросервисов_из_репозиториев(tmp_path, monkeypatch):
+    import json
+    from db import ms_store
+    monkeypatch.setattr(ms_store, "MS_FILE", tmp_path / "ms_catalog.json")
+    base = json.loads(ms_store.DEFAULT_FILE.read_text("utf-8"))
+    info = ms_store.info()
+    assert len(base) == 395 and len(set(map(str.lower, base))) == len(base)
+    assert "act-confirm-mcp-ms" in base and "zpi-ms" in base and "release-calendar-ms" in base
+    assert info["release-calendar-ms"] == "Микросервис Календарь внедрений" and "agent_analiytics" not in info
+    assert set(info) <= set(base)
+    assert st.get_ms_catalog()["info"]["zpi-ms"] == "Микросервис ЗПИ."

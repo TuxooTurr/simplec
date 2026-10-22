@@ -16,7 +16,7 @@ const STANDS = ["Major-Check", "Major-GO"];
 const INPUT = "w-full text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
 /**
- * График стендов — кто, когда и какие сервисы (КЭ) ставит на Major-Check и Major-GO в выбранном окне релиза.
+ * График стендов — кто, когда и какие микросервисы ставит на Major-Check и Major-GO в выбранном окне релиза.
  * У каждого стенда своя страница Confluence: данные — в свойстве страницы (с версией — одновременные правки
  * не затирают друг друга), текст страницы собирает SimpleTest; заявки коллеги оставляют комментариями к странице.
  * Подключение к Confluence — как к Jira в Jira tool: плашка «не подключён», окно настроек, точка статуса;
@@ -46,7 +46,8 @@ export default function StandScheduleSection() {
           <div className="min-w-0 flex-1 space-y-1">
             <h1 className="flex items-center gap-2 text-lg font-bold text-text-main"><CalendarDays className="w-5 h-5 text-primary" /> График стендов</h1>
             <p className="text-sm text-text-muted">
-              Кто, когда и какие КЭ ставит на стенд в выбранном окне релиза. Один КЭ в один день у двух команд — конфликт.
+              Кто, когда и какие микросервисы ставит на стенд: дни, период и время установки. Один микросервис у двух команд
+              в пересекающееся время — конфликт.
               Оригинал — страница стенда в Confluence; заявки коллеги оставляют там комментарием.
             </p>
           </div>

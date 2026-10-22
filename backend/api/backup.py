@@ -73,7 +73,7 @@ FILE_SECTION: dict[str, str] = {
     "testdata_connections.json": "test_data", "datagen_config.json": "test_data", "jdbc_drivers.json": "test_data",
     "people.json": "bugs", "jira_views.json": "bugs",
     "zephyr_releases.json": "zephyr",
-    "ke_catalog.json": "stands",
+    "ke_catalog.json": "stands", "ms_catalog.json": "stands",
     "log_services.json": "logs", "web_connectors.json": "logs",
     "kafka_explorer_connections.json": "kafka",
     "alert_scripts.json": "event_generators", "alert_folders.json": "event_generators", "jobs.json": "event_generators",

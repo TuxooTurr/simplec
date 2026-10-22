@@ -5,6 +5,7 @@ import { ListPlus, Loader2 } from "lucide-react";
 import { loadState, type Issue, type TaskList } from "@/lib/jiraTool";
 import { issueCache } from "@/lib/jiraToolCache";
 import { issuesByKeys } from "@/lib/jiraToolApi";
+import { msChipStyle, msGroup } from "@/lib/msColor";
 
 /** Фича для черновика брони: номер, название и микросервисы задачи из поля «Микросервисы (st)» Jira tool. */
 export interface PickedFeature { task: string; name: string; ms: string[] }
@@ -81,7 +82,10 @@ export default function ImportFromList({ already, onPick }: { already: Set<strin
               <span className="min-w-0 flex-1 text-text-main">{String(i.fields.summary ?? "")}
                 {already.has(i.key) && <span className="ml-1.5 text-text-muted">· уже в форме</span>}</span>
               <span className="flex flex-wrap justify-end gap-1 max-w-[45%]">
-                {(msLinks[i.key] ?? []).map(m => <span key={m} className="px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-700 dark:text-sky-300 font-mono">{m}</span>)}
+                {(msLinks[i.key] ?? []).map(m => {
+                  const chip = msChipStyle(m);
+                  return <span key={m} style={chip.style} title={`группа: ${msGroup(m)}`} className={`${chip.className} px-1.5 py-0.5 rounded font-mono`}>{m}</span>;
+                })}
               </span>
             </label>
           </li>

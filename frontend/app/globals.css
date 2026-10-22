@@ -272,6 +272,18 @@ html.theme-transition *::after {
   .dark .tone-danger  { background-color: rgba(239,68,68,0.15);  color: #fca5a5; border-color: rgba(239,68,68,0.30); }
   .dark .tone-info    { background-color: rgba(59,130,246,0.15); color: #93c5fd; border-color: rgba(59,130,246,0.30); }
 
+  /* Лейбл микросервиса: цвет группы (--ms-h) и ступень оттенка сервиса 0–3 (--ms-l) — lib/msColor.ts */
+  .ms-chip {
+    background-color: hsl(var(--ms-h) 80% calc(92% - var(--ms-l) * 3%));
+    color: hsl(var(--ms-h) 70% calc(24% + var(--ms-l) * 2%));
+  }
+  .dark .ms-chip {
+    background-color: hsl(var(--ms-h) 55% calc(17% + var(--ms-l) * 3%));
+    color: hsl(var(--ms-h) 85% calc(84% - var(--ms-l) * 3%));
+  }
+  /* Метка цвета группы в списках выбора — насыщенная, видна и на светлом фоне */
+  .ms-dot { background-color: hsl(var(--ms-h) 65% calc(48% + var(--ms-l) * 4%)); }
+
   .dark .tone-success-text { color: #34d399; }
   .dark .tone-warning-text { color: #fbbf24; }
   .dark .tone-danger-text  { color: #f87171; }

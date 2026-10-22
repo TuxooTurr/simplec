@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { AlertTriangle, Ban, Bookmark, Bug, Check, CheckSquare, ChevronDown, Globe, Layers, Pencil, Plus, Smile, X, Zap } from "lucide-react";
 import { parseCellIcon, useIcons } from "@/lib/cellIcon";
+import { msChipStyle, msGroup } from "@/lib/msColor";
 import Floating from "./Floating";
 import ServicePicker from "@/components/stands/ServicePicker";
 
@@ -622,11 +623,12 @@ export function MsCell({ value, catalog, info, shared, self, onChange, onCreate 
             {value.map(n => {
               const with_ = shared?.get(n.trim().replace(/\s+/g, " ").toLowerCase()) ?? [];
               const others = with_.filter(k => k !== self);
+              const chip = msChipStyle(n);
+              // Цвет — группа микросервиса (lib/msColor.ts); общий с другими задачами — янтарная обводка и «×N».
               return (
-                <span key={n} title={`${n}${info[n] ? ` — ${info[n]}` : ""}${others.length ? `\nЕщё у задач списка: ${others.join(", ")}` : ""}`}
-                  className={`max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-mono ${others.length
-                    ? "bg-amber-500/15 text-amber-800 dark:text-amber-300 ring-1 ring-amber-500/50"
-                    : "bg-sky-500/10 text-sky-700 dark:text-sky-300"}`}>
+                <span key={n} style={chip.style}
+                  title={`${n}${info[n] ? ` — ${info[n]}` : ""}\nгруппа: ${msGroup(n)}${others.length ? `\nЕщё у задач списка: ${others.join(", ")}` : ""}`}
+                  className={`${chip.className} max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-mono ${others.length ? "ring-2 ring-amber-500" : ""}`}>
                   {n}{others.length > 0 && <span className="ml-1 opacity-80">×{with_.length}</span>}
                 </span>
               );

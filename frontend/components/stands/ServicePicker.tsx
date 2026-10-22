@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState } from "react";
 import { X } from "lucide-react";
+import { msChipStyle, msGroup } from "@/lib/msColor";
 import { keKey } from "@/lib/standsApi";
 
 const norm = keKey;   // одно значение — по коду CI, если он есть, иначе по названию
@@ -61,12 +62,16 @@ export default function ServicePicker({ value, onChange, catalog, onCreate, noun
     <div className={`relative ${className}`}>
       <div className="flex flex-wrap items-center gap-1 min-h-[34px] px-1.5 py-1 border border-border-main rounded-lg bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30"
         onClick={() => input.current?.focus()}>
-        {value.map(k => (
-          <span key={k} className="flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-primary/10 text-primary text-xs font-medium">
-            {k}
-            <button type="button" onClick={() => onChange(value.filter(x => x !== k))} aria-label={`Убрать ${k}`} className="hover:text-red-600"><X className="w-3 h-3" /></button>
-          </span>
-        ))}
+        {value.map(k => {
+          const chip = msChipStyle(k);
+          return (
+            <span key={k} title={`группа: ${msGroup(k)}`} style={chip.style}
+              className={`${chip.className} flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md text-xs font-medium`}>
+              {k}
+              <button type="button" onClick={() => onChange(value.filter(x => x !== k))} aria-label={`Убрать ${k}`} className="opacity-70 hover:opacity-100 hover:text-red-600"><X className="w-3 h-3" /></button>
+            </span>
+          );
+        })}
         <input ref={input} autoFocus={autoFocus} value={q} aria-label={noun} role="combobox" aria-expanded={open && matches.length > 0} aria-controls={listId}
           placeholder={value.length ? "ещё…" : placeholder ?? (catalog.length ? `${noun}: начните вводить или выберите` : `${noun}: notify-service`)}
           onChange={e => {
@@ -98,7 +103,10 @@ export default function ServicePicker({ value, onChange, catalog, onCreate, noun
             <li key={k} role="option" aria-selected={i === hi}
               onMouseDown={e => { e.preventDefault(); add([k]); }} onMouseEnter={() => setHi(i)}
               className={`px-2.5 py-1 cursor-pointer ${i === hi ? "bg-primary/10 text-primary" : "text-text-main"}`}>
-              <span className="font-medium">{k}</span>
+              <span className="flex items-center gap-1.5 font-medium">
+                {/* Цвет группы — тот же, что у лейбла после выбора */}
+                <span aria-hidden style={msChipStyle(k).style} className="ms-dot w-2.5 h-2.5 rounded-sm flex-shrink-0" />
+                {k}</span>
               {info[k] && <span className="block text-[11px] text-text-muted truncate" title={info[k]}>{info[k]}</span>}
             </li>
           ))}

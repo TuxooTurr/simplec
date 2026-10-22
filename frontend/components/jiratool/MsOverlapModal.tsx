@@ -1,6 +1,7 @@
 "use client";
 
 import Modal from "@/components/ui/Modal";
+import { msChipStyle, msGroup } from "@/lib/msColor";
 import type { Issue, MsOverlap } from "@/lib/jiraTool";
 import type { StageInfo } from "@/lib/jiraStages";
 import { StageBadge } from "./ListCells";
@@ -32,7 +33,8 @@ export default function MsOverlapModal({ open, overlaps, issueOf, stageOf, info,
         {overlaps.map(o => (
           <section key={o.service} className="rounded-xl border border-border-main overflow-hidden">
             <header className="flex flex-wrap items-baseline gap-2 px-3 py-2 bg-amber-500/10 border-b border-border-main">
-              <span className="font-mono text-sm font-semibold text-amber-800 dark:text-amber-300">{o.service}</span>
+              <span style={msChipStyle(o.service).style} title={`группа: ${msGroup(o.service)}`}
+                className="ms-chip px-1.5 py-0.5 rounded font-mono text-sm font-semibold">{o.service}</span>
               <span className="text-xs text-text-muted">задач: {o.keys.length}</span>
               {info[o.service] && <span className="text-xs text-text-muted truncate min-w-0 flex-1" title={info[o.service]}>· {info[o.service]}</span>}
             </header>

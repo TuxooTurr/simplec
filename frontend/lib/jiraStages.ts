@@ -19,7 +19,7 @@
  */
 
 import type React from "react";
-import { categoryOf, epicLinkId, isBlocker, isClosedDefect, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
+import { categoryOf, epicLinkId, isBlocker, isResolvedDefect, projectKeyOfIssue, type Category, type Issue } from "./jiraModel";
 
 /**
  * Этап (st): встроенные dev / test / release / done / excluded и свои, добавленные человеком
@@ -207,8 +207,8 @@ export function storiesByEpic(allIssues: Issue[]): Map<string, Issue[]> {
   return out;
 }
 
-/** Блокирующие незакрытые дефекты из списка дефектов. */
-const activeBlockers = (defects: Issue[] | undefined) => (defects ?? []).filter(d => isBlocker(d) && !isClosedDefect(d));
+/** Блокирующие активные дефекты: «Подтверждено исправление», «Исключено», «Отложен», «Закрыт» — уже не блокируют. */
+const activeBlockers = (defects: Issue[] | undefined) => (defects ?? []).filter(d => isBlocker(d) && !isResolvedDefect(d));
 
 /**
  * Блокирующие дефекты задачи с учётом связей: свои; у стори — ещё дефекты её эпика;

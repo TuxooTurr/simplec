@@ -17,8 +17,8 @@ function stageRank(info: StageInfo): number {
 
 /**
  * Дефекты задачи: привязанные через Epic Link или связь, плюс унаследованные блокирующие.
- * По умолчанию — только неустранённые (всё, кроме «Подтверждено исправление» и «Закрыт»;
- * блокирующий — пока не «Закрыт»). Галочка «Показать устранённые» добавляет
+ * По умолчанию — только активные (всё, кроме «Подтверждение исправления», «Исключено», «Отложен» и «Закрыт»).
+ * Галочка «Показать устранённые» добавляет
  * их отдельной группой ниже; сортировка по колонке работает внутри каждой группы.
  * «Статус (st)» — у каждого дефекта свой, по его статусу Jira (блокировка задачи на дефекты не переносится).
  * «Скопировать в чат» — показанные дефекты: номер, название, приоритет, статус (st).
@@ -58,7 +58,7 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
         <div className="flex flex-wrap items-center gap-3">
           <label className="inline-flex items-center gap-2 text-sm text-text-main cursor-pointer select-none">
             <input type="checkbox" checked={showFixed} onChange={e => setShowFixed(e.target.checked)} />
-            Показать устранённые <span className="text-text-muted">(«Подтверждено исправление», «Закрыт»; блокирующие — только «Закрыт») — отдельной группой</span>
+            Показать устранённые <span className="text-text-muted">(«Подтверждение исправления», «Исключено», «Отложен», «Закрыт») — отдельной группой</span>
           </label>
           <span className="ml-auto flex items-center gap-2">
             {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}

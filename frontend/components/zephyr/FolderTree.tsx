@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { ChevronRight, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, Layers, MoreHorizontal, Pencil, Search, Sparkles, X } from "lucide-react";
+import { ChevronRight, Download, FilePlus2, FileText, Folder, FolderOpen, FolderPlus, Layers, MoreHorizontal, Pencil, Search, Sparkles, Trash2, X } from "lucide-react";
 import Floating from "@/components/jiratool/Floating";
 import { DRAG_CASES, type ZFolder } from "@/lib/zephyrApi";
 import { isInside, type Parent, type Staging, type StagedCase, type StagedFolder } from "@/lib/zephyrStaging";
@@ -53,6 +53,7 @@ function NameInput({ initial, depth, onDone }: { initial: string; depth: number;
 export default function FolderTree({
   folders, selected, onSelect, total, staging, pickedCase, onPickCase, onMoveCase, onMoveFolder,
   onCreateFolder, onRenameFolder, onMoveExisting, onDropCases, onNewCase,
+  withChildren, onWithChildren, onExportFolder, onDeleteFolder, onDeleteStagedFolder,
 }: {
   folders: ZFolder[];
   /** Путь выбранной папки; "" — все кейсы. */
@@ -72,6 +73,15 @@ export default function FolderTree({
   /** Кейсы из списка бросили на папку. */
   onDropCases?: (keys: string[], folder: string) => void;
   onNewCase?: (folder: string) => void;
+  /** Тумблер вверху дерева: выбранная папка показывает и кейсы всех вложенных папок. */
+  withChildren?: boolean;
+  onWithChildren?: (on: boolean) => void;
+  /** Выгрузить папку со всеми вложенными в XML ("" — весь проект). */
+  onExportFolder?: (path: string) => void;
+  /** Удалить папку: её кейсы и кейсы вложенных (подтверждение — в разделе). */
+  onDeleteFolder?: (path: string) => void;
+  /** Убрать новую папку из черновика (подтверждение — в разделе). */
+  onDeleteStagedFolder?: (id: string) => void;
 }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set(folders.map(f => f.path)));
   const [q, setQ] = useState("");
@@ -176,6 +186,11 @@ export default function FolderTree({
           <FolderPlus className="w-4 h-4 flex-shrink-0 text-violet-500" />
           <span className="min-w-0 flex-1 truncate">{f.name}</span>
           <span className="text-[10px] px-1 rounded bg-violet-500/15 text-violet-600 dark:text-violet-300">новая</span>
+          {onDeleteStagedFolder && (
+            <button type="button" onClick={e => { e.stopPropagation(); onDeleteStagedFolder(f.id); }} aria-label={`Убрать новую папку ${f.name}`}
+              title="Убрать из черновика вместе с кейсами" className="p-0.5 rounded text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 focus-visible:opacity-100">
+              <Trash2 className="w-3.5 h-3.5" /></button>
+          )}
         </div>
         {has && isOpen(k) && (
           <ul role="group">
@@ -233,6 +248,12 @@ export default function FolderTree({
             {menuItem(FolderPlus, "Новая подпапка", () => { setOpen(o => new Set(o).add(f.path)); setEdit({ mode: "new", path: f.path }); })}
             {menuItem(Pencil, "Переименовать", () => setEdit({ mode: "rename", path: f.path }))}
             {onNewCase && menuItem(FilePlus2, "Новый кейс здесь", () => onNewCase(f.path))}
+            {onExportFolder && menuItem(Download, "Выгрузить в XML", () => onExportFolder(f.path))}
+            {onDeleteFolder && (
+              <button type="button" role="menuitem" onClick={() => { setMenu(null); onDeleteFolder(f.path); }}
+                className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded text-sm text-left text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
+                <Trash2 className="w-3.5 h-3.5" /> Удалить папку…</button>
+            )}
           </Floating>
         )}
         {has && expanded && (
@@ -251,6 +272,16 @@ export default function FolderTree({
 
   return (
     <div className="flex flex-col min-h-0 h-full">
+      {onWithChildren && (
+        <label className="flex items-center gap-2 mb-2 px-1 text-xs text-text-main cursor-pointer select-none"
+          title="Включено — в выбранной папке видны кейсы всех вложенных папок; выключено — только кейсы самой папки">
+          <button type="button" role="switch" aria-checked={!!withChildren} onClick={() => onWithChildren(!withChildren)}
+            className={`relative w-8 h-[18px] rounded-full transition-colors flex-shrink-0 ${withChildren ? "bg-primary" : "bg-border-main"}`}>
+            <span className={`absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform ${withChildren ? "translate-x-3.5" : ""}`} />
+          </button>
+          Кейсы вложенных папок
+        </label>
+      )}
       <label className="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
         <Search className="w-3.5 h-3.5 text-text-muted" />
         <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти папку" aria-label="Найти папку"

@@ -900,3 +900,71 @@ def test_номер_стори_в_названии_не_путается_с_дл
     assert not z.story_in_run("SBER911-2923", info)
     assert not z.story_in_run("SBER911-9231", info)
     assert z.is_nf_type("Новый функционал") and z.is_nf_type("НФ") and not z.is_nf_type("Регресс")
+
+
+# ── Выгрузка модели, вложенные папки, удаление папки ─────────────────────────
+
+def test_кейсы_папки_с_вложенными_по_тумблеру(model):
+    keys = lambda r: [c["key"] for c in r["cases"]]
+    assert keys(z.cases(project="SBER911", folder="/Авторизация", db=None)) == ["ICON-T1"]
+    assert keys(z.cases(project="SBER911", folder="/Авторизация", children=True, db=None)) == ["ICON-T1", "ICON-T2"]
+    # «/Авторизация2» — не вложенная в «/Авторизация», хоть и начинается так же
+    assert not z.in_folder("/Авторизация2", "/Авторизация", True)
+
+
+def test_ключи_и_папки_под_папкой_включая_пустые(model):
+    z.create_folder(z.FolderCreate(project="SBER911", path="/Авторизация/Пустая/Глубже"), db=None)
+    r = z.folder_keys(z.FolderKeys(project="SBER911", folder="/Авторизация"), db=None)
+    assert r["keys"] == ["ICON-T1", "ICON-T2"]
+    assert r["folders"] == ["/Авторизация", "/Авторизация/Негатив", "/Авторизация/Пустая", "/Авторизация/Пустая/Глубже"]
+    assert len(z.folder_keys(z.FolderKeys(project="SBER911"), db=None)["keys"]) == 3        # весь проект
+
+
+def test_выгрузка_xml_туда_и_обратно_все_поля():
+    cases = [{
+        "key": "ICON-T1", "name": "Вход <по> паролю & ]]> хвост", "folder": "/Авторизация/Негатив", "objective": "Цель",
+        "precondition": "<p>Есть учётка</p>", "priority": "High", "status": "Approved", "labels": ["регресс", "web"],
+        "owner": "ivanov", "issueLinks": ["SBER911-5", "SBER911-6"], "estimatedTime": 300000,
+        "customFields": {"Крит. регресс": True, "Команда": "QA", "Баллы": 3, "КЭ": ["CI01", "CI02"], "Пусто": ""},
+        "steps": [{"description": "Открыть", "testData": "user1", "expectedResult": "Открыта"},
+                  {"description": "Нажать", "testData": "", "expectedResult": "Вход"}],
+    }]
+    xml = z.build_zephyr_xml("SBER911", ["/Авторизация", "/Авторизация/Негатив", "/Авторизация/Пустая"], cases)
+    back = z.parse_zephyr_xml(xml)
+    assert back["folders"] == ["/Авторизация", "/Авторизация/Негатив", "/Авторизация/Пустая"]   # пустая папка тоже
+    c = back["cases"][0]
+    for k in ("name", "folder", "objective", "precondition", "priority", "status", "labels", "issueLinks", "estimatedTime"):
+        assert c[k] == cases[0][k], k
+    assert c["customFields"] == {"Крит. регресс": True, "Команда": "QA", "Баллы": 3, "КЭ": ["CI01", "CI02"]}
+    assert c["steps"] == [{k: s[k] for k in ("description", "testData", "expectedResult")} for s in cases[0]["steps"]]
+
+
+def test_выгрузка_полных_кейсов_пачкой_по_порядку(jira):
+    for k in ("T1", "T2"):
+        jira["routes"][f"/rest/atm/1.0/testcase/{k}"] = {"key": k, "name": k, "folder": "/A", "testScript": {"steps": [{"description": "шаг"}]}}
+    r = z.export_cases(z.ExportKeys(project="SBER911", keys=["t2", "T1", "T9"]), db=None)
+    assert [c["key"] for c in r["cases"]] == ["T2", "T1"] and r["cases"][0]["steps"][0]["description"] == "шаг"
+    assert r["errors"][0]["key"] == "T9"
+
+
+def test_пачка_кейсов_без_повторного_создания_папок_со_связями(jira, monkeypatch):
+    calls = []
+
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        calls.append((path, json_body))
+        return {"key": "SBER911-T1"} if path.endswith("/testcase") else {"id": 1}
+    monkeypatch.setattr(z, "_jira_request", req)
+    r = z.apply_model(z.ApplyBody(project="SBER911", skipFolders=True, cases=[
+        z.StagedCase(id="x0", name="Кейс", folder="/A/B", issueLinks=["SBER911-5"], estimatedTime=60000)]), db=None)
+    assert r["created"] == 1 and not any(p.endswith("/folder") for p, _ in calls)
+    assert calls[0][1]["issueLinks"] == ["SBER911-5"] and calls[0][1]["estimatedTime"] == 60000
+
+
+def test_удаление_папки_убирает_её_из_дерева_если_кейсов_не_осталось(model):
+    z.create_folder(z.FolderCreate(project="SBER911", path="/Авторизация/Пустая"), db=None)
+    z.delete_cases(z.CasesBulk(project="SBER911", keys=["ICON-T1", "ICON-T2"]), db=None)
+    r = z.forget_folder(z.FolderForget(project="SBER911", folder="/Авторизация"), db=None)
+    assert r["casesLeft"] == 0
+    paths = [n["path"] for n in z.tree(project="SBER911", db=None)["folders"]]
+    assert paths == ["/Платежи"]
+    assert [m for m, p, _ in model if m == "DELETE"] == ["DELETE", "DELETE"]          # кейсы удалены в Jira

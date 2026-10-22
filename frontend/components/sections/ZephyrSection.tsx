@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, Pencil, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Trash2, Upload, X } from "lucide-react";
+import { Download, FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, Pencil, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Trash2, Upload, X } from "lucide-react";
 import FolderTree from "@/components/zephyr/FolderTree";
 import RunsView from "@/components/zephyr/RunsView";
 import ReleasesView from "@/components/zephyr/ReleasesView";
@@ -12,7 +12,8 @@ import ProbeModal from "@/components/zephyr/ProbeModal";
 import { CaseCard, NewCaseCard } from "@/components/zephyr/parts";
 import Modal from "@/components/ui/Modal";
 import { ApplyDialog, StagedCaseCard } from "@/components/zephyr/StagingParts";
-import { loadStaging, saveStaging, stagingFromXml, takeHandoff, usedFolders, type ApplyResult, type Parent, type Staging } from "@/lib/zephyrStaging";
+import { DeleteFolderModal, DeleteStagedFolderModal, ExportFolderModal } from "@/components/zephyr/FolderOps";
+import { dropStagedFolder, loadStaging, saveStaging, stagedFolderSize, stagingFromXml, takeHandoff, usedFolders, type ApplyResult, type Parent, type Staging } from "@/lib/zephyrStaging";
 import { getJiraSettings } from "@/lib/jiraApi";
 import { DRAG_CASES, fmtDate, fmtDuration, createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
 
@@ -26,6 +27,8 @@ function findNode(nodes: ZFolder[], path: string): ZFolder | null {
 }
 
 const PROJECT_KEY = "st_zephyr_project";
+/** Тумблер «Кейсы вложенных папок» — удобство одного браузера. */
+const CHILDREN_KEY = "st_zephyr_children";
 
 function readProject(): string {
   try { return localStorage.getItem(PROJECT_KEY) || "SBER911"; } catch { return "SBER911"; }
@@ -70,6 +73,16 @@ export default function ZephyrSection() {
   const [moveBusy, setMoveBusy] = useState(false);
   const [treeErr, setTreeErr] = useState("");
   const [folder, setFolder] = useState("");
+  /** Выбранная папка показывает и кейсы всех вложенных папок. */
+  const [withChildren, setWithChildrenState] = useState(false);
+  const setWithChildren = (on: boolean) => { setWithChildrenState(on); try { localStorage.setItem(CHILDREN_KEY, on ? "1" : "0"); } catch { /* не запомнится */ } };
+  /** Окна папки: выгрузка в XML, удаление (существующей папки или новой из черновика). */
+  const [exportFor, setExportFor] = useState<string | null>(null);
+  const [deleteFor, setDeleteFor] = useState<string | null>(null);
+  const [stagedDel, setStagedDel] = useState<string | null>(null);
+  /** Черновик на момент «Применить»: окно живёт, даже когда все кейсы созданы и черновик опустел. */
+  const [applySnap, setApplySnap] = useState<Staging | null>(null);
+  const [casesTotal, setCasesTotal] = useState(0);
   const [cases, setCases] = useState<ZCase[] | null>(null);
   const [casesErr, setCasesErr] = useState("");
   const [q, setQ] = useState("");
@@ -86,7 +99,10 @@ export default function ZephyrSection() {
   const xmlInput = useRef<HTMLInputElement>(null);
   const setStaging = (s: Staging | null) => { setStagingState(s); saveStaging(project, s); };
 
-  useEffect(() => { const p = readProject(); setProject(p); setProjectDraft(p); }, []);
+  useEffect(() => {
+    const p = readProject(); setProject(p); setProjectDraft(p);
+    try { setWithChildrenState(localStorage.getItem(CHILDREN_KEY) === "1"); } catch { /* по умолчанию выключен */ }
+  }, []);
   // Открыли другой кейс (или новый) — окно разворачивается.
   useEffect(() => { setMinimized(false); setDialogTitle(""); }, [caseKey, newCaseIn, stagedPick]);
   useEffect(() => { setStagingState(loadStaging(project)); setStagedPick(null); }, [project]);
@@ -107,16 +123,22 @@ export default function ZephyrSection() {
     staging && setStaging({ ...staging, cases: staging.cases.map(c => (c.id === id ? { ...c, target, error: undefined } : c)) });
   const moveFolder = (id: string, parent: Parent) =>
     staging && setStaging({ ...staging, folders: staging.folders.map(f => (f.id === id ? { ...f, parent } : f)) });
-  /** После «Применить»: созданные кейсы уходят из черновика, у несозданных — текст ошибки; пустые новые папки убираем. */
+  /**
+   * После пачки «Применить»: созданные кейсы уходят из черновика, у несозданных — текст ошибки; пустые новые папки
+   * убираем. Пачки идут одна за другой — черновик берём свежий (функциональное обновление), а не из замыкания.
+   */
   const afterApply = (r: ApplyResult) => {
-    if (!staging) return;
     const byId = new Map(r.results.map(x => [x.id, x]));
-    const left = staging.cases.filter(c => !byId.get(c.id)?.key).map(c => ({ ...c, error: byId.get(c.id)?.error ?? c.error }));
-    const next = { ...staging, cases: left };
-    const used = usedFolders(next);
-    setStaging(left.length ? { ...next, folders: next.folders.filter(f => used.has(f.id)) } : null);
+    setStagingState(prev => {
+      if (!prev) return prev;
+      const left = prev.cases.filter(c => !byId.get(c.id)?.key).map(c => ({ ...c, error: byId.get(c.id)?.error ?? c.error }));
+      const next = { ...prev, cases: left };
+      const used = usedFolders(next);
+      const out = left.length ? { ...next, folders: next.folders.filter(f => used.has(f.id)) } : null;
+      saveStaging(project, out);
+      return out;
+    });
     setStagedPick(null);
-    setReloadKey(k => k + 1);
   };
   useEffect(() => { getJiraSettings().then(s => setBaseUrl(s.base_url.replace(/\/$/, ""))).catch(() => {}); }, []);
 
@@ -132,9 +154,11 @@ export default function ZephyrSection() {
   useEffect(() => {
     let live = true;
     setCases(null); setCasesErr("");
-    getCases(project, folder, text).then(r => live && setCases(r.cases)).catch(e => live && setCasesErr((e as Error).message));
+    getCases(project, folder, text, withChildren)
+      .then(r => { if (live) { setCases(r.cases); setCasesTotal(r.total ?? r.cases.length); } })
+      .catch(e => live && setCasesErr((e as Error).message));
     return () => { live = false; };
-  }, [project, folder, text, reloadKey]);
+  }, [project, folder, text, reloadKey, withChildren]);
 
   /** Модель целиком из Jira — по кнопке; обычное открытие раздела берёт её из кэша сервера мгновенно. */
   const reloadModel = async () => {
@@ -227,7 +251,7 @@ export default function ZephyrSection() {
                   <p className="text-text-muted">Кейсов: {staging.cases.length}{staging.cases.some(c => c.error) ? ` (с ошибкой: ${staging.cases.filter(c => c.error).length})` : ""}.
                     Перетащите кейсы в папки дерева или новые папки внутрь папок, затем «Применить».</p>
                   <div className="flex items-center gap-1.5">
-                    <button type="button" onClick={() => setApplyOpen(true)} disabled={!staging.cases.length}
+                    <button type="button" onClick={() => { setApplySnap(staging); setApplyOpen(true); }} disabled={!staging.cases.length}
                       className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-white font-semibold disabled:opacity-40"><Upload className="w-3.5 h-3.5" /> Применить</button>
                     {!askDrop ? (
                       <button type="button" onClick={() => setAskDrop(true)} className="px-2 py-1 rounded-md text-text-muted hover:text-red-500">Сбросить</button>
@@ -271,7 +295,9 @@ export default function ZephyrSection() {
                     onMoveExisting={(src, to) => askMove(src, `${to}/${src.slice(src.lastIndexOf("/") + 1)}`, false)}
                     onDropCases={onDropCases}
                     onNewCase={f => { setNewCaseIn(f); setCaseKey(null); setStagedPick(null); }}
-                    onMoveCase={moveCase} onMoveFolder={moveFolder} />}
+                    onMoveCase={moveCase} onMoveFolder={moveFolder}
+                    withChildren={withChildren} onWithChildren={setWithChildren}
+                    onExportFolder={setExportFor} onDeleteFolder={setDeleteFor} onDeleteStagedFolder={setStagedDel} />}
               </div>
             </div>
             <Resizer pane={treePane} label="Ширина дерева папок" />
@@ -300,6 +326,10 @@ export default function ZephyrSection() {
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle disabled:opacity-50 whitespace-nowrap">
                     <RefreshCw className={`w-3.5 h-3.5 ${modelBusy === "folder" ? "animate-spin" : ""}`} /> Обновить папку</button>
                 )}
+                <button type="button" onClick={() => setExportFor(folder)}
+                  title={folder ? "Выгрузить папку со всеми вложенными в Zephyr XML" : "Выгрузить всю модель проекта в Zephyr XML"}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle whitespace-nowrap">
+                  <Download className="w-3.5 h-3.5" /> Выгрузить XML</button>
                 <ColumnsMenu cols={cols} onToggle={toggleCol} />
                 <label className="flex items-center gap-2 w-64 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
                   <Search className="w-3.5 h-3.5 text-text-muted" />
@@ -329,7 +359,9 @@ export default function ZephyrSection() {
                     <tbody>
                       {cases.length === 0 && (
                         <tr><td colSpan={3 + cols.size} className="px-4 py-6 text-center text-text-muted">
-                          {text ? `По «${text}» кейсов нет.` : folder ? "В этой папке кейсов нет (кейсы вложенных папок — в самих папках)." : "Кейсов нет."}</td></tr>
+                          {text ? `По «${text}» кейсов нет.` : folder
+                            ? (withChildren ? "В этой папке и вложенных кейсов нет." : "В этой папке кейсов нет. Кейсы вложенных папок — включите «Кейсы вложенных папок» над деревом.")
+                            : "Кейсов нет."}</td></tr>
                       )}
                       {cases.map(c => (
                         <tr key={c.key} onClick={() => { setCaseKey(c.key); setEditOpen(false); setNewCaseIn(null); }} aria-selected={caseKey === c.key}
@@ -346,7 +378,9 @@ export default function ZephyrSection() {
                           <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{c.key}</td>
                           <td className="px-3 py-1.5 text-text-main">
                             <span className="block truncate max-w-[520px]">{c.name}</span>
-                            {!folder && c.folder && !cols.has("folder") && <span className="block text-[11px] text-text-muted truncate">{c.folder}</span>}
+                            {(!folder || (withChildren && c.folder !== folder)) && c.folder && !cols.has("folder") && (
+                              <span className="block text-[11px] text-text-muted truncate">{folder && c.folder.startsWith(folder + "/") ? `…${c.folder.slice(folder.length)}` : c.folder}</span>
+                            )}
                           </td>
                           {cols.has("status") && <td className="px-3 py-1.5"><CaseStatus status={c.status} /></td>}
                           {cols.has("priority") && <td className="px-3 py-1.5 text-text-main whitespace-nowrap">{c.priority || "—"}</td>}
@@ -360,6 +394,9 @@ export default function ZephyrSection() {
                     </tbody>
                   </table>
                 )}
+              {cases && casesTotal > cases.length && (
+                <p className="px-4 py-2 text-xs text-text-muted">Показаны первые {cases.length} из {casesTotal}. Выгрузка и удаление папки берут все кейсы.</p>
+              )}
               {checked.size > 0 && (
                 // Панель выбора — поверх низа списка, а не над ним: строки не сдвигаются, пока отмечаешь кейсы.
                 <div className="sticky bottom-3 z-10 mx-4 flex items-center gap-2 rounded-xl border border-primary/40 bg-bg-card shadow-lg px-4 py-2 text-sm">
@@ -429,7 +466,26 @@ export default function ZephyrSection() {
             done(!r.errors.length, `Удалено кейсов: ${r.ok}.${r.errors.length ? ` Ошибки: ${r.errors.map(e => `${e.key} — ${e.error}`).join("; ")}` : ""}`);
           }} />
       )}
-      {applyOpen && staging && <ApplyDialog project={project} staging={staging} onDone={afterApply} onClose={() => setApplyOpen(false)} />}
+      {applyOpen && applySnap && <ApplyDialog project={project} staging={applySnap} onDone={afterApply} onFinish={() => setReloadKey(k => k + 1)}
+        onClose={() => { setApplyOpen(false); setApplySnap(null); }} />}
+      {exportFor !== null && <ExportFolderModal project={project} folder={exportFor} onClose={() => setExportFor(null)} />}
+      {deleteFor && (
+        <DeleteFolderModal project={project} folder={deleteFor} onClose={() => setDeleteFor(null)}
+          onDone={r => {
+            if (folder === deleteFor || folder.startsWith(deleteFor + "/")) setFolder("");
+            setCaseKey(null); setChecked(new Set());
+            done(!r.errors.length, `Папка ${deleteFor}: удалено кейсов ${r.deleted}.${r.errors.length ? ` Не удалились: ${r.errors.length} (${r.errors[0].key}: ${r.errors[0].error}) — папка с ними осталась в дереве.` : ""}`);
+            setDeleteFor(null);
+          }} />
+      )}
+      {stagedDel && staging && (() => {
+        const f = staging.folders.find(x => x.id === stagedDel);
+        const size = stagedFolderSize(staging, stagedDel);
+        return f ? (
+          <DeleteStagedFolderModal name={f.name} cases={size.cases} folders={size.folders} onClose={() => setStagedDel(null)}
+            onConfirm={() => { const next = dropStagedFolder(staging, stagedDel); setStaging(next.cases.length + next.folders.length ? next : null); setStagedDel(null); setStagedPick(null); }} />
+        ) : null;
+      })()}
     </div>
   );
 }

@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, FolderPlus, Loader2, Upload, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { zText } from "@/lib/zephyrApi";
 import { MinimizeBtn } from "./parts";
 import {
-  applyStaging, folderPath, targetPath, usedFolders,
+  APPLY_CHUNK, applyStaging, folderPath, targetPath, usedFolders,
   type ApplyResult, type Staging,
 } from "@/lib/zephyrStaging";
 
@@ -53,28 +53,40 @@ export function StagedCaseCard({ staging, caseId, onClose, onMinimize }: {
 }
 
 /** Подтверждение «Применить»: какие папки создадутся, сколько кейсов уйдёт; затем итог по каждому кейсу. */
-export function ApplyDialog({ project, staging, onDone, onClose }: {
+export function ApplyDialog({ project, staging, onDone, onFinish, onClose }: {
   project: string;
+  /** Черновик на момент открытия окна: пока идут пачки, раздел убирает созданное из живого черновика. */
   staging: Staging;
-  /** Итог применения — раздел убирает созданное из черновика и перечитывает дерево. */
+  /** Итог пачки — раздел сразу убирает созданное из черновика (обрыв посередине не создаст кейсы второй раз). */
   onDone: (r: ApplyResult) => void;
+  /** Всё отправлено или остановлено — перечитать дерево. */
+  onFinish: () => void;
   onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [res, setRes] = useState<ApplyResult | null>(null);
+  const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
+  const stop = useRef(false);
   const used = usedFolders(staging);
   const toCreate = staging.folders.filter(f => used.has(f.id)).map(f => folderPath(staging, f.id)).sort();
   const empty = staging.folders.filter(f => !used.has(f.id)).length;
 
   const go = async () => {
-    setBusy(true); setErr("");
-    try { const r = await applyStaging(project, staging); setRes(r); onDone(r); } catch (e) { setErr((e as Error).message); }
+    setBusy(true); setErr(""); stop.current = false; setProg({ done: 0, total: staging.cases.length });
+    try {
+      const r = await applyStaging(project, staging, (part, done, total) => { onDone(part); setProg({ done, total }); }, () => stop.current);
+      setRes(r);
+    } catch (e) {
+      // Уже созданное убрано из черновика пачками — повтор продолжит с оставшихся.
+      setErr(`${(e as Error).message}. Созданное до сбоя уже убрано из черновика — «Применить» ещё раз продолжит с оставшихся.`);
+    }
+    onFinish();
     setBusy(false);
   };
 
   return (
-    <Modal open onClose={onClose} title={res ? "Применено в Jira" : "Применить новую модель в Jira"} size="max-w-2xl">
+    <Modal open onClose={() => !busy && onClose()} title={res ? "Применено в Jira" : "Применить новую модель в Jira"} size="max-w-2xl">
       <div className="space-y-3 text-sm">
         {!res ? (
           <>
@@ -85,10 +97,21 @@ export function ApplyDialog({ project, staging, onDone, onClose }: {
               </ul>
             )}
             {empty > 0 && <p className="text-xs text-text-muted">Пустых новых папок: {empty} — их не создаём (кейсы из них переложены в другие папки).</p>}
-            <p className="text-xs text-text-muted">Если папка с таким путём в Zephyr уже есть, кейсы лягут в неё.</p>
+            <p className="text-xs text-text-muted">Если папка с таким путём в Zephyr уже есть, кейсы лягут в неё.
+              Кейсы уходят пачками по {APPLY_CHUNK}: созданные сразу пропадают из черновика, так что обрыв посередине не задвоит кейсы.</p>
+            {prog && (
+              <div className="space-y-1">
+                <div className="h-2 rounded-full bg-bg-subtle overflow-hidden">
+                  <div className="h-full bg-primary transition-[width]" style={{ width: `${prog.total ? (prog.done / prog.total) * 100 : 0}%` }} />
+                </div>
+                <p className="text-xs text-text-muted tabular-nums">{prog.done ? `Отправлено кейсов: ${prog.done} из ${prog.total}` : "Создаю папки…"}</p>
+              </div>
+            )}
             {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
             <div className="flex justify-end gap-2 pt-1">
-              <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-text-muted hover:text-text-main">Отмена</button>
+              {busy
+                ? <button type="button" onClick={() => { stop.current = true; }} className="px-3 py-2 rounded-lg border border-border-main text-text-muted hover:text-text-main">Остановить после пачки</button>
+                : <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-text-muted hover:text-text-main">Отмена</button>}
               <button type="button" onClick={go} disabled={busy || !staging.cases.length}
                 className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white font-semibold disabled:opacity-40">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} Применить</button>
@@ -98,6 +121,9 @@ export function ApplyDialog({ project, staging, onDone, onClose }: {
           <>
             <p className="flex items-center gap-2 text-text-main"><CheckCircle2 className="w-5 h-5 text-emerald-500" />
               Создано кейсов: <b>{res.created}</b>{res.failed ? <>, с ошибкой: <b className="text-red-600 dark:text-red-400">{res.failed}</b> — они остались в черновике</> : ""}.</p>
+            {res.created + res.failed < staging.cases.length && (
+              <p className="text-xs text-amber-700 dark:text-amber-300">Остановлено: не отправлено кейсов — {staging.cases.length - res.created - res.failed}. Они в черновике, «Применить» продолжит с них.</p>
+            )}
             {Object.keys(res.folderErrors).length > 0 && (
               <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-2 text-xs text-red-700 dark:text-red-300 space-y-0.5">
                 {Object.entries(res.folderErrors).map(([p, e]) => <p key={p}>Папка {p}: {e}</p>)}

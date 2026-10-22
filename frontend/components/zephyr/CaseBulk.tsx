@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Columns3, Loader2, Trash2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import Floating from "@/components/jiratool/Floating";
-import { deleteCases, editCases, getFieldValues, type CasesEditIn } from "@/lib/zephyrApi";
+import { editCases, getFieldValues, type CasesEditIn, deleteCasesChunked } from "@/lib/zephyrApi";
 
 const INPUT = "w-full text-sm px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-muted mb-1";
@@ -159,9 +159,11 @@ export function DeleteCasesModal({ project, keys, onDone, onClose }: {
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [prog, setProg] = useState<{ done: number; total: number } | null>(null);
   const go = async () => {
     setBusy(true); setErr("");
-    try { const r = await deleteCases(project, keys); onDone({ ok: r.deleted.length, errors: r.errors }); }
+    // Пачками: выбрать можно тысячи кейсов, сервер за раз берёт до 500, а ждать без прогресса долго.
+    try { const r = await deleteCasesChunked(project, keys, (done, total) => setProg({ done, total })); onDone({ ok: r.deleted.length, errors: r.errors }); }
     catch (e) { setErr((e as Error).message); setBusy(false); }
   };
   return (
@@ -169,6 +171,7 @@ export function DeleteCasesModal({ project, keys, onDone, onClose }: {
       <div className="space-y-3 text-sm">
         <p className="text-text-main">Удалить из Zephyr {keys.length === 1 ? `кейс ${keys[0]}` : `${keys.length} кейсов`}? Отменить будет нельзя.</p>
         {keys.length > 1 && <p className="max-h-32 overflow-y-auto scrollbar-thin rounded-lg bg-bg-subtle p-2 font-mono text-xs text-text-muted">{keys.join(", ")}</p>}
+        {prog && keys.length > 100 && <p className="text-xs text-text-muted tabular-nums">Удалено пачками: {prog.done} из {prog.total}</p>}
         {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} disabled={busy} className="px-3 py-2 rounded-lg border border-border-main text-text-muted">Отмена</button>

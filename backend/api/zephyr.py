@@ -476,15 +476,23 @@ def _key_num(k: str) -> tuple[str, int]:
     return (m.group(1), int(m.group(2))) if m else (k, 0)
 
 
+def in_folder(case_folder: str, folder: str, children: bool) -> bool:
+    """Кейс в папке: точно в ней или (children) в ней и во всех вложенных на любой глубине. "" — весь проект."""
+    if not folder:
+        return True
+    f = case_folder or ""
+    return f == folder or (children and f.startswith(folder.rstrip("/") + "/"))
+
+
 @router.get("/api/zephyr/cases")
-def cases(project: str = Query(..., min_length=1), folder: str = "", text: str = "",
+def cases(project: str = Query(..., min_length=1), folder: str = "", text: str = "", children: bool = False,
           db: Session = Depends(get_db)) -> dict:
-    """Кейсы папки (без вложенных) или поиск по названию/ключу — по индексу, без запроса в Jira."""
+    """Кейсы папки (children=true — и всех вложенных) или поиск по названию/ключу — по индексу, без запроса в Jira."""
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper())
     t = text.strip().lower()
     out = [c for c in idx["cases"].values()
-           if (not folder or c.get("folder") == folder) and (not t or t in c["name"].lower() or t in c["key"].lower())]
+           if in_folder(c.get("folder") or "", folder, children) and (not t or t in c["name"].lower() or t in c["key"].lower())]
     out.sort(key=lambda c: _key_num(c["key"]))
     return {"cases": [{k: v for k, v in c.items() if k != "customFields"} for c in out[:2000]], "total": len(out)}
 
@@ -1554,7 +1562,21 @@ def save_results(key: str, body: ResultsBody, db: Session = Depends(get_db)) -> 
 # Разбор XML даёт папки и кейсы; раскладку (что в какую папку дерева) человек делает в интерфейсе, а «Применить»
 # создаёт в Zephyr недостающие папки (родители — раньше детей) и кейсы. Папка, которая уже есть, не ошибка.
 
-MAX_XML = 20 * 1024 * 1024
+MAX_XML = 50 * 1024 * 1024    # модель на тысячи кейсов с шагами — десятки МБ
+
+
+def _cf_value(ftype: str, val: str) -> Any:
+    """Значение пользовательского поля из XML по его типу: флажок — bool, число — число, несколько значений — список."""
+    if ftype == "CHECKBOX":
+        return val.lower() == "true"
+    if ftype in ("NUMBER", "DECIMAL"):
+        try:
+            return int(val) if re.fullmatch(r"-?\d+", val) else float(val)
+        except ValueError:
+            return val
+    if ftype in ("MULTI_CHOICE_SELECT_LIST", "MULTI_SELECT"):
+        return [x.strip() for x in val.split(",") if x.strip()]
+    return val
 
 
 def _x(el: Any, tag: str) -> str:
@@ -1568,7 +1590,7 @@ def parse_zephyr_xml(text: str) -> dict:
     import xml.etree.ElementTree as ET
 
     if len(text.encode("utf-8")) > MAX_XML:
-        raise HTTPException(413, "Файл больше 20 МБ")
+        raise HTTPException(413, "Файл больше 50 МБ")
     if re.search(r"<!DOCTYPE|<!ENTITY", text, re.I):
         # В выгрузках Zephyr DTD нет; с ним возможна «бомба» раскрытия сущностей — такие файлы не разбираем.
         raise HTTPException(422, "В XML есть DOCTYPE/ENTITY — это не выгрузка Zephyr")
@@ -1586,18 +1608,21 @@ def parse_zephyr_xml(text: str) -> dict:
             val = _x(cf, "value")
             if not name or val == "":
                 continue
-            custom[name] = val.lower() == "true" if ftype == "CHECKBOX" else val
+            custom[name] = _cf_value(ftype, val)
         steps = [{"description": _x(s, "description"), "testData": _x(s, "testData"), "expectedResult": _x(s, "expectedResult")}
                  for s in sorted(tc.findall("./testScript/steps/step"), key=lambda s: int(s.get("index") or 0))]
         script = tc.find("testScript")
         if not steps and script is not None and _x(script, "text"):
             steps = [{"description": _x(script, "text"), "testData": "", "expectedResult": ""}]
         folder = _x(tc, "folder")
+        est = _x(tc, "estimatedTime")
         cases.append({
             "id": f"x{i}", "name": _x(tc, "name"), "folder": folder if folder.startswith("/") or not folder else "/" + folder,
             "objective": _x(tc, "objective"), "precondition": _x(tc, "precondition"),
             "priority": _x(tc, "priority"), "status": _x(tc, "status"),
             "labels": [(l.text or "").strip() for l in tc.findall("./labels/label") if (l.text or "").strip()],
+            "issueLinks": [k for k in (_x(x, "key") for x in tc.findall("./issues/issue")) if k],
+            "estimatedTime": int(est) if est.isdigit() else None,
             "customFields": custom, "steps": steps,
         })
     paths = {("/" + p.lstrip("/")) for p in folders if p} | {c["folder"] for c in cases if c["folder"]}
@@ -1631,6 +1656,8 @@ class StagedCase(BaseModel):
     priority: str = ""
     status: str = ""
     labels: list[str] = Field(default_factory=list)
+    issueLinks: list[str] = Field(default_factory=list)    # ключи задач Jira (связи кейса)
+    estimatedTime: Optional[int] = None                    # мс
     customFields: dict[str, Any] = Field(default_factory=dict)
     steps: list[StagedStep] = Field(default_factory=list)
 
@@ -1638,7 +1665,9 @@ class StagedCase(BaseModel):
 class ApplyBody(BaseModel):
     project: str = Field(..., min_length=1)
     folders: list[str] = Field(default_factory=list)       # новые папки (пути); родители досоздаются сами
-    cases: list[StagedCase] = Field(default_factory=list)
+    cases: list[StagedCase] = Field(default_factory=list, max_length=500)
+    # Большая модель уходит пачками: папки — первым запросом, дальше пачки кейсов без повторного создания папок.
+    skipFolders: bool = False
 
 
 def _ancestors(path: str) -> list[str]:
@@ -1654,6 +1683,10 @@ def _case_payload(project: str, c: StagedCase, with_custom: bool) -> dict:
             p[k] = v
     if c.labels:
         p["labels"] = c.labels
+    if with_custom and c.issueLinks:
+        p["issueLinks"] = c.issueLinks
+    if c.estimatedTime:
+        p["estimatedTime"] = c.estimatedTime
     if with_custom and c.customFields:
         p["customFields"] = c.customFields
     if c.steps:
@@ -1666,8 +1699,8 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
     """Создаёт папки и кейсы новой модели. Сбой одного кейса не останавливает остальные — в ответе итог по каждому."""
     cfg = _load_cfg(db)
     project = body.project.strip().upper()
-    wanted = sorted({a for p in [*body.folders, *(c.folder for c in body.cases)] if p for a in _ancestors(p)},
-                    key=lambda p: (p.count("/"), p))
+    wanted = [] if body.skipFolders else sorted({a for p in [*body.folders, *(c.folder for c in body.cases)] if p for a in _ancestors(p)},
+                                                key=lambda p: (p.count("/"), p))
     folder_errors: dict[str, str] = {}
     created_folders: list[str] = []
     for path in wanted:
@@ -1695,12 +1728,14 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
         except HTTPException as e:
             if e.status_code == 401:
                 raise
-            if e.status_code == 400 and c.customFields:
-                # Пользовательские поля из XML могут не совпасть с полями проекта — кейс важнее: создаём без них.
+            if e.status_code == 400 and (c.customFields or c.issueLinks):
+                # Пользовательские поля и связи из XML могут не совпасть с проектом (другой проект, нет задачи) —
+                # кейс важнее: создаём без них и говорим, что не встало.
                 try:
                     data = _jira_request(cfg, "POST", f"{ATM}/testcase", json_body=_case_payload(project, c, False))
                     row["key"] = (data or {}).get("key", "")
-                    row["warning"] = f"создан без пользовательских полей ({', '.join(c.customFields)}): {str(e.detail)[:200]}"
+                    lost = [*c.customFields, *(["связи: " + ", ".join(c.issueLinks)] if c.issueLinks else [])]
+                    row["warning"] = f"создан без пользовательских полей и связей ({', '.join(lost)}): {str(e.detail)[:200]}"
                 except HTTPException as e2:
                     if e2.status_code == 401:
                         raise
@@ -1714,7 +1749,8 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         _index_put(cfg, project, [{
             "key": made[c.id], "name": c.name, "status": c.status, "priority": c.priority, "folder": c.folder,
-            "labels": c.labels, "owner": "", "updated": now, "issueLinks": [], "customFields": c.customFields,
+            "labels": c.labels, "owner": "", "updated": now, "issueLinks": c.issueLinks, "customFields": c.customFields,
+            "estimatedTime": c.estimatedTime,
         } for c in body.cases if c.id in made])
     return {"createdFolders": created_folders, "folderErrors": folder_errors, "results": results,
             "created": sum(1 for r in results if r.get("key")), "failed": sum(1 for r in results if r.get("error"))}
@@ -1980,3 +2016,138 @@ def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
     ok, errors = _each(body.keys, one)
     _index_put(cfg, project, fresh)
     return {"updated": ok, "errors": errors}
+
+
+# ── Выгрузка модели в XML и удаление папки ───────────────────────────────────
+#
+# Выгрузка: выбранная папка со всеми вложенными (или весь проект) → тот же Zephyr XML, что принимает «Новая модель
+# из XML» (parse_zephyr_xml): папки, кейсы со всеми полями, шагами, связями и пользовательскими полями. Индекс шагов
+# не хранит — полные кейсы берутся из Jira пачками (export/cases), фронт показывает прогресс.
+# Удаление папки: публичный API папки не удаляет (id папок не отдаёт) — удаляются все её кейсы (с вложенными),
+# пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева SimpleTest уходит (folder/forget).
+
+class FolderKeys(BaseModel):
+    project: str = Field(..., min_length=1)
+    folder: str = ""                                        # "" — весь проект
+
+
+@router.post("/api/zephyr/folder/keys")
+def folder_keys(body: FolderKeys, db: Session = Depends(get_db)) -> dict:
+    """Все кейсы папки и вложенных (ключи по порядку) и все папки под ней, включая пустые."""
+    cfg = _load_cfg(db)
+    project, folder = body.project.strip().upper(), _clean_path(body.folder)
+    idx = get_index(cfg, project)
+    rows = sorted((c for c in idx["cases"].values() if in_folder(c.get("folder") or "", folder, True)),
+                  key=lambda c: (c.get("folder") or "", _key_num(c["key"])))
+    paths = {a for f in [*(c.get("folder") or "" for c in rows), *idx.get("folders", set())] for a in _ancestors(f)}
+    folders = sorted(p for p in paths if in_folder(p, folder, True))
+    return {"folder": folder, "keys": [c["key"] for c in rows], "folders": folders}
+
+
+class ExportKeys(BaseModel):
+    project: str = Field(..., min_length=1)
+    keys: list[str] = Field(..., min_length=1, max_length=200)
+
+
+def full_case(c: dict) -> dict:
+    """Кейс из Jira → всё, что уходит в XML выгрузки."""
+    return {**norm_case(c), "objective": c.get("objective") or c.get("description") or "",
+            "precondition": c.get("precondition") or "", "steps": norm_steps(c), "component": _name(c.get("component")),
+            "customFields": c.get("customFields") if isinstance(c.get("customFields"), dict) else {}}
+
+
+@router.post("/api/zephyr/export/cases")
+def export_cases(body: ExportKeys, db: Session = Depends(get_db)) -> dict:
+    """Полные кейсы (с шагами) пачкой — для выгрузки; по WAVE запросов разом, порядок — как в запросе."""
+    cfg = _load_cfg(db)
+    got: dict[str, dict] = {}
+    ok, errors = _each(body.keys, lambda k: got.__setitem__(k, full_case(_jira_request(cfg, "GET", f"{ATM}/testcase/{k}"))))
+    order = list(dict.fromkeys(k.strip().upper() for k in body.keys))
+    return {"cases": [got[k] for k in order if k in got], "errors": errors}
+
+
+def _cdata(v: Any) -> str:
+    s_ = "" if v is None else str(v)
+    return "<![CDATA[" + s_.replace("]]>", "]]]]><![CDATA[>") + "]]>"
+
+
+def _cf_xml(name: str, v: Any) -> str:
+    from xml.sax.saxutils import quoteattr
+    if isinstance(v, bool):
+        t, val = "CHECKBOX", "true" if v else "false"
+    elif isinstance(v, (int, float)):
+        t, val = "NUMBER", str(v)
+    elif isinstance(v, list):
+        t, val = "MULTI_CHOICE_SELECT_LIST", ", ".join(_name(x) for x in v)
+    elif isinstance(v, dict):
+        t, val = "SINGLE_CHOICE_SELECT_LIST", _name(v)
+    else:
+        t, val = ("MULTI_LINE_TEXT" if "\n" in str(v) else "SINGLE_LINE_TEXT"), str(v)
+    return f"<customField name={quoteattr(name)} type={quoteattr(t)}><value>{_cdata(val)}</value></customField>"
+
+
+def build_zephyr_xml(project: str, folders: list[str], cases_: list[dict]) -> str:
+    """Кейсы и папки → Zephyr XML (формат выгрузки Zephyr Scale; его же разбирает parse_zephyr_xml)."""
+    from xml.sax.saxutils import escape, quoteattr
+    out = ['<?xml version="1.0" encoding="UTF-8"?>', "<project>", f"<projectKey>{escape(project)}</projectKey>",
+           f"<exportDate>{time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}</exportDate>", "<folders>"]
+    out += [f'<folder fullPath={quoteattr(p.lstrip("/"))} index="{i}"/>' for i, p in enumerate(folders)]
+    out += ["</folders>", "<testCases>"]
+    for i, c in enumerate(cases_):
+        x = [f'<testCase id="{i + 1}" key={quoteattr(c.get("key", ""))}>']
+        x.append(f"<name>{_cdata(c.get('name'))}</name>")
+        for tag in ("objective", "precondition", "priority", "status", "owner", "component"):
+            if c.get(tag):
+                x.append(f"<{tag}>{_cdata(c[tag])}</{tag}>")
+        x.append(f"<folder>{_cdata((c.get('folder') or '').lstrip('/'))}</folder>")
+        if c.get("estimatedTime"):
+            x.append(f"<estimatedTime>{int(c['estimatedTime'])}</estimatedTime>")
+        if c.get("labels"):
+            x.append("<labels>" + "".join(f"<label>{_cdata(l)}</label>" for l in c["labels"]) + "</labels>")
+        if c.get("issueLinks"):
+            x.append("<issues>" + "".join(f"<issue><key>{escape(k)}</key></issue>" for k in c["issueLinks"]) + "</issues>")
+        cf = c.get("customFields") or {}
+        if cf:
+            x.append("<customFields>" + "".join(_cf_xml(n, v) for n, v in cf.items() if v not in (None, "", [])) + "</customFields>")
+        steps = c.get("steps") or []
+        x.append('<testScript type="steps"><steps>' + "".join(
+            f'<step index="{j}"><description>{_cdata(st.get("description"))}</description>'
+            f'<testData>{_cdata(st.get("testData"))}</testData><expectedResult>{_cdata(st.get("expectedResult"))}</expectedResult></step>'
+            for j, st in enumerate(steps)) + "</steps></testScript>")
+        x.append("</testCase>")
+        out.append("".join(x))
+    out += ["</testCases>", "</project>"]
+    return "\n".join(out)
+
+
+class ExportXml(BaseModel):
+    project: str = Field(..., min_length=1)
+    folders: list[str] = Field(default_factory=list)
+    cases: list[dict] = Field(default_factory=list)
+
+
+@router.post("/api/zephyr/export/xml")
+def export_xml(body: ExportXml):
+    from fastapi.responses import Response
+    xml = build_zephyr_xml(body.project.strip().upper(), body.folders, body.cases)
+    return Response(content=xml.encode("utf-8"), media_type="application/xml; charset=utf-8")
+
+
+class FolderForget(BaseModel):
+    project: str = Field(..., min_length=1)
+    folder: str = Field(..., min_length=2)
+
+
+@router.post("/api/zephyr/folder/forget")
+def forget_folder(body: FolderForget, db: Session = Depends(get_db)) -> dict:
+    """Убрать папку и вложенные из дерева SimpleTest после удаления их кейсов. Кейсы, что не удалились, держат папку."""
+    cfg = _load_cfg(db)
+    project, folder = body.project.strip().upper(), _clean_path(body.folder)
+    idx = get_index(cfg, project)
+    left = sum(1 for c in idx["cases"].values() if in_folder(c.get("folder") or "", folder, True))
+    with _locks.setdefault((cfg["base_url"], project), threading.Lock()):
+        fs = idx.setdefault("folders", set())
+        for f in [f for f in fs if in_folder(f, folder, True)]:
+            fs.discard(f)
+        _save_index(cfg["base_url"], project, idx)
+    return {"folder": folder, "casesLeft": left}

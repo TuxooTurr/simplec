@@ -24,6 +24,10 @@ export interface StagedCase {
   priority: string;
   status: string;
   labels: string[];
+  /** Связи с задачами Jira (из XML выгрузки). */
+  issueLinks?: string[];
+  /** Длительность, мс. */
+  estimatedTime?: number | null;
   customFields: Record<string, unknown>;
   steps: StagedStep[];
   /** Куда ляжет кейс: папка дерева или новая папка. */
@@ -120,19 +124,62 @@ export interface ApplyResult {
   failed: number;
 }
 
-export function applyStaging(project: string, s: Staging): Promise<ApplyResult> {
+/** Кейсов в одном запросе «Применить»: большая модель уходит пачками — с прогрессом и без потерь при обрыве. */
+export const APPLY_CHUNK = 50;
+
+const caseBody = (s: Staging, c: StagedCase) => ({
+  id: c.id, name: c.name, folder: targetPath(s, c), objective: c.objective, precondition: c.precondition,
+  priority: c.priority, status: c.status, labels: c.labels, issueLinks: c.issueLinks ?? [], estimatedTime: c.estimatedTime ?? null,
+  customFields: c.customFields, steps: c.steps,
+});
+
+const sendApply = (body: unknown) => fetchJson<ApplyResult>("/api/zephyr/apply", {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+});
+
+/**
+ * «Применить» пачками. Сначала — все папки одним запросом (родители раньше детей), потом кейсы по APPLY_CHUNK без
+ * повторного создания папок. После каждой пачки onChunk — раздел сразу убирает созданное из черновика: оборвалось
+ * посередине (сеть, перезапуск) — повтор не создаст кейсы второй раз. Кейс в несозданной папке не отправляется.
+ */
+export async function applyStaging(project: string, s: Staging, onChunk: (r: ApplyResult, done: number, total: number) => void,
+                                   cancelled: () => boolean = () => false): Promise<ApplyResult> {
   const used = usedFolders(s);
-  return fetchJson<ApplyResult>("/api/zephyr/apply", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      project,
-      folders: s.folders.filter(f => used.has(f.id)).map(f => folderPath(s, f.id)),
-      cases: s.cases.map(c => ({
-        id: c.id, name: c.name, folder: targetPath(s, c), objective: c.objective, precondition: c.precondition,
-        priority: c.priority, status: c.status, labels: c.labels, customFields: c.customFields, steps: c.steps,
-      })),
-    }),
-  });
+  const folders = s.folders.filter(f => used.has(f.id)).map(f => folderPath(s, f.id));
+  const total: ApplyResult = { createdFolders: [], folderErrors: {}, results: [], created: 0, failed: 0 };
+  const head = await sendApply({ project, folders, cases: [] });
+  total.createdFolders = head.createdFolders; total.folderErrors = head.folderErrors;
+  const badFolder = (path: string) => Object.keys(head.folderErrors).find(f => path === f || path.startsWith(f + "/"));
+  const rows = s.cases.map(c => caseBody(s, c));
+  const blocked = rows.filter(c => badFolder(c.folder));
+  if (blocked.length) {
+    const r: ApplyResult = { createdFolders: [], folderErrors: {}, created: 0, failed: blocked.length,
+      results: blocked.map(c => ({ id: c.id, name: c.name, error: `папка ${badFolder(c.folder)} не создалась: ${head.folderErrors[badFolder(c.folder)!]}` })) };
+    total.results.push(...r.results); total.failed += r.failed;
+    onChunk(r, 0, rows.length);
+  }
+  const todo = rows.filter(c => !badFolder(c.folder));
+  for (let i = 0; i < todo.length && !cancelled(); i += APPLY_CHUNK) {
+    const r = await sendApply({ project, skipFolders: true, cases: todo.slice(i, i + APPLY_CHUNK) });
+    total.results.push(...r.results); total.created += r.created; total.failed += r.failed;
+    onChunk(r, blocked.length + Math.min(i + APPLY_CHUNK, todo.length), rows.length);
+  }
+  return total;
+}
+
+/** Убрать из черновика новую папку со всеми вложенными новыми папками и их кейсами. */
+export function dropStagedFolder(s: Staging, id: string): Staging {
+  const gone = new Set(s.folders.filter(f => f.id === id || isInside(s, f.id, id)).map(f => f.id));
+  return {
+    ...s, folders: s.folders.filter(f => !gone.has(f.id)),
+    cases: s.cases.filter(c => !(c.target.kind === "new" && gone.has(c.target.id))),
+  };
+}
+
+/** Сколько кейсов и вложенных папок уйдёт вместе с новой папкой черновика. */
+export function stagedFolderSize(s: Staging, id: string): { cases: number; folders: number } {
+  const gone = new Set(s.folders.filter(f => f.id === id || isInside(s, f.id, id)).map(f => f.id));
+  return { cases: s.cases.filter(c => c.target.kind === "new" && gone.has(c.target.id)).length, folders: gone.size - 1 };
 }
 
 /** Передача XML из генерации SimpleTest в Zephyr Tool (между разделами — через sessionStorage). */

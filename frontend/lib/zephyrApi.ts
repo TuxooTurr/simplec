@@ -3,7 +3,10 @@
  * Этап 1: чтение и проверка API на стенде. Запись — после отчёта проверки.
  */
 
+import { authHeaders } from "./authApi";
 import { fetchJson } from "./jiraApi";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export interface ZFolder { id?: number; name: string; path: string; count: number; children: ZFolder[] }
 
@@ -104,8 +107,9 @@ export const refreshFolder = (project: string, folder: string) =>
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, folder }),
   });
 
-export const getCases = (project: string, folder: string, text = "") =>
-  fetchJson<{ cases: ZCase[] }>(`/api/zephyr/cases?${q({ project, folder, text })}`);
+/** Кейсы папки; children — и всех вложенных папок на любой глубине. Показываем до 2000, total — сколько всего. */
+export const getCases = (project: string, folder: string, text = "", children = false) =>
+  fetchJson<{ cases: ZCase[]; total: number }>(`/api/zephyr/cases?${q({ project, folder, text, children: String(children) })}`);
 
 /** Кейс целиком; с project — заодно освежает его запись в модели на сервере. */
 export const getCase = (key: string, project = "") =>
@@ -343,6 +347,61 @@ export const createCase = (project: string, edit: CaseEditIn & { name: string })
 /** Несколько кейсов: удалить / изменить статус, приоритет, метки (добавляются), пользовательские поля. */
 export const deleteCases = (project: string, keys: string[]) =>
   post<{ deleted: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/delete", { project, keys });
+
+/** Сколько кейсов удалять одним запросом: больше — дольше ждать без прогресса (сервер берёт до 500). */
+const DELETE_CHUNK = 100;
+
+/** Удалить много кейсов пачками, с прогрессом. Сбой пачки целиком (сеть) — её кейсы в ошибках, остальные идут дальше. */
+export async function deleteCasesChunked(project: string, keys: string[], onProgress: (done: number, total: number) => void) {
+  const deleted: string[] = [];
+  const errors: { key: string; error: string }[] = [];
+  for (let i = 0; i < keys.length; i += DELETE_CHUNK) {
+    const part = keys.slice(i, i + DELETE_CHUNK);
+    try {
+      const r = await deleteCases(project, part);
+      deleted.push(...r.deleted); errors.push(...r.errors);
+    } catch (e) { errors.push(...part.map(key => ({ key, error: (e as Error).message }))); }
+    onProgress(Math.min(i + DELETE_CHUNK, keys.length), keys.length);
+  }
+  return { deleted, errors };
+}
+
+/** Все кейсы папки и вложенных (ключи) и все папки под ней, включая пустые; folder "" — весь проект. */
+export const folderKeys = (project: string, folder: string) =>
+  post<{ folder: string; keys: string[]; folders: string[] }>("/api/zephyr/folder/keys", { project, folder });
+
+/** После удаления кейсов папки — убрать её (и вложенные) из дерева SimpleTest. */
+export const forgetFolder = (project: string, folder: string) =>
+  post<{ folder: string; casesLeft: number }>("/api/zephyr/folder/forget", { project, folder });
+
+/** Кейс для выгрузки: всё, что уходит в XML. */
+export type ZExportCase = ZCaseFull & { customFields?: Record<string, unknown> };
+
+const EXPORT_CHUNK = 100;
+
+/**
+ * Выгрузка папки со всеми вложенными (или всего проекта) в Zephyr XML — тот же формат, что принимает
+ * «Новая модель из XML». Полные кейсы (с шагами) — из Jira пачками, с прогрессом; файл собирает бэкенд.
+ */
+export async function exportFolderXml(project: string, folder: string, onProgress: (done: number, total: number) => void,
+                                      cancelled: () => boolean = () => false) {
+  const { keys, folders } = await folderKeys(project, folder);
+  const cases: ZExportCase[] = [];
+  const errors: { key: string; error: string }[] = [];
+  onProgress(0, keys.length);
+  for (let i = 0; i < keys.length; i += EXPORT_CHUNK) {
+    if (cancelled()) throw new Error("Выгрузка отменена");
+    const r = await post<{ cases: ZExportCase[]; errors: { key: string; error: string }[] }>("/api/zephyr/export/cases",
+      { project, keys: keys.slice(i, i + EXPORT_CHUNK) });
+    cases.push(...r.cases); errors.push(...r.errors);
+    onProgress(Math.min(i + EXPORT_CHUNK, keys.length), keys.length);
+  }
+  const res = await fetch(`${API_BASE}/api/zephyr/export/xml`, {
+    method: "POST", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify({ project, folders, cases }),
+  });
+  if (!res.ok) throw new Error(`XML не собрался: ${(await res.text()).slice(0, 200)}`);
+  return { blob: await res.blob(), total: keys.length, exported: cases.length, folders: folders.length, errors };
+}
 
 export interface CasesEditIn { status?: string; priority?: string; labelsAdd?: string[]; customFields?: Record<string, unknown> }
 

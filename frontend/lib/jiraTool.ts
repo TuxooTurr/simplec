@@ -1190,6 +1190,27 @@ export function ownStageInfo(info: StageInfo, ownDefects: Issue[] | undefined): 
 }
 
 /** Дефекты задачи для чата: номер, название, приоритет и статус (st) каждого дефекта — в формате «Скопировать в чат». */
+/**
+ * «Скопировать в чат» в окне сторей эпика — как отчёт общего списка: стори с её статусом (st), под ней активные
+ * дефекты (номер, название, приоритет). Заголовок — эпик и его статус (st).
+ */
+export function storiesChatReport(epic: Issue, stories: Issue[], epicStage: StageInfo, stageOf: (i: Issue) => StageInfo,
+                                  defectsOf: (i: Issue) => Issue[] | null): string {
+  const out = [`*Стори эпика ${epic.key}* ${String(epic.fields.summary ?? "").trim()} — ${stageDot(epicStage)} ${stageText(epicStage)}`, ""];
+  for (const i of stories) {
+    const info = stageOf(i);
+    out.push(`• [*${i.key}*] ${String(i.fields.summary ?? "").trim()} — ${stageDot(info)} ${stageText(info)}`);
+    const open = defectsOf(i)?.filter(isOpenDefect) ?? [];
+    if (open.length) {
+      out.push("Дефекты:");
+      for (const d of open) {
+        out.push(`${d.key} ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
+      }
+    }
+  }
+  return out.join("\n").trimEnd();
+}
+
 export function defectsChatReport(issue: Issue, defects: Issue[], stageOf: (i: Issue) => StageInfo): string {
   const out = [`*Дефекты ${issue.key}* ${String(issue.fields.summary ?? "").trim()}`];
   for (const d of defects) {

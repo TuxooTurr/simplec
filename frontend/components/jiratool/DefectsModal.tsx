@@ -7,7 +7,7 @@ import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } f
 import { STAGES, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
-import IssueTable from "./IssueTable";
+import IssueTable, { sortIssueRows, type IssueSort } from "./IssueTable";
 
 /** Порядок по статусу (st): раньше по процессу — выше. */
 function stageRank(info: StageInfo): number {
@@ -21,7 +21,8 @@ function stageRank(info: StageInfo): number {
  * Галочка «Показать устранённые» добавляет
  * их отдельной группой ниже; сортировка по колонке работает внутри каждой группы.
  * «Статус (st)» — у каждого дефекта свой, по его статусу Jira (блокировка задачи на дефекты не переносится).
- * «Скопировать в чат» — показанные дефекты: номер, название, приоритет, статус (st).
+ * «Скопировать в чат» — отмеченные галочками показанные дефекты (по умолчанию все) в порядке таблицы:
+ * номер, название, приоритет, статус (st).
  * «Создать дефект» — форма дефекта: у эпика эпик подставлен, у стори дефект после создания связывается с ней.
  */
 export default function DefectsModal({ open, issue, defects, stageOf, onCreate, onClose }: {
@@ -38,11 +39,19 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
   const opened = defects.filter(isOpenDefect);
   const fixed = defects.filter(d => !isOpenDefect(d));
   const blockers = blockersOf(defects).length;
-  const shown = showFixed ? [...opened, ...fixed] : opened;
+  // Что отправить в чат: по умолчанию все; галочки — выбрать нужные.
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(defects.map(d => d.key)));
+  const [sort, setSort] = useState<IssueSort>({ col: "priority", dir: 1 });
+  const rank = (d: Issue) => stageRank(stageOf(d));
+  const shown = [...sortIssueRows(opened, sort, rank), ...(showFixed ? sortIssueRows(fixed, sort, rank) : [])];
+  const toSend = shown.filter(d => picked.has(d.key));
+  const pick = (keys: string[], on: boolean) => setPicked(p => {
+    const n = new Set(p); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n;
+  });
 
   const copy = async () => {
-    const ok = await copyToClipboard(defectsChatReport(issue, shown, stageOf));
-    setNote(ok ? `Скопировано для чата: дефектов ${shown.length}` : "Браузер не дал скопировать — попробуйте ещё раз");
+    const ok = await copyToClipboard(defectsChatReport(issue, toSend, stageOf));
+    setNote(ok ? `Скопировано для чата: дефектов ${toSend.length}` : "Браузер не дал скопировать — попробуйте ещё раз");
     setTimeout(() => setNote(""), 3000);
   };
 
@@ -68,10 +77,10 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold">
                 <Bug className="w-4 h-4" /> Создать дефект</button>
             )}
-            <button type="button" onClick={copy} disabled={!shown.length}
-              title="Номер, название, приоритет и статус (st) показанных дефектов — для чата"
+            <button type="button" onClick={copy} disabled={!toSend.length}
+              title="Номер, название, приоритет и статус (st) отмеченных дефектов — для чата; галочками выберите, что отправить"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-              <MessageSquareShare className="w-4 h-4" /> Скопировать в чат</button>
+              <MessageSquareShare className="w-4 h-4" /> Скопировать в чат{shown.length ? ` (${toSend.length} из ${shown.length})` : ""}</button>
           </span>
         </div>
         {defects.length === 0 || (!showFixed && opened.length === 0) ? (
@@ -79,8 +88,9 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
             {defects.length ? "Неустранённых дефектов нет." : "Дефектов нет."}
           </p>
         ) : (
-          <IssueTable cols={["type", "key", "summary", "status", "stage", "priority", "assignee"]} initialSort={{ col: "priority", dir: 1 }}
-            stage={d => <StageBadge info={stageOf(d)} />} stageRank={d => stageRank(stageOf(d))}
+          <IssueTable cols={["type", "key", "summary", "status", "stage", "priority", "assignee"]} initialSort={sort} onSort={setSort}
+            picked={picked} onPick={pick}
+            stage={d => <StageBadge info={stageOf(d)} />} stageRank={rank}
             dim={d => !isOpenDefect(d)}
             groups={showFixed
               ? [{ title: `Неустранённые · ${opened.length}`, issues: opened }, { title: `Устранённые · ${fixed.length}`, issues: fixed }]

@@ -1558,7 +1558,7 @@ export default function JiraToolSection() {
           initial={draftOf(modal.draft)} onSave={d => saveDraft(modal.draft, d)} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
-        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf}
+        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf}
           ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onClose={() => setModal(null)} />
       )}
       {STRUCTURE_ENABLED && modal === "import" && list && (

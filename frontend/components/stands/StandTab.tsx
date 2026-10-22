@@ -8,6 +8,7 @@ import {
   pullStandRequests, saveStandSettings, saveStandsConfig, addMs, saveMsCatalog,
   keKey, type NewBooking, type StandPending, type StandSettings, type StandView,
 } from "@/lib/standsApi";
+import { msChipStyle } from "@/lib/msColor";
 import StandTimeline, { barWhen, barsOf, bookingWhen, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
 import ImportFromList, { type PickedFeature } from "./ImportFromList";
 import ServicePicker from "./ServicePicker";
@@ -244,7 +245,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
         <div className="rounded-xl border border-border-main bg-bg-card p-3 text-sm space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <span className={`px-2 py-0.5 rounded-md text-xs font-semibold ${teamCls(picked.team)}`}>{picked.team}</span>
-            <b className="text-text-main">{picked.service}</b>
+            <b style={msChipStyle(picked.service).style} className="ms-chip px-1.5 py-0.5 rounded-md">{picked.service}</b>
             <span className="text-text-muted">{barWhen(v.range.from, picked)} · фич {picked.items.length}</span>
             {picked.conflict && <span className="text-xs font-semibold text-red-600 dark:text-red-400">конфликт: этот микросервис в это время ставит другая команда</span>}
             <button type="button" onClick={() => setPickedKey(null)} aria-label="Закрыть" className="ml-auto p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { AlertTriangle } from "lucide-react";
+import { msChipStyle, msGroup } from "@/lib/msColor";
 import { keKey, type StandBooking, type StandView } from "@/lib/standsApi";
 
 /** Установки дня: команда + день + микросервис; внутри — фичи. Для счётчика «Установок» под графиком. */
@@ -166,18 +168,20 @@ export const TEAM_CLS = [
   "bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-100",
   "bg-lime-100 text-lime-800 dark:bg-lime-900/60 dark:text-lime-100",
 ];
-const CONFLICT_CLS = "bg-red-100 text-red-800 ring-2 ring-red-500 dark:bg-red-950/70 dark:text-red-200";
+/** Конфликт — красная обводка и значок поверх цвета группы микросервиса. */
+const CONFLICT_CLS = "ring-2 ring-red-500 ring-inset";
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 /**
  * График стенда: строки — команды, по горизонтали — дни показанного периода (окно планирования или, например,
  * последние 3 месяца; дни вне окна заштрихованы — только просмотр). Полоса — установка: команда + микросервис,
- * сплошная от начала до конца брони (13.11 09:00 — 17.11 18:00 — одна линия через выходные; barsOf). Несколько фич
+ * сплошная от начала до конца брони (13.11 09:00 — 17.11 18:00 — одна линия через выходные; barsOf), цвет — группа
+ * микросервиса (lib/msColor.ts), как у лейблов в Jira tool. Несколько фич
  * в одном микросервисе — одна полоса со счётчиком; добавилась фича в другой день — полоса обрывается, дальше новая. При наведении —
  * фичи: номер, название, период, время и статус (st) из Jira tool.
  * Масштаб — от часов внутри дня (сетка по часам, бронь со временем стоит на своих часах, линия «сейчас») до
  * квартала: кнопками снаружи (width) или Ctrl + колесо; перетаскивание — прокрутка.
- * Конфликт (тот же микросервис у двух команд в пересекающееся время) — красный; заморозка — жёлтая полоса;
+ * Конфликт (тот же микросервис у двух команд в пересекающееся время) — красная обводка и значок; заморозка — жёлтая полоса;
  * дата релиза — пунктир; выходные — серые. Щелчок по пустому месту строки — новая бронь этой команде на этот день
  * (в часах — с этого часа), по брони — она сама.
  */
@@ -358,14 +362,17 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
             const left = (b.start / DAY) * width + 1;
             const w = Math.max(6, ((b.end - b.start) / DAY) * width - 2);
             const when = barWhen(v.range.from, b);
+            // Цвет — группа микросервиса, как лейблы в Jira tool и форме брони (lib/msColor.ts); команда — это строка.
+            const chip = msChipStyle(b.service);
             return (
               <button key={b.key} type="button"
                 onClick={() => { if (!drag.current?.moved) onPickBlock(b); }}
                 onMouseEnter={e => setHover({ b, x: e.clientX, y: e.clientY })} onMouseLeave={() => setHover(null)}
                 aria-label={`${b.team}: ${b.service}, ${when}, фич ${b.items.length}${b.conflict ? ", конфликт" : ""}`}
-                className={`absolute rounded-md px-1 text-left text-[11px] font-medium flex items-center gap-1 overflow-hidden ${b.conflict ? CONFLICT_CLS : teamCls(b.team)}
+                className={`${chip.className} absolute rounded-md px-1 text-left text-[11px] font-medium flex items-center gap-1 overflow-hidden ${b.conflict ? CONFLICT_CLS : ""}
                   ${selected === b.key ? "outline outline-2 outline-primary" : ""}`}
-                style={{ left, width: w, top: tops[ti] + 5 + b.lane * LANE, height: LANE - 4 }}>
+                style={{ ...chip.style, left, width: w, top: tops[ti] + 5 + b.lane * LANE, height: LANE - 4 }}>
+                {b.conflict && w >= 18 && <AlertTriangle className="w-3 h-3 flex-shrink-0 text-red-600 dark:text-red-400" aria-hidden />}
                 {w >= 30 && <span className="truncate">{b.service}</span>}
                 {w >= 200 && <span className="flex-shrink-0 text-[10px] opacity-75 tabular-nums">{when}</span>}
                 {b.items.length > 1 && w >= 52 && <span className="ml-auto flex-shrink-0 px-1 rounded bg-black/10 dark:bg-white/15 text-[10px]">×{b.items.length}</span>}
@@ -387,7 +394,9 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
       {hover && (
         <div className="fixed z-[120] max-w-sm rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-2.5 text-xs pointer-events-none"
           style={{ left: Math.min(hover.x + 12, (typeof window !== "undefined" ? window.innerWidth : 1600) - 400), top: hover.y + 12 }}>
-          <p className="font-semibold text-text-main">{hover.b.service} · {hover.b.team} · {barWhen(v.range.from, hover.b)}</p>
+          <p className="font-semibold text-text-main">
+            <span style={msChipStyle(hover.b.service).style} className="ms-chip px-1 rounded">{hover.b.service}</span> · {hover.b.team} · {barWhen(v.range.from, hover.b)}</p>
+          <p className="text-[11px] text-text-muted">группа микросервиса: {msGroup(hover.b.service)}</p>
           {hover.b.conflict && <p className="text-red-600 dark:text-red-400 font-semibold">Конфликт: этот микросервис в это время ставит другая команда</p>}
           <p className="mt-1 text-text-muted">Фичи ({hover.b.items.length}):</p>
           <ul className="mt-0.5 space-y-0.5">

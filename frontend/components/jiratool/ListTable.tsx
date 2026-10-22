@@ -4,7 +4,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, END_COL, FACT_COL, PLAN_COL, START_COL, factMinutes, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
-  LOAD_COL, REQ_COL, MS_COL, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
+  LOAD_COL, REQ_COL, MS_COL, ruleResult, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
@@ -476,6 +476,7 @@ export default function ListTable({
               <JiraCell id={c.slice(5)} issue={issue} />
             ) : ownById[c.slice(4)] ? (
               <OwnCell field={ownById[c.slice(4)]} value={list.values[issue.key]?.[c.slice(4)]} icon={list.icons?.[issue.key]?.[c.slice(4)]}
+                computed={ownById[c.slice(4)].type === "rules" ? ruleResult(ownById[c.slice(4)], issue, ctx) : undefined}
                 onChange={v => onValue(issue.key, c.slice(4), v)} onIcon={code => onIcon(issue.key, c.slice(4), code)} />
             ) : <span className="text-text-muted/50">—</span>}
           </td>

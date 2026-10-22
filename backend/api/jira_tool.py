@@ -456,6 +456,102 @@ def apply_transitions(body: TransitionBody, db: Session = Depends(get_db)) -> di
     return {"results": results, "done": sum(1 for r in results if r["ok"])}
 
 
+# ── Люди → поля Jira («Тестировщик», «Аналитик»…) ────────────────────────────
+
+class UsersQuery(BaseModel):
+    q: str = Field(..., min_length=2, max_length=100)
+
+
+@router.post("/api/jira/tool/users")
+def find_users(body: UsersQuery, db: Session = Depends(get_db)) -> dict:
+    """Пользователи Jira по части имени или логина — для «Имя в Jira» в справочнике людей."""
+    cfg = _load_cfg(db)
+    raw = _jira_request(cfg, "GET", "/rest/api/2/user/search",
+                        params={"username": body.q.strip(), "maxResults": 20}) or []
+    return {"users": [{"name": u.get("name") or u.get("key") or "", "display": u.get("displayName") or "",
+                       "email": u.get("emailAddress") or "", "active": u.get("active", True)}
+                      for u in raw if isinstance(u, dict) and (u.get("name") or u.get("key"))]}
+
+
+class PersonChange(BaseModel):
+    key: str
+    field: str = Field(..., min_length=1, max_length=100)
+    user: str = Field("", max_length=200)       # логин нового человека; пусто — снять
+    display: str = Field("", max_length=200)    # для текстового поля
+    prev: str = Field("", max_length=200)       # логин прежнего — для поля с несколькими людьми
+
+
+class PersonChangesBody(BaseModel):
+    changes: list[PersonChange] = Field(default_factory=list)
+
+
+def person_field(schema: dict) -> bool:
+    """Поле, в которое можно записать человека: пользователь, несколько пользователей или текст."""
+    t = schema.get("type", "")
+    return t in ("user", "string") or (t == "array" and schema.get("items") == "user")
+
+
+def person_payload(schema: dict, c: PersonChange) -> Optional[dict]:
+    """Тело PUT задачи для поля по его схеме из editmeta. None — писать нечего."""
+    t, items = schema.get("type", ""), schema.get("items", "")
+    if t == "user":
+        return {"fields": {c.field: {"name": c.user} if c.user else None}}
+    if t == "array" and items == "user":
+        # Несколько людей в поле: своего меняем, чужих не трогаем.
+        ops = []
+        if c.prev and c.prev != c.user:
+            ops.append({"remove": {"name": c.prev}})
+        if c.user:
+            ops.append({"add": {"name": c.user}})
+        return {"update": {c.field: ops}} if ops else None
+    if t == "string":
+        return {"fields": {c.field: (c.display or c.user) or None}}
+    return None
+
+
+@router.post("/api/jira/tool/people-fields")
+def write_people_fields(body: PersonChangesBody, db: Session = Depends(get_db)) -> dict:
+    """Назначили человека в списке — пишем его имя в Jira в поле направления.
+
+    Поля нет на экране редактирования задачи (у дефекта нет «Аналитика», нет прав на поле) — «skipped»:
+    это не ошибка, человек остаётся только в SimpleTest. Ошибка — когда поле есть, а Jira запись отвергла.
+    """
+    changes = [c for c in body.changes if _KEY_RE.match(c.key.strip().upper())]
+    if len(changes) > MAX_TRANSITION_KEYS:
+        raise HTTPException(422, f"За раз — не больше {MAX_TRANSITION_KEYS} изменений")
+    cfg = _load_cfg(db)
+    metas: dict[str, dict] = {}
+
+    def meta(key: str) -> dict:
+        if key not in metas:
+            metas[key] = (_jira_request(cfg, "GET", f"/rest/api/2/issue/{key}/editmeta") or {}).get("fields") or {}
+        return metas[key]
+
+    def one(c: PersonChange) -> dict:
+        key = c.key.strip().upper()
+        out = {"key": key, "field": c.field}
+        try:
+            f = meta(key).get(c.field)
+            if not f:
+                return {**out, "skipped": True}
+            schema = f.get("schema") or {}
+            if not person_field(schema):
+                return {**out, "ok": False, "error": f"Поле «{f.get('name') or c.field}» не для людей"}
+            payload = person_payload(schema, c)
+            if payload is None:
+                return {**out, "skipped": True}
+            _jira_request(cfg, "PUT", f"/rest/api/2/issue/{key}", json_body=payload)
+            return {**out, "ok": True}
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            return {**out, "ok": False, "error": str(e.detail)}
+
+    # Последовательно: по одной задаче бывает несколько полей, а editmeta берём один раз.
+    results = [one(c) for c in changes]
+    return {"results": results, "done": sum(1 for r in results if r.get("ok"))}
+
+
 # ── Релиз = версия Jira («Исправить в версиях», fixVersion) ──────────────────
 
 _VERSION_URL_RE = re.compile(r"/projects/([A-Za-z][A-Za-z0-9_]*)/versions/(\d+)")

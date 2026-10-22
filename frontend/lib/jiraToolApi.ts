@@ -105,3 +105,18 @@ export interface ReleaseData {
 export function getRelease(version: string, project = ""): Promise<ReleaseData> {
   return fetchJson(`/api/jira/tool/release?version=${encodeURIComponent(version)}&project=${encodeURIComponent(project)}`);
 }
+
+export interface JiraUser { name: string; display: string; email: string; active: boolean }
+
+/** Пользователи Jira по части имени или логина (для «Имя в Jira» в справочнике людей). */
+export function findJiraUsers(q: string): Promise<{ users: JiraUser[] }> {
+  return post("/api/jira/tool/users", { q });
+}
+
+export interface PersonFieldChange { key: string; field: string; user: string; display: string; prev: string }
+export interface PersonFieldResult { key: string; field: string; ok?: boolean; skipped?: boolean; error?: string }
+
+/** Записать людей в поля Jira. Поля нет у задачи — skipped, это не ошибка. */
+export function writePeopleFields(changes: PersonFieldChange[]): Promise<{ results: PersonFieldResult[]; done: number }> {
+  return post("/api/jira/tool/people-fields", { changes });
+}

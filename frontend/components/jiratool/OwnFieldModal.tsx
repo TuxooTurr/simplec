@@ -3,13 +3,18 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { OWN_TYPE_LABEL, newId, tagColor, type OwnField, type OwnFieldType } from "@/lib/jiraTool";
+import { OWN_TYPE_LABEL, RULE_OP_NO_VALUE, newId, tagColor, type FieldRule, type OwnField, type OwnFieldType, type RuleResult } from "@/lib/jiraTool";
+import RulesEditor from "./RulesEditor";
+import type { PickOption } from "./FieldPicker";
 import { textOn } from "@/lib/jiraStages";
 
-/** Своё поле списка: свободный ввод, дата, дата и время, список, множественный выбор. */
-export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDelete, onClose }: {
+/** Своё поле списка: свободный ввод, дата, дата и время, список, множественный выбор, ссылка, по правилам. */
+export default function OwnFieldModal({ open, initial, typeLocked, sources = [], valuesOf = () => [], onSave, onDelete, onClose }: {
   open: boolean;
   initial: OwnField | null;
+  /** «По правилам»: поля задачи для условий и значения, которые у них встречаются в списке. */
+  sources?: PickOption[];
+  valuesOf?: (ref: string) => string[];
   /** В поле уже есть значения — тип не меняем, иначе они станут бессмысленными. */
   typeLocked?: boolean;
   onSave: (f: OwnField) => void;
@@ -25,6 +30,9 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
   // Цвет варианта считается так же, как в таблице: свой или из палитры по порядку.
   const colorOf = (o: string) => tagColor({ id: "", name: "", type, options, colors }, o);
   const [opt, setOpt] = useState("");
+  const [rules, setRules] = useState<FieldRule[]>(initial?.rules ?? []);
+  const [fallback, setFallback] = useState<RuleResult>(initial?.fallback ?? { text: "" });
+  const ruleSources = sources.filter(s => s.value !== `own:${initial?.id ?? ""}`);
   const [asking, setAsking] = useState(false);
   const withOptions = type === "select" || type === "multiselect";
 
@@ -33,12 +41,14 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
     setOptions(o => Array.from(new Set([...o, ...parts])));
     setOpt("");
   };
-  const valid = name.trim() && (!withOptions || options.length > 0);
+  // Правило готово, когда у каждого условия есть поле и значение (кроме «пусто / не пусто») и есть результат.
+  const rulesOk = rules.every(r => r.conds.every(c => c.ref && (RULE_OP_NO_VALUE.includes(c.op) || c.value.trim())) && (r.result.text.trim() || r.result.icon));
+  const valid = name.trim() && (!withOptions || options.length > 0) && (type !== "rules" || (rules.length > 0 && rulesOk));
   const field = "w-full text-sm border border-border-main rounded-lg px-3 py-2 bg-[var(--color-input-bg)] text-text-main " +
     "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
 
   return (
-    <Modal open={open} onClose={onClose} title={initial ? "Своё поле" : "Новое своё поле"}>
+    <Modal open={open} onClose={onClose} title={initial ? "Своё поле" : "Новое своё поле"} size={type === "rules" ? "max-w-3xl" : undefined}>
       <div className="space-y-4">
         <div>
           <label htmlFor="own-name" className="block text-xs font-semibold text-text-muted mb-1.5">Название</label>
@@ -73,6 +83,9 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
             </div>
             <p className="text-[11px] text-text-muted mt-1.5">Переключить можно и прямо в заголовке колонки.</p>
           </fieldset>
+        )}
+        {type === "rules" && (
+          <RulesEditor rules={rules} fallback={fallback} sources={ruleSources} valuesOf={valuesOf} onRules={setRules} onFallback={setFallback} />
         )}
         {withOptions && (
           <div>
@@ -137,6 +150,8 @@ export default function OwnFieldModal({ open, initial, typeLocked, onSave, onDel
                   wrap: type === "text" ? wrap : undefined,
                   tags: withOptions ? tags : undefined,
                   colors: withOptions && tags && Object.keys(kept).length ? kept : undefined,
+                  rules: type === "rules" ? rules : undefined,
+                  fallback: type === "rules" && (fallback.text.trim() || fallback.icon) ? fallback : undefined,
                 });
                 onClose();
               }}

@@ -11,7 +11,7 @@ import ServicePicker from "@/components/stands/ServicePicker";
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
   FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, WORK_DAY, linkHref, tagColor, blockersOf, factMinutes, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
-  type Issue, type LoadSkip, type OwnField, type Participant, type RoleState, type RoleValue, type Spend,
+  type Issue, type LoadSkip, type OwnField, type Participant, type RuleResult, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
 import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
 
@@ -409,14 +409,29 @@ function TagCell({ field, value, onChange }: { field: OwnField; value: string | 
   );
 }
 
-export function OwnCell({ field, value, icon, onChange, onIcon }: {
+/** Ячейка поля «По правилам»: символ и текст сработавшего правила; со ссылкой — текст ведёт по ней. Руками не правится. */
+function RuleCell({ result }: { result: RuleResult | null }) {
+  if (!result) return <span className="text-text-muted/50 px-1">—</span>;
+  const href = result.link ? linkHref(result.link) : null;
+  const body = <>{result.icon && <span className="mr-1">{result.icon}</span>}{result.text}</>;
+  return (
+    <span className="block px-1 py-0.5 text-sm text-text-main truncate" title={`${result.icon ?? ""} ${result.text}`.trim() + " — по правилам поля"}>
+      {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{body}</a> : body}
+    </span>
+  );
+}
+
+export function OwnCell({ field, value, icon, computed, onChange, onIcon }: {
   field: OwnField;
   value: string | string[] | undefined;
   /** Ярлычок ячейки — только у свободного ввода. */
   icon?: string;
+  /** «По правилам»: вычисленное значение. */
+  computed?: RuleResult | null;
   onChange: (v: string | string[]) => void;
   onIcon: (code: string | null) => void;
 }) {
+  if (field.type === "rules") return <RuleCell result={computed ?? null} />;
   if (field.tags && (field.type === "select" || field.type === "multiselect")) return <TagCell field={field} value={value} onChange={onChange} />;
   const cls = "bg-transparent px-1 py-0.5 rounded border border-transparent hover:border-border-main focus:border-primary/40 " +
     "focus:outline-none focus:bg-[var(--color-input-bg)] text-sm text-text-main";

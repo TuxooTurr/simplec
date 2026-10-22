@@ -22,7 +22,7 @@ export * from "./jiraModel";
 
 /* ── Свои поля, участники, списки ──────────────────────────────────────── */
 
-export type OwnFieldType = "text" | "date" | "datetime" | "select" | "multiselect" | "link";
+export type OwnFieldType = "text" | "date" | "datetime" | "select" | "multiselect" | "link" | "rules";
 
 export const OWN_TYPE_LABEL: Record<OwnFieldType, string> = {
   text: "Свободный ввод",
@@ -31,7 +31,81 @@ export const OWN_TYPE_LABEL: Record<OwnFieldType, string> = {
   select: "Выпадающий список",
   multiselect: "Множественный выбор",
   link: "Ссылка",
+  rules: "По правилам",
 };
+
+/* ── Поле «По правилам»: значение вычисляется из других полей задачи ─────────────────────────────── */
+
+/** Операторы условий — как в Excel (условное форматирование / фильтр). */
+export type RuleOp = "eq" | "ne" | "contains" | "ncontains" | "starts" | "ends" | "gt" | "gte" | "lt" | "lte" | "empty" | "nempty";
+export const RULE_OP_LABEL: Record<RuleOp, string> = {
+  eq: "равно", ne: "не равно", contains: "содержит", ncontains: "не содержит", starts: "начинается с", ends: "заканчивается на",
+  gt: "больше", gte: "больше или равно", lt: "меньше", lte: "меньше или равно", empty: "пусто", nempty: "не пусто",
+};
+/** Операторы без значения. */
+export const RULE_OP_NO_VALUE: RuleOp[] = ["empty", "nempty"];
+
+/** Условие: поле задачи (любая колонка списка), оператор, значение. */
+export interface RuleCond { ref: ColRef; op: RuleOp; value: string }
+/** Что показать, если правило сработало: текст, символ или эмодзи перед ним, ссылка (текст становится ссылкой). */
+export interface RuleResult { text: string; icon?: string; link?: string }
+/** Правило: все условия через «И» → результат. */
+export interface FieldRule { id: string; conds: RuleCond[]; result: RuleResult }
+
+/** «12,5» / «12.5» → число; «2026-10-22» / «22.10.2026» / «22.10.2026 10:00» → время; иначе null. */
+function ruleNumber(s: string): number | null {
+  const t = s.trim();
+  if (/^-?\d+(?:[.,]\d+)?$/.test(t)) return Number(t.replace(",", "."));
+  let m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(t);
+  if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] ?? 0), +(m[5] ?? 0));
+  m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2}))?$/.exec(t);
+  if (m) return Date.UTC(+m[3], +m[2] - 1, +m[1], +(m[4] ?? 0), +(m[5] ?? 0));
+  return null;
+}
+
+/**
+ * Условие для значений поля (у поля бывает несколько значений — метки, микросервисы). Положительные операторы —
+ * «хотя бы одно значение подходит», «не равно» и «не содержит» — «ни одно не подходит». Текст — без регистра;
+ * «больше/меньше» — как числа или даты, если обе стороны похожи на них, иначе по алфавиту.
+ */
+export function condMatches(values: string[], c: RuleCond): boolean {
+  const vals = values.map(v => String(v).trim()).filter(Boolean);
+  if (c.op === "empty") return vals.length === 0;
+  if (c.op === "nempty") return vals.length > 0;
+  const want = c.value.trim().toLowerCase();
+  const one = (raw: string): boolean => {
+    const v = raw.toLowerCase();
+    switch (c.op) {
+      case "eq": case "ne": {
+        const a = ruleNumber(raw), b = ruleNumber(c.value);
+        return a !== null && b !== null ? a === b : v === want;
+      }
+      case "contains": case "ncontains": return v.includes(want);
+      case "starts": return v.startsWith(want);
+      case "ends": return v.endsWith(want);
+      default: {
+        const a = ruleNumber(raw), b = ruleNumber(c.value);
+        const d = a !== null && b !== null ? a - b : v.localeCompare(want, "ru");
+        return c.op === "gt" ? d > 0 : c.op === "gte" ? d >= 0 : c.op === "lt" ? d < 0 : d <= 0;
+      }
+    }
+  };
+  if (c.op === "ne" || c.op === "ncontains") return !vals.some(one);
+  return vals.some(one);
+}
+
+let ruleDepth = 0;
+/** Значение поля «По правилам» для задачи: первое правило, у которого выполнены все условия; иначе — «иначе». */
+export function ruleResult(field: OwnField, issue: Issue, ctx: ColCtx): RuleResult | null {
+  if (ruleDepth > 3) return null;          // поля по правилам, ссылающиеся друг на друга, — не уходим в цикл
+  ruleDepth++;
+  try {
+    for (const r of field.rules ?? []) {
+      if (r.conds.length && r.conds.every(c => c.ref !== `own:${field.id}` && condMatches(colValues(c.ref, issue, ctx), c))) return r.result;
+    }
+    return field.fallback?.text || field.fallback?.icon ? field.fallback : null;
+  } finally { ruleDepth--; }
+}
 
 /**
  * Ссылка из поля «Ссылка» → адрес для перехода. Без схемы («jira.sberbank.ru/browse/X») — https://.
@@ -62,6 +136,9 @@ export interface OwnField {
   tags?: boolean;
   /** Цвет тега по варианту («#rrggbb»); нет — цвет из палитры по порядку варианта. */
   colors?: Record<string, string>;
+  /** «По правилам»: правила сверху вниз (срабатывает первое) и значение, если ни одно не подошло. */
+  rules?: FieldRule[];
+  fallback?: RuleResult;
 }
 
 /** Палитра тегов по умолчанию — по порядку вариантов. */
@@ -87,6 +164,10 @@ export interface Participant {
   color: string;
   /** Направления, в которых человек работает (DIRECTIONS). Нет — старая запись участника: это тестировщик. */
   directions?: string[];
+  /** Логин в Jira: его пишем в поле Jira направления при назначении. В списках не показывается — только в справочнике. */
+  jiraName?: string;
+  /** Как человека показывает Jira (из поиска пользователей); для текстового поля Jira пишется оно. */
+  jiraDisplay?: string;
 }
 
 export const ROLE_SUGGESTIONS = ["QA", "AQA", "LQA", "SQA", "DEV", "BA", "SA", "PM", "TL", "OPS"];
@@ -831,7 +912,9 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
   } else if (ref.startsWith("jira:")) {
     v = issue.fields[ref.slice(5)];
   } else if (ref.startsWith("own:")) {
-    v = ctx.list.values[issue.key]?.[ref.slice(4)] ?? null;
+    const f = ctx.list.ownFields.find(x => x.id === ref.slice(4));
+    // «По правилам» — вычисленный текст (по нему сортировка, фильтр и группировка), иначе — введённое значение.
+    v = f?.type === "rules" ? ruleResult(f, issue, ctx)?.text ?? null : ctx.list.values[issue.key]?.[ref.slice(4)] ?? null;
   }
   if (v === null || v === undefined || v === "") return [];
   return Array.isArray(v) ? v.filter(Boolean) : [v];
@@ -1037,7 +1120,8 @@ export interface GroupLevel { ref: ColRef; label: string }
  */
 export function isWritableGroupRef(ref: ColRef, list: TaskList): boolean {
   if (ref === PARTICIPANT_COL || ref === FOLDER_COL) return true;
-  return ref.startsWith("own:") && list.ownFields.some(f => f.id === ref.slice(4));
+  // «По правилам» вычисляется — перенос задачи в другую группу его не меняет.
+  return ref.startsWith("own:") && list.ownFields.some(f => f.id === ref.slice(4) && f.type !== "rules");
 }
 
 /** Применить перенос задачи в другую группу: записать новые значения полей. */

@@ -203,6 +203,52 @@ def test_выполнение_переходов_с_решением(jira):
     assert body == {"transition": {"id": "31"}, "fields": {"resolution": {"id": "10000"}}}
 
 
+# ── Люди → поля Jira ─────────────────────────────────────────────────────────
+
+def test_человек_пишется_в_поле_по_схеме_а_нет_поля_молча_пропуск(jira):
+    meta = {
+        "SBER911-1": {"customfield_1": {"name": "Тестировщик", "schema": {"type": "user"}},
+                      "customfield_2": {"name": "Аналитики", "schema": {"type": "array", "items": "user"}},
+                      "customfield_3": {"name": "Бэкенд", "schema": {"type": "string"}},
+                      "labels": {"name": "Метки", "schema": {"type": "array", "items": "string"}}},
+        "SBER911-2": {},   # дефект: полей направлений нет
+    }
+
+    def do(m, path, params, body):
+        key = path.split("/")[5]
+        return {"fields": meta[key]} if path.endswith("/editmeta") else {}
+
+    fake = jira({"/rest/api/2/issue/": do})
+    res = JT.write_people_fields(JT.PersonChangesBody(changes=[
+        JT.PersonChange(key="SBER911-1", field="customfield_1", user="ivanov"),
+        JT.PersonChange(key="SBER911-1", field="customfield_2", user="petrov", prev="sidorov"),
+        JT.PersonChange(key="SBER911-1", field="customfield_3", user="kim", display="Ким Анна"),
+        JT.PersonChange(key="SBER911-1", field="labels", user="kim"),
+        JT.PersonChange(key="SBER911-2", field="customfield_2", user="petrov"),
+        JT.PersonChange(key="SBER911-1", field="customfield_1", user=""),
+    ]), db=None)
+    r = res["results"]
+    assert [x.get("ok") for x in r[:3]] == [True, True, True]
+    assert r[3]["ok"] is False and "не для людей" in r[3]["error"]
+    assert r[4] == {"key": "SBER911-2", "field": "customfield_2", "skipped": True}
+    puts = [c[3] for c in fake.calls if c[0] == "PUT"]
+    assert puts == [
+        {"fields": {"customfield_1": {"name": "ivanov"}}},
+        {"update": {"customfield_2": [{"remove": {"name": "sidorov"}}, {"add": {"name": "petrov"}}]}},
+        {"fields": {"customfield_3": "Ким Анна"}},
+        {"fields": {"customfield_1": None}},                      # сняли человека — поле очищено
+    ]
+    # editmeta — один раз на задачу
+    assert sum(1 for c in fake.calls if c[1].endswith("/editmeta")) == 2
+
+
+def test_поиск_пользователей_jira(jira):
+    jira({"/rest/api/2/user/search": lambda m, p, params, b: [
+        {"name": "ivanov-ia", "displayName": "Иванов Илья", "emailAddress": "i@x", "active": True}, {"displayName": "без логина"}]})
+    assert JT.find_users(JT.UsersQuery(q="иван"), db=None) == {
+        "users": [{"name": "ivanov-ia", "display": "Иванов Илья", "email": "i@x", "active": True}]}
+
+
 # ── Структура ────────────────────────────────────────────────────────────────
 
 def test_формула_структуры():

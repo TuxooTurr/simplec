@@ -35,7 +35,7 @@ import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import LoadDetailsModal from "@/components/jiratool/LoadDetailsModal";
 import LoadRowView from "@/components/jiratool/LoadRowView";
-import { getPeople, savePeople } from "@/lib/peopleApi";
+import { getPeople, savePeople, saveJiraPeopleFields, type JiraPeopleFields } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, checklistReport, folderSections, loadSkip,
@@ -46,7 +46,8 @@ import {
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
-import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist } from "@/lib/jiraToolApi";
+import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields } from "@/lib/jiraToolApi";
+import { peopleFieldChanges } from "@/lib/jiraPeopleSync";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
@@ -198,6 +199,9 @@ export default function JiraToolSection() {
    */
   const peopleSaved = useRef<string | null>(null);
   const [peopleErr, setPeopleErr] = useState("");
+  /** Направление → поле Jira, куда пишется имя человека в Jira (хранится в справочнике людей на бэкенде). */
+  const [jiraFields, setJiraFields] = useState<JiraPeopleFields>({});
+  const [jiraPeopleErr, setJiraPeopleErr] = useState("");
   const hasState = !!state;
   useEffect(() => {
     if (!hasState || peopleSaved.current !== null) return;
@@ -205,6 +209,7 @@ export default function JiraToolSection() {
     getPeople().then(r => {
       if (!alive) return;
       setPeopleErr("");
+      setJiraFields(r.jiraFields ?? {});
       update(s => {
         const legacy = s.participants.length > 0 || Object.values(s.roleNames).some(n => n.length > 0);
         const people = r.people.length || !legacy ? r.people : migratePeople(s.participants, s.roleNames);
@@ -313,6 +318,22 @@ export default function JiraToolSection() {
   });
   const updateList = (fn: (l: TaskList) => TaskList) =>
     update(s => ({ ...s, lists: s.lists.map(l => (l.id === activeId ? fn(l) : l)) }));
+  /**
+   * Правка списка, которая может поменять людей задач (тестировщик, поля направлений): кроме списка — пишем
+   * имена в Jira в поля направлений (lib/jiraPeopleSync.ts). Поля нет у задачи — молча остаётся в SimpleTest.
+   */
+  const updateListPeople = (fn: (l: TaskList) => TaskList) => {
+    if (list && state && jira.state === "ok") {
+      const changes = peopleFieldChanges(list, fn(list), state.participants, jiraFields);
+      if (changes.length) {
+        writePeopleFields(changes).then(r => {
+          const bad = r.results.filter(x => x.ok === false);
+          setJiraPeopleErr(bad.length ? bad.map(b => `${b.key}: ${b.error}`).join("; ") : "");
+        }, e => setJiraPeopleErr((e as Error).message));
+      }
+    }
+    updateList(fn);
+  };
 
   const allIssues = useMemo(() => [...Object.values(cache), ...(state?.created ?? [])], [cache, state?.created]);
   const byKey = useMemo(() => new Map(allIssues.map(i => [i.key, i])), [allIssues]);
@@ -1270,6 +1291,13 @@ export default function JiraToolSection() {
               <button type="button" onClick={() => setLoadErr("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
             </div>
           )}
+          {jiraPeopleErr && jira.state === "ok" && (
+            <div role="alert" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-sm">
+              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <span className="min-w-0 flex-1 text-text-main">Jira не приняла людей (в SimpleTest они сохранены): {jiraPeopleErr}</span>
+              <button type="button" onClick={() => setJiraPeopleErr("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
+            </div>
+          )}
           {!list || !ctx ? (
             <div className="flex-1 flex flex-col items-center justify-center text-center gap-3 text-text-muted">
               <LayoutList className="w-8 h-8" />
@@ -1443,7 +1471,7 @@ export default function JiraToolSection() {
                       if (code) row[fid] = code; else delete row[fid];
                       return { ...l, icons: { ...l.icons, [key]: row } };
                     })}
-                    onParticipant={(key, id) => updateList(l => {
+                    onParticipant={(key, id) => updateListPeople(l => {
                       const a = { ...l.assignees };
                       if (id) a[key] = id; else delete a[key];
                       return { ...l, assignees: a };
@@ -1454,7 +1482,7 @@ export default function JiraToolSection() {
                     onOpenIssue={issue => setModal({ issueFor: issue })}
                     onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
                     onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
-                    onMoveToGroup={(key, changes, target, place) => updateList(l => {
+                    onMoveToGroup={(key, changes, target, place) => updateListPeople(l => {
                       const moved = applyGroupMove(l, state.participants, key, changes);
                       return target ? { ...moved, keys: moveItem(moved.keys, key, target, place) } : moved;
                     })}
@@ -1484,7 +1512,7 @@ export default function JiraToolSection() {
                     })}
                     onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))}
                     onOpenStage={issue => setModal({ stageFor: issue })}
-                    onRole={(key, fid, patch) => updateList(l => ({
+                    onRole={(key, fid, patch) => updateListPeople(l => ({
                       ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
                     }))}
                     onAddPerson={addPerson} onLeaveDirection={leaveDirection}
@@ -1567,6 +1595,15 @@ export default function JiraToolSection() {
       {backup && <BackupModal open section="bugs" file={backup.file} onClose={() => setBackup(null)} />}
       {modal === "participants" && (
         <ParticipantsModal open participants={state.participants} usage={usage} onClose={() => setModal(null)}
+          jiraOk={jira.state === "ok"} jiraFields={jiraFields}
+          onJiraFields={f => {
+            const prev = jiraFields;
+            setJiraFields(f);
+            saveJiraPeopleFields(f).then(() => setPeopleErr(""), e => {
+              setJiraFields(prev);
+              setPeopleErr(`Поля Jira направлений не сохранились: ${(e as Error).message}`);
+            });
+          }}
           onChange={participants => update(s => {
             const ids = new Set(participants.map(p => p.id));
             // Удалённого участника снимаем со всех задач во всех списках.
@@ -1624,6 +1661,12 @@ export default function JiraToolSection() {
       )}
       {modal && typeof modal === "object" && "own" in modal && (
         <OwnFieldModal open initial={modal.own} typeLocked={!!modal.own && ownUsed(modal.own.id)} onClose={() => setModal(null)}
+          sources={fieldOptions}
+          valuesOf={ref => {
+            if (!ctx || !list) return [];
+            const all = list.keys.map(k => byKey.get(k)).filter((i): i is Issue => !!i).flatMap(i => colValues(ref, i, ctx));
+            return Array.from(new Set(all.map(String))).sort((a, b) => a.localeCompare(b, "ru"));
+          }}
           onSave={saveOwn} onDelete={modal.own ? () => deleteOwn(modal.own!.id) : undefined} />
       )}
       <JiraSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); connect(true); }} />

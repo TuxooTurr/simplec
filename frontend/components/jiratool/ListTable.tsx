@@ -75,7 +75,7 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, reqOptions, onReqs, onReqUrl, onClearMark,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, msShared, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
@@ -153,6 +153,8 @@ export default function ListTable({
   msInfo: Record<string, string>;
   onMs: (key: string, names: string[]) => void;
   onCreateMs: (names: string[]) => Promise<void>;
+  /** Микросервисы, указанные у нескольких задач списка: имя (без регистра) → ключи задач — подсветка в ячейке. */
+  msShared: Map<string, string[]>;
   /** Снять отметку «n» (если папок в списке нет — переложить задачу некуда). */
   onClearMark: (key: string) => void;
 }) {
@@ -455,7 +457,7 @@ export default function ListTable({
               <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
                 onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />
             ) : c === MS_COL ? (
-              <MsCell value={msLinks[issue.key] ?? []} catalog={msCatalog} info={msInfo}
+              <MsCell value={msLinks[issue.key] ?? []} catalog={msCatalog} info={msInfo} shared={msShared} self={issue.key}
                 onChange={names => onMs(issue.key, names)} onCreate={onCreateMs} />
             ) : c === LOAD_COL ? (
               <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />

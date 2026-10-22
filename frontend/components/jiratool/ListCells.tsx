@@ -54,7 +54,7 @@ export function JiraCell({ id, issue }: { id: string; issue: Issue }) {
 }
 
 /**
- * Сумма неустранённых дефектов задачи (всё, кроме «Подтверждено исправление» и «Закрыт»);
+ * Сумма активных дефектов задачи (всё, кроме «Подтверждение исправления», «Исключено», «Отложен» и «Закрыт»);
  * по клику — окно со списком. У самих дефектов поля нет.
  */
 export function DefectsCell({ defects, onOpen }: { defects: Issue[] | null; onOpen: () => void }) {
@@ -574,10 +574,14 @@ export const reqDocHref = (id: string) => `/etalons?req=${encodeURIComponent(id)
  * описанию, несколько сразу, нет нужного — «+ Создать»: сохранится в справочник у всех). Справочник общий с графиком
  * стендов: оттуда же микросервисы подставляются в бронь.
  */
-export function MsCell({ value, catalog, info, onChange, onCreate }: {
+export function MsCell({ value, catalog, info, shared, self, onChange, onCreate }: {
   value: string[];
   catalog: string[];
   info: Record<string, string>;
+  /** Микросервисы, указанные у нескольких задач списка (имя без регистра → ключи): такие подсвечиваются. */
+  shared?: Map<string, string[]>;
+  /** Ключ этой задачи — чтобы в подсказке перечислить остальные. */
+  self?: string;
   onChange: (names: string[]) => void;
   onCreate: (names: string[]) => Promise<void>;
 }) {
@@ -591,10 +595,18 @@ export function MsCell({ value, catalog, info, onChange, onCreate }: {
             className="flex-1 text-left text-text-muted/50 text-sm hover:text-primary">—</button>
         ) : (
           <span className="flex flex-wrap items-center gap-1 min-w-0 flex-1">
-            {value.map(n => (
-              <span key={n} title={info[n] ? `${n} — ${info[n]}` : n}
-                className="max-w-full truncate px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-700 dark:text-sky-300 text-[11px] font-mono">{n}</span>
-            ))}
+            {value.map(n => {
+              const with_ = shared?.get(n.trim().replace(/\s+/g, " ").toLowerCase()) ?? [];
+              const others = with_.filter(k => k !== self);
+              return (
+                <span key={n} title={`${n}${info[n] ? ` — ${info[n]}` : ""}${others.length ? `\nЕщё у задач списка: ${others.join(", ")}` : ""}`}
+                  className={`max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-mono ${others.length
+                    ? "bg-amber-500/15 text-amber-800 dark:text-amber-300 ring-1 ring-amber-500/50"
+                    : "bg-sky-500/10 text-sky-700 dark:text-sky-300"}`}>
+                  {n}{others.length > 0 && <span className="ml-1 opacity-80">×{with_.length}</span>}
+                </span>
+              );
+            })}
           </span>
         )}
         {!!value.length && (

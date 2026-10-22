@@ -12,7 +12,7 @@
  */
 
 import {
-  DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isClosedDefect, isResolvedDefect,
+  DEFAULT_PROJECT, FIELD_BY_ID, PRIORITIES, STATUS_ORDER, SYSTEM_FIELD_IDS, categoryOf, isBlocker, isResolvedDefect,
   projectKeyOfIssue,
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
@@ -762,12 +762,12 @@ export function makeDefectsOf(index: Map<string, Issue[]>) {
 }
 
 /**
- * Неустранённый дефект: всё, кроме «Подтверждено исправление» и «Закрыт». Блокирующий — строже:
- * неустранён, пока не «Закрыт» (как и «Заблокирован» в статусе (st)), чтобы дефект, который держит
- * задачу заблокированной, всегда был виден в «Дефекты (st)» и «Блок (st)».
+ * Активный (неустранённый) дефект: всё, кроме «Подтверждение исправления», «Исключено», «Отложен» и «Закрыт».
+ * Правило одно для «Дефекты (st)», «Блок (st)» и блокировки стори и эпика в статусе (st) — что не блокирует, то и
+ * не висит в «Блок (st)».
  */
 export function isOpenDefect(d: Issue): boolean {
-  return !isResolvedDefect(d) || (isBlocker(d) && !isClosedDefect(d));
+  return !isResolvedDefect(d);
 }
 
 /** Неустранённые блокирующие дефекты задачи. */
@@ -835,6 +835,28 @@ export function colValues(ref: ColRef, issue: Issue, ctx: ColCtx): string[] {
   }
   if (v === null || v === undefined || v === "") return [];
   return Array.isArray(v) ? v.filter(Boolean) : [v];
+}
+
+/** Микросервис, который в списке трогают несколько задач: имя и ключи задач (в порядке списка). */
+export interface MsOverlap { service: string; keys: string[] }
+
+/**
+ * Пересечения по микросервисам в списке: микросервисы, указанные у двух и более задач (поле «Микросервисы (st)»).
+ * Имена сравниваются без регистра и лишних пробелов. Порядок — сначала самые общие, затем по имени.
+ */
+export function msOverlaps(keys: string[], msLinks: Record<string, string[]>): MsOverlap[] {
+  const by = new Map<string, MsOverlap>();
+  for (const k of keys) {
+    for (const name of msLinks[k] ?? []) {
+      const n = name.trim().replace(/\s+/g, " ").toLowerCase();
+      if (!n) continue;
+      const cur = by.get(n) ?? { service: name.trim(), keys: [] };
+      if (!cur.keys.includes(k)) cur.keys.push(k);
+      by.set(n, cur);
+    }
+  }
+  return [...by.values()].filter(o => o.keys.length > 1)
+    .sort((a, b) => b.keys.length - a.keys.length || a.service.localeCompare(b.service));
 }
 
 /** Порядок значений для сортировки и групп: статусы и этапы — по ходу процесса. */

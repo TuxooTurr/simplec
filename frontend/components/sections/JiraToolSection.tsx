@@ -11,6 +11,7 @@ import ListTable, { sortIssues, type SortState } from "@/components/jiratool/Lis
 import type { FilterOption } from "@/components/jiratool/ColumnFilter";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
 import MsAssignModal from "@/components/jiratool/MsAssignModal";
+import MsOverlapModal from "@/components/jiratool/MsOverlapModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import ListsNav from "@/components/jiratool/ListsNav";
 import type { ReqOption } from "@/components/jiratool/ListCells";
@@ -37,7 +38,7 @@ import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, SPEND_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -63,7 +64,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "load" | "loadDetails" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "load" | "loadDetails" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
 type Panel = "columns" | "group" | null;
 
@@ -409,6 +410,9 @@ export default function JiraToolSection() {
   if (!state) return <Shell><div className="p-6 text-sm text-text-muted">Загрузка…</div></Shell>;
 
   const reqName = new Map(reqOptions.map(r => [r.id, r.name]));
+  // Пересечения по микросервисам в текущем списке: виджет слева, окно с деталями, подсветка в ячейках.
+  const overlaps = list ? msOverlaps(list.keys, state.msLinks) : [];
+  const msShared = new Map(overlaps.map(o => [o.service.trim().replace(/\s+/g, " ").toLowerCase(), o.keys]));
   const ctx: ColCtx | null = list ? {
     list, participants: state.participants, stageOf, defectsOf,
     reqsOf: key => (state.reqLinks[key] ?? []).map(id => reqName.get(id) ?? "удалён"),
@@ -1207,6 +1211,19 @@ export default function JiraToolSection() {
                 onDetails={() => setModal("loadDetails")} />
             )}
 
+            {/* Пересечения по микросервисам: сколько микросервисов указано у нескольких задач списка → окно с деталями */}
+            {list && list.keys.some(k => state.msLinks[k]?.length) && (
+              <button type="button" onClick={() => setModal("msOverlaps")}
+                title="Микросервисы, которые трогают несколько задач списка: какие фичи и в каком они статусе"
+                className="bg-bg-card border border-border-main rounded-xl px-3 py-2.5 text-left hover:border-primary/40">
+                <span className="block text-[10px] font-semibold uppercase tracking-wide text-text-muted">Пересечения по микросервисам</span>
+                <span className="flex items-baseline gap-2">
+                  <b className={`text-2xl tabular-nums ${overlaps.length ? "text-amber-600 dark:text-amber-400" : "text-text-main"}`}>{overlaps.length}</b>
+                  <span className="text-xs text-text-muted">{overlaps.length ? `задач в них: ${new Set(overlaps.flatMap(o => o.keys)).size} · подробно →` : "каждый микросервис — у одной задачи"}</span>
+                </span>
+              </button>
+            )}
+
             <button type="button" onClick={() => setModal("stages")}
               className="flex items-center gap-2 bg-bg-card border border-border-main rounded-xl px-3 py-2.5 text-sm text-text-main hover:border-primary/40 text-left">
               <GitBranch className="w-4 h-4 text-text-muted" />
@@ -1473,7 +1490,7 @@ export default function JiraToolSection() {
                     onAddPerson={addPerson} onLeaveDirection={leaveDirection}
                     onNoLoad={(key, skip) => setNoLoad([key], skip)}
                     reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
-                    msLinks={state.msLinks} msCatalog={msCatalog.ms} msInfo={msCatalog.info} onCreateMs={createMs}
+                    msLinks={state.msLinks} msCatalog={msCatalog.ms} msInfo={msCatalog.info} onCreateMs={createMs} msShared={msShared}
                     onMs={(key, names) => setMs([key], names, "set")}
                     onReqUrl={(key, u) => update(s => {
                       const m = { ...s.reqUrls };
@@ -1556,6 +1573,9 @@ export default function JiraToolSection() {
             const lists = s.lists.map(l => ({ ...l, assignees: Object.fromEntries(Object.entries(l.assignees).filter(([, p]) => ids.has(p))) }));
             return { ...s, participants, lists };
           })} />
+      )}
+      {modal === "msOverlaps" && (
+        <MsOverlapModal open overlaps={overlaps} issueOf={k => byKey.get(k)} stageOf={stageOf} info={msCatalog.info} onClose={() => setModal(null)} />
       )}
       {modal === "ms" && (
         <MsAssignModal open count={selected.size} catalog={msCatalog.ms} info={msCatalog.info} onCreate={createMs}

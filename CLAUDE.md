@@ -102,6 +102,7 @@ SimpleTest/
 │   │   ├── revisor.py       # Ревизия тест-кейсов
 │   │   ├── xlsx_export.py   # POST /api/export/xlsx — таблица в Excel (генератор backend/xlsx_writer.py, без openpyxl)
 │   │   ├── backup.py        # Резервная копия: выгрузка всех данных (data/*.json, БД, эталоны) в .json и восстановление
+│   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы-требования в дереве папок (data/requirement_folders.json), документ QA
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения
@@ -117,6 +118,7 @@ SimpleTest/
 │   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)
 │   │   │   ├── AutoModelSection.tsx    # Автотесты (Java) — скрыт, код сохранён
 │   │   │   └── RevisorSection.tsx      # Ревизия — скрыт, код сохранён
+│   │   ├── incidents/       # Генератор инцидентов: IncidentGenSection (вкладки), IncidentLibrary, IncidentGenSettings
 │   │   ├── data/            # «Данные»: DataDocs (дерево + страница), DocTree, DocPage, NewDocForm, QaDocView
 │   │   ├── ExportPanel.tsx  # Экспорт в Jira Zephyr Scale
 │   │   └── NotionRenderer.tsx  # Markdown → Notion-стиль
@@ -179,6 +181,7 @@ SimpleTest/
   `st_zephyr_ke_skip:<релиз>` — КЭ, исключённые у отдельных стори в «КЭ релиза → на все стори»
 - `st_jira_tool_list_setup` — раскрыта ли «Настройка списка» вверху левой колонки Jira tool
 - `st_data_tree_open` — раскрытые папки дерева «Данных»; `st_data_doc` — последний открытый документ
+- `st_incident_spec` — черновик формы «Генератора инцидентов» (CI, количество, описание)
 - `st_cell_icon_recent`, `st_cell_icon_color` — недавние ярлычки ячеек и выбранный цвет иконок (удобство одного браузера)
 - `st_jira_tool_cache` — **sessionStorage**: кэш задач Jira tool на сессию (задачи из Jira, связанные, ненайденные);
   основная копия — в памяти модуля `frontend/lib/jiraToolCache.ts`, фоновое обновление раз в 30 минут

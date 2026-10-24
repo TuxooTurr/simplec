@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Users, X, Zap,
+  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Siren, Users, X, Zap,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
 import MetricsSection from "./MetricsSection";
 import TcsGeneratorSection from "./TcsGeneratorSection";
 import JobsSection from "./JobsSection";
+import IncidentGenSection from "@/components/incidents/IncidentGenSection";
 import WebConnectorsSection from "./WebConnectorsSection";
 import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 import AlertsSection from "./AlertsSection";
@@ -71,6 +72,15 @@ const GENERATORS: Generator[] = [
     Component: WebConnectorsSection,
     superuserOnly: true,
   } satisfies Generator] : []),
+  {
+    id: "incidents",
+    title: "Генератор инцидентов",
+    subtitle: "Тестовые инциденты в Sber911 через Kafka: по выбранным CI, с описанием и инструкцией",
+    Icon: Siren,
+    color: "red",
+    Component: IncidentGenSection,
+    superuserOnly: true,
+  },
   {
     id: "jobs",
     title: "Jobs",

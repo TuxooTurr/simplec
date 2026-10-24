@@ -52,7 +52,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
-    datagen, hub_tiles,
+    datagen, hub_tiles, incident_gen,
 )
 
 # Веб-коннекторы (Playwright), анализатор логов на них и MCP-сервер для GigaCode временно отключены
@@ -202,6 +202,7 @@ app.include_router(xlsx_export.router)
 app.include_router(stands.router)
 app.include_router(datagen.router)
 app.include_router(requirements.router)
+app.include_router(incident_gen.router)
 
 # Раздача Next.js static build (если собран)
 _FRONTEND_OUT = _ROOT / "frontend" / "out"

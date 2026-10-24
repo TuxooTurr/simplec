@@ -1,14 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, ListChecks, Loader2, Plus, RefreshCw, ShieldCheck, Tags, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, Link2, ListChecks, Loader2, Plus, RefreshCw, Rocket, Search, ShieldCheck, Tags, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { addRelease, analyzeCoverage, editNfRuns, getReleaseBoard, getReleases, removeRelease, runKind, setCoverageLink, type ReleaseBoard, type ZLinked } from "@/lib/zephyrApi";
+import {
+  addRelease, attachRun, createStoryRuns, detachRun, editNfRuns, getReleaseBoard, getReleases, getRuns, getStoryCases, removeRelease, runKind,
+  type ReleaseBoard, type ZLinked, type ZRun,
+} from "@/lib/zephyrApi";
 import RunCard, { RunTypeChip } from "./RunCard";
 import CritRegressView from "./CritRegressView";
 import KeAlignModal from "./KeAlignModal";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
+/** Кнопки как во всём SimpleTest: основная — заливка, второстепенная — рамка; одна высота и отступы. */
+const BTN_PRIMARY = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40 whitespace-nowrap";
+const BTN = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40 whitespace-nowrap";
 
 type BoardState = { data?: ReleaseBoard; err?: string; busy?: boolean };
 
@@ -17,13 +23,8 @@ type BoardState = { data?: ReleaseBoard; err?: string; busy?: boolean };
 /** Стори релиза — связанные задачи с типом «История» / Story (дефекты, эпики и прочее в расчёт не идут). */
 const isStory = (i: ZLinked) => /истори|стори|story/i.test(i.issuetype);
 const storiesOf = (b: ReleaseBoard) => b.release.stories.filter(isStory);
-/** Прогоны релиза, в отслеживании которых есть стори (стори и релиз — в одном прогоне). */
-/** Прогоны стори: после анализа покрытия — по нему (расчёт SimpleTest с ручной правкой), до — по issueKey прогонов. */
-const storyRunsOf = (b: ReleaseBoard, key: string) => {
-  if (!b.coverage) return b.storyRuns[key] ?? [];
-  const keys = new Set((b.coverage.stories[key] ?? []).map(x => x.run));
-  return b.nfRuns.filter(r => keys.has(r.key));
-};
+/** Прогоны стори: из Zephyr (стори в отслеживании) и прикреплённые в SimpleTest. */
+const storyRunsOf = (b: ReleaseBoard, key: string) => b.storyRuns[key] ?? [];
 const regressRuns = (b: ReleaseBoard) => b.runs.filter(r => runKind(r.type) === "regress");
 /** НФ-прогоны релиза — сохранённый список SimpleTest (сверка по issueKey + добавленные руками). */
 const nfRuns = (b: ReleaseBoard) => b.nfRuns ?? b.runs.filter(r => runKind(r.type) === "nf");
@@ -93,74 +94,148 @@ function NfRunsModal({ board, project, onOpenRun, onChanged, onClose }: {
   );
 }
 
+/** Папки прогонов списком — для выбора папки нового прогона и фильтра «Прикрепить имеющийся». */
+const runFolders = (runs: ZRun[]) => [...new Set(runs.map(r => r.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+
 /**
- * Покрытие стори релиза НФ-прогонами — расчёт SimpleTest: авто (номер стори в названии прогона или его issueKey)
- * и ручная правка галочками. В Jira ничего не пишется; результат хранится и красит строки стори.
+ * Прогон для выбранных стори. API Zephyr не дописывает отслеживание в готовый прогон, поэтому два пути:
+ *  • «Создать НФ-прогоны» — на каждую стори свой прогон: стори в отслеживании (ставится при создании), кейсы —
+ *    привязанные к стори, вид — НФ, папка — на выбор; прогон сразу в НФ релиза и у стори;
+ *  • «Прикрепить имеющийся» — выбрать прогон из списка (по папкам); связь хранится в SimpleTest, красит маркеры.
  */
-function CoverageModal({ board, project, onChanged, onClose }: {
-  board: ReleaseBoard; project: string; onChanged: () => void; onClose: () => void;
+function StoryRunsModal({ board, project, stories, onChanged, onClose }: {
+  board: ReleaseBoard; project: string; stories: ZLinked[]; onChanged: () => void; onClose: () => void;
 }) {
-  const [cov, setCov] = useState(board.coverage ?? null);
+  const rel = board.release.key;
+  const [tab, setTab] = useState<"create" | "attach">("create");
+  const [runs, setRuns] = useState<ZRun[] | null>(null);
+  const [cases, setCases] = useState<Record<string, string[]> | null>(null);
+  const [type, setType] = useState("");
+  const [folder, setFolder] = useState("");
+  const [q, setQ] = useState("");
+  const [folderF, setFolderF] = useState("");
+  const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const runs = nfRuns(board);
-  const stories = storiesOf(board);
-  const run = async (fn: () => Promise<typeof cov>) => {
+  const [done, setDone] = useState<{ ok: boolean; text: string }[] | null>(null);
+  const storyKeys = stories.map(s => s.key).join(",");
+  useEffect(() => {
+    getRuns(project).then(r => setRuns(r.runs)).catch(e => setErr((e as Error).message));
+    getStoryCases(rel, project, storyKeys.split(",")).then(r => { setCases(r.cases); setType(r.type); }).catch(e => setErr((e as Error).message));
+  }, [project, rel, storyKeys]);
+  const folders = runFolders(runs ?? []);
+  const withCases = stories.filter(s => (cases?.[s.key] ?? []).length > 0);
+  const sq = q.trim().toLowerCase();
+  const shown = (runs ?? []).filter(r => (!folderF || r.folder === folderF || r.folder.startsWith(folderF + "/"))
+    && (!sq || r.key.toLowerCase().includes(sq) || r.name.toLowerCase().includes(sq))).slice(0, 300);
+
+  const create = async () => {
     setBusy(true); setErr("");
-    try { setCov(await fn()); onChanged(); } catch (x) { setErr((x as Error).message); }
+    try {
+      const r = await createStoryRuns(rel, project, withCases.map(s => ({ key: s.key, summary: s.summary })), folder, type);
+      setDone(r.results.map(x => (x.run
+        ? { ok: true, text: `${x.story} → прогон ${x.run} (кейсов ${x.cases})${x.warnings?.length ? `. ${x.warnings.join(" ")}` : ""}` }
+        : { ok: false, text: `${x.story}: ${x.error}` })));
+      onChanged();
+    } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
-  const toggle = (story: string, r: string) => {
-    const link = cov?.stories[story]?.find(x => x.run === r);
-    const auto = link ? link.auto : false;
-    const next = !link;
-    // Совпало с авто — снимаем ручную правку, иначе запоминаем руками.
-    void run(() => setCoverageLink(board.release.key, project, story, r, next === auto ? null : next));
+  const attach = async () => {
+    setBusy(true); setErr("");
+    try {
+      await attachRun(rel, project, stories.map(s => s.key), pick);
+      setDone([{ ok: true, text: `Прогон ${pick} прикреплён к стори: ${stories.map(s => s.key).join(", ")}. В Zephyr отслеживание этого прогона не меняется — API не умеет.` }]);
+      onChanged();
+    } catch (e) { setErr((e as Error).message); }
+    setBusy(false);
   };
+  const tabCls = (on: boolean) => `px-3 py-1.5 rounded-lg text-sm ${on ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main hover:bg-bg-subtle"}`;
+
   return (
-    <Modal open onClose={onClose} title={`Покрытие стори · ${board.release.key}`} size="max-w-4xl">
+    <Modal open onClose={() => !busy && onClose()} title={`Прогон для стори · ${stories.length}`} size="max-w-3xl">
       <div className="space-y-3 text-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={() => run(() => analyzeCoverage(board.release.key, project))} disabled={busy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />} {cov ? "Пересчитать" : "Проанализировать"}</button>
-          {cov && <span className="text-text-main">Покрыто стори: <b>{cov.covered} из {cov.total}</b> <span className="text-xs text-text-muted">· {cov.analyzedAt}</span></span>}
-          {err && <span className="text-xs text-red-600 dark:text-red-400">{err}</span>}
+        <div className="flex gap-1" role="tablist">
+          <button type="button" role="tab" aria-selected={tab === "create"} onClick={() => setTab("create")} className={tabCls(tab === "create")}>
+            <span className="flex items-center gap-1.5"><Rocket className="w-4 h-4" /> Создать НФ-прогоны</span></button>
+          <button type="button" role="tab" aria-selected={tab === "attach"} onClick={() => setTab("attach")} className={tabCls(tab === "attach")}>
+            <span className="flex items-center gap-1.5"><Link2 className="w-4 h-4" /> Прикрепить имеющийся</span></button>
         </div>
-        <p className="text-xs text-text-muted">
-          Авто — номер стори в названии прогона или в его основной задаче отслеживания. Галочкой можно поправить связь руками
-          (рамка — правка руками). В Jira ничего не меняется.
-        </p>
-        {!cov ? <p className="text-text-muted">Нажмите «Проанализировать» — стори релиза сопоставятся с его НФ-прогонами ({runs.length}).</p>
-          : runs.length === 0 ? <p className="text-text-muted">У релиза нет НФ-прогонов — добавьте их в окне маркера «НФ».</p> : (
-          <ul className="border border-border-main rounded-xl divide-y divide-border-main max-h-[60vh] overflow-y-auto scrollbar-thin">
-            {stories.map(st => {
-              const links = cov.stories[st.key] ?? [];
-              return (
-                <li key={st.key} className="px-3 py-2 space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <Marker on={links.length > 0} title={links.length ? "Стори покрыта" : "Ни одного прогона"}>{links.length ? "есть" : "нет"}</Marker>
-                    <span className="font-mono text-xs text-primary">{st.key}</span>
-                    <span className="min-w-0 flex-1 truncate text-text-main" title={st.summary}>{st.summary}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 pl-1">
-                    {runs.map(r => {
-                      const link = links.find(x => x.run === r.key);
-                      return (
-                        <button key={r.key} type="button" disabled={busy} onClick={() => toggle(st.key, r.key)} aria-pressed={!!link}
-                          title={`${r.key} — ${r.name}${link ? (link.manual !== undefined ? " · связь руками" : " · авто") : ""}`}
-                          className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-mono border
-                            ${link ? "bg-primary/10 text-primary border-primary/50" : "text-text-muted border-border-main hover:text-text-main"}
-                            ${link?.manual !== undefined ? "ring-1 ring-amber-400" : ""}`}>
-                          {link ? <Check className="w-3 h-3" /> : <CircleDashed className="w-3 h-3" />}{r.key}
-                        </button>
-                      );
-                    })}
-                  </div>
+        {done ? (
+          <>
+            <ul className="space-y-1">
+              {done.map(d => <li key={d.text} className={`rounded-lg px-3 py-1.5 ${d.ok ? "bg-green-600/10 text-green-800 dark:text-green-300" : "bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200"}`}>{d.text}</li>)}
+            </ul>
+            <div className="flex justify-end"><button type="button" onClick={onClose} className={BTN_PRIMARY}>Готово</button></div>
+          </>
+        ) : tab === "create" ? (
+          <>
+            <p className="text-xs text-text-muted">На каждую стори — свой прогон: стори в отслеживании, кейсы — привязанные к стори в Zephyr,
+              «Вид тестирования» — НФ. Прогон сразу появится в НФ релиза и у стори. Стори без кейсов не создаются — им прикрепите имеющийся прогон.</p>
+            <ul className="max-h-56 overflow-y-auto scrollbar-thin divide-y divide-border-main border border-border-main rounded-lg">
+              {stories.map(s => {
+                const n = cases?.[s.key]?.length;
+                return (
+                  <li key={s.key} className="flex items-center gap-2 px-3 py-1.5">
+                    <span className="font-mono text-xs text-primary whitespace-nowrap">{s.key}</span>
+                    <span className="min-w-0 flex-1 truncate text-text-main" title={s.summary}>{s.summary}</span>
+                    <span className={`text-xs whitespace-nowrap ${n ? "text-text-muted" : "text-amber-700 dark:text-amber-300"}`}>
+                      {cases ? (n ? `кейсов: ${n}` : "нет кейсов") : <Loader2 className="w-3.5 h-3.5 animate-spin" />}</span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1"><span className="block text-xs text-text-muted">Папка прогонов</span>
+                <select value={folder} onChange={e => setFolder(e.target.value)} className={`${INPUT} w-full`}>
+                  <option value="">— корень —</option>
+                  {folders.map(f => <option key={f} value={f}>{f}</option>)}
+                </select></label>
+              <label className="space-y-1"><span className="block text-xs text-text-muted">Вид тестирования</span>
+                <input value={type} onChange={e => setType(e.target.value)} className={`${INPUT} w-full`} /></label>
+            </div>
+            {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} disabled={busy} className={BTN}>Отмена</button>
+              <button type="button" onClick={create} disabled={busy || !withCases.length} className={BTN_PRIMARY}>
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />} Создать прогоны ({withCases.length})</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-xs text-text-muted">Выберите прогон — он прикрепится ко всем выбранным стори и встанет в НФ релиза. Связь хранится в SimpleTest:
+              в Zephyr отслеживание готового прогона через API не меняется.</p>
+            <div className="flex gap-2">
+              <label className="min-w-0 flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)]">
+                <Search className="w-3.5 h-3.5 text-text-muted" />
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Номер или название прогона" aria-label="Найти прогон"
+                  className="min-w-0 flex-1 bg-transparent text-sm text-text-main focus:outline-none" /></label>
+              <select value={folderF} onChange={e => setFolderF(e.target.value)} aria-label="Папка прогонов" className={`${INPUT} w-64`}>
+                <option value="">Все папки</option>
+                {folders.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <ul role="radiogroup" aria-label="Прогон" className="max-h-72 overflow-y-auto scrollbar-thin divide-y divide-border-main border border-border-main rounded-lg">
+              {!runs && <li className="px-3 py-2 text-text-muted"><Loader2 className="inline w-4 h-4 animate-spin" /> Загружаю прогоны…</li>}
+              {runs && !shown.length && <li className="px-3 py-2 text-text-muted">Ничего не найдено.</li>}
+              {shown.map(r => (
+                <li key={r.key}>
+                  <label className={`flex items-center gap-2 px-3 py-1.5 cursor-pointer ${pick === r.key ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
+                    <input type="radio" name="attach-run" checked={pick === r.key} onChange={() => setPick(r.key)} />
+                    <span className="font-mono text-xs text-primary whitespace-nowrap">{r.key}</span>
+                    <span className="min-w-0 flex-1 truncate text-text-main" title={r.name}>{r.name}</span>
+                    <RunTypeChip type={r.type} />
+                    <span className="max-w-[160px] truncate text-[11px] text-text-muted" title={r.folder}>{r.folder}</span>
+                  </label>
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+            {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={onClose} disabled={busy} className={BTN}>Отмена</button>
+              <button type="button" onClick={attach} disabled={busy || !pick} className={BTN_PRIMARY}>
+                {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />} Прикрепить к {stories.length} стори</button>
+            </div>
+          </>
         )}
       </div>
     </Modal>
@@ -173,18 +248,18 @@ function MissingNfJql({ board, baseUrl }: { board: ReleaseBoard; baseUrl: string
   const [copied, setCopied] = useState(false);
   const missing = storiesWithoutRun(board);
   if (!storiesOf(board).length) return null;
-  if (!missing.length) return <p className="px-4 py-2 text-xs text-green-700 dark:text-green-400">Все стори релиза есть в прогонах релиза.</p>;
+  if (!missing.length) return <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" /> Все стори в прогонах</span>;
   const jql = `issuekey in (${missing.map(s => s.key).join(", ")}) ORDER BY key`;
   const copy = async () => {
     try { await navigator.clipboard.writeText(jql); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* выделите и скопируйте вручную */ }
   };
   return (
-    <div className="px-4 py-2 space-y-2">
-      <button type="button" onClick={() => setShown(v => !v)} aria-expanded={shown}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-        <ListChecks className="w-4 h-4" /> Собрать список · без прогона: {missing.length}</button>
+    <>
+      <button type="button" onClick={() => setShown(v => !v)} aria-expanded={shown} title="JQL стори без прогона — открыть в Jira или скопировать"
+        className={BTN}>
+        <ListChecks className="w-4 h-4" /> Собрать список прогона · без прогона: {missing.length}</button>
       {shown && (
-        <div className="rounded-lg border border-border-main bg-bg-subtle p-2 space-y-1.5">
+        <div className="basis-full order-last rounded-lg border border-border-main bg-bg-subtle p-2 space-y-1.5">
           <p className="text-[11px] text-text-muted">JQL стори без прогона — добавьте их в отслеживание прогонов релиза в Zephyr:</p>
           <code className="block select-all break-all font-mono text-xs text-text-main">{jql}</code>
           <div className="flex items-center gap-2">
@@ -198,7 +273,7 @@ function MissingNfJql({ board, baseUrl }: { board: ReleaseBoard; baseUrl: string
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -210,7 +285,9 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
   const [regressOpen, setRegressOpen] = useState(false);
   const [nfOpen, setNfOpen] = useState(false);
   const [keOpen, setKeOpen] = useState(false);
-  const [covOpen, setCovOpen] = useState(false);
+  /** Стори, отмеченные для «Прогон для выбранных», и открыто ли это окно. */
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [runsOpen, setRunsOpen] = useState(false);
   const [askRemove, setAskRemove] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string }[]>([]);
 
@@ -279,11 +356,11 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
 
       {open && b && (
         <div className="border-t border-border-main">
-          {b.traceSource === "issueKey" && !b.coverage && (
+          {b.traceSource === "issueKey" && (
             <p className="flex items-start gap-2 px-4 py-2 text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-              <span>Стенд отдаёт у прогона только одну задачу отслеживания, поэтому стори ниже — по ней. Точнее: «Проанализировать
-                покрытие» — SimpleTest сопоставит стори с НФ-прогонами релиза сам (по номеру стори), связи можно поправить руками.</span>
+              <span>Стенд отдаёт у прогона одну задачу отслеживания: «Прогон есть» — если стори в отслеживании прогона или прогон
+                прикреплён к ней здесь. Отметьте стори без прогона и нажмите «Прогон для выбранных» — создать НФ-прогоны или прикрепить имеющийся.</span>
             </p>
           )}
           {stories.length === 0 ? (
@@ -293,15 +370,25 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
               {stories.map(s => {
                 const runs = storyRunsOf(b, s.key);
                 return (
-                  <li key={s.key} className="flex items-center gap-3 px-4 py-2">
+                  <li key={s.key} className={`flex items-center gap-3 px-4 py-2 ${picked.has(s.key) ? "bg-primary/5" : ""}`}>
+                    <input type="checkbox" aria-label={`Выбрать ${s.key}`} checked={picked.has(s.key)}
+                      onChange={() => setPicked(o => { const n = new Set(o); if (n.has(s.key)) n.delete(s.key); else n.add(s.key); return n; })} />
                     <Marker on={runs.length > 0} title={runs.length ? `Стори в отслеживании прогонов релиза: ${runs.map(r => `${r.key} — ${r.name}`).join("; ")}` : "Стори нет в отслеживании прогонов релиза"}>
                       {runs.length ? "Прогон есть" : "Прогона нет"}</Marker>
                     <a href={`${baseUrl}/browse/${s.key}`} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-primary hover:underline whitespace-nowrap">{s.key}</a>
                     <span className="min-w-0 flex-1 truncate text-sm text-text-main" title={s.summary}>{s.summary}</span>
                     <span className="flex flex-wrap justify-end gap-1">
                       {runs.map(r => (
-                        <button key={r.key} type="button" onClick={() => onOpenRun(r.key)} title={`${r.name} — открыть на вкладке «Прогоны»`}
-                          className="flex items-center gap-1 font-mono text-[11px] text-primary hover:underline">{r.key}<RunTypeChip type={r.type} /></button>
+                        <span key={r.key} className="flex items-center gap-0.5">
+                          <button type="button" onClick={() => onOpenRun(r.key)}
+                            title={`${r.name} — открыть на вкладке «Прогоны»${r.attached ? " · прикреплён в SimpleTest" : " · стори в отслеживании прогона"}`}
+                            className="flex items-center gap-1 font-mono text-[11px] text-primary hover:underline">{r.key}{r.attached && <Link2 className="w-3 h-3" />}<RunTypeChip type={r.type} /></button>
+                          {r.attached && (
+                            <button type="button" aria-label={`Открепить ${r.key} от ${s.key}`} title="Открепить (связь SimpleTest; в Zephyr ничего не меняется)"
+                              onClick={() => void detachRun(relKey, project, s.key, r.key).then(onReload, e => setNote([{ ok: false, text: (e as Error).message }]))}
+                              className="p-0.5 rounded text-text-muted hover:text-red-500"><X className="w-3 h-3" /></button>
+                          )}
+                        </span>
                       ))}
                     </span>
                     <span className="text-xs text-text-muted whitespace-nowrap">{s.status}</span>
@@ -310,17 +397,17 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
               })}
             </ul>
           )}
-          <div className="border-t border-border-main"><MissingNfJql board={b} baseUrl={baseUrl} /></div>
           {stories.length > 0 && (
-            <div className="border-t border-border-main px-4 py-2 flex flex-wrap gap-2">
-              <button type="button" onClick={() => setCovOpen(true)}
-                title="Сопоставить стори релиза с его НФ-прогонами: авто по номеру стори + правка руками. Считает SimpleTest, в Jira ничего не пишется"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-                <ListChecks className="w-4 h-4" /> Проанализировать покрытие
-                {b.coverage && <span className="text-xs text-text-muted">· {b.coverage.covered}/{b.coverage.total}</span>}</button>
-              <button type="button" onClick={() => setKeOpen(true)}
-                title={`Выравнивание: всем стори — все КЭ релиза${b.release.ke.length ? ` (${b.release.ke.map(k => k.label).join(", ")})` : ""}. Сначала покажет, что изменится`}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+            <div className="border-t border-border-main px-4 py-2 flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-1.5 text-xs text-text-muted cursor-pointer select-none" title="Отметить все стори без прогона">
+                <input type="checkbox" checked={storiesWithoutRun(b).length > 0 && storiesWithoutRun(b).every(x => picked.has(x.key))}
+                  onChange={e => setPicked(e.target.checked ? new Set(storiesWithoutRun(b).map(x => x.key)) : new Set())} /> без прогона</label>
+              <button type="button" onClick={() => setRunsOpen(true)} disabled={!picked.size} className={BTN_PRIMARY}
+                title="Создать НФ-прогоны на выбранные стори или прикрепить к ним имеющийся прогон">
+                <Rocket className="w-4 h-4" /> Прогон для выбранных{picked.size ? ` (${picked.size})` : ""}</button>
+              <MissingNfJql board={b} baseUrl={baseUrl} />
+              <button type="button" onClick={() => setKeOpen(true)} className={BTN}
+                title={`Выравнивание: всем стори — все КЭ релиза${b.release.ke.length ? ` (${b.release.ke.map(k => k.label).join(", ")})` : ""}. Сначала покажет, что изменится`}>
                 <Tags className="w-4 h-4" /> КЭ релиза → на все стори</button>
             </div>
           )}
@@ -340,7 +427,10 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
       )}
       {keOpen && <KeAlignModal releaseKey={relKey} baseUrl={baseUrl} onClose={() => setKeOpen(false)} />}
       {nfOpen && b && <NfRunsModal board={b} project={project} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
-      {covOpen && b && <CoverageModal board={b} project={project} onChanged={onReload} onClose={() => setCovOpen(false)} />}
+      {runsOpen && b && (
+        <StoryRunsModal board={b} project={project} stories={stories.filter(x => picked.has(x.key))}
+          onChanged={() => { setPicked(new Set()); onReload(); }} onClose={() => setRunsOpen(false)} />
+      )}
     </li>
   );
 }
@@ -350,7 +440,8 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
  * есть прогон регресса; «НФ» — каждая стори релиза есть в отслеживании прогона релиза (клик — прогоны НФ релиза);
  * «Регресс покрыт» — оба. «Собрать регресс» —
  * окно: КЭ релиза → кейсы по полю «АС» → прогон в Zephyr с релизом в отслеживании. Раскрытая строка — стори
- * с маркером НФ и «Собрать список» — JQL стори без НФ. Список релизов общий — хранится в SimpleTest.
+ * с маркером «Прогон есть», галочками и «Прогон для выбранных» (создать НФ-прогоны или прикрепить имеющийся),
+ * «Собрать список прогона» — JQL стори без прогона. Список релизов общий — хранится в SimpleTest.
  */
 export default function ReleasesView({ project, baseUrl, onOpenRun }: { project: string; baseUrl: string; onOpenRun: (key: string) => void }) {
   const [keys, setKeys] = useState<string[] | null>(null);

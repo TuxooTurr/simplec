@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
-import { fmtDate, fmtDuration, getRun, getRuns, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
+import { ChevronDown, FolderTree as FolderTreeIcon, Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
+import { fmtDate, fmtDuration, getRun, getRuns, type ZFolder, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
+import FolderTree from "./FolderTree";
 import { CaseCard, IssueLinks, ResultBar, ResultPill } from "./parts";
 import Player from "./Player";
 import CaseDialog from "./CaseDialog";
@@ -14,6 +15,24 @@ const runCache = new Map<string, ZRunFull>();
 
 type Sort = "new" | "old";
 const SORT_KEY = "st_zephyr_runs_sort";
+/** Дерево папок прогонов — из путей прогонов (папки прогонов API отдельно не отдаёт); count — с вложенными. */
+export function runFolderTree(runs: ZRun[]): ZFolder[] {
+  type Node = { name: string; path: string; count: number; children: Map<string, Node> };
+  const root: Node = { name: "", path: "", count: 0, children: new Map() };
+  for (const r of runs) {
+    let node = root, acc = "";
+    for (const part of (r.folder || "").split("/").filter(Boolean)) {
+      acc += "/" + part;
+      if (!node.children.has(part)) node.children.set(part, { name: part, path: acc, count: 0, children: new Map() });
+      node = node.children.get(part)!;
+      node.count += 1;
+    }
+  }
+  const out = (n: Node): ZFolder[] => [...n.children.values()].sort((a, b) => a.name.localeCompare(b.name, "ru"))
+    .map(c => ({ name: c.name, path: c.path, count: c.count, children: out(c) }));
+  return out(root);
+}
+
 /** Время создания прогона для сортировки; нет даты — по номеру прогона. */
 const created = (r: ZRun) => Date.parse(r.created || "") || Number(r.key.replace(/\D/g, "")) || 0;
 
@@ -31,6 +50,9 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
   const [q, setQ] = useState("");
   const [typeF, setTypeF] = useState("");
   const [sort, setSort] = useState<Sort>("new");
+  /** Папка прогонов: "" — все; выбранная — с вложенными. */
+  const [folder, setFolder] = useState("");
+  const [treeOpen, setTreeOpen] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [sel, setSel] = useState<string | null>(openKey ?? null);
   const [run, setRun] = useState<ZRunFull | null>(null);
@@ -70,9 +92,11 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
 
   const types = useMemo(() => [...new Set((runs ?? []).map(r => r.type).filter(Boolean))].sort(), [runs]);
   const s = q.trim().toLowerCase();
+  const tree = useMemo(() => runFolderTree(runs ?? []), [runs]);
+  const inFolder = (r: ZRun) => !folder || r.folder === folder || (r.folder || "").startsWith(folder + "/");
   const shown = useMemo(() => (runs ?? [])
-    .filter(r => (!typeF || r.type === typeF) && (!s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s)))
-    .sort((a, b) => (sort === "new" ? created(b) - created(a) : created(a) - created(b))), [runs, s, typeF, sort]);
+    .filter(r => inFolder(r) && (!typeF || r.type === typeF) && (!s || r.name.toLowerCase().includes(s) || r.key.toLowerCase().includes(s)))
+    .sort((a, b) => (sort === "new" ? created(b) - created(a) : created(a) - created(b))), [runs, s, typeF, sort, folder]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const SELECT = "text-sm border border-border-main rounded-lg px-2 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
@@ -100,9 +124,26 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
             <option value="old">Сначала старые</option>
           </select>
         </div>
+        {runs && tree.length > 0 && (
+          // Папки прогонов — как дерево кейсов: выбор папки показывает её прогоны вместе с вложенными.
+          <div className="mb-2 rounded-lg border border-border-main">
+            <button type="button" onClick={() => setTreeOpen(o => !o)} aria-expanded={treeOpen}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-sm">
+              <FolderTreeIcon className="w-4 h-4 text-text-muted" />
+              <span className="font-medium text-text-main">Папки прогонов</span>
+              <span className="min-w-0 flex-1 truncate text-right text-[11px] text-text-muted">{folder || "все"}</span>
+              <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform ${treeOpen ? "rotate-180" : ""}`} />
+            </button>
+            {treeOpen && (
+              <div className="px-1.5 pb-1.5 max-h-72 overflow-hidden flex flex-col">
+                <FolderTree folders={tree} total={runs.length} selected={folder} onSelect={setFolder} rootLabel="Все прогоны" />
+              </div>
+            )}
+          </div>
+        )}
         {err && <p className="text-sm text-red-600 dark:text-red-400">Прогоны не загрузились: {err}</p>}
         {!runs && !err && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p>}
-        {runs && shown.length === 0 && <p className="text-sm text-text-muted">{runs.length ? "Ничего не найдено." : "Прогонов в проекте нет."}</p>}
+        {runs && shown.length === 0 && <p className="text-sm text-text-muted">{runs.length ? (folder ? "В этой папке прогонов нет." : "Ничего не найдено.") : "Прогонов в проекте нет."}</p>}
         <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-1.5" aria-label="Прогоны">
           {shown.map(r => (
             <li key={r.key}>

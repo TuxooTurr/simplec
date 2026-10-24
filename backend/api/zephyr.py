@@ -1174,17 +1174,23 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
         _rel_save(data)
         stored = dict(nf)
     nf_runs = [_nf_run_view(cfg, project, k, stored) for k in stored["runs"]]
+    # Прогоны, прикреплённые к стори в SimpleTest (API отслеживание готового прогона не пишет), — к найденным в Zephyr.
+    attached = {s_: list(v) for s_, v in (stored.get("attached") or {}).items()}
+    for s_, runs_ in attached.items():
+        have = {r["key"] for r in story_runs.get(s_, [])}
+        story_runs.setdefault(s_, []).extend(
+            {**v, "attached": True} for v in (_nf_run_view(cfg, project, k, stored) for k in runs_ if k not in have) if v)
     return {"release": rel, "runs": order(clean(r) for r in rel_runs),
             "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source,
-            "nfRuns": order(r for r in nf_runs if r), "coverage": stored.get("coverage")}
+            "nfRuns": order(r for r in nf_runs if r), "attached": attached}
 
 
-# ── НФ-прогоны релиза и покрытие стори — у нас, а не в API ───────────────────
+# ── НФ-прогоны релиза и прогоны стори — у нас, а не в API ────────────────────
 #
-# Полное отслеживание прогона API маркеру не отдаёт (внутренний /rest/tests — 403), поэтому связи считаем сами:
+# Полное отслеживание прогона API не отдаёт и не пишет (внутренний /rest/tests — 403), поэтому:
 #   • список НФ-прогонов релиза хранится в data/zephyr_releases.json (сверка по issueKey + ручное добавление);
-#   • «Проанализировать покрытие»: стори релиза × сохранённые прогоны — авто (номер стори в названии прогона или
-#     в его issueKey) плюс ручная правка (manual: стори → прогон → да/нет); результат хранится и показывается в строке.
+#   • прогоны стори: найденные в Zephyr (стори в issueKey прогона) + прикреплённые в SimpleTest (attached:
+#     стори → прогоны) — «Прикрепить имеющийся» или «Создать НФ-прогон» на стори (стори в отслеживании при создании).
 
 def is_nf_type(t: str) -> bool:
     """Вид прогона «Новый функционал» / «НФ…» — как runKind во фронте."""
@@ -1193,8 +1199,15 @@ def is_nf_type(t: str) -> bool:
 
 def _rel_nf(p: dict, rel: str) -> dict:
     nf = p.setdefault("nf", {}).setdefault(rel, {})
-    for k, v in (("runs", []), ("removed", []), ("manual", {}), ("runInfo", {})):
+    for k, v in (("runs", []), ("removed", []), ("attached", {}), ("runInfo", {})):
         nf.setdefault(k, v)
+    # До 24.10.2026 связи стори ↔ прогон правили руками в «Покрытии» (manual) — отмеченные переносим в прикреплённые.
+    for story, runs_ in (nf.pop("manual", None) or {}).items():
+        for run, on in runs_.items():
+            if on and run not in nf["attached"].setdefault(story, []):
+                nf["attached"][story].append(run)
+    nf.pop("coverage", None)
+    nf.pop("stories", None)
     return nf
 
 
@@ -1214,29 +1227,6 @@ def _nf_run_view(cfg: dict, project: str, key: str, nf: dict) -> Optional[dict]:
     info = nf["runInfo"].get(key) or {}
     return {"key": key, "name": info.get("name", ""), "status": "", "folder": "", "version": "", "issueKey": info.get("issueKey", ""),
             "type": info.get("type", ""), "owner": "", "created": "", "plannedStart": "", "plannedEnd": "", "total": 0, "counts": {}}
-
-
-def story_in_run(story: str, info: dict) -> bool:
-    """Авто-связь: номер стори в названии прогона («НФ-SBER911-29231 · …», без хвоста цифр) или в его issueKey."""
-    if info.get("issueKey") == story:
-        return True
-    # Перед номером может стоять дефис («НФ-SBER911-…»), но не буква или цифра; после — не цифра (29231 ≠ 2923).
-    return bool(re.search(rf"(?<![A-Z0-9]){re.escape(story)}(?!\d)", (info.get("name") or "").upper()))
-
-
-def coverage_of(stories: list[str], nf: dict) -> dict:
-    """Стори → прогоны: авто + ручная правка. Только по сохранённому, без запросов в Jira."""
-    out: dict[str, list[dict]] = {}
-    for s_ in stories:
-        rows = []
-        for run in nf["runs"]:
-            auto = story_in_run(s_, nf["runInfo"].get(run) or {})
-            manual = (nf["manual"].get(s_) or {}).get(run)
-            if (manual if manual is not None else auto):
-                rows.append({"run": run, "auto": auto, **({"manual": manual} if manual is not None else {})})
-        out[s_] = rows
-    return {"stories": out, "analyzedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "covered": sum(1 for v in out.values() if v), "total": len(out)}
 
 
 class NfRunsEdit(BaseModel):
@@ -1275,46 +1265,130 @@ def release_nf_runs(key: str, body: NfRunsEdit, db: Session = Depends(get_db)) -
         return {"runs": list(nf["runs"]), "removed": list(nf["removed"])}
 
 
-class CoverageBody(BaseModel):
+class StoriesAttach(BaseModel):
     project: str = Field(..., min_length=1)
+    stories: list[str] = Field(..., min_length=1, max_length=500)
+    run: str = Field(..., min_length=1)
 
 
-@router.post("/api/zephyr/release/{key}/coverage")
-def release_coverage(key: str, body: CoverageBody, db: Session = Depends(get_db)) -> dict:
-    """«Проанализировать покрытие»: стори релиза (из Jira) × сохранённые НФ-прогоны — расчёт у нас, результат хранится."""
-    rel = release(_issue_key(key, "Номер релиза"), db=db)
-    stories = [x["key"] for x in rel["stories"] if _STORY_RE.search(x["issuetype"])]
+@router.post("/api/zephyr/release/{key}/attach")
+def release_attach(key: str, body: StoriesAttach, db: Session = Depends(get_db)) -> dict:
+    """
+    Прикрепить имеющийся прогон к стори релиза. В отслеживание готового прогона публичный API писать не умеет
+    (одна задача, только при создании; внутренний — 403), поэтому связь хранится в SimpleTest: стори красится
+    «Прогон есть», прогон встаёт в НФ релиза. В Zephyr отслеживание этого прогона не меняется.
+    """
+    rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
+    run = body.run.strip().upper()
+    if not _RUN_RE.match(run):
+        raise HTTPException(422, "Номер прогона — в формате SBER911-C709")
+    info = _run_info(norm_run(_jira_request(_load_cfg(db), "GET", f"{ATM}/testrun/{run}")))
+    stories = [_issue_key(x, "Номер стори") for x in body.stories]
     with _releases_lock:
         data = _rel_load()
-        nf = _rel_nf(_rel_project(data, body.project.strip().upper()), rel["key"])
-        nf["stories"] = stories
-        nf["coverage"] = coverage_of(stories, nf)
+        nf = _rel_nf(_rel_project(data, project), rel)
+        for st in stories:
+            runs_ = nf.setdefault("attached", {}).setdefault(st, [])
+            if run not in runs_:
+                runs_.append(run)
+        if run not in nf["runs"]:
+            nf["runs"].append(run)
+        nf["removed"] = [x for x in nf["removed"] if x != run]
+        nf["runInfo"][run] = info
         _rel_save(data)
-        return nf["coverage"]
+        return {"attached": nf["attached"]}
 
 
-class CoverageManual(BaseModel):
+class StoryDetach(BaseModel):
     project: str = Field(..., min_length=1)
     story: str = Field(..., min_length=1)
     run: str = Field(..., min_length=1)
-    linked: Optional[bool] = None    # None — вернуть авто
 
 
-@router.put("/api/zephyr/release/{key}/coverage/manual")
-def release_coverage_manual(key: str, body: CoverageManual) -> dict:
-    """Ручная правка связи стори ↔ прогон; покрытие пересчитывается по сохранённому, без Jira."""
+@router.post("/api/zephyr/release/{key}/detach")
+def release_detach(key: str, body: StoryDetach) -> dict:
+    """Открепить прогон, прикреплённый к стори в SimpleTest (в Zephyr ничего не меняется)."""
     rel, story, run = _issue_key(key, "Номер релиза"), _issue_key(body.story, "Номер стори"), body.run.strip().upper()
     with _releases_lock:
         data = _rel_load()
         nf = _rel_nf(_rel_project(data, body.project.strip().upper()), rel)
-        m = nf["manual"].setdefault(story, {})
-        if body.linked is None:
-            m.pop(run, None)
-        else:
-            m[run] = body.linked
-        nf["coverage"] = coverage_of(nf.get("stories") or list((nf.get("coverage") or {}).get("stories", {}).keys()), nf)
+        att = nf.setdefault("attached", {})
+        att[story] = [x for x in att.get(story, []) if x != run]
+        if not att[story]:
+            att.pop(story)
         _rel_save(data)
-        return nf["coverage"]
+        return {"attached": att}
+
+
+def nf_type_value(cfg: dict, project: str) -> str:
+    """Как на стенде называется вид «Новый функционал» у прогонов: первый НФ-вид из индекса прогонов."""
+    try:
+        for r in get_index(cfg, project, kind="testrun")["cases"].values():
+            if is_nf_type(r.get("type") or ""):
+                return r["type"]
+    except HTTPException:
+        pass
+    return "Новый функционал"
+
+
+def story_cases(cfg: dict, project: str, story: str) -> list[str]:
+    """Кейсы, привязанные к стори в Zephyr (связи кейса с задачами), — по индексу модели."""
+    idx = get_index(cfg, project)["cases"]
+    return sorted((k for k, c in idx.items() if story in [str(x).upper() for x in c.get("issueLinks") or []]), key=_key_num)
+
+
+@router.get("/api/zephyr/release/{key}/story-cases")
+def release_story_cases(key: str, project: str = Query(..., min_length=1), stories: str = "", db: Session = Depends(get_db)) -> dict:
+    """Сколько кейсов привязано к каждой стори — до создания НФ-прогонов (прогон без кейсов не создаём)."""
+    cfg = _load_cfg(db)
+    keys = [_issue_key(x, "Номер стори") for x in stories.split(",") if x.strip()]
+    return {"cases": {k: story_cases(cfg, project.strip().upper(), k) for k in keys}, "type": nf_type_value(cfg, project.strip().upper())}
+
+
+class StoryRunsCreate(BaseModel):
+    project: str = Field(..., min_length=1)
+    stories: list[dict] = Field(..., min_length=1, max_length=100)   # [{key, summary}]
+    folder: str = ""
+    type: str = ""
+
+
+@router.post("/api/zephyr/release/{key}/story-runs")
+def release_story_runs(key: str, body: StoryRunsCreate, db: Session = Depends(get_db)) -> dict:
+    """
+    НФ-прогон на каждую выбранную стори: стори — в отслеживании (API ставит задачу только при создании),
+    кейсы — привязанные к стори, вид — НФ. Созданный прогон сразу в НФ релиза и у стори. Нет кейсов — не создаём.
+    """
+    cfg = _load_cfg(db)
+    rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
+    run_type = body.type.strip() or nf_type_value(cfg, project)
+    results = []
+    for st in body.stories:
+        story = _issue_key(str(st.get("key", "")), "Номер стори")
+        cases_ = story_cases(cfg, project, story)
+        if not cases_:
+            results.append({"story": story, "error": "к стори не привязано ни одного кейса — прикрепите имеющийся прогон"})
+            continue
+        name = f"НФ-{story} · {str(st.get('summary') or '').strip()}".strip(" ·")[:255]
+        try:
+            r = create_run(RunCreate(project=project, name=name, issueKey=story, caseKeys=cases_, folder=body.folder, type=run_type), db)
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            results.append({"story": story, "error": str(e.detail)[:300]})
+            continue
+        with _releases_lock:
+            data = _rel_load()
+            nf = _rel_nf(_rel_project(data, project), rel)
+            if r["key"] not in nf["runs"]:
+                nf["runs"].append(r["key"])
+            nf["runInfo"][r["key"]] = {"name": name, "issueKey": story, "type": run_type}
+            runs_ = nf.setdefault("attached", {}).setdefault(story, [])
+            if r["key"] not in runs_:
+                runs_.append(r["key"])
+            _rel_save(data)
+        results.append({"story": story, "run": r["key"], "cases": len(cases_), "warnings": r.get("warnings", [])})
+    return {"results": results, "created": sum(1 for x in results if x.get("run"))}
+
 
 # ── Выравнивание КЭ: все КЭ релиза — на все его стори ────────────────────────
 #

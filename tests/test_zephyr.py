@@ -874,31 +874,44 @@ def test_нф_прогоны_релиза_сохраняются_и_дополн
         z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", add="не прогон"), db=None)
 
 
-def test_покрытие_стори_авто_по_названию_и_issuekey_и_ручная_правка(jira):
+def test_прикрепить_прогон_к_стори_и_открепить(jira):
     _release_route(jira); _nf_search(jira)
-    z.release_board("SBER911-100", project="SBER911", db=None)
     jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
-    z.release_nf_runs("SBER911-100", z.NfRunsEdit(project="SBER911", add="SBER911-C3"), db=None)
-    cov = z.release_coverage("SBER911-100", z.CoverageBody(project="SBER911"), db=None)
-    assert cov["stories"]["SBER911-11"] == [{"run": "SBER911-C2", "auto": True}]     # номер в названии
-    assert cov["stories"]["SBER911-12"] == [{"run": "SBER911-C3", "auto": True}]     # issueKey
-    assert (cov["covered"], cov["total"]) == (2, 2)
-    # ручная правка: стори 11 есть и в общем C3; у стори 12 C3 снимаем — Jira не трогаем
-    z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-11", run="SBER911-C3", linked=True))
-    cov = z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-12", run="SBER911-C3", linked=False))
-    assert [x["run"] for x in cov["stories"]["SBER911-11"]] == ["SBER911-C2", "SBER911-C3"]
-    assert cov["stories"]["SBER911-11"][1] == {"run": "SBER911-C3", "auto": False, "manual": True}
-    assert cov["stories"]["SBER911-12"] == [] and cov["covered"] == 1
-    cov = z.release_coverage_manual("SBER911-100", z.CoverageManual(project="SBER911", story="SBER911-12", run="SBER911-C3", linked=None))
-    assert cov["stories"]["SBER911-12"] == [{"run": "SBER911-C3", "auto": True}]     # вернули авто
-    assert z.release_board("SBER911-100", project="SBER911", db=None)["coverage"]["covered"] == 2
+    z.release_attach("SBER911-100", z.StoriesAttach(project="SBER911", stories=["sber911-11", "SBER911-12"], run="sber911-c3"), db=None)
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C3"] and b["storyRuns"]["SBER911-11"][0]["attached"]
+    assert "SBER911-C3" in [r["key"] for r in b["nfRuns"]]                   # прикреплённый — и в НФ релиза
+    z.release_detach("SBER911-100", z.StoryDetach(project="SBER911", story="SBER911-11", run="SBER911-C3"))
+    b = z.release_board("SBER911-100", project="SBER911", db=None)
+    assert b["storyRuns"]["SBER911-11"] == [] and b["attached"] == {"SBER911-12": ["SBER911-C3"]}
 
 
-def test_номер_стори_в_названии_не_путается_с_длинным():
-    info = {"name": "НФ-SBER911-29231 · тема", "issueKey": ""}
-    assert z.story_in_run("SBER911-29231", info)
-    assert not z.story_in_run("SBER911-2923", info)
-    assert not z.story_in_run("SBER911-9231", info)
+def test_нф_прогон_на_стори_с_её_кейсами_стори_в_отслеживании(jira, monkeypatch):
+    _release_route(jira); _nf_search(jira)
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [
+        {"key": "T1", "issueLinks": ["SBER911-11"]}, {"key": "T2", "issueLinks": ["sber911-11", "X-1"]}, {"key": "T3"}] if p["startAt"] == 0 else []
+    made = []
+
+    def fake_create(body, db):
+        made.append(body)
+        return {"key": "SBER911-C50", "warnings": []}
+    monkeypatch.setattr(z, "create_run", fake_create)
+    r = z.release_story_runs("SBER911-100", z.StoryRunsCreate(project="SBER911", folder="/НФ", stories=[
+        {"key": "SBER911-11", "summary": "Стори А"}, {"key": "SBER911-12", "summary": "Без кейсов"}]), db=None)
+    assert r["created"] == 1 and "ни одного кейса" in r["results"][1]["error"]
+    body = made[0]
+    assert (body.issueKey, body.caseKeys, body.folder, body.name) == ("SBER911-11", ["T1", "T2"], "/НФ", "НФ-SBER911-11 · Стори А")
+    assert body.type == "Новый функционал"                                   # вид — как у НФ-прогонов стенда
+    assert z.release_board("SBER911-100", project="SBER911", db=None)["attached"] == {"SBER911-11": ["SBER911-C50"]}
+
+
+def test_ручные_связи_покрытия_переходят_в_прикреплённые():
+    p = {"nf": {"SBER911-100": {"runs": ["C1"], "manual": {"S-1": {"C1": True, "C2": False}}, "coverage": {"x": 1}}}}
+    nf = z._rel_nf(p, "SBER911-100")
+    assert nf["attached"] == {"S-1": ["C1"]} and "manual" not in nf and "coverage" not in nf
+
+
+def test_вид_нф():
     assert z.is_nf_type("Новый функционал") and z.is_nf_type("НФ") and not z.is_nf_type("Регресс")
 
 

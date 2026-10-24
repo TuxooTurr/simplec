@@ -53,7 +53,7 @@ function NameInput({ initial, depth, onDone }: { initial: string; depth: number;
 export default function FolderTree({
   folders, selected, onSelect, total, staging, pickedCase, onPickCase, onMoveCase, onMoveFolder,
   onCreateFolder, onRenameFolder, onMoveExisting, onDropCases, onNewCase,
-  withChildren, onWithChildren, onExportFolder, onDeleteFolder, onDeleteStagedFolder,
+  withChildren, onWithChildren, onExportFolder, onDeleteFolder, onDeleteStagedFolder, rootLabel = "Все кейсы",
 }: {
   folders: ZFolder[];
   /** Путь выбранной папки; "" — все кейсы. */
@@ -82,6 +82,8 @@ export default function FolderTree({
   onDeleteFolder?: (path: string) => void;
   /** Убрать новую папку из черновика (подтверждение — в разделе). */
   onDeleteStagedFolder?: (id: string) => void;
+  /** Подпись корня дерева: «Все кейсы» или, у дерева прогонов, «Все прогоны». */
+  rootLabel?: string;
 }) {
   const [open, setOpen] = useState<Set<string>>(() => new Set(folders.map(f => f.path)));
   const [q, setQ] = useState("");
@@ -303,9 +305,9 @@ export default function FolderTree({
         <div {...dropProps("e:")} className={`group flex items-center gap-1.5 px-2 py-1 rounded-md cursor-pointer text-sm
             ${over === "e:" ? "ring-2 ring-primary bg-primary/10" : selected === "" ? "bg-primary/10 text-primary font-medium" : "text-text-main hover:bg-bg-subtle"}`}
           onClick={() => onSelect("")} role="button" tabIndex={0} onKeyDown={e => e.key === "Enter" && onSelect("")}
-          title={editable ? "Все кейсы. Бросьте сюда папку — она переедет в корень проекта" : "Все кейсы"}>
+          title={editable ? `${rootLabel}. Бросьте сюда папку — она переедет в корень проекта` : rootLabel}>
           <Layers className="w-4 h-4 text-text-muted" />
-          <span className="flex-1">Все кейсы</span>
+          <span className="flex-1">{rootLabel}</span>
           {total ? <span className="text-[11px] text-text-muted tabular-nums">{total}</span> : null}
           {editable && (
             <button type="button" onClick={e => { e.stopPropagation(); setEdit({ mode: "new", path: "" }); }} title="Новая папка в корне проекта"

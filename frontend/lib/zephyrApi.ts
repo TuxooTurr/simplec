@@ -226,7 +226,12 @@ export interface ReleaseBoard {
   nfRuns: ZRun[];
   /** Стори → прогоны, прикреплённые в SimpleTest (API отслеживание готового прогона не пишет). */
   attached?: Record<string, string[]>;
+  /** Стори → прикреплённые прогоны, ссылка на которые уже стоит на стори в Jira. */
+  jiraLinked?: Record<string, string[]>;
 }
+
+/** Итог записи в Jira по каждой стори: "ok" или текст ошибки. */
+export type JiraLinkResult = Record<string, string>;
 
 export const getReleases = (project: string) => fetchJson<ReleaseList>(`/api/zephyr/releases?${q({ project })}`);
 
@@ -249,13 +254,20 @@ export const editNfRuns = (key: string, project: string, edit: { add?: string; r
 export const detachRegress = (key: string, project: string, run: string) =>
   postJson<{ detached: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/regress-detach`, "POST", { project, run });
 
-/** Прикрепить имеющийся прогон к стори (связь — в SimpleTest; прогон встаёт в НФ релиза). */
+/** Прикрепить имеющийся прогон к стори: связь в SimpleTest и ссылка на прогон на стори в Jira (jira — итог по стори). */
 export const attachRun = (key: string, project: string, stories: string[], run: string) =>
-  postJson<{ attached: Record<string, string[]> }>(`/api/zephyr/release/${encodeURIComponent(key)}/attach`, "POST", { project, stories, run });
+  postJson<{ attached: Record<string, string[]>; jiraLinked: Record<string, string[]>; jira: JiraLinkResult }>(
+    `/api/zephyr/release/${encodeURIComponent(key)}/attach`, "POST", { project, stories, run });
 
-/** Открепить прикреплённый в SimpleTest прогон от стори. */
+/** Открепить прогон от стори: в SimpleTest и ссылку на стори в Jira (jira — "ok" или ошибка). */
 export const detachRun = (key: string, project: string, story: string, run: string) =>
-  postJson<{ attached: Record<string, string[]> }>(`/api/zephyr/release/${encodeURIComponent(key)}/detach`, "POST", { project, story, run });
+  postJson<{ attached: Record<string, string[]>; jiraLinked: Record<string, string[]>; jira: string }>(
+    `/api/zephyr/release/${encodeURIComponent(key)}/detach`, "POST", { project, story, run });
+
+/** Дописать в Jira ссылки для привязок, которых там ещё нет. */
+export const attachedToJira = (key: string, project: string) =>
+  postJson<{ results: { story: string; run: string; ok: boolean; error?: string }[]; jiraLinked: Record<string, string[]> }>(
+    `/api/zephyr/release/${encodeURIComponent(key)}/attached/jira`, "POST", { project });
 
 /** Кейсы, привязанные к стори, — до создания НФ-прогонов; type — как на стенде называется вид НФ. */
 export const getStoryCases = (key: string, project: string, stories: string[]) =>

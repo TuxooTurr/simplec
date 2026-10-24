@@ -897,13 +897,54 @@ def test_нф_прогоны_релиза_сохраняются_и_дополн
 def test_прикрепить_прогон_к_стори_и_открепить(jira):
     _release_route(jira); _nf_search(jira)
     jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
-    z.release_attach("SBER911-100", z.StoriesAttach(project="SBER911", stories=["sber911-11", "SBER911-12"], run="sber911-c3"), db=None)
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = {}
+    jira["routes"]["/rest/api/2/issue/SBER911-12/remotelink"] = {}
+    r = z.release_attach("SBER911-100", z.StoriesAttach(project="SBER911", stories=["sber911-11", "SBER911-12"], run="sber911-c3"), db=None)
+    assert r["jira"] == {"SBER911-11": "ok", "SBER911-12": "ok"}
+    assert r["jiraLinked"] == {"SBER911-11": ["SBER911-C3"], "SBER911-12": ["SBER911-C3"]}
     b = z.release_board("SBER911-100", project="SBER911", db=None)
     assert [r["key"] for r in b["storyRuns"]["SBER911-11"]] == ["SBER911-C3"] and b["storyRuns"]["SBER911-11"][0]["attached"]
     assert "SBER911-C3" in [r["key"] for r in b["nfRuns"]]                   # прикреплённый — и в НФ релиза
-    z.release_detach("SBER911-100", z.StoryDetach(project="SBER911", story="SBER911-11", run="SBER911-C3"))
+    assert b["jiraLinked"]["SBER911-11"] == ["SBER911-C3"]
+    d = z.release_detach("SBER911-100", z.StoryDetach(project="SBER911", story="SBER911-11", run="SBER911-C3"), db=None)
+    assert d["jira"] == "ok" and ("/rest/api/2/issue/SBER911-11/remotelink", {"globalId": "simpletest:zephyr-run:SBER911-C3"}) in jira["calls"]
     b = z.release_board("SBER911-100", project="SBER911", db=None)
     assert b["storyRuns"]["SBER911-11"] == [] and b["attached"] == {"SBER911-12": ["SBER911-C3"]}
+    assert b["jiraLinked"] == {"SBER911-12": ["SBER911-C3"]}
+
+
+def test_jira_не_ответила_привязка_остаётся_и_дописывается_позже(jira):
+    _release_route(jira); _nf_search(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = HTTPException(403, "Jira: нет прав на операцию (403)")
+    r = z.release_attach("SBER911-100", z.StoriesAttach(project="SBER911", stories=["SBER911-11"], run="SBER911-C3"), db=None)
+    assert r["jira"]["SBER911-11"].endswith("(403)") and r["attached"] == {"SBER911-11": ["SBER911-C3"]} and r["jiraLinked"] == {}
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = {}
+    s = z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)
+    assert s["results"] == [{"story": "SBER911-11", "run": "SBER911-C3", "ok": True}] and s["jiraLinked"] == {"SBER911-11": ["SBER911-C3"]}
+
+
+def test_дописать_старую_привязку_в_jira_с_названием_прогона(jira):
+    _release_route(jira); _nf_search(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    sent = []
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = {}
+    orig = z._jira_request
+
+    def spy(cfg, method, path, params=None, json_body=None, **kw):
+        if path.endswith("/remotelink") and method == "POST":
+            sent.append(json_body)
+        return orig(cfg, method, path, params=params, json_body=json_body, **kw)
+    z._jira_request = spy
+    try:
+        data = z._rel_load()
+        z._rel_nf(z._rel_project(data, "SBER911"), "SBER911-100")["attached"] = {"SBER911-11": ["SBER911-C3"]}
+        z._rel_save(data)
+        z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)
+    finally:
+        z._jira_request = orig
+    assert sent[0]["object"]["title"] == "SBER911-C3 · НФ общий" and sent[0]["globalId"] == "simpletest:zephyr-run:SBER911-C3"
+    assert z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)["results"] == []   # повторно — нечего
 
 
 def test_нф_прогон_на_стори_с_её_кейсами_стори_в_отслеживании(jira, monkeypatch):

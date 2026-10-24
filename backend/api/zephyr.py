@@ -1185,7 +1185,8 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
             {**v, "attached": True} for v in (_nf_run_view(cfg, project, k, stored) for k in runs_ if k not in have) if v)
     return {"release": rel, "runs": order(clean(r) for r in rel_runs),
             "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source,
-            "nfRuns": order(r for r in nf_runs if r), "attached": attached}
+            "nfRuns": order(r for r in nf_runs if r), "attached": attached,
+            "jiraLinked": {s_: list(v) for s_, v in (stored.get("jiraLinks") or {}).items()}}
 
 
 # ── НФ-прогоны релиза и прогоны стори — у нас, а не в API ────────────────────
@@ -1202,7 +1203,7 @@ def is_nf_type(t: str) -> bool:
 
 def _rel_nf(p: dict, rel: str) -> dict:
     nf = p.setdefault("nf", {}).setdefault(rel, {})
-    for k, v in (("runs", []), ("removed", []), ("attached", {}), ("runInfo", {})):
+    for k, v in (("runs", []), ("removed", []), ("attached", {}), ("runInfo", {}), ("jiraLinks", {})):
         nf.setdefault(k, v)
     # До 24.10.2026 связи стори ↔ прогон правили руками в «Покрытии» (manual) — отмеченные переносим в прикреплённые.
     for story, runs_ in (nf.pop("manual", None) or {}).items():
@@ -1295,19 +1296,67 @@ class StoriesAttach(BaseModel):
     run: str = Field(..., min_length=1)
 
 
+# ── Привязка стори к прогону в Jira ──────────────────────────────────────────
+#
+# Отслеживание готового прогона Zephyr не меняется через API (публичный пишет одну задачу и только при создании,
+# внутренний — 403). Поэтому привязка ставится и в Jira: на стори — ссылка (remote link) на прогон Zephyr,
+# видна в разделе «Ссылки» задачи. globalId у ссылки свой на каждый прогон — повторная привязка не плодит дублей,
+# открепление удаляет именно её. Связь в SimpleTest (attached) остаётся основной для доски релиза; где ссылка
+# в Jira уже стоит — в jiraLinks.
+
+def _link_id(run: str) -> str:
+    return f"simpletest:zephyr-run:{run}"
+
+
+def jira_link_run(cfg: dict, story: str, run: str, info: dict, rel: str) -> None:
+    title = f"{run} · {info.get('name') or 'прогон Zephyr'}"
+    _jira_request(cfg, "POST", f"/rest/api/2/issue/{story}/remotelink", json_body={
+        "globalId": _link_id(run),
+        "application": {"type": "simpletest.zephyr", "name": "Zephyr Scale"},
+        "relationship": "НФ-прогон",
+        "object": {"url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{run}", "title": title[:255],
+                   "summary": f"Прогон нового функционала релиза {rel}"},
+    })
+
+
+def jira_unlink_run(cfg: dict, story: str, run: str) -> None:
+    try:
+        _jira_request(cfg, "DELETE", f"/rest/api/2/issue/{story}/remotelink", params={"globalId": _link_id(run)})
+    except HTTPException as e:
+        if e.status_code != 404:                       # ссылки уже нет — это и нужно
+            raise
+
+
+def _mark_jira(nf: dict, story: str, run: str, on: bool) -> None:
+    links = nf.setdefault("jiraLinks", {})
+    cur = [x for x in links.get(story, []) if x != run] + ([run] if on else [])
+    if cur:
+        links[story] = cur
+    else:
+        links.pop(story, None)
+
+
 @router.post("/api/zephyr/release/{key}/attach")
 def release_attach(key: str, body: StoriesAttach, db: Session = Depends(get_db)) -> dict:
     """
-    Прикрепить имеющийся прогон к стори релиза. В отслеживание готового прогона публичный API писать не умеет
-    (одна задача, только при создании; внутренний — 403), поэтому связь хранится в SimpleTest: стори красится
-    «Прогон есть», прогон встаёт в НФ релиза. В Zephyr отслеживание этого прогона не меняется.
+    Прикрепить имеющийся прогон к стори релиза: связь в SimpleTest (стори красится «Прогон есть», прогон встаёт в НФ
+    релиза) и ссылка на прогон на самой стори в Jira. Ошибка Jira не отменяет привязку в SimpleTest — она в ответе
+    (jira: {стори: "ok" | текст ошибки}), и ссылку можно дописать позже кнопкой «Записать привязки в Jira».
     """
     rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
     run = body.run.strip().upper()
     if not _RUN_RE.match(run):
         raise HTTPException(422, "Номер прогона — в формате SBER911-C709")
-    info = _run_info(norm_run(_jira_request(_load_cfg(db), "GET", f"{ATM}/testrun/{run}")))
+    cfg = _load_cfg(db)
+    info = _run_info(norm_run(_jira_request(cfg, "GET", f"{ATM}/testrun/{run}")))
     stories = [_issue_key(x, "Номер стори") for x in body.stories]
+    jira: dict[str, str] = {}
+    for st in stories:
+        try:
+            jira_link_run(cfg, st, run, info, rel)
+            jira[st] = "ok"
+        except HTTPException as e:
+            jira[st] = str(e.detail)
     with _releases_lock:
         data = _rel_load()
         nf = _rel_nf(_rel_project(data, project), rel)
@@ -1315,12 +1364,13 @@ def release_attach(key: str, body: StoriesAttach, db: Session = Depends(get_db))
             runs_ = nf.setdefault("attached", {}).setdefault(st, [])
             if run not in runs_:
                 runs_.append(run)
+            _mark_jira(nf, st, run, jira[st] == "ok")
         if run not in nf["runs"]:
             nf["runs"].append(run)
         nf["removed"] = [x for x in nf["removed"] if x != run]
         nf["runInfo"][run] = info
         _rel_save(data)
-        return {"attached": nf["attached"]}
+        return {"attached": nf["attached"], "jiraLinked": nf["jiraLinks"], "jira": jira}
 
 
 class StoryDetach(BaseModel):
@@ -1330,9 +1380,15 @@ class StoryDetach(BaseModel):
 
 
 @router.post("/api/zephyr/release/{key}/detach")
-def release_detach(key: str, body: StoryDetach) -> dict:
-    """Открепить прогон, прикреплённый к стори в SimpleTest (в Zephyr ничего не меняется)."""
+def release_detach(key: str, body: StoryDetach, db: Session = Depends(get_db)) -> dict:
+    """Открепить прогон от стори: в SimpleTest и ссылку на стори в Jira. Ошибка Jira — в ответе (jira), связь в
+    SimpleTest всё равно снимается."""
     rel, story, run = _issue_key(key, "Номер релиза"), _issue_key(body.story, "Номер стори"), body.run.strip().upper()
+    jira = "ok"
+    try:
+        jira_unlink_run(_load_cfg(db), story, run)
+    except HTTPException as e:
+        jira = str(e.detail)
     with _releases_lock:
         data = _rel_load()
         nf = _rel_nf(_rel_project(data, body.project.strip().upper()), rel)
@@ -1340,8 +1396,48 @@ def release_detach(key: str, body: StoryDetach) -> dict:
         att[story] = [x for x in att.get(story, []) if x != run]
         if not att[story]:
             att.pop(story)
+        if jira == "ok":
+            _mark_jira(nf, story, run, False)
         _rel_save(data)
-        return {"attached": att}
+        return {"attached": att, "jiraLinked": nf["jiraLinks"], "jira": jira}
+
+
+class JiraSyncBody(BaseModel):
+    project: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/release/{key}/attached/jira")
+def release_attached_to_jira(key: str, body: JiraSyncBody, db: Session = Depends(get_db)) -> dict:
+    """Дописать в Jira ссылки для привязок, которых там ещё нет (сделаны до этой функции или Jira тогда не ответила)."""
+    rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
+    cfg = _load_cfg(db)
+    with _releases_lock:
+        nf = dict(_rel_nf(_rel_project(_rel_load(), project), rel))
+    todo = [(st, run) for st, runs_ in (nf.get("attached") or {}).items() for run in runs_
+            if run not in (nf.get("jiraLinks") or {}).get(st, [])]
+    results: list[dict] = []
+    infos: dict[str, dict] = {}
+    for st, run in todo:
+        info = infos.get(run) or (nf.get("runInfo") or {}).get(run) or {}
+        if not info.get("name"):                      # старые привязки без снимка прогона — название берём из Zephyr
+            try:
+                info = _run_info(norm_run(_jira_request(cfg, "GET", f"{ATM}/testrun/{run}")))
+            except HTTPException:
+                pass
+        infos[run] = info
+        try:
+            jira_link_run(cfg, st, run, info, rel)
+            results.append({"story": st, "run": run, "ok": True})
+        except HTTPException as e:
+            results.append({"story": st, "run": run, "ok": False, "error": str(e.detail)})
+    with _releases_lock:
+        data = _rel_load()
+        live = _rel_nf(_rel_project(data, project), rel)
+        for r in results:
+            if r["ok"]:
+                _mark_jira(live, r["story"], r["run"], True)
+        _rel_save(data)
+        return {"results": results, "jiraLinked": live["jiraLinks"]}
 
 
 def nf_type_value(cfg: dict, project: str) -> str:

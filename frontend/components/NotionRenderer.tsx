@@ -94,12 +94,41 @@ export function looksLikeMarkdown(text: string): boolean {
   return /^\s{0,3}#{1,6} /m.test(text) || /^```/m.test(text) || marks >= 2 || (marks >= 1 && inline);
 }
 
+/** Якорь заголовка: тот же текст → тот же id (по нему «Данные» ведут на место изменения в документе). */
+export function headingSlug(text: string): string {
+  return "h-" + text.replace(/[*_`~[\]()]/g, "").trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+}
+
+/** Пункт списка: «[x] …» / «[ ] …» — задача с отметкой (списки задач Confluence). */
+function listItemBody(item: string): React.ReactNode {
+  const m = item.match(/^\[( |x|X)\]\s+(.*)$/);
+  if (!m) return renderInline(item);
+  const done = m[1] !== " ";
+  return (
+    <span className="inline-flex items-start gap-1.5">
+      <span className={`mt-[3px] w-3.5 h-3.5 flex-shrink-0 rounded border text-[10px] leading-none flex items-center justify-center ${done ? "bg-primary border-primary text-white" : "border-border-main"}`}>{done ? "✓" : ""}</span>
+      <span className={done ? "text-text-muted line-through" : ""}>{renderInline(m[2])}</span>
+    </span>
+  );
+}
+
 // ── NotionRenderer ────────────────────────────────────────────────────────────
-export default function NotionRenderer({ text, className = "" }: { text: string; className?: string }) {
+/** anchors — у заголовков id (headingSlug), чтобы на них можно было сослаться. */
+export default function NotionRenderer({ text, className = "", anchors = false }: { text: string; className?: string; anchors?: boolean }) {
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
   let i = 0;
   let k = 0;
+  const used = new Set<string>();
+  const hid = (t: string): string | undefined => {
+    if (!anchors) return undefined;
+    const base = headingSlug(t);
+    if (!used.has(base)) { used.add(base); return base; }
+    let n = 2;
+    while (used.has(`${base}-${n}`)) n++;
+    used.add(`${base}-${n}`);
+    return `${base}-${n}`;
+  };
 
   while (i < lines.length) {
     const raw = lines[i];
@@ -192,7 +221,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     // ── H1 ──────────────────────────────────────────────────────────
     if (/^# /.test(raw)) {
       nodes.push(
-        <h1 key={k++} className="text-base font-bold text-text-main mt-6 mb-2 first:mt-0 pb-2 border-b border-border-main">
+        <h1 key={k++} id={hid(raw.slice(2))} className="text-base font-bold text-text-main mt-6 mb-2 first:mt-0 pb-2 border-b border-border-main scroll-mt-4">
           {renderInline(raw.slice(2))}
         </h1>
       );
@@ -202,7 +231,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     // ── H2 ──────────────────────────────────────────────────────────
     if (/^## /.test(raw)) {
       nodes.push(
-        <h2 key={k++} className="text-sm font-semibold text-text-main mt-5 mb-1.5 first:mt-0 uppercase tracking-wide text-[11px]">
+        <h2 key={k++} id={hid(raw.slice(3))} className="text-sm font-semibold text-text-main mt-5 mb-1.5 first:mt-0 uppercase tracking-wide text-[11px] scroll-mt-4">
           {renderInline(raw.slice(3))}
         </h2>
       );
@@ -212,7 +241,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     // ── H3 ──────────────────────────────────────────────────────────
     if (/^### /.test(raw)) {
       nodes.push(
-        <h3 key={k++} className="text-sm font-semibold text-text-main mt-4 mb-1 first:mt-0">
+        <h3 key={k++} id={hid(raw.slice(4))} className="text-sm font-semibold text-text-main mt-4 mb-1 first:mt-0 scroll-mt-4">
           {renderInline(raw.slice(4))}
         </h3>
       );
@@ -224,7 +253,7 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     if (/^#{4,6} /.test(raw)) {
       const level = raw.match(/^#+/)![0].length;
       nodes.push(
-        <h4 key={k++} className="text-sm font-semibold text-text-muted mt-3 mb-1 first:mt-0">
+        <h4 key={k++} id={hid(raw.slice(level + 1))} className="text-sm font-semibold text-text-muted mt-3 mb-1 first:mt-0 scroll-mt-4">
           {renderInline(raw.slice(level + 1))}
         </h4>
       );
@@ -232,18 +261,20 @@ export default function NotionRenderer({ text, className = "" }: { text: string;
     }
 
     // ── Bullet list (collect consecutive lines) ──────────────────────
+    // Вложенные пункты (отступ по 2 пробела) — в том же списке со сдвигом.
     if (/^[*\-+] /.test(raw)) {
-      const items: string[] = [];
-      while (i < lines.length && /^[*\-+] /.test(lines[i])) {
-        items.push(lines[i].replace(/^[*\-+] /, ""));
+      const items: { text: string; depth: number }[] = [];
+      while (i < lines.length && (/^[*\-+] /.test(lines[i]) || (items.length > 0 && /^ {2,}[*\-+] /.test(lines[i])))) {
+        const m = lines[i].match(/^( *)[*\-+] (.*)$/)!;
+        items.push({ text: m[2], depth: Math.min(4, Math.floor(m[1].length / 2)) });
         i++;
       }
       nodes.push(
         <ul key={k++} className="my-2 space-y-1.5">
           {items.map((item, idx) => (
-            <li key={idx} className="flex items-start gap-2.5 text-sm text-text-main leading-relaxed">
-              <span className="mt-[7px] w-1.5 h-1.5 rounded-sm bg-gray-400 flex-shrink-0" />
-              <span>{renderInline(item)}</span>
+            <li key={idx} className="flex items-start gap-2.5 text-sm text-text-main leading-relaxed" style={item.depth ? { marginLeft: item.depth * 18 } : undefined}>
+              <span className={`mt-[7px] w-1.5 h-1.5 flex-shrink-0 ${item.depth ? "rounded-full border border-gray-400" : "rounded-sm bg-gray-400"}`} />
+              <span>{listItemBody(item.text)}</span>
             </li>
           ))}
         </ul>

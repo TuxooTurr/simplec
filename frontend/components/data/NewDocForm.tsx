@@ -1,20 +1,24 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Eye, FileText, Folder, Loader2, Paperclip, Pencil, Save, Tag, X } from "lucide-react";
+import { Eye, FileText, Folder, Globe, Loader2, Paperclip, Pencil, Save, Tag, X } from "lucide-react";
 import { ACCEPT_FILES, fileToText, folderOptions, SourceView } from "@/components/data/DocPage";
+import ConfluenceImport from "@/components/data/ConfluenceImport";
 import type { ReqFolder } from "@/lib/api";
 
 /**
  * Новый документ: заголовок, фича, папка и содержимое — Markdown вручную или из файла (PDF и DOCX собираются
  * в Markdown: заголовки, списки, абзацы, таблицы DOCX). «Просмотр» показывает, как разметка будет выглядеть на странице.
  */
-export default function NewDocForm({ folders, folderId, onSave, onCancel }: {
+export default function NewDocForm({ folders, folderId, onSave, onCancel, onImported, onSettings }: {
   folders: ReqFolder[];
   folderId: string;
   onSave: (d: { name: string; feature: string; text: string; folder_id: string }) => Promise<void>;
   onCancel: () => void;
+  onImported: (firstId: string) => Promise<void>;
+  onSettings: () => void;
 }) {
+  const [source, setSource] = useState<"manual" | "confluence">("manual");
   const [name, setName] = useState("");
   const [feature, setFeature] = useState("");
   const [folder, setFolder] = useState(folderId);
@@ -45,8 +49,23 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel }: {
   const BTN = "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg border border-border-main text-text-main hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 transition-all";
   const tab = (on: boolean) => `inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs ${on ? "bg-bg-card text-text-main font-medium shadow-sm" : "text-text-muted hover:text-text-main"}`;
 
+  const modeSwitch = (
+    <div className="mb-3 inline-flex gap-0.5 rounded-lg bg-bg-subtle p-0.5" role="group" aria-label="Откуда документ">
+      <button type="button" className={tab(source === "manual")} aria-pressed={source === "manual"} onClick={() => setSource("manual")}><Pencil className="w-3.5 h-3.5" /> Вручную или из файла</button>
+      <button type="button" className={tab(source === "confluence")} aria-pressed={source === "confluence"} onClick={() => setSource("confluence")}><Globe className="w-3.5 h-3.5" /> Из Confluence</button>
+    </div>
+  );
+  if (source === "confluence") return (
+    <article className="max-w-4xl mx-auto px-2 pb-16">
+      {modeSwitch}
+      <h2 className="mb-3 text-2xl font-bold text-text-main">Новый документ из Confluence</h2>
+      <ConfluenceImport folders={folders} folderId={folderId} onImported={onImported} onCancel={onCancel} onSettings={onSettings} />
+    </article>
+  );
+
   return (
     <article className="max-w-4xl mx-auto px-2 pb-16">
+      {modeSwitch}
       <p className="mb-2 text-xs text-text-muted">Новый документ</p>
       <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Без названия" aria-label="Заголовок документа"
         className="w-full bg-transparent text-3xl font-bold text-text-main placeholder:text-text-muted/50 rounded-md px-1 -mx-1 focus:outline-none focus:ring-2 focus:ring-primary/30" />

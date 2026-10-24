@@ -1162,9 +1162,44 @@ export interface Requirement {
   qa_doc_truncated: boolean;
   /** Папка в дереве «Данных»; "" или нет поля — в корне. */
   folder_id?: string;
+  /** Что именно нужно из исходника (если в нём несколько СТ) — подсказка генератору документа QA. */
+  focus?: string;
+  /** Страницы Confluence, из которых собран исходник. */
+  sources?: ReqSource[];
+  /** Номер текущей версии, когда создана и что в ней доработали; прошлые версии — в versions. */
+  version?: number;
+  version_at?: string;
+  version_note?: string;
+  versions?: ReqVersion[];
   created_at: string;
   updated_at: string;
 }
+
+export interface ReqSource { id: string; title: string; url: string; version: number }
+
+export interface ReqVersion {
+  n: number;
+  at: string;
+  note: string;
+  text: string;
+  qa_doc: string;
+  qa_doc_truncated: boolean;
+  sources?: ReqSource[];
+}
+
+export interface ConfluencePage extends ReqSource { space: string; markdown: string; parent: string; depth: number }
+
+export interface ReqDiffItem {
+  kind: "added" | "changed" | "removed";
+  /** Раздел документа (заголовок), где изменение; у убранного — раздел, где оно было бы в новой версии. */
+  section: string;
+  text: string;
+  old?: string;
+  was?: string;
+  heading: boolean;
+}
+
+export interface ReqDiff { field: "qa_doc" | "text"; added: number; changed: number; removed: number; items: ReqDiffItem[] }
 
 export interface ReqFolder {
   id: string;
@@ -1194,13 +1229,45 @@ export async function deleteRequirement(id: string): Promise<{ status: string }>
 }
 
 /** Заголовок, фича, исходник, папка документа. QA-документ не трогается — его пересобирают отдельно. */
-export async function updateRequirement(id: string, patch: { name?: string; feature?: string; text?: string; folder_id?: string }): Promise<Requirement> {
+export async function updateRequirement(id: string, patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string }): Promise<Requirement> {
   return fetchJson(`/api/requirements/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
 }
+
+const postJson = <T,>(path: string, body: unknown): Promise<T> =>
+  fetchJson(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** Страница Confluence (ссылка, id, /display/ПРОСТРАНСТВО/Заголовок) и, если children, дочерние — без сохранения. */
+export const previewConfluence = (ref: string, children: boolean) =>
+  postJson<{ pages: ConfluencePage[] }>("/api/requirements/confluence/preview", { ref, children });
+
+/** Страница (и дочерние — деревом папок) → документы в папке. */
+export const importConfluence = (ref: string, children: boolean, folder_id: string, focus: string) =>
+  postJson<{ created: Requirement[]; folders: number }>("/api/requirements/confluence/import", { ref, children, folder_id, focus });
+
+/** Ещё одна СТ в документ — разделом; as_version — новой версией документа. */
+export const addReqSource = (id: string, ref: string, as_version: boolean, note = "") =>
+  postJson<Requirement>(`/api/requirements/${id}/sources`, { ref, as_version, note });
+
+/** Перечитать страницы документа: изменились — новая версия, иначе changed: false. */
+export const syncReqSources = (id: string) => postJson<{ changed: boolean; item: Requirement }>(`/api/requirements/${id}/sync`, {});
+
+/** Новая версия вручную (доработка фичи): прежний исходник и QA-документ уходят в историю. */
+export const newReqVersion = (id: string, text: string, note: string) => postJson<Requirement>(`/api/requirements/${id}/versions`, { text, note });
+
+/** Что изменилось с версии a до b (QA-документ, если он есть у обеих, иначе исходник). */
+export const reqDiff = (id: string, a: number, b: number) => fetchJson<ReqDiff>(`/api/requirements/${id}/diff?a=${a}&b=${b}&field=auto`);
+
+export interface CorpAuthStatus { jira: { base_url: string; hasToken: boolean }; confluence: { base_url: string; hasToken: boolean } }
+
+export const getCorpAuthStatus = () => fetchJson<CorpAuthStatus>("/api/corp-auth/status");
+
+/** Один логин и пароль Сигмы → маркеры Jira и Confluence. Пароль не хранится. */
+export const corpLogin = (login: string, password: string) =>
+  postJson<CorpAuthStatus & { results: Record<"jira" | "confluence", { ok: boolean; text: string }> }>("/api/corp-auth/login", { login, password });
 
 export async function listReqFolders(): Promise<ReqFolder[]> {
   return fetchJson("/api/requirements/folders");

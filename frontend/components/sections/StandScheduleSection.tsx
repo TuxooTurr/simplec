@@ -91,7 +91,7 @@ export default function StandScheduleSection() {
         )}
       </div>
 
-      <ConfluenceSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); connect(); }} />
+      <ConfluenceSettingsModal open={settingsOpen} title="График стендов — подключение к Confluence" onClose={() => { setSettingsOpen(false); connect(); }} />
       {probeOpen && (
         <Modal open onClose={() => setProbeOpen(false)} title="Проверка API Confluence" size="max-w-3xl">
           <ProbeCard />

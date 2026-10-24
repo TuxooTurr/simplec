@@ -102,8 +102,9 @@ SimpleTest/
 │   │   ├── revisor.py       # Ревизия тест-кейсов
 │   │   ├── xlsx_export.py   # POST /api/export/xlsx — таблица в Excel (генератор backend/xlsx_writer.py, без openpyxl)
 │   │   ├── backup.py        # Резервная копия: выгрузка всех данных (data/*.json, БД, эталоны) в .json и восстановление
+│   │   ├── corp_auth.py     # Единая учётная запись: логин/пароль Сигмы → маркеры Jira и Confluence (пароль не хранится)
 │   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
-│   │   ├── requirements.py  # «Данные»: документы-требования в дереве папок (data/requirement_folders.json), документ QA
+│   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения
 │   └── schemas.py           # Pydantic схемы

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FilePlus2, Loader2, RefreshCw } from "lucide-react";
+import { FilePlus2, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import DocTree from "@/components/data/DocTree";
 import DocPage from "@/components/data/DocPage";
 import NewDocForm from "@/components/data/NewDocForm";
+import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
   addReqFolder, addRequirement, deleteReqFolder, deleteRequirement, generateRequirementDoc, listReqFolders,
@@ -25,6 +26,7 @@ export default function DataDocs() {
   const [err, setErr] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<string | null>(null);   // папка нового документа; null — не создаём
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const load = async () => {
     setErr("");
@@ -73,16 +75,25 @@ export default function DataDocs() {
               void deleteReqFolder(f.id).then(() => load(), fail);
             }} />
         )}
-        <button type="button" onClick={() => void load()} title="Перечитать дерево"
-          className="mt-auto flex items-center gap-1.5 px-2 py-1.5 text-xs text-text-muted hover:text-text-main rounded-md hover:bg-bg-subtle">
-          <RefreshCw className="w-3.5 h-3.5" /> Обновить
-        </button>
+        <div className="mt-auto flex items-center gap-1">
+          <button type="button" onClick={() => void load()} title="Перечитать дерево"
+            className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-text-muted hover:text-text-main rounded-md hover:bg-bg-subtle">
+            <RefreshCw className="w-3.5 h-3.5" /> Обновить
+          </button>
+          <span className="flex-1" />
+          <button type="button" onClick={() => setSettingsOpen(true)} title="Единый вход в Jira и Confluence, подключение к Confluence"
+            className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-text-muted hover:text-text-main rounded-md hover:bg-bg-subtle">
+            <KeyRound className="w-3.5 h-3.5" /> Учётная запись
+          </button>
+        </div>
       </aside>
 
       <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin px-8 py-6">
         {err && <p className="max-w-4xl mx-auto mb-3 text-sm text-red-600 dark:text-red-400">{err}</p>}
         {creating !== null ? (
           <NewDocForm key={creating} folders={folders} folderId={creating} onCancel={() => setCreating(null)}
+            onSettings={() => setSettingsOpen(true)}
+            onImported={async first => { await load(); select(first); }}
             onSave={async d => {
               const made = await addRequirement(d);
               setDocs(ds => [made, ...ds]);
@@ -92,6 +103,8 @@ export default function DataDocs() {
           <DocPage doc={doc} folders={folders} provider={provider}
             onPatch={async patch => replace(await updateRequirement(doc.id, patch))}
             onGenerate={async () => replace(await generateRequirementDoc(doc.id, provider))}
+            onReplace={replace}
+            onSettings={() => setSettingsOpen(true)}
             onDelete={() => {
               if (!confirm(`Удалить документ «${doc.name}»?`)) return;
               void deleteRequirement(doc.id).then(() => { setDocs(ds => ds.filter(x => x.id !== doc.id)); select(null); }, fail);
@@ -106,6 +119,7 @@ export default function DataDocs() {
           </div>
         )}
       </main>
+      <ConfluenceSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Учётная запись и подключение к Confluence" />
     </div>
   );
 }

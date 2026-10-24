@@ -26,7 +26,7 @@ export function splitSpeech(doc: string): { main: string; speech: string } {
  * QA-документ: основная часть — разметкой, речь для краткого рассказа о функционале — внизу свёрнутым блоком
  * (раскрыть, скопировать). Старые документы без этого раздела показываются как есть.
  */
-export default function QaDocView({ doc }: { doc: string }) {
+export default function QaDocView({ doc, anchors = false }: { doc: string; anchors?: boolean }) {
   const { main, speech } = splitSpeech(doc);
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -36,7 +36,7 @@ export default function QaDocView({ doc }: { doc: string }) {
   };
   return (
     <div>
-      <NotionRenderer text={main} />
+      <NotionRenderer text={main} anchors={anchors} />
       {speech && (
         <div className="mt-6 rounded-xl border border-border-main bg-bg-subtle/50">
           <div className="flex items-center gap-2 px-3 py-2">

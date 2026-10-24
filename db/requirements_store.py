@@ -77,7 +77,8 @@ class RequirementsStore:
 
     @classmethod
     def add_requirement(cls, name: str, feature: str, text: str,
-                         qa_doc: str = "", qa_doc_truncated: bool = False, folder_id: str = "") -> dict:
+                         qa_doc: str = "", qa_doc_truncated: bool = False, folder_id: str = "",
+                         sources: Optional[list] = None, focus: str = "") -> dict:
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "id": uuid.uuid4().hex[:12],
@@ -92,6 +93,15 @@ class RequirementsStore:
             "qa_doc": qa_doc,
             "qa_doc_truncated": qa_doc_truncated,
             "folder_id": folder_id,
+            # Что именно нужно из исходника (если в нём несколько СТ) — подсказка генератору документа QA.
+            "focus": focus.strip(),
+            # Страницы Confluence, из которых собран исходник: [{id, title, url, version}] — для обновления.
+            "sources": list(sources or []),
+            # Версии: текущая — в полях записи (version, version_at, version_note), прошлые — в versions.
+            "version": 1,
+            "version_at": now,
+            "version_note": "",
+            "versions": [],
             "created_at": now,
             "updated_at": now,
         }
@@ -108,6 +118,29 @@ class RequirementsStore:
             if i.get("id") == req_id:
                 i.update(fields)
                 i["updated_at"] = datetime.now(timezone.utc).isoformat()
+                cls._save(items)
+                return i
+        return None
+
+    @classmethod
+    def new_version(cls, req_id: str, text: str, note: str = "", sources: Optional[list] = None) -> Optional[dict]:
+        """
+        Новая версия документа: текущие исходник и QA-документ уходят в историю (versions), исходник — новый,
+        QA-документ — пустой (собирается заново по новой версии). Номер версии растёт.
+        """
+        items = cls._load()
+        for i in items:
+            if i.get("id") == req_id:
+                now = datetime.now(timezone.utc).isoformat()
+                i.setdefault("versions", []).append({
+                    "n": i.get("version", 1), "at": i.get("version_at") or i.get("created_at", now),
+                    "note": i.get("version_note", ""), "text": i.get("text", ""), "qa_doc": i.get("qa_doc", ""),
+                    "qa_doc_truncated": i.get("qa_doc_truncated", False), "sources": i.get("sources", []),
+                })
+                i.update(text=text, qa_doc="", qa_doc_truncated=False, version=i.get("version", 1) + 1,
+                         version_at=now, version_note=note.strip(), updated_at=now)
+                if sources is not None:
+                    i["sources"] = sources
                 cls._save(items)
                 return i
         return None

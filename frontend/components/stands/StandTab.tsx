@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Check, ExternalLink, Inbox, Link2, ListPlus, Loader2, Maximize2, Minimize2, Plus, RefreshCw, Settings2, Snowflake, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Inbox, Link2, ListPlus, Loader2, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Settings2, Snowflake, Trash2, X } from "lucide-react";
 import {
-  addStandBookings, addStandFreeze, createStandPage, decideStandPending, deleteStandBooking, deleteStandFreeze, getStand,
+  addStandBookings, addStandFreeze, createStandPage, decideStandPending, deleteStandBooking, deleteStandFreeze, editStandBooking, getStand,
   pullStandRequests, saveStandSettings, saveStandsConfig, addMs, saveMsCatalog,
-  keKey, type NewBooking, type StandPending, type StandSettings, type StandView,
+  keKey, type NewBooking, type StandBooking, type StandPending, type StandSettings, type StandView,
 } from "@/lib/standsApi";
 import { msChipStyle } from "@/lib/msColor";
 import StandTimeline, { barWhen, barsOf, bookingWhen, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
@@ -51,6 +51,8 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
   /** Второй щелчок в той же строке при открытой форме — конец (или начало) периода; n — чтобы повтор тоже сработал. */
   const [cellEnd, setCellEnd] = useState<{ date: string; n: number } | null>(null);
   const [pickedKey, setPickedKey] = useState<string | null>(null);   // установка: дата|команда|микросервис
+  /** Бронь, которую правят в карточке установки (id). */
+  const [editing, setEditing] = useState<string | null>(null);
   /** Период графика: окно планирования или последние 3 месяца (только просмотр того, что вне окна). */
   const [period, setPeriod] = useState<"window" | "quarter">("window");
   const periodRef = useRef(period);
@@ -253,6 +255,15 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
           <ul className="divide-y divide-border-main border border-border-main rounded-lg">
             {picked.items.map(it => {
               const st = it.task ? featureStage(it.task) : null;
+              if (editing === it.id) {
+                return (
+                  <li key={it.id} className="px-2.5 py-2">
+                    <BookingEdit b={it} teams={v.teams} catalog={v.msCatalog} busy={busy} onCancel={() => setEditing(null)}
+                      onSave={nb => run(() => editStandBooking(stand, it.id, nb), () => `Бронь ${nb.task || nb.service} изменена`)
+                        .then(ok => { if (ok) { setEditing(null); setPickedKey(null); } })} />
+                  </li>
+                );
+              }
               return (
                 <li key={it.id} className="flex flex-wrap items-center gap-2 px-2.5 py-1.5">
                   <span className="font-mono text-primary">{it.task || "—"}</span>
@@ -260,6 +271,8 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
                     <span className="text-xs text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
                   <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "SimpleTest"}</span>
+                  <button type="button" onClick={() => setEditing(it.id)} disabled={busy} aria-label={`Изменить ${it.task || "бронь"}`}
+                    title="Изменить: дни, время, команду, микросервис, фичу" className="p-1 text-text-muted hover:text-primary disabled:opacity-50"><Pencil className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
                     aria-label={`Удалить ${it.task || "бронь"}`} title={it.dateTo ? "Снять эту фичу с установки — со всего диапазона" : "Снять эту фичу с установки"}
                     className="p-1 text-text-muted hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
@@ -272,6 +285,52 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
         </div>
       )}
     </div>
+  );
+}
+
+/** Правка одной брони прямо в карточке установки: дни, время, команда, микросервис, задача и фича. */
+function BookingEdit({ b, teams, catalog, busy, onSave, onCancel }: {
+  b: StandBooking; teams: string[]; catalog: string[]; busy: boolean;
+  onSave: (nb: NewBooking) => void; onCancel: () => void;
+}) {
+  const [from, setFrom] = useState(b.date);
+  const [to, setTo] = useState(b.dateTo || b.date);
+  const [tFrom, setTFrom] = useState(b.timeFrom ?? "");
+  const [tTo, setTTo] = useState(b.timeTo ?? "");
+  const [team, setTeam] = useState(b.team);
+  const [service, setService] = useState(b.service);
+  const [task, setTask] = useState(b.task);
+  const [features, setFeatures] = useState(b.features);
+  const bad = to < from ? "конец раньше начала" : from === to && tFrom && tTo && tFrom >= tTo ? "время конца раньше начала" : !service.trim() ? "укажите микросервис" : "";
+  return (
+    <form className="space-y-2" onSubmit={e => {
+      e.preventDefault();
+      if (!bad) onSave({ date: from, dateTo: to > from ? to : "", ...(tFrom ? { timeFrom: tFrom } : {}), ...(tTo ? { timeTo: tTo } : {}),
+        team, service: service.trim(), task: task.trim().toUpperCase(), features: features.trim(), hotfix: false });
+    }}>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+        <label className="flex items-center gap-1">с <input type="date" value={from} onChange={e => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} className={INPUT} /></label>
+        <input type="time" step={900} value={tFrom} onChange={e => setTFrom(e.target.value)} aria-label="Время начала" className={INPUT} />
+        <label className="flex items-center gap-1">по <input type="date" value={to} min={from} onChange={e => setTo(e.target.value)} className={INPUT} /></label>
+        <input type="time" step={900} value={tTo} onChange={e => setTTo(e.target.value)} aria-label="Время конца" className={INPUT} />
+        <select value={team} onChange={e => setTeam(e.target.value)} aria-label="Команда" className={INPUT}>
+          {teams.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={service} onChange={e => setService(e.target.value)} list="stand-ms-catalog-edit" placeholder="микросервис" aria-label="Микросервис" className={`${INPUT} w-64 font-mono`} />
+        <datalist id="stand-ms-catalog-edit">{catalog.map(k => <option key={k} value={k} />)}</datalist>
+        <input value={task} onChange={e => setTask(e.target.value)} placeholder="SBER911-123" aria-label="Задача" className={`${INPUT} w-36 font-mono`} />
+        <input value={features} onChange={e => setFeatures(e.target.value)} placeholder="Название фичи" aria-label="Фича" className={`${INPUT} min-w-0 flex-1`} />
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="submit" disabled={busy || !!bad} className="flex items-center gap-1 px-3 py-1 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Сохранить</button>
+        <button type="button" onClick={onCancel} className="px-3 py-1 rounded-lg border border-border-main text-xs text-text-muted">Отмена</button>
+        {bad && <span className="text-xs text-red-600 dark:text-red-400">{bad}</span>}
+        <span className="text-[11px] text-text-muted">Новые дни проверяются по правилам стенда (окно, заморозка, лимит).</span>
+      </div>
+    </form>
   );
 }
 

@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.confluence import _load_cfg, _request, page_ref
 from backend.api.jira_defects import _get, _set
+from backend.ms_color import ms_hex
 from db import ke_store, ms_store
 from db.postgres import get_db
 
@@ -583,6 +584,68 @@ def day_status(data: dict, d: date, now: Optional[date] = None) -> tuple[str, st
     return "МОЖНО", "Green"
 
 
+_GREY, _FREEZE, _RELEASE, _CONFLICT = "#f4f5f7", "#fff4cc", "#deebff", "#ffbdad"
+
+
+def render_chart(data: dict, now: date) -> str:
+    """
+    График стенда таблицей — как в SimpleTest: строки — команда и микросервис, столбцы — дни окна, занятый день
+    закрашен цветом группы микросервиса (backend/ms_color.py = lib/msColor.ts), конфликт — красный «!».
+    Бронь стоит непрерывно, в том числе в выходные; в первый день — время начала, в последний — конца.
+    В шапке: выходные — серые, заморозка — жёлтая, релиз — синий, сегодня — жирным.
+    """
+    e = html.escape
+    days = [date.fromisoformat(data["window"]["from"]) + timedelta(days=i)
+            for i in range((date.fromisoformat(data["window"]["to"]) - date.fromisoformat(data["window"]["from"])).days + 1)]
+    if not days:
+        return ""
+    lo, hi = days[0].isoformat(), days[-1].isoformat()
+    rows: dict[tuple, list[dict]] = {}
+    for b in data["bookings"]:
+        if b["date"] <= hi and (b.get("dateTo") or b["date"]) >= lo:
+            rows.setdefault((b["team"], _ke(b["service"])), []).append(b)
+    if not rows:
+        return ""
+    team_order = {t: i for i, t in enumerate(data["teams"])}
+    rel_on = {r["date"]: r["name"] for r in data["releases"]}
+    conflicts = {d: conflict_ids(data, d) for d in days if d.weekday() < 5}
+    head = ["<th>Команда</th><th>Микросервис</th>"]
+    for d in days:
+        colour = _RELEASE if d.isoformat() in rel_on else _FREEZE if freeze_on(data, d) else _GREY if d.weekday() >= 5 else ""
+        label = f"{WEEKDAYS[d.weekday()]}<br/>{d.strftime('%d.%m')}"
+        label = f"<strong>{label}</strong>" if d == now else label
+        if d.isoformat() in rel_on:
+            label += f"<br/>{e(rel_on[d.isoformat()])}"
+        attr = f' data-highlight-colour="{colour}"' if colour else ""
+        head.append(f"<th{attr}>{label}</th>")
+    out = ["<h2>График</h2>", "<p>Строка — установка: команда и микросервис; закрашены дни, когда сборка стоит "
+           "(цвет — группа микросервиса, как в SimpleTest), «!» — конфликт с другой командой.</p>",
+           "<table><tbody><tr>" + "".join(head) + "</tr>"]
+    keys = sorted(rows, key=lambda k: (team_order.get(k[0], 99), k[0], rows[k][0]["service"].lower()))
+    for n, key in enumerate(keys):
+        team, items = key[0], rows[key]
+        lead = ""
+        if n == 0 or keys[n - 1][0] != team:
+            span = sum(1 for k in keys if k[0] == team)
+            lead = f'<td rowspan="{span}"><strong>{e(team)}</strong></td>'
+        cells = []
+        for d in days:
+            iso = d.isoformat()
+            on = [b for b in items if b["date"] <= iso <= (b.get("dateTo") or b["date"])]
+            if not on:
+                cells.append("<td></td>")
+                continue
+            bad = any(b["id"] in conflicts.get(d, set()) for b in on)
+            marks = [b["timeFrom"] for b in on if b["date"] == iso and b.get("timeFrom")]
+            marks += ["до " + b["timeTo"] for b in on if (b.get("dateTo") or b["date"]) == iso and b.get("timeTo")]
+            text = ("! " if bad else "") + " ".join(marks)
+            colour = _CONFLICT if bad else ms_hex(items[0]["service"])
+            cells.append(f'<td data-highlight-colour="{colour}">{e(text)}</td>')
+        out.append(f"<tr>{lead}<td>{e(items[0]['service'])}</td>{''.join(cells)}</tr>")
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
 def render_page(data: dict, now: Optional[date] = None) -> str:
     """Текст страницы (storage format): памятка, сегодня, шаблон заявки, релизы, заморозки, таблица рабочих дней окна."""
     now = now or today()
@@ -613,7 +676,8 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         parts.append("<p>Заморозки: " + "; ".join(
             f"{date.fromisoformat(f['from']).strftime('%d.%m')}–{date.fromisoformat(f['to']).strftime('%d.%m')}"
             f"{' (' + e(f['reason']) + ')' if f.get('reason') else ''}" for f in fz_list) + "</p>")
-    parts.append("<table><tbody><tr><th>День</th><th>Статус</th><th>Микросервис (команда)</th><th>Фичи</th></tr>")
+    parts.append(render_chart(data, now))
+    parts.append("<h2>По дням</h2><table><tbody><tr><th>День</th><th>Статус</th><th>Команда</th><th>Микросервис</th><th>Фичи</th></tr>")
     rel_on = {r["date"]: r["name"] for r in rels}
     for d in window_days(data):
         if d.weekday() >= 5:
@@ -633,11 +697,11 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         for b in sorted(bookings_on(data, d), key=lambda b: (b["team"], b["service"].lower(), b.get("task") or "")):
             groups.setdefault((b["team"], _ke(b["service"])), []).append(b)
         if not groups:
-            parts.append(f"<tr><td>{day}</td><td>{_status_macro(label, col)}</td><td>—</td><td></td></tr>")
+            parts.append(f"<tr><td>{day}</td><td>{_status_macro(label, col)}</td><td>—</td><td>—</td><td></td></tr>")
             continue
         ids = conflict_ids(data, d)
         for n, ((team, kek), items) in enumerate(groups.items()):
-            ke = f"{e(items[0]['service'])} ({e(team)})"
+            ke = e(items[0]["service"])
             if any(b["id"] in ids for b in items):
                 ke = f"{ke} {_status_macro('КОНФЛИКТ', 'Red')}"
             feats = "<br/>".join(
@@ -646,7 +710,7 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
                     f"({e(time_label(b))})" if time_label(b) else "") if x) or "—"
                 for b in items)
             lead = f"<td rowspan=\"{len(groups)}\">{day}</td><td rowspan=\"{len(groups)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
-            parts.append(f"<tr>{lead}<td>{ke}</td><td>{feats}</td></tr>")
+            parts.append(f"<tr>{lead}<td>{e(team)}</td><td>{ke}</td><td>{feats}</td></tr>")
     parts.append("</tbody></table>")
     return "".join(parts)
 
@@ -908,6 +972,49 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
         return rejected
     data, rejected = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data, {"added": len(body.items) - len(rejected), "rejected": rejected})
+
+
+@router.put("/api/stands/{stand}/bookings/{bid}")
+def edit_booking(stand: str, bid: str, body: BookingBody, db: Session = Depends(get_db)) -> dict:
+    """
+    Изменить бронь: дни, время, команду, микросервис, фичу и задачу. Правила (окно, выходной, заморозка, лимит,
+    прошедший день) проверяются только для дней, которые добавились к брони: начатую бронь можно продлить или поправить,
+    хотя её первый день уже прошёл.
+    """
+    cfg, pid, stand = _ctx(db, stand)
+    try:
+        d = date.fromisoformat(body.date)
+        to = date.fromisoformat(body.dateTo) if body.dateTo else d
+    except ValueError:
+        raise HTTPException(422, "Дата — ГГГГ-ММ-ДД")
+    if to < d:
+        raise HTTPException(422, "Конец периода раньше начала")
+    if (to - d).days > 62:
+        raise HTTPException(422, "Период — не больше двух месяцев")
+    if to != d and not range_days(d, to):
+        raise HTTPException(422, "В периоде одни выходные")
+
+    def fn(data: dict) -> None:
+        cur = next((b for b in data["bookings"] if b["id"] == bid), None)
+        if cur is None:
+            raise HTTPException(404, "Брони уже нет — её удалили")
+        team = match_team(data, body.team)
+        if not team:
+            raise HTTPException(422, f"Нет команды «{body.team}»")
+        why = check_times(body.timeFrom, body.timeTo, single=to == d)
+        old = set(range_days(date.fromisoformat(cur["date"]), date.fromisoformat(cur.get("dateTo") or cur["date"])))
+        added = [x for x in (range_days(d, to) or [d]) if x not in old]
+        for x in added:
+            why = why or check(data, x, body.hotfix)
+        if why:
+            raise HTTPException(409, f"Нельзя: {why}")
+        new = _new_booking(d, team, body.service, body.task, cur.get("by", ""), cur.get("source", "simpletest"),
+                           cur.get("comment", ""), body.features, to, body.timeFrom, body.timeTo)
+        created = cur.get("createdAt", new["createdAt"])
+        cur.clear()
+        cur.update({**new, "id": bid, "createdAt": created, "editedAt": new["createdAt"]})
+    data, _ = mutate(cfg, pid, stand, fn)
+    return _done(cfg, pid, data)
 
 
 @router.delete("/api/stands/{stand}/bookings/{bid}")

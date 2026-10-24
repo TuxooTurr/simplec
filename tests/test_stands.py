@@ -158,8 +158,9 @@ def test_страница_таблица_дней_маркеры_фичи_рел
     _book("2026-10-23", "SC", "notify", "тема инцидента; фильтр по статусу", "SBER911-5")
     _book("2026-10-23", "B2C", "notify")
     body = conf["body"]
-    assert body.count("<tr><td") == 20 + 1                      # 20 рабочих дней окна; у 23.10 две установки (SC и B2C) — строк на одну больше
-    assert '<td rowspan="2">' in body and "notify (SC)" in body and "SBER911-5 — тема инцидента; фильтр по статусу" in body
+    days = body.split("<h2>По дням</h2>")[1]
+    assert days.count("<tr><td") == 20 + 1                      # 20 рабочих дней окна; у 23.10 две установки (SC и B2C) — строк на одну больше
+    assert '<td rowspan="2">' in days and "<td>SC</td><td>notify" in days and "SBER911-5 — тема инцидента; фильтр по статусу" in days
     assert body.count(">КОНФЛИКТ<") >= 2 and "РЕЛИЗ Release 26" in body and "Окно планирования: 19.10.2026 — 13.11.2026" in body
     assert "Фичи: тема инцидента" in body and "<strong>ср 21.10</strong>" in body and "ПРОШЁЛ" in body
 
@@ -184,8 +185,8 @@ def test_один_кэ_у_команды_по_разным_фичам_одна_�
     _book("2026-10-22", "B2C", "rms-front", "Тема инцидента", "SBER911-3")    # тот же КЭ — лимит 2 не съеден
     v = _book("2026-10-22", "SC", "gateway")
     assert v["days"][[d["date"] for d in v["days"]].index("2026-10-22")]["status"] == "ЛИМИТ"   # установок 2: rms-front (B2C) + gateway (SC)
-    body = conf["body"]
-    assert body.count("rms-front (B2C)") == 1
+    body = conf["body"].split("<h2>По дням</h2>")[1]
+    assert body.count("<td>B2C</td><td>rms-front") == 1
     assert "SBER911-1 — Карточка инцидента<br/>SBER911-2 — Фильтр по статусу<br/>SBER911-3 — Тема инцидента" in body
 
 
@@ -377,3 +378,40 @@ def test_время_периода_начало_в_первый_день_кон�
     assert flags[("Агенты", "2026-10-22")] is False      # в первый день B2C ставит с 18:00
     assert flags[("SC", "2026-10-26")] is False          # в последний день B2C стоит до 09:00
     assert flags[("B2C", "2026-10-23")] is False
+
+
+def test_правка_брони_дни_время_и_правила_только_для_новых_дней(conf):
+    _settings()
+    B = st.BookingBody
+    v = _bulk(B(date="2026-10-22", team="B2C", service="notify", task="SBER911-1", features="Фича"))
+    bid = next(b for d in v["days"] for b in d["bookings"])["id"]
+    v = st.edit_booking("Major-Check", bid, B(date="2026-10-22", dateTo="2026-10-26", timeFrom="10:00", team="SC",
+                                              service="gateway", task="sber911-2", features="Новая"), db=None)
+    got = next(b for d in v["days"] for b in d["bookings"] if b["id"] == bid)
+    assert (got["team"], got["service"], got["task"], got["dateTo"], got["timeFrom"]) == ("SC", "gateway", "SBER911-2", "2026-10-26", "10:00")
+    assert sum(1 for d in v["days"] for b in d["bookings"] if b["id"] == bid) == 3     # 22, 23, 26 (выходные пропущены)
+    with pytest.raises(HTTPException) as e:
+        st.edit_booking("Major-Check", bid, B(date="2026-10-22", dateTo="2026-10-21", team="SC", service="x"), db=None)
+    assert e.value.status_code == 422
+    with pytest.raises(HTTPException) as e:
+        st.edit_booking("Major-Check", "нет-такой", B(date="2026-10-22", team="SC", service="x"), db=None)
+    assert e.value.status_code == 404
+    for bad in (B(date="2026-10-24", dateTo="2026-10-25", team="SC", service="x"),      # одни выходные
+                B(date="2026-10-22", dateTo="2026-12-31", team="SC", service="x")):     # дольше двух месяцев
+        with pytest.raises(HTTPException) as e:
+            st.edit_booking("Major-Check", bid, bad, db=None)
+        assert e.value.status_code == 422
+
+
+def test_график_на_странице_сплошные_полосы_цвет_группы_и_конфликт(conf):
+    from backend.ms_color import ms_hex
+    _settings()
+    _bulk(st.BookingBody(date="2026-10-23", dateTo="2026-10-26", timeFrom="09:00", timeTo="18:00", team="B2C", service="work-group-ms"),
+          st.BookingBody(date="2026-10-26", timeFrom="10:00", timeTo="12:00", team="SC", service="work-group-ms"))
+    chart = conf["body"].split("<h2>График</h2>")[1].split("<h2>По дням</h2>")[0]
+    b2c = chart.split("<strong>B2C</strong>")[1].split("</tr>")[0]
+    colour = ms_hex("work-group-ms")
+    # 23.10 (пт) с 09:00, выходные 24–25 закрашены, 26.10 до 18:00 — конфликт с SC (красный «!»)
+    assert b2c.count(f'data-highlight-colour="{colour}"') == 3 and ">09:00<" in b2c
+    assert 'data-highlight-colour="#ffbdad">! до 18:00<' in b2c
+    assert "<strong>SC</strong>" in chart and "<th>Команда</th><th>Микросервис</th>" in chart

@@ -75,6 +75,8 @@ export const addStandBooking = (stand: string, b: NewBooking) => send<StandView>
 export const addStandBookings = (stand: string, items: NewBooking[]) =>
   send<StandView & { added: number; rejected: { service: string; task: string; reason: string }[] }>(`/api/stands/${enc(stand)}/bookings/bulk`, "POST", { items });
 export const deleteStandBooking = (stand: string, id: string) => send<StandView>(`/api/stands/${enc(stand)}/bookings/${enc(id)}`, "DELETE");
+/** Изменить бронь: правила проверяются только для добавленных дней. */
+export const editStandBooking = (stand: string, id: string, b: NewBooking) => send<StandView>(`/api/stands/${enc(stand)}/bookings/${enc(id)}`, "PUT", b);
 export const addStandFreeze = (stand: string, f: { start: string; end: string; reason: string }) => send<StandView>(`/api/stands/${enc(stand)}/freezes`, "POST", f);
 export const deleteStandFreeze = (stand: string, id: string) => send<StandView>(`/api/stands/${enc(stand)}/freezes/${enc(id)}`, "DELETE");
 export const pullStandRequests = (stand: string) => send<StandView>(`/api/stands/${enc(stand)}/pull`, "POST");

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Check, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Check, MessageSquareShare } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { categoryOf, storiesChatReport, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { sortIssueRows, type IssueSort } from "./IssueTable";
+import BulkStatusModal from "./BulkStatusModal";
 
 /** Порядок для сортировки по статусу (st): заблокированные и отстающие — первыми. */
 function stageRank(info: StageInfo): number {
@@ -20,11 +21,12 @@ function stageRank(info: StageInfo): number {
  * Окно по клику на «Статус (st)» эпика: его стори — тип, номер со ссылкой в Jira, название,
  * статус Jira, собственный статус (st) стори (блокировка эпика на стори здесь не переносится), исполнитель.
  * Дефекты здесь не показываются — они только в «Дефекты (st)», включая блокирующие, из-за которых эпик «Заблокирован».
- * Только просмотр: статус (st) меняется стрелкой в строке списка.
+ * Статус (st) меняется стрелкой в строке списка; статус Jira отмеченных стори — «Сменить статус».
  * «Скопировать в чат» — отмеченные галочками стори (по умолчанию все) в порядке таблицы, как отчёт общего списка:
  * стори со статусом (st), под ней её активные дефекты.
+ * «Сменить статус» — отмеченные стори переводятся в Jira тем же окном, что и в списке (переходы workflow).
  */
-export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, onClose }: {
+export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   /** Стори эпика (через Epic Link). */
@@ -34,8 +36,11 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   ownStageOf: (i: Issue) => StageInfo;
   /** Дефекты задачи (свои и унаследованные) — для отчёта в чат; null — у дефекта поля нет. */
   defectsOf: (i: Issue) => Issue[] | null;
+  /** Переходы выполнены — перечитать эти задачи из Jira. */
+  onTransitions?: (keys: string[]) => void;
   onClose: () => void;
 }) {
+  const [statusOpen, setStatusOpen] = useState(false);
   const info = stageOf(issue);
   const isEpic = categoryOf(issue) === "epic";
   const [picked, setPicked] = useState<Set<string>>(() => new Set(stories.map(s => s.key)));
@@ -72,6 +77,12 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
               {stories.length > 0 && (
                 <span className="ml-auto flex items-center gap-2">
                   {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
+                  {onTransitions && (
+                    <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
+                      title="Перевести отмеченные стори в другой статус Jira — переходы спрашиваются у Jira"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                      <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
+                  )}
                   <button type="button" onClick={copy} disabled={!toSend.length}
                     title="Стори со статусом (st) и их активные дефекты — как отчёт списка; галочками выберите, что отправить"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
@@ -92,6 +103,9 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
           </section>
         )}
       </div>
+      {statusOpen && onTransitions && (
+        <BulkStatusModal open issues={toSend} storiesOf={() => []} onDone={onTransitions} onClose={() => setStatusOpen(false)} />
+      )}
     </Modal>
   );
 }

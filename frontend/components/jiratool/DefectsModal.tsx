@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { Bug, Check, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Bug, Check, MessageSquareShare } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } from "@/lib/jiraTool";
 import { STAGES, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { sortIssueRows, type IssueSort } from "./IssueTable";
+import BulkStatusModal from "./BulkStatusModal";
 
 /** Порядок по статусу (st): раньше по процессу — выше. */
 function stageRank(info: StageInfo): number {
@@ -24,17 +25,21 @@ function stageRank(info: StageInfo): number {
  * «Скопировать в чат» — отмеченные галочками показанные дефекты (по умолчанию все) в порядке таблицы:
  * номер, название, приоритет, статус (st).
  * «Создать дефект» — форма дефекта: у эпика эпик подставлен, у стори дефект после создания связывается с ней.
+ * «Сменить статус» — отмеченные дефекты переводятся в Jira тем же окном, что и в списке (переходы workflow).
  */
-export default function DefectsModal({ open, issue, defects, stageOf, onCreate, onClose }: {
+export default function DefectsModal({ open, issue, defects, stageOf, onCreate, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   defects: Issue[];
   stageOf: (i: Issue) => StageInfo;
   /** Создать дефект к этой задаче; нет — кнопки нет (задача — черновик, её нет в Jira). */
   onCreate?: () => void;
+  /** Переходы выполнены — перечитать эти задачи из Jira. */
+  onTransitions?: (keys: string[]) => void;
   onClose: () => void;
 }) {
   const [showFixed, setShowFixed] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
   const [note, setNote] = useState("");
   const opened = defects.filter(isOpenDefect);
   const fixed = defects.filter(d => !isOpenDefect(d));
@@ -77,6 +82,12 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold">
                 <Bug className="w-4 h-4" /> Создать дефект</button>
             )}
+            {onTransitions && (
+              <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
+                title="Перевести отмеченные дефекты в другой статус Jira — переходы спрашиваются у Jira"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
+            )}
             <button type="button" onClick={copy} disabled={!toSend.length}
               title="Номер, название, приоритет и статус (st) отмеченных дефектов — для чата; галочками выберите, что отправить"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
@@ -97,6 +108,9 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
               : [{ title: null, issues: opened }]} />
         )}
       </div>
+      {statusOpen && onTransitions && (
+        <BulkStatusModal open issues={toSend} storiesOf={() => []} onDone={onTransitions} onClose={() => setStatusOpen(false)} />
+      )}
     </Modal>
   );
 }

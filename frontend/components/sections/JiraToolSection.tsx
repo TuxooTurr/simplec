@@ -1671,7 +1671,7 @@ export default function JiraToolSection() {
       )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
         <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf}
-          ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onClose={() => setModal(null)} />
+          ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onTransitions={afterTransitions} onClose={() => setModal(null)} />
       )}
       {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
@@ -1732,7 +1732,7 @@ export default function JiraToolSection() {
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf}
-          onCreate={modal.defectsFor.local ? undefined : () => setDefectFor(modal.defectsFor)} onClose={() => setModal(null)} />
+          onCreate={modal.defectsFor.local ? undefined : () => setDefectFor(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />
       )}
       {/* Поверх окна «Дефекты» — поэтому ниже него */}
       {defectFor && (

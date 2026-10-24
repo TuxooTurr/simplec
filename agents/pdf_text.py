@@ -366,6 +366,12 @@ class _Font:
         self.simple: dict[int, str] = {}
         sub = doc.get(font.get("Subtype"))
         self.two_byte = sub == "Type0"
+        # Жирный ли шрифт — для заголовков при сборке Markdown: по имени (Arial-BoldMT, ABCDEF+Calibri-Bold)
+        # или по толщине из описания шрифта.
+        desc = doc.get(font.get("FontDescriptor"))
+        weight = doc.get(desc.get("FontWeight")) if isinstance(desc, dict) else None
+        self.bold = bool(re.search(r"bold|black|heavy|semibold|demi", str(doc.get(font.get("BaseFont")) or ""), re.I)) \
+            or (isinstance(weight, (int, float)) and weight >= 600)
         tu = doc.get(font.get("ToUnicode"))
         if isinstance(tu, Stream):
             try:
@@ -487,7 +493,12 @@ class _Font:
 _TEXT_OPS = {b"Tj", b"TJ", b"'", b'"'}
 
 
-def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: int = 0) -> str:
+def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: int = 0,
+                  spans: Optional[list] = None) -> str:
+    """Текст потока содержимого. spans — если передан, сюда параллельно выводу пишутся куски
+    (текст, кегль на странице, жирный ли, вертикаль строки, начало куска по горизонтали); пробел и перевод
+    строки — с кеглем None.
+    По ним собирается Markdown (pdf_markdown)."""
     fonts = doc.get(res.get("Font")) if isinstance(res, dict) else None
     fonts = fonts if isinstance(fonts, dict) else {}
     xobjs = doc.get(res.get("XObject")) if isinstance(res, dict) else None
@@ -513,14 +524,19 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
     pos: Optional[float] = None        # куда встанет следующий символ
     end_x: Optional[float] = None      # где закончился последний выведенный текст
     y: Optional[float] = None
+    ty, leading = 0.0, 0.0             # вертикаль текущей строки и интерлиньяж (TL) — абзацы при сборке Markdown
 
     def newline() -> None:
         if out and not out[-1].endswith("\n"):
             out.append("\n")
+            if spans is not None:
+                spans.append(("\n", None, False, ty, 0.0))
 
     def space() -> None:
         if out and not out[-1].endswith((" ", "\n")):
             out.append(" ")
+            if spans is not None:
+                spans.append((" ", None, False, ty, 0.0))
 
     def gap(start: float) -> None:
         """Новый кусок текста с позиции start: зазор от конца предыдущего больше ~пятой кегля — пробел."""
@@ -542,8 +558,13 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
             cur = font(args[0] if len(args) < 2 else args[-2])
             if isinstance(args[-1], (int, float)) and args[-1]:
                 size = abs(float(args[-1]))
+        elif op == b"TL" and args and isinstance(args[-1], (int, float)):
+            leading = args[-1] * scale
         elif op in (b"Td", b"TD") and len(args) >= 2 and isinstance(args[1], (int, float)) and isinstance(args[0], (int, float)):
             line_x += args[0] * scale
+            ty += args[1] * scale
+            if op == b"TD":
+                leading = -args[1] * scale
             if abs(args[1]) > 0.5:                            # сдвиг по вертикали — новая строка
                 newline()
                 end_x = None
@@ -553,6 +574,7 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
         elif op == b"T*":
             newline()
             end_x, pos = None, line_x
+            ty -= leading or size * scale * 1.2
         elif op == b"Tm" and len(args) >= 6 and all(isinstance(a, (int, float)) for a in args[-6:]):
             a, _b, _c, _d, e, f = args[-6:]
             scale = abs(a) or 1.0
@@ -561,18 +583,22 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
                 end_x = None
             else:
                 gap(e)
-            line_x, pos, y = e, e, f
+            line_x, pos, y, ty = e, e, f, f
         elif op == b"BT":
-            line_x, pos, scale = 0.0, None, 1.0
+            line_x, pos, scale, ty = 0.0, None, 1.0, 0.0
         elif op in _TEXT_OPS and args:
             if op in (b"'", b'"'):
                 newline()
+                ty -= leading or size * scale * 1.2
             arg = args[-1]
             items = arg if isinstance(arg, list) else [arg]
             x = line_x if pos is None else pos
             for it in items:
+                x0 = x
                 if isinstance(it, bytes) and not isinstance(it, Op):
                     txt, w = cur.text(it) if cur else (it.decode("latin-1", errors="ignore"), 500.0 * len(it))
+                    if spans is not None:
+                        spans.append((txt, size * scale, bool(cur and cur.bold), ty, x0))
                     out.append(txt)
                     x += w / 1000 * size * scale
                 elif isinstance(it, (int, float)):
@@ -585,7 +611,10 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
             if isinstance(xo, Stream) and doc.get(xo.dict.get("Subtype")) == "Form":
                 try:
                     sub_res = doc.get(xo.dict.get("Resources"))
-                    out.append(_content_text(doc, _decode(xo, doc), sub_res if isinstance(sub_res, dict) else res, fonts_cache, depth + 1))
+                    newline()
+                    out.append(_content_text(doc, _decode(xo, doc), sub_res if isinstance(sub_res, dict) else res, fonts_cache,
+                                             depth + 1, spans))
+                    newline()
                 except Exception:
                     pass
         args = []
@@ -594,15 +623,14 @@ def _content_text(doc: _Doc, data: bytes, res: dict, fonts_cache: dict, depth: i
     return re.sub(r"[ \t]{2,}", " ", text)
 
 
-def extract_pages(data: bytes) -> list[str]:
-    """Текст по страницам. Не PDF, зашифрован или битый так, что страниц не найти — ValueError."""
+def _page_streams(data: bytes) -> tuple[_Doc, list[tuple[bytes, dict]]]:
+    """Документ и по каждой странице — склеенный поток содержимого и ресурсы."""
     if not data.lstrip()[:5].startswith(b"%PDF"):
         raise ValueError("это не PDF")
     doc = _Doc(data)
     pages = doc.pages()
     if not pages:
         raise ValueError("в PDF не нашлось страниц")
-    cache: dict = {}
     out = []
     for page, res in pages:
         contents = doc.get(page.get("Contents"))
@@ -615,5 +643,221 @@ def extract_pages(data: bytes) -> list[str]:
                     buf += _decode(c, doc) + b"\n"
                 except Exception:
                     continue
-        out.append(_content_text(doc, buf, res, cache).strip())
+        out.append((buf, res))
+    return doc, out
+
+
+def extract_pages(data: bytes) -> list[str]:
+    """Текст по страницам. Не PDF, зашифрован или битый так, что страниц не найти — ValueError."""
+    doc, pages = _page_streams(data)
+    cache: dict = {}
+    return [_content_text(doc, buf, res, cache).strip() for buf, res in pages]
+
+
+# ── PDF → Markdown ───────────────────────────────────────────────────────────
+#
+# Разметки в PDF нет — только куски текста с кеглем, шрифтом и положением. Структура восстанавливается по ним:
+#   • основной кегль — тот, которым набрана бо́льшая часть символов; строки заметно крупнее — заголовки
+#     (самый крупный кегль — «#», следующий — «##», третий — «###»);
+#   • короткая строка целиком жирным основным кеглем — заголовок уровнем ниже крупных («Примечание:» с двоеточием
+#     в конце — жирный абзац, а не заголовок);
+#   • маркеры •, –, -, * и «1.» / «1)» в начале строки — пункты списка;
+#   • строки абзаца склеиваются (PDF переносит строки по ширине страницы), новый абзац — по увеличенному
+#     вертикальному зазору; перенос слова с дефисом в конце строки склеивается без дефиса;
+#   • колонтитулы — строки, повторяющиеся вверху или внизу большинства страниц, и номера страниц — выкидываются.
+# Таблицы восстановить не из чего — их строки остаются обычным текстом.
+
+class _Line:
+    __slots__ = ("text", "size", "bold", "y", "x")
+
+    def __init__(self, text: str, size: Optional[float], bold: bool, y: float, x: float):
+        self.text, self.size, self.bold, self.y, self.x = text, size, bold, y, x
+
+
+def _lines(spans: list) -> list[_Line]:
+    """Куски текста → строки: кегль строки — у большинства её символов, жирная — если жирные все буквы."""
+    out: list[_Line] = []
+    buf: list[tuple] = []
+
+    def close() -> None:
+        text = re.sub(r"\s+", " ", "".join(t for t, *_ in buf)).strip()
+        if text:
+            weight: dict[float, int] = {}
+            letters = bold = 0
+            for t, sz, b, *_ in buf:
+                n = sum(1 for ch in t if not ch.isspace())
+                if sz is not None and n:
+                    weight[round(sz * 2) / 2] = weight.get(round(sz * 2) / 2, 0) + n
+                    letters += n
+                    bold += n if b else 0
+            size = max(weight, key=weight.get) if weight else None
+            first = next((sp for sp in buf if sp[1] is not None and sp[0].strip()), buf[0])
+            out.append(_Line(text, size, bool(letters) and bold == letters, first[3], first[4]))
+        buf.clear()
+
+    for sp in spans:
+        if sp[0] == "\n":
+            close()
+        else:
+            buf.append(sp)
+    close()
     return out
+
+
+# Маркеры: обычные и из шрифтов Symbol/Wingdings, которыми Word рисует списки (U+F0B7, U+F0A7, U+F076, U+F0D8).
+_BULLET_RE = re.compile(r"^(?:[•●▪◦‣∙·○■□➢►✓✔\uf0b7\uf0a7\uf076\uf0d8]\s*|[-–—*]\s+)(?=\S)")
+_NUM_RE_MD = re.compile(r"^(\d{1,2})[.)]\s+(?=\S)")
+_PAGE_NO_RE = re.compile(r"^(?:(?:стр\.?|страница|page|p\.)\s*)?\d{1,4}(?:\s*(?:из|/|of)\s*\d{1,4})?$", re.I)
+
+
+def _drop_running(pages: list[list[_Line]]) -> list[list[_Line]]:
+    """Без колонтитулов (повторяются вверху/внизу на большинстве страниц; цифры не в счёт) и номеров страниц."""
+    norm = lambda t: re.sub(r"\d+", "#", t.lower())
+    edge: dict[str, int] = {}
+    for lines in pages:
+        for t in {norm(l.text) for l in lines[:2] + lines[-2:]}:
+            edge[t] = edge.get(t, 0) + 1
+    repeated = {t for t, n in edge.items() if len(pages) >= 3 and n >= max(3, len(pages) * 0.6)}
+    out = []
+    for lines in pages:
+        keep = []
+        for i, l in enumerate(lines):
+            at_edge = i < 2 or i >= len(lines) - 2
+            if at_edge and (norm(l.text) in repeated or _PAGE_NO_RE.match(l.text)):
+                continue
+            keep.append(l)
+        out.append(keep)
+    return out
+
+
+def _join(a: str, b: str) -> str:
+    """Склейка перенесённых строк: «инфор-» + «мация» → «информация», иначе через пробел."""
+    if re.search(r"[A-Za-zА-Яа-яЁё]-$", a) and b[:1].islower():
+        return a[:-1] + b
+    return a + " " + b
+
+
+def pdf_markdown(data: bytes) -> str:
+    """PDF → Markdown: заголовки по кеглю и жирности, списки, абзацы. Ошибки — как у extract_pages."""
+    doc, streams = _page_streams(data)
+    cache: dict = {}
+    pages: list[list[_Line]] = []
+    for buf, res in streams:
+        spans: list = []
+        _content_text(doc, buf, res, cache, spans=spans)
+        pages.append(_lines(spans))
+    pages = _drop_running(pages)
+    lines = [l for p in pages for l in p]
+    if not lines:
+        return ""
+
+    # Основной кегль — по числу символов.
+    weight: dict[float, int] = {}
+    for l in lines:
+        if l.size is not None:
+            weight[l.size] = weight.get(l.size, 0) + len(l.text)
+    body = max(weight, key=weight.get) if weight else 0.0
+    big = sorted({l.size for l in lines if l.size and body and l.size >= body * 1.12 and len(l.text) <= 150}, reverse=True)[:3]
+    level = {sz: i + 1 for i, sz in enumerate(big)}
+    bold_level = min(len(big) + 1, 4)
+
+    # Обычный межстрочный зазор основного текста — чтобы отличить перенос строки от нового абзаца.
+    # Самый частый зазор (а не медиана): строк внутри абзацев больше, чем промежутков между блоками.
+    gap_n: dict[float, int] = {}
+    for p in pages:
+        for a, b in zip(p, p[1:]):
+            g = round(abs(b.y - a.y) * 2) / 2
+            if a.size == body and b.size == body and 0 < g < body * 4:
+                gap_n[g] = gap_n.get(g, 0) + 1
+    line_gap = min(gap_n, key=lambda g: (-gap_n[g], g)) if gap_n else 0.0
+
+    # Списки, у которых маркер нарисован картинкой (Chrome, браузеры), видны только по отступу: строки пункта
+    # сдвинуты вправо от левого края текста. Но и абзац «с красной строки» (Word) начинается с отступа — у него
+    # продолжение уже без отступа. Если таких абзацев в документе хотя бы два, отступ списком не считаем.
+    xs: dict[float, int] = {}
+    for l in lines:
+        if l.size == body:
+            xs[round(l.x)] = xs.get(round(l.x), 0) + len(l.text)
+    margin = min((x for x, n in xs.items() if n >= max(xs.values()) * 0.3), default=0.0) if xs else 0.0
+    indented = lambda l: l.size == body and body > 0 and l.x >= margin + body * 0.8
+    red_line = sum(1 for pg in pages for a, b in zip(pg, pg[1:])
+                   if indented(a) and b.size == body and not indented(b) and line_gap and abs(b.y - a.y) <= line_gap * 1.5)
+    use_indent = red_line < 2
+
+    blocks: list[str] = []
+    para = ""            # текущий абзац или пункт списка
+    para_indent = False  # текущий пункт распознан по отступу
+    last_text = ""       # последняя строка предыдущей страницы
+    for p in pages:
+        prev: Optional[_Line] = None
+        for l in p:
+            t = l.text
+            heading = 0
+            if l.size in level:
+                heading = level[l.size]
+            elif l.bold and l.size == body and len(t) <= 100 and not re.search(r"[.;,]$", t) and re.search(r"[^\W\d_]", t):
+                heading = -1 if t.endswith(":") else bold_level
+            bullet = _BULLET_RE.match(t)
+            num = _NUM_RE_MD.match(t)
+            gap = abs(l.y - prev.y) if prev is not None else 0.0
+            if prev is None:
+                # Первая строка страницы: абзац с прошлой страницы продолжается, если там фраза не закончилась.
+                new_para = not last_text or bool(re.search(r"[.!?:;»\"]$", last_text))
+            else:
+                new_para = not line_gap or gap > line_gap * 1.5 or gap == 0
+            prev_text = prev.text if prev is not None else last_text
+            prev = l
+            if heading or bullet or num:
+                if para:
+                    blocks.append(para)
+                    para = ""
+                para_indent = False
+                if heading > 0:
+                    # Заголовок, перенесённый на две строки, — одной строкой.
+                    if blocks and blocks[-1].startswith("#" * heading + " ") and not new_para:
+                        blocks[-1] = _join(blocks[-1], t)
+                    else:
+                        blocks.append("#" * heading + " " + t)
+                elif heading < 0:
+                    blocks.append("**" + t + "**")
+                elif bullet:
+                    para = "- " + t[bullet.end():]
+                else:
+                    para = num.group(1) + ". " + t[num.end():]
+                continue
+            if use_indent and indented(l):
+                starts = not para_indent or new_para or (re.search(r"[.;!?]$", prev_text) and re.match(r"[«\"(]?[A-ZА-ЯЁ0-9]", t))
+                if starts:
+                    if para:
+                        blocks.append(para)
+                    para, para_indent = "- " + t, True
+                else:
+                    para = _join(para, t)
+                continue
+            if para_indent:               # строка без отступа после пунктов — список кончился
+                blocks.append(para)
+                para, para_indent = t, False
+                continue
+            if not use_indent and indented(l):   # документ «с красной строки»: отступ и есть начало абзаца
+                new_para = True
+            if para and not new_para:
+                para = _join(para, t)
+            elif para and para.startswith(("- ",)) and gap and gap <= line_gap * 1.5:
+                para = _join(para, t)
+            else:
+                if para:
+                    blocks.append(para)
+                para = t
+        if p:
+            last_text = p[-1].text
+    if para:
+        blocks.append(para)
+
+    # Пункты списка подряд — без пустой строки между ними, остальное — через пустую строку.
+    out: list[str] = []
+    for b in blocks:
+        is_item = b.startswith("- ") or bool(re.match(r"\d+\. ", b))
+        if out and not (is_item and (out[-1].startswith("- ") or re.match(r"\d+\. ", out[-1]))):
+            out.append("")
+        out.append(b)
+    return "\n".join(out).strip()

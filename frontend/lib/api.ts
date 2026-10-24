@@ -54,10 +54,11 @@ export async function getSystemConfig(): Promise<{ gigachat_only: boolean }> {
 
 // ─── Generation ────────────────────────────────────────────────────────────
 
-export async function parseFile(file: File): Promise<{ text: string; filename: string }> {
+/** markdown — PDF собирается в Markdown (заголовки, списки, абзацы), а не в текст по страницам. */
+export async function parseFile(file: File, opts?: { markdown?: boolean }): Promise<{ text: string; filename: string }> {
   const body = new FormData();
   body.append("file", file);
-  return fetchJson("/api/generation/parse-file", { method: "POST", body });
+  return fetchJson(`/api/generation/parse-file${opts?.markdown ? "?markdown=true" : ""}`, { method: "POST", body });
 }
 
 // ─── Etalons ───────────────────────────────────────────────────────────────
@@ -1159,8 +1160,18 @@ export interface Requirement {
   text: string;
   qa_doc: string;
   qa_doc_truncated: boolean;
+  /** Папка в дереве «Данных»; "" или нет поля — в корне. */
+  folder_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ReqFolder {
+  id: string;
+  name: string;
+  /** "" — в корне. */
+  parent_id: string;
+  created_at: string;
 }
 
 export async function listRequirements(feature?: string): Promise<Requirement[]> {
@@ -1169,7 +1180,7 @@ export async function listRequirements(feature?: string): Promise<Requirement[]>
 }
 
 export async function addRequirement(data: {
-  name: string; feature?: string; text: string; qa_doc?: string; qa_doc_truncated?: boolean;
+  name: string; feature?: string; text: string; qa_doc?: string; qa_doc_truncated?: boolean; folder_id?: string;
 }): Promise<Requirement> {
   return fetchJson("/api/requirements", {
     method: "POST",
@@ -1180,6 +1191,40 @@ export async function addRequirement(data: {
 
 export async function deleteRequirement(id: string): Promise<{ status: string }> {
   return fetchJson(`/api/requirements/${id}`, { method: "DELETE" });
+}
+
+/** Заголовок, фича, исходник, папка документа. QA-документ не трогается — его пересобирают отдельно. */
+export async function updateRequirement(id: string, patch: { name?: string; feature?: string; text?: string; folder_id?: string }): Promise<Requirement> {
+  return fetchJson(`/api/requirements/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function listReqFolders(): Promise<ReqFolder[]> {
+  return fetchJson("/api/requirements/folders");
+}
+
+export async function addReqFolder(name: string, parent_id = ""): Promise<ReqFolder> {
+  return fetchJson("/api/requirements/folders", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, parent_id }),
+  });
+}
+
+export async function updateReqFolder(id: string, patch: { name?: string; parent_id?: string }): Promise<ReqFolder> {
+  return fetchJson(`/api/requirements/folders/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+/** Папка удаляется со вложенными; документы из них переходят в папку уровнем выше (moved — сколько). */
+export async function deleteReqFolder(id: string): Promise<{ status: string; moved: number }> {
+  return fetchJson(`/api/requirements/folders/${id}`, { method: "DELETE" });
 }
 
 export async function generateRequirementDoc(id: string, provider: string): Promise<Requirement> {

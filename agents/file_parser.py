@@ -35,15 +35,16 @@ def validate_file(data: bytes, filename: str) -> None:
         raise ValueError("Файл пустой")
 
 
-def parse_file(data: bytes, filename: str) -> str:
-    """Извлекает текст из файла с предварительной валидацией."""
+def parse_file(data: bytes, filename: str, markdown: bool = False) -> str:
+    """Извлекает текст из файла с предварительной валидацией.
+    markdown=True — PDF собирается в Markdown (заголовки, списки, абзацы) для «Данных», а не в текст по страницам."""
 
     validate_file(data, filename)
 
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
     if ext == "pdf":
-        return _parse_pdf(data)
+        return _parse_pdf_markdown(data) if markdown else _parse_pdf(data)
     elif ext in ("docx", "doc"):
         return _parse_docx(data)
     elif ext in ("xlsx", "xls"):
@@ -96,6 +97,17 @@ def _parse_pdf(data: bytes) -> str:
             "Сохраните страницы как PNG/JPG и приложите их — сработает распознавание текста (OCR)."
         )
     return result
+
+
+def _parse_pdf_markdown(data: bytes) -> str:
+    """PDF → Markdown встроенным разбором (agents/pdf_text.pdf_markdown): структуру восстанавливают кегль, жирность
+    и отступы, которых нет в выдаче PyPDF2. Не вышло — обычный текст по страницам (с той же ошибкой для сканов)."""
+    from agents.pdf_text import pdf_markdown
+    try:
+        md = pdf_markdown(data)
+    except Exception:
+        md = ""
+    return md if md.strip() else _parse_pdf(data)
 
 
 def _parse_docx(data: bytes) -> str:

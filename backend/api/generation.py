@@ -583,12 +583,13 @@ async def export_session(session_id: str, req: ExportRequest) -> dict:
 # ── REST: file → text ───────────────────────────────────────────────────────
 
 @router.post("/api/generation/parse-file")
-async def parse_file_endpoint(file: UploadFile = File(...)):
+async def parse_file_endpoint(file: UploadFile = File(...), markdown: bool = False):
+    """markdown=true — PDF собирается в Markdown (для документов раздела «Данные»)."""
     from agents.file_parser import parse_file, validate_file
     data = await file.read()
     try:
         validate_file(data, file.filename)
-        text = await asyncio.to_thread(parse_file, data, file.filename)
+        text = await asyncio.to_thread(parse_file, data, file.filename, markdown)
         return {"text": text, "filename": file.filename, "size": len(data)}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

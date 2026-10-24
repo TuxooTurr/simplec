@@ -11,6 +11,10 @@
 
 Файл: data/requirements.json — локально на той машине/сервере, где запущен
 бэкенд (не в облаке, без внешних зависимостей вроде huggingface.co).
+
+Дерево папок раздела «Данные» — data/requirement_folders.json: папка {id, name, parent_id}, у требования —
+folder_id ("" — в корне). Папки только группируют: где бы ни лежало требование, его видят выбор требований
+в генерации и в дефектах.
 """
 
 import json
@@ -26,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _FILE = _ROOT / "data" / "requirements.json"
+_FOLDERS = _ROOT / "data" / "requirement_folders.json"
 _MAX_ITEMS = 500
 
 
@@ -72,7 +77,7 @@ class RequirementsStore:
 
     @classmethod
     def add_requirement(cls, name: str, feature: str, text: str,
-                         qa_doc: str = "", qa_doc_truncated: bool = False) -> dict:
+                         qa_doc: str = "", qa_doc_truncated: bool = False, folder_id: str = "") -> dict:
         now = datetime.now(timezone.utc).isoformat()
         item = {
             "id": uuid.uuid4().hex[:12],
@@ -86,6 +91,7 @@ class RequirementsStore:
             # вместе с исходником в этой же записи: исходник и результат всегда рядом.
             "qa_doc": qa_doc,
             "qa_doc_truncated": qa_doc_truncated,
+            "folder_id": folder_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -115,3 +121,94 @@ class RequirementsStore:
             return False
         cls._save(items)
         return True
+
+    # ── Папки ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _load_folders() -> list[dict]:
+        if not _FOLDERS.exists():
+            return []
+        try:
+            with open(_FOLDERS, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except json.JSONDecodeError:
+            logger.warning("requirement_folders.json битый — папки не прочитаны")
+            return []
+
+    @staticmethod
+    def _save_folders(items: list[dict]) -> None:
+        _FOLDERS.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = _FOLDERS.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, _FOLDERS)
+
+    @classmethod
+    def list_folders(cls) -> list[dict]:
+        return sorted(cls._load_folders(), key=lambda f: str(f.get("name", "")).lower())
+
+    @classmethod
+    def folder_exists(cls, folder_id: str) -> bool:
+        return not folder_id or any(f.get("id") == folder_id for f in cls._load_folders())
+
+    @classmethod
+    def add_folder(cls, name: str, parent_id: str = "") -> dict:
+        if not cls.folder_exists(parent_id):
+            raise KeyError(parent_id)
+        item = {"id": uuid.uuid4().hex[:12], "name": name.strip(), "parent_id": parent_id,
+                "created_at": datetime.now(timezone.utc).isoformat()}
+        items = cls._load_folders()
+        items.append(item)
+        cls._save_folders(items)
+        return item
+
+    @staticmethod
+    def _subtree(items: list[dict], root: str) -> set[str]:
+        """Папка и все вложенные в неё на любой глубине."""
+        out, todo = {root}, [root]
+        while todo:
+            cur = todo.pop()
+            for f in items:
+                if f.get("parent_id") == cur and f["id"] not in out:
+                    out.add(f["id"])
+                    todo.append(f["id"])
+        return out
+
+    @classmethod
+    def update_folder(cls, folder_id: str, name: Optional[str] = None, parent_id: Optional[str] = None) -> Optional[dict]:
+        """Переименовать или перенести. В себя или во вложенную папку перенести нельзя — ValueError."""
+        items = cls._load_folders()
+        cur = next((f for f in items if f.get("id") == folder_id), None)
+        if cur is None:
+            return None
+        if parent_id is not None:
+            if parent_id and not any(f.get("id") == parent_id for f in items):
+                raise KeyError(parent_id)
+            if parent_id in cls._subtree(items, folder_id):
+                raise ValueError("Папку нельзя перенести в саму себя или во вложенную")
+            cur["parent_id"] = parent_id
+        if name is not None:
+            cur["name"] = name.strip()
+        cls._save_folders(items)
+        return cur
+
+    @classmethod
+    def delete_folder(cls, folder_id: str) -> Optional[int]:
+        """Удалить папку со вложенными. Требования из них не удаляются — переходят в папку уровнем выше.
+        Сколько требований перенесено; папки нет — None."""
+        items = cls._load_folders()
+        cur = next((f for f in items if f.get("id") == folder_id), None)
+        if cur is None:
+            return None
+        gone = cls._subtree(items, folder_id)
+        cls._save_folders([f for f in items if f["id"] not in gone])
+        reqs = cls._load()
+        moved = 0
+        for r in reqs:
+            if r.get("folder_id") in gone:
+                r["folder_id"] = cur.get("parent_id", "")
+                moved += 1
+        if moved:
+            cls._save(reqs)
+        return moved

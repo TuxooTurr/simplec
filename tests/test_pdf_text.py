@@ -82,3 +82,86 @@ def test_pdf_без_текста_честная_ошибка(monkeypatch):
     pdf = _pdf({**_page_tree(4, 5), 4: _stream(b"q 1 0 0 1 0 0 cm Q"), 5: b"<< /Type /Font /Subtype /Type1 >>"})
     with pytest.raises(ValueError, match="скан"):
         file_parser.parse_file(pdf, "scan.pdf")
+
+
+# ── PDF → Markdown ───────────────────────────────────────────────────────────
+
+def _md_pdf(pages: list[bytes]) -> bytes:
+    """PDF из нескольких страниц: F1 — обычный Helvetica, F2 — Helvetica-Bold."""
+    n = len(pages)
+    kids = " ".join(f"{10 + i} 0 R" for i in range(n))
+    objs = {
+        1: b"<< /Type /Catalog /Pages 2 0 R >>",
+        2: f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode(),
+        5: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        6: b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+    }
+    for i, content in enumerate(pages):
+        objs[10 + i] = (f"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> "
+                        f"/Contents {30 + i} 0 R >>").encode()
+        objs[30 + i] = _stream(content)
+    return _pdf(objs)
+
+
+def _ln(text: str, y: float, size: int = 10, bold: bool = False, x: float = 50) -> bytes:
+    font = b"/F2" if bold else b"/F1"
+    esc = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    return b"BT " + font + f" {size} Tf 1 0 0 1 {x} {y} Tm (".encode() + esc.encode("latin-1") + b") Tj ET\n"
+
+
+def test_markdown_заголовки_по_кеглю_и_жирности_абзацы_и_списки():
+    from agents.pdf_text import pdf_markdown
+    page = b"".join([
+        _ln("Specification", 760, 20),
+        _ln("Overview", 730, 15),
+        _ln("The system accepts a call and checks the", 710),
+        _ln("data before sending it on.", 698),
+        _ln("Second paragraph starts after a gap.", 676),
+        _ln("Access rules", 650, bold=True),
+        _ln("Note:", 630, bold=True),
+        _ln("- first item", 610),
+        _ln("- second item that wraps onto", 598),
+        _ln("1) open the card", 586),
+        _ln("2) press close", 574),
+    ])
+    assert pdf_markdown(_md_pdf([page])) == (
+        "# Specification\n\n## Overview\n\n"
+        "The system accepts a call and checks the data before sending it on.\n\n"
+        "Second paragraph starts after a gap.\n\n### Access rules\n\n**Note:**\n\n"
+        "- first item\n- second item that wraps onto\n1. open the card\n2. press close"
+    )
+
+
+def test_markdown_колонтитулы_номера_страниц_и_абзац_через_страницу():
+    from agents.pdf_text import pdf_markdown
+    pages = []
+    for i in range(3):
+        body = _ln("Line one of the text that continues" if i == 0 else "on the next page and ends here.", 700)
+        if i == 2:
+            body = _ln("Final paragraph.", 700)
+        pages.append(_ln("ACME confidential", 790, 8) + body + _ln(str(i + 1), 40, 8))
+    md = pdf_markdown(_md_pdf(pages))
+    assert "ACME" not in md and "\n1\n" not in md
+    assert md == "Line one of the text that continues on the next page and ends here.\n\nFinal paragraph."
+
+
+def test_markdown_список_по_отступу_когда_маркер_картинкой():
+    from agents.pdf_text import pdf_markdown
+    page = b"".join([
+        _ln("Fields of the card:", 700),
+        _ln("Number is unique.", 688, x=70),
+        _ln("Address is required and is checked", 676, x=70),
+        _ln("against the directory.", 664, x=70),
+        _ln("Status is one of three.", 652, x=70),
+        _ln("Closed cards are read only.", 630),
+    ])
+    assert pdf_markdown(_md_pdf([page])) == (
+        "Fields of the card:\n\n- Number is unique.\n- Address is required and is checked against the directory.\n"
+        "- Status is one of three.\n\nClosed cards are read only."
+    )
+
+
+def test_парсер_файлов_pdf_в_markdown_по_флагу():
+    pdf = _md_pdf([_ln("Title", 760, 20) + _ln("Body text.", 730)])
+    assert file_parser.parse_file(pdf, "spec.pdf", markdown=True) == "# Title\n\nBody text."
+    assert file_parser.parse_file(pdf, "spec.pdf").startswith("--- Страница 1 ---")

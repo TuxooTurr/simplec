@@ -1527,6 +1527,8 @@ def release_ke_plan(key: str, db: Session = Depends(get_db)) -> dict:
 
 class KeApplyBody(BaseModel):
     stories: list[str] = Field(default_factory=list)   # каким стори добавить (пусто — всем, кому не хватает)
+    # Стори → КЭ (подписи, как в плане), которые ей не добавлять: сняли крестиком на маркере.
+    exclude: dict[str, list[str]] = Field(default_factory=dict)
 
 
 @router.post("/api/zephyr/release/{key}/ke-apply")
@@ -1538,7 +1540,15 @@ def release_ke_apply(key: str, body: KeApplyBody, db: Session = Depends(get_db))
         raise HTTPException(409, plan["blocked"] or "Запись поля КЭ невозможна")
     fid, mode = plan["release"]["field"], plan["mode"]
     wanted = {k.strip().upper() for k in body.stories if k.strip()}
-    todo = [x for x in plan["stories"] if x.get("missingRaw") and (not wanted or x["key"] in wanted)]
+    skip = {k.strip().upper(): set(v) for k, v in body.exclude.items()}
+    todo = []
+    for x in plan["stories"]:
+        if not x.get("missingRaw") or (wanted and x["key"] not in wanted):
+            continue
+        off = skip.get(x["key"], set())
+        keep = [(lbl, raw) for lbl, raw in zip(x["missing"], x["missingRaw"]) if lbl not in off]
+        if keep:
+            todo.append({**x, "missing": [k for k, _ in keep], "missingRaw": [r for _, r in keep]})
 
     def one(row: dict) -> dict:
         if mode == "add":

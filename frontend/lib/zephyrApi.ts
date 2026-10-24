@@ -310,9 +310,10 @@ export interface KeResult { key: string; ok: boolean; added?: string[]; error?: 
 
 export const getKePlan = (key: string) => fetchJson<KePlan>(`/api/zephyr/release/${encodeURIComponent(key)}/ke-plan`);
 
-export const applyKe = (key: string, stories: string[]) =>
+/** exclude — стори → КЭ, которые ей не добавлять (сняли крестиком). */
+export const applyKe = (key: string, stories: string[], exclude: Record<string, string[]> = {}) =>
   fetchJson<{ results: KeResult[]; plan: KePlan }>(`/api/zephyr/release/${encodeURIComponent(key)}/ke-apply`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stories }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stories, exclude }),
   });
 
 export const getRelease = (key: string) => fetchJson<ZRelease>(`/api/zephyr/release/${encodeURIComponent(key.trim())}`);

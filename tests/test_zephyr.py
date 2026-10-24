@@ -830,6 +830,26 @@ def test_запись_кэ_запрещена_если_поля_нет_на_эк
     assert "одно значение" in z.release_ke_plan("SBER911-100", db=None)["blocked"]
 
 
+def test_исключённые_кэ_стори_не_добавляются(jira, monkeypatch):
+    _ke_release(jira, {"SBER911-1": [], "SBER911-2": []})
+    plan = z.release_ke_plan("SBER911-100", db=None)
+    labels = plan["release"]["ke"]
+    assert len(labels) >= 2
+    puts = {}
+    real = z._jira_request
+
+    def req(cfg, m, p, **kw):
+        if m == "PUT":
+            puts[p.rsplit("/", 1)[1]] = kw.get("json_body")
+            return {}
+        return real(cfg, m, p, **kw)
+    monkeypatch.setattr(z, "_jira_request", req)
+    # Стори 1 — без первой КЭ; стори 2 — все КЭ исключены: в Jira не уходит
+    res = z.release_ke_apply("SBER911-100", z.KeApplyBody(exclude={"sber911-1": [labels[0]], "SBER911-2": labels}), db=None)
+    assert [r["key"] for r in res["results"]] == ["SBER911-1"] and res["results"][0]["added"] == labels[1:]
+    assert "SBER911-2" not in puts
+
+
 def test_ошибка_jira_по_одной_стори_не_останавливает_остальные(jira, monkeypatch):
     _ke_release(jira, {"SBER911-1": [], "SBER911-2": []})
     real = z._jira_request

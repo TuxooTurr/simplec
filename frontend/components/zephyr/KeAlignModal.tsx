@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Check, ClipboardCopy, Loader2, Tags, XCircle } from "lucide-react";
+import { AlertTriangle, Check, ClipboardCopy, Loader2, Tags, X, XCircle } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { applyKe, getKePlan, type KePlan, type KeResult } from "@/lib/zephyrApi";
 
@@ -9,13 +9,23 @@ import { applyKe, getKePlan, type KePlan, type KeResult } from "@/lib/zephyrApi"
  * Выравнивание КЭ: все КЭ релиза — на все его стори (по процессу у стори должны стоять КЭ релиза).
  * Открытие окна — только чтение: что у каждой стори есть и чего не хватает, и проверка поля КЭ у стори
  * (editmeta: на экране ли, тип, операции). Запись — по кнопке, добавляются только недостающие КЭ,
- * свои КЭ стори не трогаются. Ответ Jira по каждой стори виден как есть; отчёт можно скопировать разработчику.
+ * свои КЭ стори не трогаются. Отдельную КЭ конкретной стори можно исключить — крестик на её маркере в «Добавится».
+ * Ответ Jira по каждой стори виден как есть; отчёт можно скопировать разработчику.
  */
 export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { releaseKey: string; baseUrl: string; onClose: () => void }) {
   const [plan, setPlan] = useState<KePlan | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
   const [off, setOff] = useState<Set<string>>(new Set());     // стори, с которых сняли галочку
+  /** Стори → КЭ, которые ей не добавлять (сняли крестиком на маркере). */
+  const [skip, setSkip] = useState<Record<string, string[]>>({});
+  const toggleSkip = (story: string, ke: string) => setSkip(o => {
+    const cur = o[story] ?? [];
+    const next = cur.includes(ke) ? cur.filter(x => x !== ke) : [...cur, ke];
+    const n = { ...o };
+    if (next.length) n[story] = next; else delete n[story];
+    return n;
+  });
   const [results, setResults] = useState<KeResult[] | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -26,15 +36,16 @@ export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { release
     return () => { alive = false; };
   }, [releaseKey]);
 
-  const todo = plan?.stories.filter(s => s.missing.length && !s.error) ?? [];
+  // Стори, у которой исключили все недостающие КЭ, — назначать нечего.
+  const todo = plan?.stories.filter(s => s.missing.some(k => !(skip[s.key] ?? []).includes(k)) && !s.error) ?? [];
   const chosen = todo.filter(s => !off.has(s.key));
   const byKey = new Map((results ?? []).map(r => [r.key, r]));
 
   const apply = async () => {
     setBusy(true); setErr("");
     try {
-      const out = await applyKe(releaseKey, chosen.map(s => s.key));
-      setResults(out.results); setPlan(out.plan); setOff(new Set());
+      const out = await applyKe(releaseKey, chosen.map(s => s.key), skip);
+      setResults(out.results); setPlan(out.plan); setOff(new Set()); setSkip({});
     } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };
@@ -82,7 +93,7 @@ export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { release
               <ul className="border border-border-main rounded-xl divide-y divide-border-main max-h-[50vh] overflow-y-auto scrollbar-thin">
                 {plan.stories.map(s => {
                   const r = byKey.get(s.key);
-                  const can = s.missing.length > 0 && !s.error;
+                  const can = todo.includes(s);
                   return (
                     <li key={s.key} className="flex items-start gap-3 px-3 py-2 text-sm">
                       <input type="checkbox" className="mt-1" aria-label={`Назначить КЭ ${s.key}`} disabled={!can || busy}
@@ -95,7 +106,25 @@ export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { release
                         </span>
                         <span className="block text-[11px] text-text-muted">Сейчас: {s.ke.length ? s.ke.join(" · ") : "КЭ нет"}</span>
                         {s.error && <span className="block text-[11px] text-red-600 dark:text-red-400">Не прочиталась: {s.error}</span>}
-                        {s.missing.length > 0 && <span className="block text-[11px] text-primary">Добавится: {s.missing.join(" · ")}</span>}
+                        {s.missing.length > 0 && (
+                          <span className="flex flex-wrap items-center gap-1 mt-0.5 text-[11px]">
+                            <span className="text-text-muted">Добавится:</span>
+                            {s.missing.map(k => {
+                              const out = (skip[s.key] ?? []).includes(k);
+                              return (
+                                <span key={k} className={`inline-flex items-center gap-0.5 pl-1.5 pr-0.5 py-0.5 rounded-full border
+                                  ${out ? "border-border-main text-text-muted line-through" : "border-primary/40 bg-primary/10 text-primary"}`}>
+                                  {k}
+                                  <button type="button" onClick={() => toggleSkip(s.key, k)} disabled={busy}
+                                    aria-label={out ? `Вернуть ${k} для ${s.key}` : `Не добавлять ${k} в ${s.key}`}
+                                    title={out ? "Вернуть: КЭ добавится стори" : "Исключить: этой стори КЭ не добавлять"}
+                                    className="p-0.5 rounded-full hover:bg-bg-subtle">
+                                    {out ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}</button>
+                                </span>
+                              );
+                            })}
+                          </span>
+                        )}
                         {r && !r.ok && <span className="block text-[11px] text-red-600 dark:text-red-400">Jira: {r.error}</span>}
                       </span>
                       {r?.ok ? <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400 whitespace-nowrap"><Check className="w-3.5 h-3.5" /> Назначено</span>

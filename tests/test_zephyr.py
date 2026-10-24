@@ -911,6 +911,13 @@ def test_ручные_связи_покрытия_переходят_в_прик
     assert nf["attached"] == {"S-1": ["C1"]} and "manual" not in nf and "coverage" not in nf
 
 
+def test_открепить_регресс_от_релиза(jira):
+    _release_route(jira); _nf_search(jira)
+    assert "SBER911-C1" in [r["key"] for r in z.release_board("SBER911-100", project="SBER911", db=None)["runs"]]
+    z.release_regress_detach("SBER911-100", z.RegressDetach(project="SBER911", run="sber911-c1"))
+    assert "SBER911-C1" not in [r["key"] for r in z.release_board("SBER911-100", project="SBER911", db=None)["runs"]]
+
+
 def test_вид_нф():
     assert z.is_nf_type("Новый функционал") and z.is_nf_type("НФ") and not z.is_nf_type("Регресс")
 

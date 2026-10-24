@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCheck, ChevronDown, ExternalLink, Loader2, PlayCircle, Plus, Rocket, Search, SlidersHorizontal, X } from "lucide-react";
+import { AlertTriangle, CheckCheck, ChevronDown, ExternalLink, Loader2, PlayCircle, Plus, Rocket, Search, SlidersHorizontal, Unlink, X } from "lucide-react";
 import {
-  DEFAULT_CRITERIA, createRun, findCritCases, getFieldValues, getRelease, saveResults,
+  DEFAULT_CRITERIA, createRun, findCritCases, getFieldValues, getRelease, getRun, saveResults,
   type CritCase, type CritCriteria, type CritStats, type ZRelease,
 } from "@/lib/zephyrApi";
 import Player from "./Player";
@@ -44,13 +44,21 @@ function Step({ n, title, done, children }: { n: number; title: string; done?: b
  * в плеере или кнопкой «Пройти все». С releaseKey — встроен в строку релиза: релиз загружается сам.
  * modal — в окне «Собрать регресс»: кейсы ищутся сразу, отмечает их пользователь («Выбрать все»), прогон создаётся
  * без доп. подтверждения, и окно закрывает раздел (onRunCreated).
+ *
+ * Ревизия (existingRuns — у релиза уже есть прогон регресса): кейсы этих прогонов читаются из Zephyr; КЭ релиза,
+ * которых нет ни у одного кейса прогонов, подсвечены как новые; список — только недобавленные кейсы (их собирают
+ * в дополнительный прогон: в готовый прогон API кейсы не добавляет). Или «Открепить» прогон и собрать новый.
  */
-export default function CritRegressView({ project, baseUrl, releaseKey, modal, onRunCreated }: {
+export default function CritRegressView({ project, baseUrl, releaseKey, modal, onRunCreated, existingRuns, onDetach }: {
   project: string;
   baseUrl: string;
   releaseKey?: string;
   modal?: boolean;
   onRunCreated?: (key: string, warnings: string[]) => void;
+  /** Прогоны регресса, уже привязанные к релизу, — ревизия вместо сборки с нуля. */
+  existingRuns?: { key: string; name: string }[];
+  /** Открепить прогон регресса от релиза (в SimpleTest) — чтобы собрать новый. */
+  onDetach?: (run: string) => Promise<void>;
 }) {
   const embedded = !!releaseKey;
   const [relKey, setRelKey] = useState(releaseKey ?? "");
@@ -83,6 +91,33 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
   const [values, setValues] = useState<{ statuses: string[]; fields: Record<string, string[]> } | null>(null);
   const [valuesErr, setValuesErr] = useState("");
 
+  /* ── Ревизия: кейсы уже собранных прогонов регресса ── */
+  const [revRuns, setRevRuns] = useState(existingRuns ?? []);
+  const [inRun, setInRun] = useState<Set<string> | null>(null);
+  const [revErr, setRevErr] = useState("");
+  const [onlyNew, setOnlyNew] = useState(true);
+  const [detaching, setDetaching] = useState("");
+  const revision = revRuns.length > 0;
+  const revKeys = revRuns.map(r => r.key).join(",");
+  useEffect(() => {
+    if (!revKeys) { setInRun(null); return; }
+    let live = true;
+    setRevErr("");
+    Promise.all(revKeys.split(",").map(k => getRun(k)))
+      .then(rs => { if (live) setInRun(new Set(rs.flatMap(r => r.items.map(i => i.testCaseKey)))); })
+      .catch(e => { if (live) setRevErr((e as Error).message); });
+    return () => { live = false; };
+  }, [revKeys]);
+  // КЭ, которых нет ни у одного кейса уже собранных прогонов, — новые (появились у релиза после сборки).
+  const coveredKe = useMemo(() => new Set((cases ?? []).filter(c => inRun?.has(c.key)).flatMap(c => c.ke)), [cases, inRun]);
+  const isNewKe = (l: string) => revision && !!inRun && !!cases && !coveredKe.has(l);
+  const detach = async (run: string) => {
+    if (!onDetach) return;
+    setDetaching(run);
+    try { await onDetach(run); setRevRuns(rs => rs.filter(r => r.key !== run)); } catch (e) { setRevErr((e as Error).message); }
+    setDetaching("");
+  };
+
   useEffect(() => setCrit(readCriteria()), []);
   const saveCrit = (c: CritCriteria) => { setCrit(c); try { localStorage.setItem(CRIT_KEY, JSON.stringify(c)); } catch { /* не запомнится */ } };
   useEffect(() => {
@@ -97,7 +132,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
     try {
       const r = await getRelease(k);
       setRel(r); setKeOn(new Set(r.ke.map(x => x.label)));
-      setRunName(`${readCriteria().only_crit ? "Крит регресс" : "Регресс"} ${r.key} · ${today()}`);
+      setRunName(`${readCriteria().only_crit ? "Крит регресс" : "Регресс"} ${r.key} · ${today()}${existingRuns?.length ? " · доп." : ""}`);
       if (modal && r.ke.length) void find(r.ke.map(x => x.label), readCriteria());   // набор кейсов — сразу
     } catch (e) { setRelErr((e as Error).message); }
     setRelBusy(false);
@@ -118,8 +153,10 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
   };
 
   const s = q.trim().toLowerCase();
-  const shown = useMemo(() => (cases ?? []).filter(c => !s || c.name.toLowerCase().includes(s) || c.key.toLowerCase().includes(s)), [cases, s]);
-  const allOn = !!cases?.length && cases.every(c => chosen.has(c.key));
+  const notAdded = (c: CritCase) => !inRun?.has(c.key);
+  const pool = useMemo(() => (cases ?? []).filter(c => !(revision && onlyNew && inRun) || notAdded(c)), [cases, revision, onlyNew, inRun]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const shown = useMemo(() => pool.filter(c => !s || c.name.toLowerCase().includes(s) || c.key.toLowerCase().includes(s)), [pool, s]);
+  const allOn = pool.length > 0 && pool.every(c => chosen.has(c.key));
 
   const create = async () => {
     if (!rel) return;
@@ -166,11 +203,13 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
               {rel.ke.length === 0 && <p className="text-sm text-amber-700 dark:text-amber-300">В задаче релиза КЭ не найдены — добавьте их вручную ниже.</p>}
               <div className="flex flex-wrap gap-1.5">
                 {keList.map(l => (
-                  <label key={l} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs cursor-pointer select-none
-                    ${keOn.has(l) ? "border-primary bg-primary/10 text-primary" : "border-border-main text-text-muted"}`}>
+                  <label key={l} title={isNewKe(l) ? "Новая КЭ: ни у одного кейса уже собранного прогона её нет" : undefined}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs cursor-pointer select-none
+                    ${keOn.has(l) ? "border-primary bg-primary/10 text-primary" : "border-border-main text-text-muted"}
+                    ${isNewKe(l) ? "ring-2 ring-amber-400" : ""}`}>
                     <input type="checkbox" className="sr-only" checked={keOn.has(l)}
                       onChange={() => setKeOn(o => { const n = new Set(o); if (n.has(l)) n.delete(l); else n.add(l); return n; })} />
-                    {l}
+                    {l}{isNewKe(l) && <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-300">новая</span>}
                   </label>
                 ))}
                 <span className="flex items-center gap-1">
@@ -202,6 +241,31 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
           {keBlock}
         </Step>}
         {embedded && relErr && <p className="text-sm text-red-600 dark:text-red-400">{relErr}</p>}
+        {revision && (
+          <div className="rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2 text-sm">
+            <p className="flex items-start gap-2 text-amber-900 dark:text-amber-200">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>Регресс уже собран — ревизия: новые КЭ релиза подсвечены, ниже — только кейсы, которых в прогоне нет. Их можно собрать
+                в дополнительный прогон (в готовый прогон API Zephyr кейсы не добавляет) или открепить прогон и собрать регресс заново.</span>
+            </p>
+            <ul className="space-y-1">
+              {revRuns.map(r => (
+                <li key={r.key} className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-primary">{r.key}</span>
+                  <span className="min-w-0 flex-1 truncate text-text-main">{r.name}</span>
+                  {onDetach && (
+                    <button type="button" onClick={() => detach(r.key)} disabled={!!detaching}
+                      title="Открепить от релиза в SimpleTest — строка релиза перестанет его учитывать; в Zephyr отслеживание не меняется"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border-main bg-bg-card text-xs text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                      {detaching === r.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unlink className="w-3.5 h-3.5" />} Открепить</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {!inRun && !revErr && <p className="flex items-center gap-1.5 text-xs text-text-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Читаю кейсы прогона…</p>}
+            {revErr && <p className="text-xs text-red-600 dark:text-red-400">Кейсы прогона не прочитались: {revErr}</p>}
+          </div>
+        )}
         {embedded && relBusy && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю релиз…</p>}
 
         {rel && (
@@ -256,9 +320,15 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
               <>
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer select-none">
-                    <input type="checkbox" checked={allOn} onChange={() => setChosen(allOn ? new Set() : new Set(cases.map(c => c.key)))} />
-                    Выбрать все · выбрано {chosen.size} из {cases.length}
+                    <input type="checkbox" checked={allOn} onChange={() => setChosen(allOn ? new Set() : new Set(pool.map(c => c.key)))} />
+                    Выбрать все · выбрано {chosen.size} из {pool.length}
                   </label>
+                  {revision && inRun && (
+                    <label className="flex items-center gap-2 text-sm text-text-main cursor-pointer select-none">
+                      <input type="checkbox" checked={onlyNew} onChange={e => setOnlyNew(e.target.checked)} />
+                      Только недобавленные · {cases.filter(notAdded).length} из {cases.length}
+                    </label>
+                  )}
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Найти кейс" aria-label="Найти кейс" className={`${INPUT} ml-auto w-56`} />
                 </div>
                 <div className="max-h-[420px] overflow-y-auto scrollbar-thin border border-border-main rounded-xl">
@@ -274,7 +344,9 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
                           <td className="px-3 py-1.5 font-mono text-xs text-primary whitespace-nowrap">{c.key}</td>
                           <td className="px-3 py-1.5 text-text-main"><span className="block truncate max-w-[480px]">{c.name}</span>
                             {c.folder && <span className="block text-[11px] text-text-muted truncate">{c.folder}</span>}</td>
-                          <td className="px-3 py-1.5 text-xs text-text-muted truncate">{c.ke.join(", ")}</td>
+                          <td className="px-3 py-1.5 text-xs text-text-muted truncate">
+                            {c.ke.map((k, i) => <span key={k} className={isNewKe(k) ? "font-semibold text-amber-700 dark:text-amber-300" : ""}>{i ? ", " : ""}{k}</span>)}
+                            {revision && inRun?.has(c.key) && <span className="ml-1 text-green-700 dark:text-green-400">· в прогоне</span>}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -295,7 +367,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
                   <input value={runName} onChange={e => setRunName(e.target.value)} aria-label="Название прогона" className={`${INPUT} flex-1`} />
                   <button type="button" onClick={modal ? create : () => setConfirm(true)} disabled={!chosen.size || !runName.trim() || creating}
                     className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
-                    {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />} Создать прогон ({chosen.size})</button>
+                    {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />} {revision ? "Создать доп. прогон" : "Создать прогон"} ({chosen.size})</button>
                 </div>
                 <p className="text-xs text-text-muted">В отслеживании прогона будет задача релиза {rel.key}, «{crit.type_field}» прогона — {crit.type_value}.</p>
                 {confirm && (

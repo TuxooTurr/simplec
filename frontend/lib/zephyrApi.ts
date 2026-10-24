@@ -245,6 +245,10 @@ const postJson = <T,>(path: string, method: string, body: unknown) =>
 export const editNfRuns = (key: string, project: string, edit: { add?: string; remove?: string }) =>
   postJson<{ runs: string[]; removed: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/nf-runs`, "POST", { project, ...edit });
 
+/** Открепить прогон регресса от релиза в SimpleTest — чтобы собрать новый (в Zephyr отслеживание не меняется). */
+export const detachRegress = (key: string, project: string, run: string) =>
+  postJson<{ detached: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/regress-detach`, "POST", { project, run });
+
 /** Прикрепить имеющийся прогон к стори (связь — в SimpleTest; прогон встаёт в НФ релиза). */
 export const attachRun = (key: string, project: string, stories: string[], run: string) =>
   postJson<{ attached: Record<string, string[]> }>(`/api/zephyr/release/${encodeURIComponent(key)}/attach`, "POST", { project, stories, run });

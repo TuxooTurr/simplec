@@ -1164,6 +1164,9 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
     # которые API не показывает с релизом (релиз — не основная задача), добавляют руками — они остаются.
     with _releases_lock:
         data = _rel_load()
+        # Прогоны регресса, откреплённые от релиза в SimpleTest (собирают новый): в строке релиза их больше нет.
+        detached = set(_rel_project(data, project).get("regressDetached", {}).get(rel["key"], []))
+        rel_runs = [r for r in rel_runs if r["key"] not in detached]
         nf = _rel_nf(_rel_project(data, project), rel["key"])
         for r in rel_runs:
             if is_nf_type(r.get("type", "")) and r["key"] not in nf["runs"] and r["key"] not in nf["removed"]:
@@ -1263,6 +1266,27 @@ def release_nf_runs(key: str, body: NfRunsEdit, db: Session = Depends(get_db)) -
             nf["runInfo"].pop(run, None)
         _rel_save(data)
         return {"runs": list(nf["runs"]), "removed": list(nf["removed"])}
+
+
+class RegressDetach(BaseModel):
+    project: str = Field(..., min_length=1)
+    run: str = Field(..., min_length=1)
+
+
+@router.post("/api/zephyr/release/{key}/regress-detach")
+def release_regress_detach(key: str, body: RegressDetach) -> dict:
+    """Открепить прогон регресса от релиза — чтобы собрать новый. Только в SimpleTest: API отслеживание прогона
+    не меняет, поэтому в Zephyr релиз у прогона остаётся (уберите вручную, если нужно)."""
+    rel, run = _issue_key(key, "Номер релиза"), body.run.strip().upper()
+    if not _RUN_RE.match(run):
+        raise HTTPException(422, "Номер прогона — в формате SBER911-C709")
+    with _releases_lock:
+        data = _rel_load()
+        lst = _rel_project(data, body.project.strip().upper()).setdefault("regressDetached", {}).setdefault(rel, [])
+        if run not in lst:
+            lst.append(run)
+        _rel_save(data)
+        return {"detached": list(lst)}
 
 
 class StoriesAttach(BaseModel):

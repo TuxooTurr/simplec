@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, CircleDashed, Copy, ExternalLink, Link2, ListChecks, Loader2, Plus, RefreshCw, Rocket, Search, ShieldCheck, Tags, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import {
-  addRelease, attachRun, createStoryRuns, detachRun, editNfRuns, getReleaseBoard, getReleases, getRuns, getStoryCases, removeRelease, runKind,
+  addRelease, attachRun, createStoryRuns, detachRegress, detachRun, editNfRuns, getReleaseBoard, getReleases, getRuns, getStoryCases, removeRelease, runKind,
   type ReleaseBoard, type ZLinked, type ZRun,
 } from "@/lib/zephyrApi";
 import RunCard, { RunTypeChip } from "./RunCard";
@@ -416,8 +416,10 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
       {open && !b && !st.err && <p className="flex items-center gap-2 border-t border-border-main px-4 py-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю релиз…</p>}
 
       {regressOpen && (
-        <Modal open onClose={() => setRegressOpen(false)} title={`Собрать регресс · ${relKey}`} size="max-w-5xl">
+        <Modal open onClose={() => setRegressOpen(false)} title={`${regress.length ? "Ревизия регресса" : "Собрать регресс"} · ${relKey}`} size="max-w-5xl">
           <CritRegressView project={project} baseUrl={baseUrl} releaseKey={relKey} modal
+            existingRuns={regress.map(r => ({ key: r.key, name: r.name }))}
+            onDetach={async run => { await detachRegress(relKey, project, run); onReload(); }}
             onRunCreated={(key, warnings) => {
               setRegressOpen(false);
               setNote([{ ok: true, text: `Прогон ${key} создан, в отслеживании — ${relKey}.` }, ...warnings.map(w => ({ ok: false, text: w }))]);

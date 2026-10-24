@@ -501,7 +501,7 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 > Пополняй этот раздел при КАЖДОМ значимом изменении (новая запись сверху).
 > Формат: `### YYYY-MM-DD — краткий заголовок` + буллеты что/почему/где.
 
-### 2026-10-24 — «Данные»: документы в дереве папок, PDF → Markdown, документ QA с текстом для рассказа
+### 2026-10-24 — «Данные»: документы в дереве папок, PDF и DOCX → Markdown, документ QA с текстом для рассказа
 - **Дерево папок** (`components/data/DocTree.tsx`, `DataDocs.tsx`): требования — документы в папках, как страницы
   Notion. Папки — `data/requirement_folders.json` ({id, name, parent_id}), у требования `folder_id` ("" — корень).
   API: `GET/POST /api/requirements/folders`, `PATCH/DELETE /api/requirements/folders/{id}` (перенос в себя/во вложенную —
@@ -521,6 +521,12 @@ curl -s -X POST http://localhost:8000/api/auth/login \
   «с красной строки» распознаётся и отступ там — начало абзаца); абзацы — по зазору (самый частый межстрочный),
   переносы с дефисом склеиваются, абзац через страницу не рвётся, колонтитулы и номера страниц убираются. Таблицы —
   текстом. Проверено на PDF из Chrome (`--print-to-pdf`): заголовки, списки, абзацы с красной строки на 3 страницах.
+- **DOCX → Markdown** (`agents/docx_text.docx_markdown`, без python-docx: zip + XML): заголовки по стилям
+  («Heading N»/«Заголовок N», «Title», outlineLvl), без стилей — по кеглю (`w:sz`) как в PDF; списки Word (numPr +
+  numbering.xml: bullet/decimal, вложенность по ilvl или «List Bullet 2»), маркер текстом и «1⇥» — пункты; жирное —
+  `**…**`; таблицы — таблицами Markdown; sdt раскрываются, `delText` и коды полей пропускаются. `parse-file?markdown=true`
+  для .docx; обычный разбор DOCX без python-docx тоже берёт встроенный. Проверено на DOCX из python-docx (стили)
+  и `textutil` (ручное оформление); тесты — `tests/test_docx_text.py`.
 
 ### 2026-10-24 — Релиз: прогоны на стори, ревизия регресса, исключение КЭ; Jira tool: статус из окон; стенды: правка брони, график в Confluence
 - **Zephyr, «Прогоны»** (`RunsView.tsx`): дерево папок прогонов (`runFolderTree`, `FolderTree rootLabel="Все прогоны"`),

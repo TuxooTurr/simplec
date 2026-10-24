@@ -37,7 +37,7 @@ def validate_file(data: bytes, filename: str) -> None:
 
 def parse_file(data: bytes, filename: str, markdown: bool = False) -> str:
     """Извлекает текст из файла с предварительной валидацией.
-    markdown=True — PDF собирается в Markdown (заголовки, списки, абзацы) для «Данных», а не в текст по страницам."""
+    markdown=True — PDF и DOCX собираются в Markdown (заголовки, списки, абзацы, таблицы DOCX) для «Данных»."""
 
     validate_file(data, filename)
 
@@ -46,7 +46,7 @@ def parse_file(data: bytes, filename: str, markdown: bool = False) -> str:
     if ext == "pdf":
         return _parse_pdf_markdown(data) if markdown else _parse_pdf(data)
     elif ext in ("docx", "doc"):
-        return _parse_docx(data)
+        return _parse_docx_markdown(data) if markdown else _parse_docx(data)
     elif ext in ("xlsx", "xls"):
         return _parse_xlsx(data)
     elif ext == "xml":
@@ -110,13 +110,32 @@ def _parse_pdf_markdown(data: bytes) -> str:
     return md if md.strip() else _parse_pdf(data)
 
 
+def _parse_docx_markdown(data: bytes) -> str:
+    """DOCX → Markdown встроенным разбором (agents/docx_text.py): стили заголовков, списки Word, таблицы, жирное.
+    Не вышло — обычный текст через python-docx (с его понятными ошибками, например для старого .doc)."""
+    from agents.docx_text import docx_markdown
+    try:
+        md = docx_markdown(data)
+    except Exception:
+        md = ""
+    return md if md.strip() else _parse_docx(data)
+
+
 def _parse_docx(data: bytes) -> str:
     # Ошибки поднимаем, а не возвращаем заглушкой (см. _parse_pdf) — иначе текст
     # вида «[Ошибка DOCX: ...]» уходит в LLM как будто это содержимое файла.
     try:
         from docx import Document
     except ImportError:
-        raise ValueError("DOCX не обработан: на сервере не установлен python-docx")
+        # python-docx не установлен (скачать в корп. сети нельзя) — встроенный разбор, он без библиотек.
+        from agents.docx_text import docx_markdown
+        try:
+            result = docx_markdown(data)
+        except ValueError:
+            raise ValueError("Не удалось прочитать DOCX. Если файл в старом формате .doc — пересохраните его как .docx в Word.")
+        if not result.strip():
+            raise ValueError("Документ DOCX пустой")
+        return result
     try:
         doc = Document(io.BytesIO(data))
         paragraphs = []

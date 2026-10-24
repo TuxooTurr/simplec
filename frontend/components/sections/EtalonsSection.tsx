@@ -1162,7 +1162,7 @@ export default function EtalonsSection() {
         <div className="mb-4">
           <h1 className="text-xl font-bold text-text-main mb-1">Данные</h1>
           <p className="text-sm text-text-muted">
-            Документы в папках, как в Notion: исходник (Markdown, PDF собирается в разметку) и документ QA с текстом для рассказа.
+            Документы в папках, как в Notion: исходник (Markdown, PDF и DOCX собираются в разметку) и документ QA с текстом для рассказа.
           </p>
         </div>
 

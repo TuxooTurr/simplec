@@ -6,8 +6,8 @@ import { ACCEPT_FILES, fileToText, folderOptions, SourceView } from "@/component
 import type { ReqFolder } from "@/lib/api";
 
 /**
- * Новый документ: заголовок, фича, папка и содержимое — Markdown вручную или из файла (PDF собирается в Markdown:
- * заголовки, списки, абзацы). «Просмотр» показывает, как разметка будет выглядеть на странице.
+ * Новый документ: заголовок, фича, папка и содержимое — Markdown вручную или из файла (PDF и DOCX собираются
+ * в Markdown: заголовки, списки, абзацы, таблицы DOCX). «Просмотр» показывает, как разметка будет выглядеть на странице.
  */
 export default function NewDocForm({ folders, folderId, onSave, onCancel }: {
   folders: ReqFolder[];
@@ -82,7 +82,7 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel }: {
       <div className="mt-4">
         {preview && text.trim() ? <SourceView text={text} /> : (
           <textarea value={text} onChange={e => setText(e.target.value)} aria-label="Содержимое (Markdown)"
-            placeholder={"Вставьте текст требования или Markdown:\n\n# Заголовок\n## Раздел\n- пункт списка\n\nили загрузите файл — PDF соберётся в разметку."}
+            placeholder={"Вставьте текст требования или Markdown:\n\n# Заголовок\n## Раздел\n- пункт списка\n\nили загрузите файл — PDF и DOCX соберутся в разметку."}
             className="w-full min-h-[420px] border border-border-main rounded-lg px-3 py-2 font-mono text-[13px] leading-relaxed bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y" />
         )}
       </div>

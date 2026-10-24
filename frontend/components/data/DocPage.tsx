@@ -37,7 +37,7 @@ export function folderOptions(folders: ReqFolder[]): { id: string; label: string
   return out;
 }
 
-/** Текст из файла: PDF — сразу в Markdown (заголовки, списки, абзацы), остальное — как отдаёт разбор файлов. */
+/** Текст из файла: PDF и DOCX — сразу в Markdown (заголовки, списки, абзацы, таблицы), остальное — как отдаёт разбор файлов. */
 export async function fileToText(file: File): Promise<string> {
   return (await parseFile(file, { markdown: true })).text;
 }

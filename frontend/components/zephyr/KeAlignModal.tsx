@@ -5,6 +5,22 @@ import { AlertTriangle, Check, ClipboardCopy, Loader2, Tags, X, XCircle } from "
 import Modal from "@/components/ui/Modal";
 import { applyKe, getKePlan, type KePlan, type KeResult } from "@/lib/zephyrApi";
 
+const SKIP_KEY = (release: string) => `st_zephyr_ke_skip:${release}`;
+
+function readSkip(release: string): Record<string, string[]> {
+  try {
+    const v = JSON.parse(localStorage.getItem(SKIP_KEY(release)) || "{}");
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch { return {}; }
+}
+
+function writeSkip(release: string, v: Record<string, string[]>) {
+  try {
+    if (Object.keys(v).length) localStorage.setItem(SKIP_KEY(release), JSON.stringify(v));
+    else localStorage.removeItem(SKIP_KEY(release));
+  } catch { /* приватный режим — исключения живут до закрытия окна */ }
+}
+
 /**
  * Выравнивание КЭ: все КЭ релиза — на все его стори (по процессу у стори должны стоять КЭ релиза).
  * Открытие окна — только чтение: что у каждой стори есть и чего не хватает, и проверка поля КЭ у стори
@@ -17,13 +33,15 @@ export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { release
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(true);
   const [off, setOff] = useState<Set<string>>(new Set());     // стори, с которых сняли галочку
-  /** Стори → КЭ, которые ей не добавлять (сняли крестиком на маркере). */
-  const [skip, setSkip] = useState<Record<string, string[]>>({});
+  /** Стори → КЭ, которые ей не добавлять (сняли крестиком на маркере). Помнится по релизу: иначе при следующем
+   *  выравнивании исключённая КЭ снова встала бы «к добавлению». */
+  const [skip, setSkip] = useState<Record<string, string[]>>(() => readSkip(releaseKey));
   const toggleSkip = (story: string, ke: string) => setSkip(o => {
     const cur = o[story] ?? [];
     const next = cur.includes(ke) ? cur.filter(x => x !== ke) : [...cur, ke];
     const n = { ...o };
     if (next.length) n[story] = next; else delete n[story];
+    writeSkip(releaseKey, n);
     return n;
   });
   const [results, setResults] = useState<KeResult[] | null>(null);
@@ -45,7 +63,7 @@ export default function KeAlignModal({ releaseKey, baseUrl, onClose }: { release
     setBusy(true); setErr("");
     try {
       const out = await applyKe(releaseKey, chosen.map(s => s.key), skip);
-      setResults(out.results); setPlan(out.plan); setOff(new Set()); setSkip({});
+      setResults(out.results); setPlan(out.plan); setOff(new Set());
     } catch (e) { setErr((e as Error).message); }
     setBusy(false);
   };

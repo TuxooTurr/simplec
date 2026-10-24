@@ -103,10 +103,12 @@ const runFolders = (runs: ZRun[]) => [...new Set(runs.map(r => r.folder).filter(
  *    привязанные к стори, вид — НФ, папка — на выбор; прогон сразу в НФ релиза и у стори;
  *  • «Прикрепить имеющийся» — выбрать прогон из списка (по папкам); связь хранится в SimpleTest, красит маркеры.
  */
-function StoryRunsModal({ board, project, stories, onChanged, onClose }: {
+function StoryRunsModal({ board, project, stories: picked, onChanged, onClose }: {
   board: ReleaseBoard; project: string; stories: ZLinked[]; onChanged: () => void; onClose: () => void;
 }) {
   const rel = board.release.key;
+  // Стори — на момент открытия: после создания отметки снимаются, а итог должен показывать, для кого создавали.
+  const [stories] = useState(picked);
   const [tab, setTab] = useState<"create" | "attach">("create");
   const [runs, setRuns] = useState<ZRun[] | null>(null);
   const [cases, setCases] = useState<Record<string, string[]> | null>(null);

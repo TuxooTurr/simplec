@@ -349,6 +349,11 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
                             {revision && inRun?.has(c.key) && <span className="ml-1 text-green-700 dark:text-green-400">· в прогоне</span>}</td>
                         </tr>
                       ))}
+                      {shown.length === 0 && (
+                        <tr><td colSpan={4} className="px-3 py-6 text-center text-sm text-text-muted">
+                          {revision && onlyNew && pool.length === 0 ? "Все подходящие кейсы уже в прогонах регресса — добавлять нечего." : "Ничего не найдено."}
+                        </td></tr>
+                      )}
                     </tbody>
                   </table>
                 </div>

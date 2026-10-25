@@ -164,3 +164,57 @@ def test_рисунки_данных_в_копии_и_восстановлени
     res = bk.restore(db, out, {"etalons"})
     assert (folder / "0123456789abcdef0123.png").read_bytes() == png
     assert res["restored"]["assets"] == ["0123456789abcdef0123.png"] and any("evil" in e for e in res["errors"])
+
+
+# ── «Данные»: дерево и документы сливаются, а не затираются ─────────────────
+
+BASE_TREE = [{"id": "b1", "name": "Карточка", "parent_id": ""}, {"id": "b2", "name": "Адреса", "parent_id": "b1"},
+             {"id": "b3", "name": "Права", "parent_id": "b1"}]
+
+
+def test_восстановление_данных_не_затирает_дерево(env):
+    db, data = env
+    (data / "requirement_folders.json").write_text(json.dumps(BASE_TREE, ensure_ascii=False), "utf-8")
+    (data / "requirements.json").write_text(json.dumps([
+        {"id": "d0", "name": "Свой", "folder_id": "b3", "updated_at": "2026-10-25"}], ensure_ascii=False), "utf-8")
+    # Копия с другой машины: та же «Карточка/Адреса» под другими id, своя папка и документы в них.
+    server = {"files": {
+        "requirement_folders.json": [{"id": "x1", "name": "карточка ", "parent_id": ""},
+                                     {"id": "x2", "name": "Адреса", "parent_id": "x1"},
+                                     {"id": "x9", "name": "Старая СТ", "parent_id": "x1"}],
+        "requirements.json": [{"id": "d1", "name": "Док", "folder_id": "x2", "updated_at": "2026-10-01"},
+                              {"id": "d2", "name": "Док 2", "folder_id": "x9", "updated_at": "2026-10-01"},
+                              {"id": "d0", "name": "Свой (старый)", "folder_id": "x9", "updated_at": "2026-09-01"}],
+        "requirement_folders_seeded.json": ["/Карточка"],
+    }, "tables": {}}
+    res = bk.restore(db, server, {"etalons"})
+    assert res["errors"] == []
+    folders = json.loads((data / "requirement_folders.json").read_text("utf-8"))
+    assert [f["id"] for f in folders] == ["b1", "b2", "b3", "x9"]          # базовое дерево цело, дописана одна папка
+    assert next(f for f in folders if f["id"] == "x9")["parent_id"] == "b1"
+    docs = {d["id"]: d for d in json.loads((data / "requirements.json").read_text("utf-8"))}
+    assert docs["d1"]["folder_id"] == "b2" and docs["d2"]["folder_id"] == "x9"   # папки копии → здешние
+    assert docs["d0"]["name"] == "Свой" and docs["d0"]["folder_id"] == "b3"     # свежее здешнее не откатилось
+    assert json.loads((data / "requirement_folders_seeded.json").read_text("utf-8")) == ["/Карточка"]
+
+
+def test_тот_же_документ_новее_в_копии_берётся_из_копии_папка_остаётся(env):
+    db, data = env
+    (data / "requirement_folders.json").write_text(json.dumps(BASE_TREE, ensure_ascii=False), "utf-8")
+    (data / "requirements.json").write_text(json.dumps([
+        {"id": "d0", "name": "Было", "folder_id": "b3", "updated_at": "2026-10-01"}], ensure_ascii=False), "utf-8")
+    bk.restore(db, {"files": {"requirements.json": [{"id": "d0", "name": "Стало", "folder_id": "", "updated_at": "2026-10-20"}]},
+                    "tables": {}}, None)
+    doc = json.loads((data / "requirements.json").read_text("utf-8"))[0]
+    assert doc["name"] == "Стало" and doc["folder_id"] == "b3"
+    assert len(json.loads((data / "requirement_folders.json").read_text("utf-8"))) == 3
+
+
+def test_сбой_одной_таблицы_не_обрывает_восстановление(env):
+    db, data = env
+    server = {"files": {"people.json": {"people": []}},
+              "tables": {"test_systems": [{"id": 1, "name": None, "it_service_ci": None}]}}   # NOT NULL — упадёт
+    res = bk.restore(db, server, None)
+    assert "people.json" in res["restored"]["files"]
+    assert any("test_systems" in e for e in res["errors"])
+    assert db.query(Systems).count() == 1                                     # таблица откатилась целиком

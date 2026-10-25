@@ -16,8 +16,11 @@
 на месте метки остаётся то, что уже сохранено на этом SimpleTest (пароль подключения с тем же id, токен Jira…);
 нечего оставить — поле пустое, его вводят заново.
 
-Восстановление заменяет выбранные разделы целиком (настройки — по ключам, чужие ключи не трогает). Перед заменой
-текущие данные сохраняются в data/backups/ (последние 5) — ошибочное восстановление можно откатить.
+Восстановление заменяет выбранные разделы целиком (настройки — по ключам, чужие ключи не трогает). Исключение —
+«Данные»: дерево папок и документы не заменяются, а сливаются (merge_requirements) — текущее дерево (в том числе
+базовое дерево фич) остаётся, из копии дописывается недостающее. Перед заменой текущие данные сохраняются
+в data/backups/ (последние 5) — ошибочное восстановление можно откатить. Сбой одного файла или таблицы не обрывает
+остальное: он попадает в errors.
 
 Эндпоинты:
   GET  /api/backup/sections         — разделы и что в них есть сейчас
@@ -328,25 +331,118 @@ def _snapshot(db: Session) -> str:
     return str(path.relative_to(_ROOT))
 
 
+REQ_FOLDERS, REQ_DOCS, REQ_SEEDED = "requirement_folders.json", "requirements.json", "requirement_folders_seeded.json"
+MERGED_FILES = (REQ_FOLDERS, REQ_DOCS, REQ_SEEDED)
+
+
+def _dicts(value: Any) -> list[dict]:
+    return [x for x in value if isinstance(x, dict) and x.get("id")] if isinstance(value, list) else []
+
+
+def merge_folders(current: list[dict], incoming: list[dict]) -> tuple[list[dict], dict[str, str]]:
+    """Папки «Данных» из копии → в текущее дерево, ничего в нём не меняя. Папка с тем же id или с тем же именем
+    у того же родителя — уже есть (базовое дерево на разных машинах заводит одинаковые папки с разными id);
+    остальные дописываются. Возвращает дерево и соответствие id папок копии → id папок здесь."""
+    out = list(current)
+    have = {f["id"] for f in out}
+    src = {f["id"]: f for f in incoming}
+    idmap: dict[str, str] = {}
+
+    def place(f: dict, chain: frozenset) -> str:
+        fid = f["id"]
+        if fid in idmap:
+            return idmap[fid]
+        if fid in have:                       # та же папка: её место и имя — как сейчас
+            idmap[fid] = fid
+            return fid
+        pid = f.get("parent_id") or ""
+        if pid in src and pid not in chain:
+            parent = place(src[pid], chain | {fid})
+        else:
+            parent = pid if pid in have else ""
+        name = str(f.get("name", "")).strip().lower()
+        same = next((x for x in out if (x.get("parent_id") or "") == parent
+                     and str(x.get("name", "")).strip().lower() == name), None)
+        if same is not None:
+            idmap[fid] = same["id"]
+        else:
+            out.append({**f, "parent_id": parent})
+            have.add(fid)
+            idmap[fid] = fid
+        return idmap[fid]
+
+    for f in incoming:
+        place(f, frozenset())
+    return out, idmap
+
+
+def merge_requirements(current: list[dict], incoming: list[dict], idmap: dict[str, str], folder_ids: set[str]) -> list[dict]:
+    """Документы из копии: новых — дописать (в папку из копии, переведённую на здешние id); тот же документ есть —
+    остаётся более свежий по updated_at, а папка — здешняя (раскладку по дереву копия не меняет)."""
+    out = list(current)
+    pos = {d["id"]: i for i, d in enumerate(out)}
+    for doc in incoming:
+        fid = idmap.get(doc.get("folder_id") or "", doc.get("folder_id") or "")
+        if doc["id"] not in pos:
+            out.append({**doc, "folder_id": fid if fid in folder_ids else ""})
+            continue
+        cur = out[pos[doc["id"]]]
+        if str(doc.get("updated_at", "")) > str(cur.get("updated_at", "")):
+            out[pos[doc["id"]]] = {**doc, "folder_id": cur.get("folder_id", "")}
+    return out
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text("utf-8")) if path.exists() else None
+    except (OSError, ValueError):
+        return None
+
+
+def _restore_requirements(files: dict, done: dict, errors: list[str]) -> None:
+    """Раздел «Данные»: дерево и документы сливаются с текущими, а не заменяют их."""
+    try:
+        folders_now = _dicts(_read_json(DATA_DIR / REQ_FOLDERS))
+        folders, idmap = merge_folders(folders_now, _dicts(files.get(REQ_FOLDERS)))
+        if REQ_FOLDERS in files:
+            _write_json(DATA_DIR / REQ_FOLDERS, folders)
+            done["files"].append(REQ_FOLDERS)
+        if REQ_DOCS in files:
+            docs_now = _dicts(_read_json(DATA_DIR / REQ_DOCS))
+            docs = merge_requirements(docs_now, _dicts(unredact(files[REQ_DOCS], docs_now)), idmap, {f["id"] for f in folders})
+            _write_json(DATA_DIR / REQ_DOCS, docs)
+            done["files"].append(REQ_DOCS)
+        if REQ_SEEDED in files:
+            seeded = _read_json(DATA_DIR / REQ_SEEDED)
+            both = {x for x in (seeded or []) + (files[REQ_SEEDED] or []) if isinstance(x, str)}
+            _write_json(DATA_DIR / REQ_SEEDED, sorted(both))
+            done["files"].append(REQ_SEEDED)
+    except Exception as e:     # noqa: BLE001 — остальные разделы восстанавливаем дальше
+        errors.append(f"«Данные» (дерево и документы): {e}"[:300])
+
+
 def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> dict:
-    """Заменить выбранные разделы данными из выгрузки. Возвращает, что восстановлено."""
+    """Заменить выбранные разделы данными из выгрузки (дерево и документы «Данных» — слить). Возвращает, что восстановлено."""
     take = (lambda s: sections is None or s in sections)
     done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "etalons": [], "assets": []}
     errors: list[str] = []
 
-    for name, value in (server.get("files") or {}).items():
-        if not take(FILE_SECTION.get(name, "settings")):
+    files = server.get("files") or {}
+    if take(ETALONS) and any(n in files for n in MERGED_FILES):
+        _restore_requirements(files, done, errors)
+
+    for name, value in files.items():
+        if name in MERGED_FILES or not take(FILE_SECTION.get(name, "settings")):
             continue
         if Path(name).name != name or not name.endswith(".json") or name.startswith("."):
             errors.append(f"{name}: недопустимое имя файла")
             continue
         path = DATA_DIR / name
         try:
-            old = json.loads(path.read_text("utf-8")) if path.exists() else None
-        except (OSError, ValueError):
-            old = None
-        _write_json(path, unredact(value, old))
-        done["files"].append(name)
+            _write_json(path, unredact(value, _read_json(path)))
+            done["files"].append(name)
+        except (OSError, TypeError, ValueError) as e:
+            errors.append(f"{name}: {e}"[:200])
 
     tables = _tables()
     for name, rows in (server.get("tables") or {}).items():
@@ -354,27 +450,36 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> d
         if table is None:
             errors.append(f"{name}: такой таблицы в этой версии нет — пропущена")
             continue
-        if name == SETTINGS_TABLE:
-            current = {r.key: r.value for r in db.execute(table.select()).fetchall()}
-            for r in rows:
-                if not take(setting_section(r.get("key", ""))):
-                    continue
-                vals = _parse_dt(table, r)
-                vals["value"] = _unredact_setting(vals.get("value"), current.get(r["key"]))
-                if r["key"] in current:
-                    db.execute(table.update().where(table.c.key == r["key"]).values(**vals))
-                else:
-                    db.execute(table.insert().values(**vals))
-                done["settings"].append(r["key"])
-            continue
-        if not take(TABLE_SECTION.get(name, "settings")):
-            continue
-        db.execute(table.delete())
-        if rows:
-            db.execute(table.insert(), [_parse_dt(table, r) for r in rows])
-            _fix_sequence(db, table)
-        done["tables"].append(f"{name} ({len(rows)})")
-    db.commit()
+        # Каждая таблица — своей транзакцией: сбой одной (например, копия старой версии без нового столбца)
+        # откатывает только её, остальное восстанавливается.
+        try:
+            if name == SETTINGS_TABLE:
+                current = {r.key: r.value for r in db.execute(table.select()).fetchall()}
+                keys = []
+                for r in rows:
+                    if not take(setting_section(r.get("key", ""))):
+                        continue
+                    vals = _parse_dt(table, r)
+                    vals["value"] = _unredact_setting(vals.get("value"), current.get(r["key"]))
+                    if r["key"] in current:
+                        db.execute(table.update().where(table.c.key == r["key"]).values(**vals))
+                    else:
+                        db.execute(table.insert().values(**vals))
+                    keys.append(r["key"])
+                db.commit()
+                done["settings"].extend(keys)
+                continue
+            if not take(TABLE_SECTION.get(name, "settings")):
+                continue
+            db.execute(table.delete())
+            if rows:
+                db.execute(table.insert(), [_parse_dt(table, r) for r in rows])
+                _fix_sequence(db, table)
+            db.commit()
+            done["tables"].append(f"{name} ({len(rows)})")
+        except Exception as e:     # noqa: BLE001
+            db.rollback()
+            errors.append(f"таблица {name}: {e}"[:300])
 
     # Рисунки «Данных»: дописываем (имя — хэш содержимого: тот же файл совпадёт сам с собой, чужие не трогаем).
     if server.get("assets") and take(ETALONS):

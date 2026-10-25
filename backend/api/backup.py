@@ -80,7 +80,7 @@ FILE_SECTION: dict[str, str] = {
     "alert_scripts.json": "event_generators", "alert_folders.json": "event_generators", "jobs.json": "event_generators",
     "job_folders.json": "event_generators", "job_history.json": "event_generators", "hub_tiles.json": "event_generators",
     "kernel_audit.json": "event_generators", "teams.json": "event_generators", "incident_gen.json": "event_generators",
-    "requirements.json": "etalons", "requirement_folders.json": "etalons",
+    "requirements.json": "etalons", "requirement_folders.json": "etalons", "requirement_folders_seeded.json": "etalons",
     "model_bench_scenarios.json": "model_bench", "model_bench_sessions.json": "model_bench",
     "autotest_run_config.json": "auto_model", "autotest_run_history.json": "auto_model",
 }

@@ -87,3 +87,35 @@ def test_раздел_речи_только_по_флагу():
     gen.generate_qa_doc("Требование", "Фича", with_speech=True)
     head = FakeLLM.prompt.index("## " + SPEECH_HEADING)
     assert head > FakeLLM.prompt.index("## Вопросы для уточнения")
+
+
+def _paths() -> list[str]:
+    """Папки дерева полными путями «/А/Б»."""
+    items = {f["id"]: f for f in api.list_folders()}
+    def path(f: dict) -> str:
+        p = items.get(f.get("parent_id", ""))
+        return (path(p) if p else "") + "/" + f["name"]
+    return sorted(path(f) for f in items.values())
+
+
+def test_базовое_дерево_дописывается_один_раз(tmp_path, monkeypatch):
+    mine = api.add_folder(api.FolderBody(name="Блок"))          # своя папка была до базового дерева
+    base = tmp_path / "base.json"
+    base.write_text('["/Блок/Раздел/Фича", "/Блок/Раздел/Фича 2"]', encoding="utf-8")
+    monkeypatch.setattr(rs, "_FOLDERS_DEFAULT", base)
+    assert _paths() == ["/Блок", "/Блок/Раздел", "/Блок/Раздел/Фича", "/Блок/Раздел/Фича 2"]
+    assert [f["id"] for f in api.list_folders() if f["name"] == "Блок"] == [mine["id"]]
+    gone = next(f for f in api.list_folders() if f["name"] == "Фича 2")
+    api.delete_folder(gone["id"])
+    assert "/Блок/Раздел/Фича 2" not in _paths()              # удалённая руками не возвращается
+    base.write_text('["/Блок/Раздел/Фича", "/Блок/Раздел/Фича 2", "/Новый блок"]', encoding="utf-8")
+    assert _paths() == ["/Блок", "/Блок/Раздел", "/Блок/Раздел/Фича", "/Новый блок"]   # новое в базовом — дописано
+
+
+def test_битый_файл_папок_базовым_деревом_не_затирается(tmp_path, monkeypatch):
+    base = tmp_path / "base.json"
+    base.write_text('["/Блок"]', encoding="utf-8")
+    monkeypatch.setattr(rs, "_FOLDERS_DEFAULT", base)
+    rs._FOLDERS.write_text("{не json", encoding="utf-8")
+    assert api.list_folders() == []
+    assert rs._FOLDERS.read_text(encoding="utf-8") == "{не json"

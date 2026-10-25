@@ -15,6 +15,11 @@
 Дерево папок раздела «Данные» — data/requirement_folders.json: папка {id, name, parent_id}, у требования —
 folder_id ("" — в корне). Папки только группируют: где бы ни лежало требование, его видят выбор требований
 в генерации и в дефектах.
+
+Базовое дерево (блок → раздел → фича новой тестовой модели) — db/requirement_folders_default.json, пути
+«/Блок/Раздел/Фича» (лежит в репозитории). Как справочник КЭ: при чтении недостающие папки дописываются один раз,
+одноимённые на своём месте переиспользуются, удалённая руками не вернётся — уже предложенные пути помним
+в requirement_folders_seeded.json рядом с файлом папок.
 """
 
 import json
@@ -31,6 +36,7 @@ logger = logging.getLogger(__name__)
 _ROOT = Path(__file__).resolve().parent.parent
 _FILE = _ROOT / "data" / "requirements.json"
 _FOLDERS = _ROOT / "data" / "requirement_folders.json"
+_FOLDERS_DEFAULT = Path(__file__).resolve().parent / "requirement_folders_default.json"
 _MAX_ITEMS = 500
 
 
@@ -157,17 +163,51 @@ class RequirementsStore:
 
     # ── Папки ────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _load_folders() -> list[dict]:
+    @classmethod
+    def _load_folders(cls) -> list[dict]:
         if not _FOLDERS.exists():
-            return []
+            return cls._seed_folders([])
         try:
             with open(_FOLDERS, encoding="utf-8") as f:
                 data = json.load(f)
-            return data if isinstance(data, list) else []
         except json.JSONDecodeError:
             logger.warning("requirement_folders.json битый — папки не прочитаны")
             return []
+        # Непонятный файл не трогаем: базовое дерево поверх него затёрло бы чужие папки.
+        return cls._seed_folders(data) if isinstance(data, list) else []
+
+    @classmethod
+    def _seed_folders(cls, items: list[dict]) -> list[dict]:
+        """Дописать базовое дерево: пути, которые ещё не предлагали, — недостающими папками."""
+        try:
+            defaults = [p for p in json.loads(_FOLDERS_DEFAULT.read_text("utf-8")) if isinstance(p, str)]
+        except (OSError, ValueError):
+            return items
+        # Отметка — рядом с файлом папок: где папки, там и память о предложенном (тесты с временными файлами её не трогают).
+        seeded_file = _FOLDERS.with_name("requirement_folders_seeded.json")
+        try:
+            seeded = set(json.loads(seeded_file.read_text("utf-8")))
+        except (OSError, ValueError):
+            seeded = set()
+        fresh = [p for p in defaults if p not in seeded]
+        if not fresh:
+            return items
+        now = datetime.now(timezone.utc).isoformat()
+        for path in fresh:
+            parent = ""
+            for name in [x.strip() for x in path.split("/") if x.strip()]:
+                f = next((x for x in items if x.get("parent_id", "") == parent
+                          and str(x.get("name", "")).strip().lower() == name.lower()), None)
+                if f is None:
+                    f = {"id": uuid.uuid4().hex[:12], "name": name, "parent_id": parent, "created_at": now}
+                    items.append(f)
+                parent = f["id"]
+        cls._save_folders(items)
+        tmp_path = seeded_file.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(sorted(seeded | set(fresh)), fh, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, seeded_file)
+        return items
 
     @staticmethod
     def _save_folders(items: list[dict]) -> None:

@@ -103,6 +103,7 @@ SimpleTest/
 │   │   ├── xlsx_export.py   # POST /api/export/xlsx — таблица в Excel (генератор backend/xlsx_writer.py, без openpyxl)
 │   │   ├── backup.py        # Резервная копия: выгрузка всех данных (data/*.json, БД, эталоны) в .json и восстановление
 │   │   ├── corp_auth.py     # Единая учётная запись: логин/пароль Сигмы → маркеры Jira и Confluence (пароль не хранится)
+│   │   ├── incident_catalog.py # Генератор инцидентов: 3 КЭ и ~20 сценариев текста (мониторинг, обращения, алерты Рефлекса)
 │   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
@@ -182,7 +183,7 @@ SimpleTest/
   `st_zephyr_ke_skip:<релиз>` — КЭ, исключённые у отдельных стори в «КЭ релиза → на все стори»
 - `st_jira_tool_list_setup` — раскрыта ли «Настройка списка» вверху левой колонки Jira tool
 - `st_data_tree_open` — раскрытые папки дерева «Данных»; `st_data_doc` — последний открытый документ; `st_data_editor_mode` — вид редактора (Редактор / Рядом / Просмотр)
-- `st_incident_spec` — черновик формы «Генератора инцидентов» (CI, количество, описание)
+- `st_incident_rows` — строки «Генератора инцидентов» (КЭ, приоритет, инструкция); `st_incident_spec` — черновик прежней формы (не используется)
 - `st_cell_icon_recent`, `st_cell_icon_color` — недавние ярлычки ячеек и выбранный цвет иконок (удобство одного браузера)
 - `st_jira_tool_cache` — **sessionStorage**: кэш задач Jira tool на сессию (задачи из Jira, связанные, ненайденные);
   основная копия — в памяти модуля `frontend/lib/jiraToolCache.ts`, фоновое обновление раз в 30 минут

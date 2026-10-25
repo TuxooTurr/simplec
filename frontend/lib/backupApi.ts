@@ -11,14 +11,14 @@ import { fetchJson } from "./jiraApi";
 export const BACKUP_FORMAT = "simpletest.backup";
 const REDACTED = "__SIMPLETEST_REDACTED__";
 
-export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; etalons: number }
+export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; etalons: number; assets?: number }
 export interface BackupFile {
   format: string; version: number; createdAt: string; scope: string; scopeTitle: string; secrets: string;
   server: Record<string, unknown>; summary: BackupSummary[];
   browser?: { localStorage: Record<string, string> };
 }
 export interface RestoreResult {
-  restored: { files: string[]; tables: string[]; settings: string[]; etalons: string[] };
+  restored: { files: string[]; tables: string[]; settings: string[]; etalons: string[]; assets?: string[] };
   errors: string[]; snapshot: string; browserKeys: number;
 }
 

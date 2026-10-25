@@ -8,6 +8,7 @@
   • файлы data/*.json — все, что есть (новые хранилища попадают в выгрузку сами, без правки этого модуля);
   • таблицы БД — настройки (metrics_settings), Метрики ОД, журнал генераций;
   • эталоны RAG (ChromaDB) — тексты, метаданные и векторы (при восстановлении не пересчитываются);
+  • рисунки документов «Данных» (data/requirement_assets) — содержимым в base64, раздел «Данные»;
   • браузерные данные (localStorage) кладёт в файл фронт — бэкенд их не видит.
 Не входят: кэши, которые собираются заново (индекс Zephyr), JAR-драйверы JDBC, сертификаты и ключи.
 
@@ -210,6 +211,20 @@ def _etalons_dump() -> tuple[Optional[dict], str]:
         return None, f"эталоны не выгружены: {e}"[:300]
 
 
+ASSETS_DIR_NAME = "requirement_assets"
+_ASSET_NAME = re.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp|svg)$")
+
+
+def _assets_dump() -> dict[str, str]:
+    """Рисунки документов «Данных»: имя файла → содержимое в base64 (имя — хэш содержимого, совпадения не дублируются)."""
+    import base64
+    folder = DATA_DIR / ASSETS_DIR_NAME
+    if not folder.is_dir():
+        return {}
+    return {p.name: base64.b64encode(p.read_bytes()).decode("ascii")
+            for p in sorted(folder.iterdir()) if p.is_file() and _ASSET_NAME.match(p.name)}
+
+
 def collect(db: Session, scope: str = "all", secrets: bool = False) -> dict:
     """Данные сервера для выгрузки. secrets=True — только для локального снимка перед восстановлением."""
     if scope != "all" and scope not in SECTIONS:
@@ -243,6 +258,9 @@ def collect(db: Session, scope: str = "all", secrets: bool = False) -> dict:
             out["etalons"] = et
         if err:
             skipped.append(err)
+        assets = _assets_dump()
+        if assets:
+            out["assets"] = assets
     return {**out, "skipped": skipped}
 
 
@@ -251,7 +269,7 @@ def summary(server: dict) -> list[dict]:
     acc: dict[str, dict] = {}
 
     def at(s: str) -> dict:
-        return acc.setdefault(s, {"id": s, "title": SECTIONS.get(s, s), "files": [], "tables": [], "settings": 0, "etalons": 0})
+        return acc.setdefault(s, {"id": s, "title": SECTIONS.get(s, s), "files": [], "tables": [], "settings": 0, "etalons": 0, "assets": 0})
     for name in server.get("files", {}):
         at(FILE_SECTION.get(name, "settings"))["files"].append(name)
     for name, rows in server.get("tables", {}).items():
@@ -262,6 +280,8 @@ def summary(server: dict) -> list[dict]:
             at(TABLE_SECTION.get(name, "settings"))["tables"].append(f"{name} ({len(rows)})")
     if server.get("etalons"):
         at(ETALONS)["etalons"] = sum(len(c.get("ids") or []) for c in server["etalons"].values())
+    if server.get("assets"):
+        at(ETALONS)["assets"] = len(server["assets"])
     return [acc[s] for s in SECTIONS if s in acc]
 
 
@@ -311,7 +331,7 @@ def _snapshot(db: Session) -> str:
 def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> dict:
     """Заменить выбранные разделы данными из выгрузки. Возвращает, что восстановлено."""
     take = (lambda s: sections is None or s in sections)
-    done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "etalons": []}
+    done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "etalons": [], "assets": []}
     errors: list[str] = []
 
     for name, value in (server.get("files") or {}).items():
@@ -355,6 +375,21 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> d
             _fix_sequence(db, table)
         done["tables"].append(f"{name} ({len(rows)})")
     db.commit()
+
+    # Рисунки «Данных»: дописываем (имя — хэш содержимого: тот же файл совпадёт сам с собой, чужие не трогаем).
+    if server.get("assets") and take(ETALONS):
+        import base64
+        folder = DATA_DIR / ASSETS_DIR_NAME
+        for name, b64 in server["assets"].items():
+            if not _ASSET_NAME.match(name):
+                errors.append(f"рисунок {name}: недопустимое имя")
+                continue
+            try:
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / name).write_bytes(base64.b64decode(b64, validate=True))
+                done["assets"].append(name)
+            except (ValueError, OSError) as e:
+                errors.append(f"рисунок {name}: {e}"[:200])
 
     if server.get("etalons") and take(ETALONS):
         try:

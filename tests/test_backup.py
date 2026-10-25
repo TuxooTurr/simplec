@@ -144,3 +144,23 @@ def test_redact_и_unredact():
     old = {"a": {"token": "OLD"}, "list": [{"id": 2, "password": "two"}, {"id": 1, "password": "one"}]}
     assert bk.unredact(red, old) == {"a": {"token": "OLD", "token_path": "/p", "auth_type": "api_key", "n_tokens": 5},
                                      "list": [{"id": 1, "password": "one"}]}
+
+
+
+def test_рисунки_данных_в_копии_и_восстановлении(env):
+    import base64
+    db, data = env
+    folder = data / "requirement_assets"
+    folder.mkdir()
+    png = b"\x89PNG\r\n\x1a\nrisunok"
+    (folder / "0123456789abcdef0123.png").write_bytes(png)
+    (folder / "junk.txt").write_text("не рисунок")
+    out = bk.collect(db, "etalons")
+    assert out["assets"] == {"0123456789abcdef0123.png": base64.b64encode(png).decode()}
+    assert [s["assets"] for s in bk.summary(out) if s["id"] == "etalons"] == [1]
+    assert "assets" not in bk.collect(db, "zephyr")
+    (folder / "0123456789abcdef0123.png").unlink()
+    out["assets"]["../evil.png"] = base64.b64encode(b"x").decode()
+    res = bk.restore(db, out, {"etalons"})
+    assert (folder / "0123456789abcdef0123.png").read_bytes() == png
+    assert res["restored"]["assets"] == ["0123456789abcdef0123.png"] and any("evil" in e for e in res["errors"])

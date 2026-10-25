@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Siren, Users, X, Zap,
+  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Siren, Trash2, Users, X, Zap,
 } from "lucide-react";
 import type { ComponentType } from "react";
 
@@ -16,7 +16,7 @@ import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 import AlertsSection from "./AlertsSection";
 import { useAlertsScheduler } from "@/contexts/AlertsSchedulerContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { getHubTiles, resetHubTile, saveAlertFolder, saveHubTile, type HubTileStyle } from "@/lib/api";
+import { deleteAlertFolder, getHubTiles, resetHubTile, saveAlertFolder, saveHubTile, type HubTileStyle } from "@/lib/api";
 import type { TileColor } from "@/lib/tileStyle";
 import TileGlyph from "@/components/hub/TileGlyph";
 import TileEditor, { type TileDefaults } from "@/components/hub/TileEditor";
@@ -102,10 +102,11 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
-function TileShell({ onClick, onEdit, editLabel, delay, children }: {
-  onClick: () => void; onEdit?: () => void; editLabel: string; delay: number; children: React.ReactNode;
+function TileShell({ onClick, onEdit, editLabel, onDelete, deleteLabel, delay, children }: {
+  onClick: () => void; onEdit?: () => void; editLabel: string; onDelete?: () => void; deleteLabel?: string;
+  delay: number; children: React.ReactNode;
 }) {
-  // Карандаш — отдельная кнопка рядом с плиткой: кнопка внутри кнопки недопустима.
+  // Карандаш и корзина — отдельные кнопки поверх плитки: кнопка внутри кнопки недопустима.
   return (
     <div className="relative group/tile animate-fade-in" style={{ animationDelay: `${delay}ms` }}>
       <button
@@ -134,13 +135,26 @@ function TileShell({ onClick, onEdit, editLabel, delay, children }: {
           <Pencil className="w-3.5 h-3.5" />
         </button>
       )}
+      {onDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={deleteLabel}
+          title="Удалить папку (алерты переедут в «Без папки»)"
+          className="absolute top-3 right-12 p-1.5 rounded-lg text-text-muted bg-bg-card border border-border-main
+            opacity-0 group-hover/tile:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:border-red-200 transition-opacity
+            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }
 
 export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: boolean }) {
   const { isSuperuser } = useAuth();
-  const { scripts, folders, setFolders, sessions, loadErr } = useAlertsScheduler();
+  const { scripts, setScripts, folders, setFolders, sessions, loadErr } = useAlertsScheduler();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -213,6 +227,22 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
       const saved = await saveAlertFolder({ name });
       setFolders(prev => [...prev, saved]);
       setNewFolder(null);
+    } catch (e) { alert(String(e)); }
+  };
+
+  // Алерты папки не удаляются, а переезжают в «Без папки» — так же делает бэкенд.
+  const removeFolder = async (fid: string, name: string, total: number) => {
+    const what = total ? ` ${total} ${plural(total, "алерт переедет", "алерта переедут", "алертов переедут")} в «Без папки».` : "";
+    if (!confirm(`Удалить папку «${name}»?${what}`)) return;
+    try {
+      await deleteAlertFolder(fid);
+      setFolders(prev => prev.filter(f => f.id !== fid));
+      setScripts(prev => prev.map(s => (s.folder_id === fid ? { ...s, folder_id: null } : s)));
+      // Оформление плитки удалённой папки больше не нужно.
+      if (tiles[ALERTS_PREFIX + fid]) {
+        resetHubTile(ALERTS_PREFIX + fid).catch(() => { /* останется в data/hub_tiles.json, не мешает */ });
+        setTiles(prev => { const next = { ...prev }; delete next[ALERTS_PREFIX + fid]; return next; });
+      }
     } catch (e) { alert(String(e)); }
   };
 
@@ -305,12 +335,14 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
               return (
                 <TileShell key={t.key} onClick={() => setOpenId(key)} delay={nextDelay()}
                   editLabel={`Оформление папки «${title}»`}
+                  deleteLabel={`Удалить папку «${title}»`}
+                  onDelete={isSuperuser && t.folderId ? () => removeFolder(t.folderId!, title, t.total) : undefined}
                   onEdit={isSuperuser ? () => setEditing({
                     key, folderId: t.folderId ?? undefined,
                     defaults: { title: t.title, subtitle: count, ...ALERT_DEFAULTS },
                   }) : undefined}>
                   <TileGlyph icon={st.icon} color={st.color} fallbackIcon={ALERT_DEFAULTS.Icon} fallbackColor={ALERT_DEFAULTS.color} />
-                  <div className="flex items-center gap-2 mb-1 min-w-0 pr-7">
+                  <div className={`flex items-center gap-2 mb-1 min-w-0 ${isSuperuser && t.folderId ? "pr-16" : "pr-7"}`}>
                     <h3 className="text-sm font-semibold text-text-main truncate">{title}</h3>
                     {running > 0 && (
                       <span className="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold
@@ -348,7 +380,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                       value={newFolder}
                       onChange={e => setNewFolder(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter") createFolder(); if (e.key === "Escape") setNewFolder(null); }}
-                      placeholder="Например, PKAP insert"
+                      placeholder="Например, PKAP"
                       className="flex-1 min-w-0 text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)]
                         text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />

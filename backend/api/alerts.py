@@ -66,13 +66,26 @@ def list_folders() -> list[dict]:
     return AlertsStore.get_folders()
 
 
+def _require_superuser(request: Request, detail: str) -> None:
+    user = getattr(request.state, "user", None)
+    if user and user.get("role") != "superuser":
+        raise HTTPException(status_code=403, detail=detail)
+
+
 @router.post("/api/alerts/folders")
-def upsert_folder(folder: AlertFolder) -> dict:
+def upsert_folder(folder: AlertFolder, request: Request) -> dict:
+    """Создать папку (без id) или переименовать — только суперюзер, как и в интерфейсе."""
+    _require_superuser(request, "Папки алертов меняет только суперюзер")
+    folder.name = folder.name.strip()
+    if not folder.name:
+        raise HTTPException(status_code=422, detail="Укажите название папки")
     return AlertsStore.save_folder(folder.model_dump(exclude_none=False))
 
 
 @router.delete("/api/alerts/folders/{folder_id}")
-def remove_folder(folder_id: str) -> dict:
+def remove_folder(folder_id: str, request: Request) -> dict:
+    """Удалить папку; её алерты остаются и переезжают в «Без папки»."""
+    _require_superuser(request, "Папки алертов удаляет только суперюзер")
     ok = AlertsStore.delete_folder(folder_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Папка не найдена")

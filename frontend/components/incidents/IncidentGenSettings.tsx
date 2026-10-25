@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, Loader2, Plug, Save } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, Loader2, Plug, Save, Upload } from "lucide-react";
 import { BTN, BTN_PRIMARY, INPUT } from "@/components/incidents/ui";
 import { listKafkaConnections, testKafkaConnection, type KafkaConnection } from "@/lib/kafkaApi";
 import { listTestDataConnections, type TestDataConnection } from "@/lib/api";
-import { saveIncSettings, type IncSettings } from "@/lib/incidentGenApi";
+import { getIncState, importIncFile, saveIncSettings, type IncSettings } from "@/lib/incidentGenApi";
 
 const LABEL = "block text-xs font-medium text-text-muted mb-1";
 const SQL_PARAMS = ["incident_sm_id", "incident_instruction", "system_cis", "incident_technical_description", "incident_short_description",
@@ -24,6 +24,20 @@ export default function IncidentGenSettings({ initial, onSaved }: { initial: Inc
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  /** test_sql_templates.json из набора ноутбука → SQL-шаблон инструкции (create_incident_instruction). */
+  const importSql = async (f: File | undefined) => {
+    if (!f) return;
+    setMsg(null);
+    try {
+      const r = await importIncFile(f);
+      if (r.kind !== "sql") { setMsg({ ok: false, text: "В файле нет create_incident_instruction — нужен test_sql_templates.json" }); return; }
+      const st = await getIncState();
+      setS(x => ({ ...x, instruction_sql: st.settings.instruction_sql }));
+      onSaved(st.settings, st.instructionsBlocked);
+      setMsg({ ok: true, text: "SQL-шаблон загружен из файла" });
+    } catch (e) { setMsg({ ok: false, text: (e as Error).message }); }
+  };
   useEffect(() => {
     listKafkaConnections().then(setKafka, () => undefined);
     listTestDataConnections().then(setDbs, () => undefined);
@@ -94,6 +108,10 @@ export default function IncidentGenSettings({ initial, onSaved }: { initial: Inc
             </select></label>
           <label className="block"><span className={LABEL}>Ждать инцидент в БД, сек</span>
             <input type="number" min={0} max={120} value={s.instruction_wait_sec} onChange={e => set({ instruction_wait_sec: Math.min(120, Math.max(0, Number(e.target.value) || 0)) })} className={INPUT} /></label>
+        </div>
+        <div className="flex items-center gap-2">
+          <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" onChange={e => { void importSql(e.target.files?.[0]); e.target.value = ""; }} />
+          <button type="button" className={BTN} onClick={() => fileRef.current?.click()}><Upload className="w-4 h-4" /> Загрузить test_sql_templates.json</button>
         </div>
         <label className="block"><span className={LABEL}>SQL-шаблон (параметры в фигурных скобках; должен вернуть id инструкции)</span>
           <textarea value={s.instruction_sql} onChange={e => set({ instruction_sql: e.target.value })} rows={8} spellCheck={false}

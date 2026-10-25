@@ -160,3 +160,57 @@ def test_импорт_примеров_сценариев_и_sql():
     assert ig.get_state()["instructionsBlocked"] == "не выбрано подключение к БД инцидентов"
     with pytest.raises(HTTPException):
         asyncio.run(ig.import_file(_upload({"x": 1})))
+
+
+# ── Простой режим: строки с услугой, видом события, приоритетом, инструкцией ───
+
+def test_каталог_три_услуги_и_около_двадцати_сценариев():
+    from backend.api import incident_catalog as cat
+    c = ig.get_catalog()
+    assert [s["ci"] for s in c["services"]] == ["CI02302514", "CI00233293", "CI00641491"]
+    assert c["scenarios"] >= 20 and c["priorities"] == ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    kinds = {k for k, _, _ in cat.scenarios("CI00233293")}
+    assert kinds == {"monitoring", "manual", "alert"}
+
+
+def test_все_сценарии_по_образцам_без_людей():
+    from backend.api import incident_catalog as cat
+    for svc in cat.SERVICES:
+        for kind, variant, _ in cat.scenarios(svc["ci"]):
+            e = cat.render(svc["ci"], kind, variant, rng=random.Random(1))
+            d = e["description"]
+            assert d.startswith("Зарегистрирован: ") and f"Наименование услуги: {svc['name']} ({svc['ci']})" in d
+            assert "Менеджер ИТ-услуги: Уточняется" in d and e["title"] and e["instruction"].startswith("# Найденные варианты")
+            assert "{" not in d and "{" not in e["title"]                       # все подстановки заполнены
+    assert "Хост: не определён" in cat.render("CI00233293", "monitoring", "unknown-host")["description"]
+    assert "Хосты: " in cat.render("CI00233293", "monitoring", "all-down")["description"]
+    assert "Heap JVM воркера paonlineng" in cat.render("CI02302514", "alert", "heap")["description"]
+    with pytest.raises(KeyError):
+        cat.render("CI1")
+
+
+def test_случайный_сценарий_время_отправки():
+    from backend.api import incident_catalog as cat
+    seen = {cat.render("CI00641491", rng=random.Random(i))["variant"] for i in range(80)}
+    assert len(seen) >= 12                                                    # сценарии действительно разные
+    now = datetime(2026, 10, 25, 14, 7)
+    assert "Зарегистрирован: 25.10.2026 в 14:07" in cat.render("CI00641491", now=now)["description"]
+
+
+def test_строки_одна_строка_один_инцидент_инструкция_по_галочке(monkeypatch):
+    from agents.kafka_client import KafkaClient
+    FakeProducer.sent = []
+    monkeypatch.setattr(KafkaClient, "_build_producer", staticmethod(lambda cfg: FakeProducer()))
+    monkeypatch.setattr(ig, "kafka_cfg", lambda s: {})
+    rows = [ig.Row(ci="CI00233293", priority="HIGH", instruction=True),
+            ig.Row(ci="CI00641491"),
+            ig.Row(ci="CI02302514", priority="CRITICAL")]
+    p = ig.preview_rows(ig.RowsBody(rows=rows))
+    assert p["total"] == 3 and [i["message"]["priorityCode"] for i in p["items"]] == ["HIGH", "MEDIUM", "CRITICAL"]
+    assert p["items"][0]["instruction"] and p["items"][1]["instruction"] == ""
+    assert [i["message"]["itService"]["code"] for i in p["items"]] == ["CI00233293", "CI00641491", "CI02302514"]
+    run = asyncio.run(ig.send_rows(ig.RowsBody(rows=rows)))
+    assert len(run["results"]) == 3 and run["cis"] == ["CI00233293", "CI00641491", "CI02302514"]
+    assert "нет SQL-шаблона" in run["results"][0]["instruction_error"] and not run["results"][1]["hasInstruction"]
+    with pytest.raises(HTTPException):
+        ig.preview_rows(ig.RowsBody(rows=[ig.Row(ci="CI00233293", kind="manual", variant="нет")]))

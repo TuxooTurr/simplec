@@ -135,19 +135,12 @@ def plan(spec: Spec, library: list[dict], rng: Optional[random.Random] = None) -
     return items
 
 
-def build(spec: Spec, settings: dict, item: dict, n: int, now: Optional[datetime] = None) -> dict:
-    """Сообщение Sber ESM для одного инцидента + то, что нужно для инструкции."""
-    now = now or datetime.now(timezone.utc)
-    shift = timedelta(minutes=item["shift"])
-    inc = inc_number()
-    values = {"ci": item["ci"], "system": item["system"], "n": str(n), "inc": inc,
-              "now": datetime.now().strftime("%d.%m.%Y %H:%M")}
-    lib = item.get("lib") or {}
-    description = lib.get("description", "") if spec.description_mode == "library" else render(spec.description, values)
-    title = (render(spec.title, values) if spec.title.strip() else description)[:255]
+def esm_message(settings: dict, ci: str, inc: str, title: str, description: str, spec: Spec, now: datetime,
+                shift: timedelta = timedelta()) -> dict:
+    """Сообщение Sber ESM — как в ноутбуке; поля и сдвиги времени — из spec."""
     person = {"idBhb": settings.get("assignee_id_bhb") or None,
               "personalNumber": settings.get("assignee_personal_number") or None, "idEps": None}
-    message = {
+    return {
         "id": str(uuid.uuid4()),
         "businessId": inc,
         "incType": spec.inc_type,
@@ -155,7 +148,7 @@ def build(spec: Spec, settings: dict, item: dict, n: int, now: Optional[datetime
         "priorityCode": spec.priority,
         "priorityMethod": "MANUALLY",
         "integrationHubId": None,
-        "itService": {"guid": str(uuid.uuid4()), "code": item["ci"]},
+        "itService": {"guid": str(uuid.uuid4()), "code": ci},
         "description": description,
         "reasonINC": None,
         "workGroup": str(uuid.uuid4()),
@@ -170,7 +163,7 @@ def build(spec: Spec, settings: dict, item: dict, n: int, now: Optional[datetime
         "postedBySberESM": ts(now, timedelta(minutes=-spec.created_ago_min), shift),
         "standType": None,
         "systemCreatedBy": settings.get("system_created_by") or None,
-        "title": title,
+        "title": title[:255],
         "impactCustomService": spec.impact_custom_service,
         "configurationElement": None,
         "isAutoHealing": None,
@@ -184,6 +177,19 @@ def build(spec: Spec, settings: dict, item: dict, n: int, now: Optional[datetime
         "registeredByEventId": False,
         "creationType": spec.creation_type,
     }
+
+
+def build(spec: Spec, settings: dict, item: dict, n: int, now: Optional[datetime] = None) -> dict:
+    """Сообщение Sber ESM для одного инцидента + то, что нужно для инструкции."""
+    now = now or datetime.now(timezone.utc)
+    shift = timedelta(minutes=item["shift"])
+    inc = inc_number()
+    values = {"ci": item["ci"], "system": item["system"], "n": str(n), "inc": inc,
+              "now": datetime.now().strftime("%d.%m.%Y %H:%M")}
+    lib = item.get("lib") or {}
+    description = lib.get("description", "") if spec.description_mode == "library" else render(spec.description, values)
+    title = (render(spec.title, values) if spec.title.strip() else description)[:255]
+    message = esm_message(settings, item["ci"], inc, title, description, spec, now, shift)
     instruction = ""
     if item["main"]:
         instruction = lib.get("instruction", "") if spec.instruction_mode == "library" else (
@@ -544,3 +550,73 @@ async def import_file(file: UploadFile = File(...)) -> dict:
             return added
         return {"kind": "presets", "added": store.update(fn2)}
     raise HTTPException(422, "Не узнал файл: ожидаются incident_instruction_examples.json, test_sc.json или test_sql_templates.json")
+
+
+# ── Простой режим: строка = инцидент «КЭ · приоритет · с инструкцией или без» ───
+#
+# Услуги и тексты — из каталога (backend/api/incident_catalog.py): три КЭ и ~20 сценариев (один хост, несколько,
+# все узлы, хост не определён, обращения, алерты Рефлекса). Сценарий на каждый инцидент — случайный, время — момент
+# отправки. Остальные поля сообщения — как в ноутбуке (Spec по умолчанию).
+
+PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+
+
+class Row(BaseModel):
+    ci: str = Field(..., min_length=1)
+    kind: Literal["", "monitoring", "manual", "alert"] = ""   # пусто — случайный сценарий (так работает интерфейс)
+    variant: str = ""
+    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "MEDIUM"
+    instruction: bool = False
+
+
+class RowsBody(BaseModel):
+    rows: list[Row] = Field(..., min_length=1, max_length=100)
+
+
+@router.get("/api/incident-gen/catalog")
+def get_catalog() -> dict:
+    from backend.api import incident_catalog as cat
+    return {**cat.catalog(), "priorities": PRIORITIES}
+
+
+def build_rows(rows: list[Row], settings: dict, now: Optional[datetime] = None) -> list[dict]:
+    from backend.api import incident_catalog as cat
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for r in rows:
+        try:
+            ev = cat.render(r.ci, r.kind, r.variant)
+        except KeyError:
+            raise HTTPException(422, f"Нет такой услуги или сценария: {r.ci} / {r.kind or 'случайный'} {r.variant}".strip())
+        spec = Spec(cis=[Ci(code=r.ci)], priority=r.priority)
+        msg = esm_message(settings, r.ci, inc_number(), ev["title"], ev["description"], spec, now)
+        out.append({"ci": r.ci, "main": True, "message": msg, "instruction": ev["instruction"] if r.instruction else "",
+                    "summary": ev["title"], "kind": r.kind, "variant": ev["variant"]})
+    return out
+
+
+@router.post("/api/incident-gen/rows/preview")
+def preview_rows(body: RowsBody) -> dict:
+    built = build_rows(body.rows, store.read()["settings"])
+    return {"total": len(built), "main": len(built), "items": built}
+
+
+@router.post("/api/incident-gen/rows/send")
+async def send_rows(body: RowsBody) -> dict:
+    settings = store.read()["settings"]
+    built = build_rows(body.rows, settings)
+
+    def work() -> list[dict]:
+        done = send_all(built, settings)
+        if any(r.instruction for r in body.rows):
+            write_instructions(done, settings)
+        return done
+
+    done = await asyncio.to_thread(work)
+    results = [{k: d.get(k) for k in ("ci", "main", "inc", "title", "offset", "partition", "error",
+                                       "instruction_id", "instruction_error")} | {"hasInstruction": bool(d["instruction"])}
+               for d in done]
+    run = {"id": store.new_id(), "at": store.stamp(), "preset": "", "topic": settings["topic"],
+           "cis": sorted({r.ci for r in body.rows}), "results": results}
+    store.update(lambda d: d.update(history=([run] + d["history"])[:store.HISTORY_MAX]))
+    return run

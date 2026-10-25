@@ -118,10 +118,20 @@ export function importIncFile(file: File) {
 }
 export const getKeCatalog = () => call<{ ke: string[] }>("/api/ke-catalog");
 
-/** «Карточка инцидента [CI00233293]» → { code: "CI00233293", name: "Карточка инцидента" }; без кода — null. */
-export function parseKe(s: string): IncCi | null {
-  const m = s.match(/\b(CI\d{5,})\b/i);
-  if (!m) return null;
-  const name = s.replace(/\s*[[(]?\s*CI\d{5,}\s*[\])]?\s*/i, " ").trim();
-  return { code: m[1].toUpperCase(), name };
+// ── Простой режим: строка = инцидент «КЭ · приоритет · с инструкцией или без» ──
+// Сценарий (один хост, несколько, все узлы, обращение, алерт…) выбирает сервер случайно; время — момент отправки.
+
+export type IncPriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+export interface IncRow { ci: string; priority: IncPriority; instruction: boolean }
+
+export interface IncCatalog {
+  services: { ci: string; name: string; crit: string }[];
+  /** Сколько сценариев под капотом. */
+  scenarios: number;
+  priorities: IncPriority[];
 }
+
+export const getIncCatalog = () => call<IncCatalog>("/api/incident-gen/catalog");
+export const previewIncRows = (rows: IncRow[]) => call<{ total: number; items: IncPreviewItem[] }>("/api/incident-gen/rows/preview", "POST", { rows });
+export const sendIncRows = (rows: IncRow[]) => call<IncRun>("/api/incident-gen/rows/send", "POST", { rows });

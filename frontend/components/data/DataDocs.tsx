@@ -102,7 +102,7 @@ export default function DataDocs() {
         ) : doc ? (
           <DocPage doc={doc} folders={folders} provider={provider}
             onPatch={async patch => replace(await updateRequirement(doc.id, patch))}
-            onGenerate={async () => replace(await generateRequirementDoc(doc.id, provider))}
+            onGenerate={async (links, focus) => replace(await generateRequirementDoc(doc.id, provider, links, focus))}
             onReplace={replace}
             onSettings={() => setSettingsOpen(true)}
             onDelete={() => {

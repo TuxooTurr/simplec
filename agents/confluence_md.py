@@ -8,8 +8,10 @@
     многострочное содержимое ячейки — через «; »);
   • ссылки: обычные — [текст](url), на страницы Confluence (ac:link → ri:page) — [заголовок](адрес по заголовку);
   • макросы: code / noformat — блоком кода с языком; info / note / tip / warning / panel — цитатой с пометкой;
-    expand — заголовком и содержимым; status — [СТАТУС]; jira — ключом задачи; drawio / gliffy / картинки —
-    пометкой с именем (сами изображения без входа в Confluence не показать); toc, children и служебные — пропускаются.
+    expand — заголовком и содержимым; status — [СТАТУС]; jira — ссылкой на задачу; toc, children и служебные — пропускаются;
+  • картинки страницы — ![подпись](attachment:ID_СТРАНИЦЫ/файл): их скачивает и подставляет вызывающий код
+    (requirements.resolve_attachments), картинки по адресу — как есть; диаграммы draw.io / Gliffy — их PNG-превью
+    (вложение «имя.png»); вложенные файлы — ссылкой на скачивание в Confluence.
 Неизвестный макрос — содержимое его тела, если оно есть.
 """
 
@@ -34,9 +36,9 @@ class _Cell:
 
 
 class _Conv(HTMLParser):
-    def __init__(self, base_url: str = "", space: str = "") -> None:
+    def __init__(self, base_url: str = "", space: str = "", page_id: str = "", jira_url: str = "") -> None:
         super().__init__(convert_charrefs=True)
-        self.base, self.space = base_url.rstrip("/"), space
+        self.base, self.space, self.page_id, self.jira = base_url.rstrip("/"), space, page_id, jira_url.rstrip("/")
         self.out: list[str] = []            # готовые блоки
         self.buf: list[str] = []            # текущий абзац (инлайн)
         self.lists: list[list] = []         # стек списков: ["ul"|"ol", счётчик]
@@ -170,7 +172,8 @@ class _Conv(HTMLParser):
             if self.base and title:
                 self.links[-1]["href"] = f"{self.base}/display/{quote(space)}/{quote(title.replace(' ', '+'), safe='+')}" if space else ""
         elif tag == "ri:attachment" and self.links:
-            self.links[-1]["title"] = a.get("ri:filename") or ""
+            self.links[-1]["file"] = a.get("ri:filename") or ""
+            self.links[-1]["title"] = self.links[-1].get("title") or self.links[-1]["file"]
         elif tag == "ri:url" and self.links:
             self.links[-1]["href"] = a.get("ri:value") or ""
         elif tag == "ac:image":
@@ -227,10 +230,18 @@ class _Conv(HTMLParser):
             elif name == "status":
                 self._emit(f"[{(p.get('title') or p.get('colour') or 'статус').upper()}]")
             elif name == "jira":
-                self._emit(p.get("key") or "")
-            elif name in ("drawio", "drawio-sketch", "gliffy", "plantuml", "mermaid-macro"):
+                key = (p.get("key") or "").strip()
+                self._emit(f"[{key}]({self.jira}/browse/{key})" if key and self.jira else key)
+            elif name in ("drawio", "drawio-sketch", "gliffy"):
                 self._flush()
-                self.out.append(f"*[Диаграмма {name}: {p.get('diagramname') or p.get('name') or 'без имени'}]*")
+                dname = (p.get("diagramname") or p.get("name") or "").strip()
+                if dname and self.page_id:          # у диаграммы на странице лежит PNG-превью «имя.png»
+                    self.out.append(f"![Диаграмма: {dname}](attachment:{self.page_id}/{quote(dname + '.png')})")
+                else:
+                    self.out.append(f"*[Диаграмма {name}: {dname or 'без имени'}]*")
+            elif name in ("plantuml", "mermaid-macro"):
+                self._flush()
+                self.out.append(f"*[Диаграмма {name}]*")
             elif m["body"] and name not in _PANELS and name != "expand":
                 self._flush()
                 self.out.append("```\n" + "".join(m["body"]).strip("\n") + "\n```")
@@ -247,11 +258,19 @@ class _Conv(HTMLParser):
             ln = self.links.pop()
             text = self._since(ln["start"]).strip() or ln.get("title") or ln.get("href", "")
             href = ln.get("href") or ""
+            if not href and ln.get("file") and self.base and self.page_id:     # вложенный файл — скачать из Confluence
+                href = f"{self.base}/download/attachments/{self.page_id}/{quote(ln['file'])}"
             self._emit(f"[{text}]({href})" if href.startswith(("http://", "https://")) else text)
         elif tag == "ac:image" and self.links:
             ln = self.links.pop()
             self._since(ln["start"])
-            self._emit(f"*[изображение{': ' + ln['title'] if ln.get('title') else ''}]*")
+            alt = (ln.get("title") or ln.get("file") or "изображение").replace("]", ")").replace("[", "(")
+            if ln.get("href", "").startswith(("http://", "https://")):
+                self._emit(f"![{alt}]({ln['href']})")
+            elif ln.get("file") and self.page_id:
+                self._emit(f"![{alt}](attachment:{self.page_id}/{quote(ln['file'])})")
+            else:
+                self._emit(f"*[изображение{': ' + alt if alt else ''}]*")
         elif tag in ("td", "th") and self.tables:
             t = self.tables[-1]
             if t["cell"] is not None and t["row"] is not None:
@@ -342,8 +361,9 @@ def _task_status(xml: str) -> str:
                   lambda m: "<ac:task-done/>" if m.group(1) == "complete" else "", xml)
 
 
-def storage_to_markdown(xml: str, base_url: str = "", space: str = "") -> str:
-    conv = _Conv(base_url, space)
+def storage_to_markdown(xml: str, base_url: str = "", space: str = "", page_id: str = "", jira_url: str = "") -> str:
+    """page_id — у картинок страницы ссылка attachment:ID/файл (скачать); jira_url — задачи Jira ссылками."""
+    conv = _Conv(base_url, space, page_id, jira_url)
     xml = _task_status(xml or "")
     # Отметку «выполнено» разбираем отдельным пустым тегом.
     orig_start = conv.handle_starttag

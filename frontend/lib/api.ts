@@ -1171,6 +1171,9 @@ export interface Requirement {
   version_at?: string;
   version_note?: string;
   versions?: ReqVersion[];
+  /** Связанные страницы, по которым собран документ QA, и ссылки, которые прочитать не вышло. */
+  qa_links?: { title: string; url: string }[];
+  qa_link_errors?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -1241,12 +1244,12 @@ const postJson = <T,>(path: string, body: unknown): Promise<T> =>
   fetchJson(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 /** Страница Confluence (ссылка, id, /display/ПРОСТРАНСТВО/Заголовок) и, если children, дочерние — без сохранения. */
-export const previewConfluence = (ref: string, children: boolean) =>
-  postJson<{ pages: ConfluencePage[] }>("/api/requirements/confluence/preview", { ref, children });
+export const previewConfluence = (refs: string[], children: boolean) =>
+  postJson<{ pages: ConfluencePage[] }>("/api/requirements/confluence/preview", { refs, children });
 
 /** Страница (и дочерние — деревом папок) → документы в папке. */
-export const importConfluence = (ref: string, children: boolean, folder_id: string, focus: string) =>
-  postJson<{ created: Requirement[]; folders: number }>("/api/requirements/confluence/import", { ref, children, folder_id, focus });
+export const importConfluence = (refs: string[], children: boolean, folder_id: string, focus: string, name = "") =>
+  postJson<{ created: Requirement[]; folders: number }>("/api/requirements/confluence/import", { refs, children, folder_id, focus, name });
 
 /** Ещё одна СТ в документ — разделом; as_version — новой версией документа. */
 export const addReqSource = (id: string, ref: string, as_version: boolean, note = "") =>
@@ -1268,6 +1271,17 @@ export const getCorpAuthStatus = () => fetchJson<CorpAuthStatus>("/api/corp-auth
 /** Один логин и пароль Сигмы → маркеры Jira и Confluence. Пароль не хранится. */
 export const corpLogin = (login: string, password: string) =>
   postJson<CorpAuthStatus & { results: Record<"jira" | "confluence", { ok: boolean; text: string }> }>("/api/corp-auth/login", { login, password });
+
+/** Картинка из редактора → адрес для Markdown (хранится в SimpleTest). */
+export async function uploadReqAsset(file: File): Promise<{ url: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  return fetchJson("/api/requirements/assets", { method: "POST", body });
+}
+
+/** Страницы для сборки документа QA: источники документа и ссылки на страницы Confluence внутри текста. */
+export const getReqLinks = (id: string) =>
+  fetchJson<{ sources: { id: string; title: string; url: string }[]; found: { title: string; url: string }[] }>(`/api/requirements/${id}/links`);
 
 export async function listReqFolders(): Promise<ReqFolder[]> {
   return fetchJson("/api/requirements/folders");
@@ -1294,11 +1308,12 @@ export async function deleteReqFolder(id: string): Promise<{ status: string; mov
   return fetchJson(`/api/requirements/folders/${id}`, { method: "DELETE" });
 }
 
-export async function generateRequirementDoc(id: string, provider: string): Promise<Requirement> {
+/** Документ QA. links — страницы Confluence, которые ИИ прочитает вместе с исходником; focus — «Что нужно». */
+export async function generateRequirementDoc(id: string, provider: string, links: string[] = [], focus?: string): Promise<Requirement> {
   return fetchJson(`/api/requirements/${id}/generate-doc`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider }),
+    body: JSON.stringify({ provider, links, ...(focus !== undefined ? { focus } : {}) }),
   });
 }
 

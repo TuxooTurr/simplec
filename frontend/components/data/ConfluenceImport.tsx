@@ -11,8 +11,10 @@ const BTN = "inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium ro
   "hover:bg-bg-subtle hover:border-primary/40 disabled:opacity-50 disabled:cursor-not-allowed";
 
 /**
- * Документ из Confluence: ссылка на страницу (или её id, или /display/ПРОСТРАНСТВО/Заголовок), по желанию — с дочерними
- * страницами (они лягут деревом папок, как в Confluence). «Показать» — что придёт, без сохранения; «Загрузить» — в папку.
+ * Документ из Confluence: название (функция) и основные ссылки на страницы (по одной в строке; id или
+ * /display/ПРОСТРАНСТВО/Заголовок тоже подходят). Требования берутся со страниц целиком — с таблицами, рисунками и
+ * ссылками; несколько ссылок — один документ, каждая страница — разделом. Одна ссылка «с дочерними» — дерево папок,
+ * как в Confluence. «Показать» — что придёт, без сохранения; «Загрузить» — в папку.
  */
 export default function ConfluenceImport({ folders, folderId, onImported, onCancel, onSettings }: {
   folders: ReqFolder[];
@@ -21,7 +23,9 @@ export default function ConfluenceImport({ folders, folderId, onImported, onCanc
   onCancel: () => void;
   onSettings: () => void;
 }) {
-  const [ref, setRef] = useState("");
+  const [name, setName] = useState("");
+  const [refsText, setRefsText] = useState("");
+  const refs = refsText.split(/[\n,]+/).map(x => x.trim()).filter(Boolean);
   const [children, setChildren] = useState(false);
   const [focus, setFocus] = useState("");
   const [folder, setFolder] = useState(folderId);
@@ -32,23 +36,26 @@ export default function ConfluenceImport({ folders, folderId, onImported, onCanc
 
   const preview = async () => {
     setBusy("preview"); setErr(""); setPages(null);
-    try { const r = await previewConfluence(ref.trim(), children); setPages(r.pages); setShown(0); } catch (e) { setErr((e as Error).message); }
+    try { const r = await previewConfluence(refs, children && refs.length === 1); setPages(r.pages); setShown(0); } catch (e) { setErr((e as Error).message); }
     setBusy("");
   };
   const doImport = async () => {
     setBusy("import"); setErr("");
-    try { const r = await importConfluence(ref.trim(), children, folder, focus.trim()); await onImported(r.created[0].id); }
+    try { const r = await importConfluence(refs, children && refs.length === 1, folder, focus.trim(), name.trim()); await onImported(r.created[0].id); }
     catch (e) { setErr((e as Error).message); setBusy(""); }
   };
   const needsAuth = /маркер|401|токен/i.test(err);
 
   return (
     <div className="space-y-3">
-      <div className="flex gap-2">
-        <input autoFocus value={ref} onChange={e => { setRef(e.target.value); setPages(null); }} aria-label="Страница Confluence"
-          onKeyDown={e => { if (e.key === "Enter" && ref.trim()) void preview(); }}
-          placeholder="https://confluence.sberbank.ru/pages/viewpage.action?pageId=… или id страницы" className={INPUT} />
-        <button type="button" className={BTN} disabled={!ref.trim() || !!busy} onClick={() => void preview()}>
+      <input autoFocus value={name} onChange={e => setName(e.target.value)} aria-label="Название документа"
+        placeholder="Название — функция, по которой собирается документ (пусто — заголовок первой страницы)"
+        className="w-full bg-transparent text-2xl font-bold text-text-main placeholder:text-text-muted/50 placeholder:text-base placeholder:font-normal rounded-md px-1 -mx-1 focus:outline-none focus:ring-2 focus:ring-primary/30" />
+      <div className="flex gap-2 items-start">
+        <textarea value={refsText} onChange={e => { setRefsText(e.target.value); setPages(null); }} aria-label="Ссылки на страницы Confluence" rows={3}
+          placeholder={"Основные ссылки на страницы Confluence — по одной в строке\nhttps://confluence.sberbank.ru/pages/viewpage.action?pageId=…"}
+          className={`${INPUT} resize-y font-mono text-xs`} />
+        <button type="button" className={BTN} disabled={!refs.length || !!busy} onClick={() => void preview()}>
           {busy === "preview" ? <Loader2 className="w-4 h-4 animate-spin" /> : <Eye className="w-4 h-4" />} Показать</button>
       </div>
       <div className="grid grid-cols-[120px_1fr] items-center gap-y-1.5 text-sm">
@@ -61,10 +68,14 @@ export default function ConfluenceImport({ folders, folderId, onImported, onCanc
           {folderOptions(folders).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
         </select>
       </div>
-      <label className="inline-flex items-center gap-2 text-sm text-text-main">
-        <input type="checkbox" checked={children} onChange={e => { setChildren(e.target.checked); setPages(null); }} />
-        С дочерними страницами — деревом папок, как в Confluence (до 3 уровней, не больше 60 страниц)
-      </label>
+      {refs.length <= 1 ? (
+        <label className="inline-flex items-center gap-2 text-sm text-text-main">
+          <input type="checkbox" checked={children} onChange={e => { setChildren(e.target.checked); setPages(null); }} />
+          С дочерними страницами — отдельными документами деревом папок, как в Confluence (до 3 уровней, не больше 60)
+        </label>
+      ) : (
+        <p className="text-xs text-text-muted">Ссылок: {refs.length} — получится один документ, каждая страница — разделом со ссылкой на оригинал.</p>
+      )}
 
       {err && (
         <div className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400">
@@ -76,7 +87,7 @@ export default function ConfluenceImport({ folders, folderId, onImported, onCanc
       {pages && (
         <div className="rounded-xl border border-border-main">
           <div className="flex items-center gap-2 border-b border-border-main px-3 py-2">
-            <span className="text-sm font-medium text-text-main">Придёт страниц: {pages.length}</span>
+            <span className="text-sm font-medium text-text-main">Придёт страниц: {pages.length}{pages.length > 1 && !(children && refs.length === 1) ? " — в один документ" : ""}</span>
             <span className="flex-1" />
             <button type="button" className={BTN} onClick={onCancel}><X className="w-4 h-4" /> Отмена</button>
             <button type="button" disabled={!!busy} onClick={() => void doImport()}

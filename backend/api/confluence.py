@@ -114,6 +114,36 @@ def _request(cfg: dict, method: str, path: str, params: Optional[dict] = None, j
         raise HTTPException(502, f"Confluence ответил не JSON (возможно, страница входа): {resp.text[:200]}")
 
 
+MAX_ATTACHMENT = 15 * 1024 * 1024     # картинка больше — не скачиваем (в документ встанет пометка)
+
+
+def download_attachment(cfg: dict, page_id: str, filename: str) -> tuple[bytes, str]:
+    """Вложение страницы (картинка, PNG-превью диаграммы) → (байты, тип). Нет такого — HTTPException 404."""
+    import requests
+    found = _request(cfg, "GET", f"/rest/api/content/{page_id}/child/attachment",
+                     params={"filename": filename, "limit": 1}).get("results") or []
+    if not found:
+        raise HTTPException(404, f"Во вложениях страницы нет «{filename}»")
+    path = ((found[0].get("_links") or {}).get("download")) or ""
+    if not path:
+        raise HTTPException(404, f"Confluence не дал ссылку на «{filename}»")
+    url = path if path.startswith("http") else cfg["base_url"] + path
+    try:
+        resp = requests.get(url, headers={"Authorization": "Bearer " + _resolve_token(cfg),
+                                          "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)"},
+                            verify=cfg["ssl_verify"], timeout=60, stream=True)
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(502, f"Confluence недоступен: {str(e)[:200]}")
+    if resp.status_code >= 400:
+        raise HTTPException(resp.status_code, f"Confluence не отдал «{filename}» ({resp.status_code})")
+    data = b""
+    for chunk in resp.iter_content(64 * 1024):
+        data += chunk
+        if len(data) > MAX_ATTACHMENT:
+            raise HTTPException(413, f"«{filename}» больше {MAX_ATTACHMENT // 1024 // 1024} МБ")
+    return data, resp.headers.get("Content-Type", "application/octet-stream").split(";")[0]
+
+
 # ── Настройки ────────────────────────────────────────────────────────────────
 
 class ConfluenceSettingsBody(BaseModel):

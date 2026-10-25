@@ -17,7 +17,7 @@
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from db.requirements_store import RequirementsStore
@@ -135,28 +135,73 @@ def delete_requirement(req_id: str) -> dict:
 
 class GenerateDocBody(BaseModel):
     provider: str = Field(..., min_length=1)
+    # Страницы Confluence, которые ИИ прочитает вместе с исходником (ссылки из документа и добавленные в окне).
+    links: list[str] = Field(default_factory=list, max_length=30)
+    focus: Optional[str] = None
+
+
+MAX_LINK_CHARS = 40_000      # с одной связанной страницы — не больше (в контекст модели всё не влезет)
+MAX_EXTRA_CHARS = 120_000    # со всех связанных страниц вместе
+
+
+def linked_context(links: list[str]) -> tuple[str, list[dict], list[str]]:
+    """Связанные страницы → текст для модели, список прочитанных ({title, url}) и ошибки по ссылкам."""
+    import re as _re
+    parts, used, errors, total = [], [], [], 0
+    seen: set[str] = set()
+    for ref in links:
+        ref = ref.strip()
+        if not ref:
+            continue
+        try:
+            p = fetch_page(ref)
+        except HTTPException as e:
+            errors.append(f"{ref}: {e.detail}")
+            continue
+        if p["id"] in seen:
+            continue
+        seen.add(p["id"])
+        md = _re.sub(r"!\[([^\]]*)\]\(attachment:[^)]+\)", r"[рисунок: \1]", p["markdown"])     # модели картинки не нужны
+        if len(md) > MAX_LINK_CHARS:
+            md = md[:MAX_LINK_CHARS] + "\n\n[…страница обрезана по объёму]"
+        if total + len(md) > MAX_EXTRA_CHARS:
+            errors.append(f"{p['title']}: не поместилась — связанных страниц слишком много по объёму")
+            continue
+        total += len(md)
+        parts.append(f"## {p['title']}\nИсточник: {p['url']}\n\n{md}")
+        used.append({"title": p["title"], "url": p["url"]})
+    text = ("\n\n---\n# СВЯЗАННЫЕ СТРАНИЦЫ (по ссылкам из документа)\n\n" + "\n\n".join(parts)) if parts else ""
+    return text, used, errors
 
 
 @router.post("/api/requirements/{req_id}/generate-doc")
 async def generate_requirement_doc(req_id: str, body: GenerateDocBody) -> dict:
+    """
+    Документ QA по исходнику. links — страницы Confluence (ссылки из самого документа и добавленные вручную): ИИ
+    читает их вместе с исходником и собирает единый документ по функции из названия документа (и «Что нужно»).
+    """
     item = RequirementsStore.get_requirement(req_id)
     if not item:
         raise HTTPException(status_code=404, detail="Требование не найдено")
+    if body.focus is not None:
+        item = RequirementsStore.update_requirement(req_id, focus=body.focus.strip()) or item
 
     from agents.llm_client import LLMClient
     from agents.layered_generator import LayeredGenerator
 
+    extra, used, link_errors = await asyncio.to_thread(linked_context, body.links) if body.links else ("", [], [])
     try:
         llm = LLMClient(provider=body.provider)
         gen = LayeredGenerator(llm)
         qa_doc, truncated = await asyncio.to_thread(
-            gen.generate_qa_doc, item["text"], item.get("feature", ""), "", True, item.get("name", ""), item.get("focus", "")
+            gen.generate_qa_doc, item["text"] + extra, item.get("feature", ""), "", True, item.get("name", ""), item.get("focus", "")
         )
     except Exception as e:
         _, friendly = LLMClient.classify_error(e)
         raise HTTPException(status_code=400, detail=f"Не удалось сгенерировать документацию: {friendly}")
 
-    updated = RequirementsStore.update_requirement(req_id, qa_doc=qa_doc, qa_doc_truncated=truncated)
+    updated = RequirementsStore.update_requirement(req_id, qa_doc=qa_doc, qa_doc_truncated=truncated,
+                                                   qa_links=used, qa_link_errors=link_errors)
     if not updated:
         raise HTTPException(status_code=404, detail="Требование исчезло во время генерации — начните заново")
     return updated
@@ -172,11 +217,17 @@ MAX_PAGES = 60
 
 
 def _cf():
-    from backend.api import confluence
+    """Модуль Confluence и его настройки; в jira_url — адрес Jira (задачи на страницах — ссылками на неё)."""
+    from backend.api import confluence, jira_defects
     from db.postgres import SessionLocal
     db = SessionLocal()
     try:
-        return confluence, confluence._load_cfg(db)
+        cfg = dict(confluence._load_cfg(db))
+        try:
+            cfg.setdefault("jira_url", jira_defects._load_cfg(db)["base_url"])
+        except Exception:
+            cfg.setdefault("jira_url", "")
+        return confluence, cfg
     finally:
         db.close()
 
@@ -188,7 +239,97 @@ def _page_meta(cfg: dict, data: dict) -> dict:
     body = (((data.get("body") or {}).get("storage") or {}).get("value")) or ""
     return {"id": str(data.get("id")), "title": data.get("title") or "", "space": space,
             "url": cfg["base_url"] + webui, "version": ((data.get("version") or {}).get("number")) or 0,
-            "markdown": storage_to_markdown(body, cfg["base_url"], space)}
+            "markdown": storage_to_markdown(body, cfg["base_url"], space, str(data.get("id") or ""), cfg.get("jira_url", ""))}
+
+
+# ── Рисунки ──────────────────────────────────────────────────────────────────
+#
+# Картинки страниц Confluence (и вставленные в редакторе) хранятся у нас: data/requirement_assets/<sha1>.<ext> —
+# документ показывает их и после правки или удаления страницы, у каждой версии — свои. Отдаются только с входом
+# в SimpleTest (интерфейс подгружает их с маркером). В предпросмотре до загрузки — напрямую из Confluence.
+
+import hashlib as _hashlib
+import re as _re_mod
+from pathlib import Path as _Path
+
+ASSETS_DIR = _Path(__file__).resolve().parent.parent.parent / "data" / "requirement_assets"
+_IMG_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
+_ASSET_RE = _re_mod.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp|svg)$")
+_ATT_RE = _re_mod.compile(r"(!?)\[([^\]]*)\]\(attachment:(\d+)/([^)\s]+)\)")
+MAX_ASSET = 15 * 1024 * 1024
+
+
+def save_asset(data: bytes, ctype: str, name: str = "") -> str:
+    """Картинка → файл по хэшу содержимого (одинаковые не дублируются) → адрес для документа."""
+    ext = _IMG_TYPES.get(ctype) or {".jpeg": ".jpg"}.get(_Path(name).suffix.lower(), _Path(name).suffix.lower())
+    if ext not in _IMG_TYPES.values():
+        raise HTTPException(415, "Это не картинка (PNG, JPG, GIF, WEBP, SVG)")
+    fname = _hashlib.sha1(data).hexdigest()[:20] + ext
+    ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+    target = ASSETS_DIR / fname
+    if not target.exists():
+        target.write_bytes(data)
+    return f"/api/requirements/assets/{fname}"
+
+
+def resolve_attachments(md: str, mode: str = "store") -> str:
+    """
+    Ссылки attachment:ID/файл из конвертера: store — скачать картинки к нам (не вышло — пометка в тексте),
+    proxy — показывать напрямую из Confluence (предпросмотр, ничего не сохраняется).
+    """
+    from urllib.parse import unquote
+    if "attachment:" not in md:
+        return md
+    confluence, cfg = _cf()
+    cache: dict[tuple, Optional[str]] = {}
+
+    def sub(m) -> str:
+        bang, alt, page, fname = m.groups()
+        name = unquote(fname)
+        if mode == "proxy":
+            return f"{bang}[{alt}](/api/requirements/confluence/attachment?page={page}&file={fname})"
+        key = (page, name)
+        if key not in cache:
+            try:
+                data, ctype = confluence.download_attachment(cfg, page, name)
+                cache[key] = save_asset(data, ctype, name)
+            except HTTPException:
+                cache[key] = None
+        if cache[key] is None:
+            return f"*[{alt or 'изображение'}: «{name}» не скачалось из Confluence]*"
+        return f"{bang}[{alt}]({cache[key]})"
+    return _ATT_RE.sub(sub, md)
+
+
+@router.get("/api/requirements/assets/{name}")
+def get_asset(name: str):
+    from fastapi.responses import FileResponse
+    if not _ASSET_RE.match(name) or not (ASSETS_DIR / name).exists():
+        raise HTTPException(404, "Картинки нет")
+    media = {".jpg": "image/jpeg", ".svg": "image/svg+xml"}.get(_Path(name).suffix, "image/" + _Path(name).suffix[1:])
+    # SVG может содержать скрипт — запрещаем ему что-либо исполнять, даже если файл откроют напрямую.
+    return FileResponse(ASSETS_DIR / name, media_type=media, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+                                                                     "Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@router.post("/api/requirements/assets")
+async def upload_asset(file: UploadFile = File(...)) -> dict:
+    """Картинка из редактора (вставка из буфера, перетаскивание, «Картинка») → адрес для Markdown."""
+    data = await file.read()
+    if len(data) > MAX_ASSET:
+        raise HTTPException(413, f"Картинка больше {MAX_ASSET // 1024 // 1024} МБ")
+    return {"url": save_asset(data, (file.content_type or "").split(";")[0], file.filename or "")}
+
+
+@router.get("/api/requirements/confluence/attachment")
+def confluence_attachment(page: str = Query(..., pattern=r"^\d+$"), file: str = Query(..., min_length=1)):
+    """Картинка страницы напрямую из Confluence — для предпросмотра до загрузки."""
+    from fastapi.responses import Response
+    confluence, cfg = _cf()
+    data, ctype = confluence.download_attachment(cfg, page, file)
+    if not ctype.startswith("image/") or ctype == "image/svg+xml":
+        ctype = "application/octet-stream" if not ctype.startswith("image/") else ctype
+    return Response(data, media_type=ctype, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
 
 
 _EXPAND = "body.storage,version,space"
@@ -267,31 +408,68 @@ def _meta(p: dict) -> dict:
 
 
 class ConfluenceRef(BaseModel):
-    ref: str = Field(..., min_length=1)
+    ref: str = ""
+    # Несколько ссылок — один документ из всех страниц (каждая — разделом). С одной ссылкой и children — дерево.
+    refs: list[str] = Field(default_factory=list, max_length=30)
     children: bool = False
+
+    def all_refs(self) -> list[str]:
+        out: list[str] = []
+        for r in [self.ref, *self.refs]:
+            r = r.strip()
+            if r and r not in out:
+                out.append(r)
+        if not out:
+            raise HTTPException(422, "Укажите хотя бы одну ссылку на страницу Confluence")
+        return out
+
+
+def _fetch(body: ConfluenceRef) -> list[dict]:
+    refs = body.all_refs()
+    if body.children and len(refs) == 1:
+        return fetch_tree(refs[0], True)
+    pages = []
+    for r in refs:
+        p = fetch_page(r)
+        if all(x["id"] != p["id"] for x in pages):
+            p.update(parent="", depth=0)
+            pages.append(p)
+    return pages
 
 
 @router.post("/api/requirements/confluence/preview")
 async def confluence_preview(body: ConfluenceRef) -> dict:
-    """Что придёт из Confluence (ничего не сохраняет): страницы с Markdown."""
-    pages = await asyncio.to_thread(fetch_tree, body.ref, body.children)
+    """Что придёт из Confluence (ничего не сохраняет): страницы с Markdown, картинки — напрямую из Confluence."""
+    pages = await asyncio.to_thread(_fetch, body)
+    for p in pages:
+        p["markdown"] = resolve_attachments(p["markdown"], "proxy")
     return {"pages": pages}
 
 
 class ConfluenceImport(ConfluenceRef):
     folder_id: str = ""
     focus: str = ""
+    name: str = ""          # название документа (функция); пусто — заголовок первой страницы
 
 
 @router.post("/api/requirements/confluence/import")
 async def confluence_import(body: ConfluenceImport) -> dict:
     """
-    Страница → документ в выбранной папке. С дочерними — дерево как в Confluence: страница, у которой есть дочерние,
-    становится папкой с её названием (внутри — документ самой страницы и дочерние).
+    Ссылки → документ в выбранной папке. Несколько ссылок — один документ с вашим названием, каждая страница —
+    разделом со ссылкой на оригинал. Одна ссылка с дочерними — дерево как в Confluence: страница, у которой есть
+    дочерние, становится папкой с её названием. Картинки страниц скачиваются к нам.
     """
     if not RequirementsStore.folder_exists(body.folder_id):
         raise HTTPException(404, "Папки уже нет — обновите дерево")
-    pages = await asyncio.to_thread(fetch_tree, body.ref, body.children)
+    pages = await asyncio.to_thread(_fetch, body)
+    for p in pages:
+        p["markdown"] = await asyncio.to_thread(resolve_attachments, p["markdown"], "store")
+    tree = body.children and len(body.all_refs()) == 1
+    if not tree:
+        doc = RequirementsStore.add_requirement(
+            body.name.strip() or pages[0]["title"] or "Без названия", "", compose(pages) or "(страницы пустые)",
+            folder_id=body.folder_id, sources=[_meta(p) for p in pages], focus=body.focus)
+        return {"created": [doc], "folders": 0}
     parents = {p["parent"] for p in pages if p["parent"]}
     folder_of: dict[str, str] = {}
     created: list[dict] = []
@@ -319,6 +497,7 @@ async def add_source(req_id: str, body: AddSourceBody) -> dict:
     if not item:
         raise HTTPException(404, "Требование не найдено")
     p = await asyncio.to_thread(fetch_page, body.ref)
+    p["markdown"] = await asyncio.to_thread(resolve_attachments, p["markdown"], "store")
     sources = list(item.get("sources") or [])
     if any(s.get("id") == p["id"] for s in sources):
         raise HTTPException(409, f"Страница «{p['title']}» уже есть в документе — обновите её кнопкой «Обновить из Confluence»")
@@ -351,6 +530,8 @@ async def sync_sources(req_id: str) -> dict:
     moved = [p for p in pages if p["version"] != old.get(p["id"], {}).get("version")]
     if not moved:
         return {"changed": False, "item": item}
+    for p in pages:
+        p["markdown"] = await asyncio.to_thread(resolve_attachments, p["markdown"], "store")
     note = "Обновлено из Confluence: " + ", ".join(f"«{p['title']}» v{old[p['id']].get('version')} → v{p['version']}" for p in moved)
     return {"changed": True, "item": RequirementsStore.new_version(req_id, compose(pages), note, [_meta(p) for p in pages])}
 
@@ -394,3 +575,39 @@ def version_diff(req_id: str, a: int = Query(...), b: int = Query(...), field: s
     if field not in ("qa_doc", "text"):
         raise HTTPException(422, "field: qa_doc, text или auto")
     return {"field": field, **diff(va.get(field, ""), vb.get(field, ""))}
+
+
+@router.get("/api/requirements/{req_id}/links")
+def document_links(req_id: str) -> dict:
+    """
+    Страницы для сборки документа QA: страницы-источники документа и ссылки на страницы Confluence внутри текста
+    (на соседние СТ, справочники). Ссылки на скачивание файлов и картинок — не страницы, их нет в списке.
+    """
+    import re as _re
+    from urllib.parse import urlparse
+    item = RequirementsStore.get_requirement(req_id)
+    if not item:
+        raise HTTPException(404, "Требование не найдено")
+    _, cfg = _cf()
+    host = urlparse(cfg["base_url"]).netloc
+    sources = [{"title": s.get("title", ""), "url": s.get("url", ""), "id": s.get("id", "")} for s in item.get("sources") or []]
+    have = {s["id"] for s in sources} | {s["url"] for s in sources}
+    titles = {s["title"].strip().lower() for s in sources if s["title"]}
+    found: list[dict] = []
+    for m in _re.finditer(r"(?<!!)\[([^\]]+)\]\((https?://[^)\s]+)\)", item.get("text", "")):
+        title, url = m.group(1), m.group(2)
+        u = urlparse(url)
+        if u.netloc != host or "/download/" in u.path:
+            continue
+        pid = _re.search(r"pageId=(\d+)", url) or _re.search(r"/pages/(\d+)", url)
+        if not (pid or "/display/" in u.path):
+            continue
+        key = pid.group(1) if pid else url
+        if not pid:                                    # /display/ПРОСТРАНСТВО/Заголовок — сверяем по заголовку
+            from urllib.parse import unquote_plus
+            if unquote_plus(u.path.rstrip("/").rsplit("/", 1)[-1]).strip().lower() in titles:
+                continue
+        if key in have or url in have or any(f["url"] == url for f in found):
+            continue
+        found.append({"title": title, "url": url})
+    return {"sources": sources, "found": found}

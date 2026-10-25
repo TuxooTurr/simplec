@@ -168,3 +168,86 @@ def test_промт_учитывает_название_и_уточнение():
     assert "Что именно нужно: только выгрузка в PDF" in FakeLLM.prompt and "несколько СТ" in FakeLLM.prompt
     LayeredGenerator(FakeLLM()).generate_qa_doc("Т", "Ф")
     assert "О ЧЁМ ДОКУМЕНТ" not in FakeLLM.prompt
+
+
+# ── Рисунки, несколько ссылок, связанные страницы для документа QA ─────────────
+
+@pytest.fixture
+def assets(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "ASSETS_DIR", tmp_path / "assets")
+    return tmp_path / "assets"
+
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"x" * 20
+
+
+def test_картинки_страницы_скачиваются_к_нам_или_остаётся_пометка(confluence, assets, monkeypatch):
+    from backend.api import confluence as cf
+
+    def download(cfg, page, name):
+        if name == "нет.png":
+            raise HTTPException(404, "нет вложения")
+        return PNG, "image/png"
+    monkeypatch.setattr(cf, "download_attachment", download)
+    md = "![схема](attachment:1/flow%20chart.png) и ![](attachment:1/%D0%BD%D0%B5%D1%82.png) и ![x](attachment:1/flow%20chart.png)"
+    out = api.resolve_attachments(md, "store")
+    url = out.split("(")[1].split(")")[0]
+    assert url.startswith("/api/requirements/assets/") and url.endswith(".png") and out.count(url) == 2
+    assert "*[изображение: «нет.png» не скачалось из Confluence]*" in out
+    assert len(list(assets.iterdir())) == 1                                    # одинаковые — один файл
+    assert api.resolve_attachments("![a](attachment:7/f.png)", "proxy") == "![a](/api/requirements/confluence/attachment?page=7&file=f.png)"
+    assert str(api.get_asset(url.rsplit("/", 1)[1]).path).endswith(".png")
+    with pytest.raises(HTTPException):
+        api.get_asset("../secret.png")
+
+
+def test_загрузка_картинки_из_редактора(assets):
+    from fastapi import UploadFile
+    import io
+    r = asyncio.run(api.upload_asset(UploadFile(file=io.BytesIO(PNG), filename="paste.png", headers={"content-type": "image/png"})))
+    assert r["url"].startswith("/api/requirements/assets/")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(api.upload_asset(UploadFile(file=io.BytesIO(b"MZ"), filename="x.exe", headers={"content-type": "application/x-msdownload"})))
+    assert e.value.status_code == 415
+
+
+def test_один_документ_из_нескольких_ссылок_со_своим_названием(confluence, assets):
+    r = asyncio.run(api.confluence_import(api.ConfluenceImport(refs=["1", "https://c.ru/display/S/СТ+Адреса", "1"], name=" Экспорт карточки ")))
+    doc = r["created"][0]
+    assert len(r["created"]) == 1 and doc["name"] == "Экспорт карточки"
+    assert [s["id"] for s in doc["sources"]] == ["1", "2"]
+    assert doc["text"].startswith("## Карточка\n\n> Источник:") and "\n\n## СТ Адреса\n\n> Источник:" in doc["text"]
+    with pytest.raises(HTTPException):
+        asyncio.run(api.confluence_import(api.ConfluenceImport()))
+
+
+def test_ссылки_документа_для_сборки_qa(confluence):
+    text = ("> Источник: [Карточка](https://c.ru/pages/viewpage.action?pageId=1) · версия 3\n\n"
+            "Та же страница по заголовку: [карточка](https://c.ru/display/S/Карточка). "
+            "См. [СТ-13](https://c.ru/display/S/СТ-13), [права](https://c.ru/pages/viewpage.action?pageId=3), "
+            "[ТЗ.pdf](https://c.ru/download/attachments/1/ТЗ.pdf), [Google](https://google.com), ![p](https://c.ru/pages/viewpage.action?pageId=9)")
+    d = S.add_requirement("Док", "", text, sources=[{"id": "1", "title": "Карточка", "url": "https://c.ru/pages/viewpage.action?pageId=1", "version": 3}])
+    r = api.document_links(d["id"])
+    assert [s["id"] for s in r["sources"]] == ["1"]
+    assert r["found"] == [{"title": "СТ-13", "url": "https://c.ru/display/S/СТ-13"},
+                          {"title": "права", "url": "https://c.ru/pages/viewpage.action?pageId=3"}]
+
+
+def test_документ_qa_со_связанными_страницами(confluence, monkeypatch):
+    from agents import llm_client
+    seen = {}
+
+    class FakeLLM:
+        def __init__(self, provider):
+            pass
+
+        def chat_continued(self, messages, **kw):
+            seen["prompt"] = messages[0].content
+            return type("R", (), {"content": "# QA", "finish_reason": "stop"})()
+    monkeypatch.setattr(llm_client, "LLMClient", FakeLLM)
+    d = S.add_requirement("Экспорт карточки", "", "Исходник документа.")
+    out = asyncio.run(api.generate_requirement_doc(d["id"], api.GenerateDocBody(provider="x", links=["2", "nope", "2"], focus="только PDF")))
+    assert "Функция (название документа): Экспорт карточки" in seen["prompt"] and "Что именно нужно: только PDF" in seen["prompt"]
+    assert "СВЯЗАННЫЕ СТРАНИЦЫ" in seen["prompt"] and "Адрес по ФИАС." in seen["prompt"]
+    assert out["qa_links"] == [{"title": "СТ Адреса", "url": "https://c.ru/display/S/2"}] and out["focus"] == "только PDF"
+    assert len(out["qa_link_errors"]) == 1 and out["qa_link_errors"][0].startswith("nope")

@@ -7,6 +7,8 @@ import NotionRenderer, { headingSlug, looksLikeMarkdown } from "@/components/Not
 import QaDocView from "@/components/data/QaDocView";
 import SourcesBar from "@/components/data/SourcesBar";
 import VersionChanges from "@/components/data/VersionChanges";
+import MarkdownEditor from "@/components/data/MarkdownEditor";
+import QaGenerateModal from "@/components/data/QaGenerateModal";
 import { newReqVersion, parseFile, type ReqFolder, type Requirement } from "@/lib/api";
 
 export const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.md,.markdown";
@@ -85,8 +87,7 @@ function SourceEditor({ initial, onSave, onCancel }: { initial: string; onSave: 
   };
   return (
     <div className="space-y-2">
-      <textarea value={text} onChange={e => setText(e.target.value)} aria-label="Исходник (Markdown)"
-        className={`${INPUT} min-h-[360px] font-mono text-[13px] leading-relaxed resize-y`} />
+      <MarkdownEditor value={text} onChange={setText} minHeight={360} autoFocus />
       {err && <p className="text-xs text-red-600 dark:text-red-400">{err}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <input ref={fileRef} type="file" accept={ACCEPT_FILES} className="hidden" onChange={e => { void pick(e.target.files?.[0]); e.target.value = ""; }} />
@@ -138,7 +139,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   folders: ReqFolder[];
   provider: string;
   onPatch: (patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string }) => Promise<void>;
-  onGenerate: () => Promise<void>;
+  onGenerate: (links: string[], focus: string) => Promise<void>;
   onDelete: () => void;
   onReplace: (d: Requirement) => void;
   onSettings: () => void;
@@ -179,11 +180,16 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   };
   const saveFeature = () => { if (feature.trim() !== doc.feature) void save({ feature }).catch(() => setFeature(doc.feature)); };
   const saveFocus = () => { if (focus.trim() !== (doc.focus ?? "")) void save({ focus }).catch(() => setFocus(doc.focus ?? "")); };
+  const [qaOpen, setQaOpen] = useState(false);
   const generate = async () => {
     if (!provider) { setErr("Выберите LLM-провайдер в шапке"); return; }
-    setGen(true); setErr("");
-    try { await onGenerate(); } catch (e) { setErr((e as Error).message); }
-    setGen(false);
+    setErr("");
+    setQaOpen(true);
+  };
+  /** Из окна сборки: ошибка — в окне (оно не закроется), успех — окно закрывается. */
+  const runGenerate = async (links: string[], f: string) => {
+    setGen(true);
+    try { await onGenerate(links, f); setFocus(f); } finally { setGen(false); }
   };
   const saveSource = async (text: string) => {
     await save({ text });
@@ -287,6 +293,13 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
         </div>
       )}
       {note && <p className="mt-3 text-sm text-text-muted">{note}</p>}
+      {isCur && hasQa && (doc.qa_links?.length || doc.qa_link_errors?.length) ? (
+        <div className="mt-3 text-xs text-text-muted">
+          {doc.qa_links?.length ? <p>Собран по исходнику и страницам: {doc.qa_links.map((l, i) => (
+            <span key={l.url}>{i > 0 && ", "}<a href={l.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{l.title}</a></span>))}</p> : null}
+          {doc.qa_link_errors?.length ? <p className="text-amber-700 dark:text-amber-300">Не прочитаны: {doc.qa_link_errors.join("; ")}</p> : null}
+        </div>
+      ) : null}
       {hasQa && view.qa_doc_truncated && (
         <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">Документ QA обрезан лимитом модели — конец может отсутствовать.</p>
       )}
@@ -305,6 +318,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
             : <SourceView text={view.text} actions={isCur ? <button type="button" className={BTN} onClick={() => setEditing(true)}><Pencil className="w-4 h-4" /> Править</button> : undefined} />}
         </div>
       </Modal>
+      <QaGenerateModal open={qaOpen} doc={doc} onClose={() => setQaOpen(false)} onGenerate={runGenerate} />
       <NewVersionModal open={newVer} initial={doc.text} onClose={() => setNewVer(false)}
         onSave={async (text, n) => { onReplace(await newReqVersion(doc.id, text, n)); setNewVer(false); setNote("Создана новая версия — соберите для неё документ QA."); }} />
     </article>

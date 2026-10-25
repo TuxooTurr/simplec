@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Eye, FileText, Folder, Globe, Loader2, Paperclip, Pencil, Save, Tag, X } from "lucide-react";
-import { ACCEPT_FILES, fileToText, folderOptions, SourceView } from "@/components/data/DocPage";
+import { FileText, Folder, Globe, Loader2, Paperclip, Pencil, Save, Tag, X } from "lucide-react";
+import { ACCEPT_FILES, fileToText, folderOptions } from "@/components/data/DocPage";
+import MarkdownEditor from "@/components/data/MarkdownEditor";
 import ConfluenceImport from "@/components/data/ConfluenceImport";
 import type { ReqFolder } from "@/lib/api";
 
@@ -23,7 +24,6 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
   const [feature, setFeature] = useState("");
   const [folder, setFolder] = useState(folderId);
   const [text, setText] = useState("");
-  const [preview, setPreview] = useState(false);
   const [fileName, setFileName] = useState("");
   const [fileBusy, setFileBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -37,7 +37,6 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
       setText(await fileToText(f));
       setFileName(f.name);
       if (!name.trim()) setName(f.name.replace(/\.[^.]+$/, ""));
-      setPreview(true);
     } catch (e) { setErr((e as Error).message); }
     setFileBusy(false);
   };
@@ -58,7 +57,7 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
   if (source === "confluence") return (
     <article className="max-w-4xl mx-auto px-2 pb-16">
       {modeSwitch}
-      <h2 className="mb-3 text-2xl font-bold text-text-main">Новый документ из Confluence</h2>
+      <p className="mb-2 text-xs text-text-muted">Новый документ из Confluence</p>
       <ConfluenceImport folders={folders} folderId={folderId} onImported={onImported} onCancel={onCancel} onSettings={onSettings} />
     </article>
   );
@@ -81,10 +80,6 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2 border-y border-border-main py-2.5">
-        <div className="inline-flex gap-0.5 rounded-lg bg-bg-subtle p-0.5" role="group" aria-label="Режим">
-          <button type="button" className={tab(!preview)} aria-pressed={!preview} onClick={() => setPreview(false)}><Pencil className="w-3.5 h-3.5" /> Текст</button>
-          <button type="button" className={tab(preview)} aria-pressed={preview} onClick={() => setPreview(true)} disabled={!text.trim()}><Eye className="w-3.5 h-3.5" /> Просмотр</button>
-        </div>
         <input ref={fileRef} type="file" accept={ACCEPT_FILES} className="hidden" onChange={e => { void pick(e.target.files?.[0]); e.target.value = ""; }} />
         <button type="button" className={BTN} disabled={fileBusy} onClick={() => fileRef.current?.click()}>
           {fileBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Paperclip className="w-3.5 h-3.5" />} {fileBusy ? "Читаю файл…" : "Загрузить из файла"}
@@ -99,11 +94,8 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
       </div>
       {err && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{err}</p>}
       <div className="mt-4">
-        {preview && text.trim() ? <SourceView text={text} /> : (
-          <textarea value={text} onChange={e => setText(e.target.value)} aria-label="Содержимое (Markdown)"
-            placeholder={"Вставьте текст требования или Markdown:\n\n# Заголовок\n## Раздел\n- пункт списка\n\nили загрузите файл — PDF и DOCX соберутся в разметку."}
-            className="w-full min-h-[420px] border border-border-main rounded-lg px-3 py-2 font-mono text-[13px] leading-relaxed bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 resize-y" />
-        )}
+        <MarkdownEditor value={text} onChange={setText}
+          placeholder={"Пишите или вставьте текст требования. «/» в начале строки — заголовок, таблица, колонки, список…\nили загрузите файл — PDF и DOCX соберутся в разметку."} />
       </div>
     </article>
   );

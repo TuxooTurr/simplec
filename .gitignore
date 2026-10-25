@@ -18,6 +18,7 @@ data/gen_sessions.json
 data/model_bench_sessions.json
 data/requirements.json
 data/requirement_folders.json
+data/requirement_assets/
 data/incident_gen.json
 data/people.json
 data/ke_catalog.json

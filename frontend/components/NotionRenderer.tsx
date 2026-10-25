@@ -1,29 +1,34 @@
 "use client";
 
 import React from "react";
+import AuthImage from "@/components/AuthImage";
 
-// ── Inline formatting: **bold**, *italic*, `code`, [ссылка](https://…) ──────────
+// ── Inline formatting: **bold**, *italic*, ~~зачёркнутый~~, `code`, [ссылка](https://…), ![картинка](адрес) ──
 function renderInline(text: string): React.ReactNode {
-  const re = /(\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))/g;
+  const re = /(!\[([^\]\n]*)\]\(((?:https?:\/\/|\/api\/)[^)\s]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|~~([^~\n]+)~~|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\))/g;
   const parts: React.ReactNode[] = [];
   let last = 0;
   let m: RegExpExecArray | null;
   let k = 0;
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(<React.Fragment key={k++}>{text.slice(last, m.index)}</React.Fragment>);
-    if (m[2] !== undefined)
-      parts.push(<strong key={k++} className="font-semibold text-text-main">{m[2]}</strong>);
-    else if (m[3] !== undefined)
-      parts.push(<em key={k++} className="italic text-text-main">{m[3]}</em>);
+    if (m[3] !== undefined)
+      parts.push(<AuthImage key={k++} src={m[3]} alt={m[2] ?? ""} />);
     else if (m[4] !== undefined)
+      parts.push(<strong key={k++} className="font-semibold text-text-main">{m[4]}</strong>);
+    else if (m[5] !== undefined)
+      parts.push(<em key={k++} className="italic text-text-main">{m[5]}</em>);
+    else if (m[6] !== undefined)
+      parts.push(<s key={k++} className="text-text-muted">{m[6]}</s>);
+    else if (m[7] !== undefined)
       parts.push(
         <code key={k++} className="px-1.5 py-0.5 rounded text-[11px] bg-bg-muted font-mono text-text-main border border-border-main">
-          {m[4]}
+          {m[7]}
         </code>
       );
-    else if (m[5] !== undefined)
+    else if (m[8] !== undefined)
       parts.push(
-        <a key={k++} href={m[6]} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{m[5]}</a>
+        <a key={k++} href={m[9]} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline break-all">{m[8]}</a>
       );
     last = m.index + m[0].length;
   }
@@ -89,7 +94,7 @@ function alignClass(separatorCell: string): string {
  */
 export function looksLikeMarkdown(text: string): boolean {
   const lines = text.split("\n");
-  const marks = lines.filter(l => /^\s{0,3}(#{1,6} |[*\-+] |\d+\. |> |```|\|.*\|)/.test(l)).length;
+  const marks = lines.filter(l => /^\s{0,3}(#{1,6} |[*\-+] |\d+\. |> |```|\|.*\||!\[|:::columns)/.test(l)).length;
   const inline = /\*\*[^*\n]+\*\*|\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|`[^`\n]+`/.test(text);
   return /^\s{0,3}#{1,6} /m.test(text) || /^```/m.test(text) || marks >= 2 || (marks >= 1 && inline);
 }
@@ -133,6 +138,29 @@ export default function NotionRenderer({ text, className = "", anchors = false }
   while (i < lines.length) {
     const raw = lines[i];
     const trimmed = raw.trim();
+
+    // ── Колонки (:::columns … :::col … :::) — как колонки в Notion ─────
+    if (trimmed === ":::columns") {
+      const cols: string[][] = [[]];
+      i++;
+      let depth = 0;
+      while (i < lines.length) {
+        const t = lines[i].trim();
+        if (t === ":::columns") depth++;
+        if (t === ":::" && depth === 0) break;
+        if (t === ":::" && depth > 0) depth--;
+        if (t === ":::col" && depth === 0) cols.push([]);
+        else cols[cols.length - 1].push(lines[i]);
+        i++;
+      }
+      i++; // закрывающее :::
+      nodes.push(
+        <div key={k++} className="my-3 grid gap-4" style={{ gridTemplateColumns: `repeat(${cols.length}, minmax(0, 1fr))` }}>
+          {cols.map((c, ci) => <div key={ci} className="min-w-0"><NotionRenderer text={c.join("\n")} anchors={anchors} /></div>)}
+        </div>
+      );
+      continue;
+    }
 
     // ── Fenced code block ───────────────────────────────────────────
     if (trimmed.startsWith("```")) {

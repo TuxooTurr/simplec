@@ -7,7 +7,7 @@ import { categoryOf, storiesChatReport, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
-import IssueTable, { sortIssueRows, type IssueSort } from "./IssueTable";
+import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
 import BulkStatusModal from "./BulkStatusModal";
 
 /** Порядок для сортировки по статусу (st): заблокированные и отстающие — первыми. */
@@ -25,6 +25,7 @@ function stageRank(info: StageInfo): number {
  * «Скопировать в чат» — отмеченные галочками стори (по умолчанию все) в порядке таблицы, как отчёт общего списка:
  * стори со статусом (st), под ней её активные дефекты.
  * «Сменить статус» — отмеченные стори переводятся в Jira тем же окном, что и в списке (переходы workflow).
+ * Поиск и фильтры колонок сужают таблицу; в чат и в смену статуса уходят только видимые отмеченные стори.
  */
 export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, onTransitions, onClose }: {
   open: boolean;
@@ -46,8 +47,11 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   const [picked, setPicked] = useState<Set<string>>(() => new Set(stories.map(s => s.key)));
   const [sort, setSort] = useState<IssueSort>({ col: "stage", dir: 1 });
   const [note, setNote] = useState("");
+  const [filter, setFilter] = useState<IssueFilter>(NO_FILTER);
   const rank = (s: Issue) => stageRank(ownStageOf(s));
-  const toSend = sortIssueRows(stories, sort, rank).filter(s => picked.has(s.key));
+  const label = (s: Issue) => stageText(ownStageOf(s));
+  const visible = filterIssueRows(stories, filter, label);
+  const toSend = sortIssueRows(visible, sort, rank).filter(s => picked.has(s.key));
   const pick = (keys: string[], on: boolean) => setPicked(p => {
     const n = new Set(p); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n;
   });
@@ -86,7 +90,7 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                   <button type="button" onClick={copy} disabled={!toSend.length}
                     title="Стори со статусом (st) и их активные дефекты — как отчёт списка; галочками выберите, что отправить"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                    <MessageSquareShare className="w-4 h-4" /> Скопировать в чат ({toSend.length} из {stories.length})</button>
+                    <MessageSquareShare className="w-4 h-4" /> Скопировать в чат ({toSend.length} из {visible.length})</button>
                 </span>
               )}
             </div>
@@ -96,9 +100,10 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
               </p>
             ) : (
               <IssueTable cols={["type", "key", "summary", "status", "stage", "assignee"]} initialSort={sort} onSort={setSort}
-                picked={picked} onPick={pick}
+                picked={picked} onPick={pick} widthKey="stories"
+                filter={filter} onFilter={setFilter} source={stories} stageLabel={label}
                 stage={s => <StageBadge info={ownStageOf(s)} />} stageRank={rank}
-                groups={[{ title: null, issues: stories }]} />
+                groups={[{ title: null, issues: visible }]} />
             )}
           </section>
         )}

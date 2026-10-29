@@ -59,7 +59,8 @@ export default function Floating({ anchor, onClose, width, className = "", style
       closeRef.current();
     };
     const onScroll = (e: Event) => { if (!box.current?.contains(e.target as Node)) place(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeRef.current(); };
+    // Esc закрывает только всплывающее окно — не окно (Modal), в котором оно открыто: тот слушает window, мы — раньше, на document.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); } };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);

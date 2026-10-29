@@ -30,7 +30,7 @@ bash install.sh      # venv + pip install + .env (уже в репо — шаг 
 bash start.sh        # backend :8000 + frontend :3000, откроет браузер
 ```
 
-Вход: `Sber911` / `1234567` (superuser) или `SberMonitoring` / `1234567`.
+Вход: логин и пароль Jira или универсальная учётка `Sber911` / `1234567`.
 
 Windows: используйте Conda (`conda create -n simpletest python=3.12 && conda activate simpletest`),
 затем те же `bash install.sh` / `bash start.sh` из Git Bash.

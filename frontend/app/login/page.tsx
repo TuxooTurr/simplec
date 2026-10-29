@@ -4,6 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Zap, Loader2, LogIn } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { loginTokensNote, stashLoginNote } from "@/lib/authApi";
+
+/* Вход — логином и паролем Jira: пароль проверяет Jira, заодно проверяются токены Jira и Confluence
+   (свои рабочие остаются, иначе выпускаются новые — об этом скажет сообщение в приложении).
+   Без корпоративной сети — универсальная учётная запись. */
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,7 +24,8 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
     try {
-      await login(loginStr.trim(), password);
+      const tokens = await login(loginStr.trim(), password);
+      stashLoginNote(loginTokensNote(tokens));
       router.replace("/generation");
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
@@ -42,12 +48,13 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="bg-bg-card rounded-2xl border border-border-main shadow-sm p-6 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-              Логин
+              Логин Jira
             </label>
             <input
               value={loginStr}
               onChange={e => { setLoginStr(e.target.value); setError(""); }}
-              placeholder="Sber911"
+              placeholder="Логин Сигмы"
+              autoComplete="username"
               autoFocus
               className="w-full border border-border-main rounded-lg px-3 py-2.5 text-sm
                 bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60
@@ -57,13 +64,14 @@ export default function LoginPage() {
 
           <div>
             <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-              Пароль
+              Пароль Jira
             </label>
             <input
               type="password"
               value={password}
               onChange={e => { setPassword(e.target.value); setError(""); }}
-              placeholder="Введите пароль"
+              placeholder="Пароль Сигмы"
+              autoComplete="current-password"
               className="w-full border border-border-main rounded-lg px-3 py-2.5 text-sm
                 bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60
                 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
@@ -88,13 +96,14 @@ export default function LoginPage() {
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-main"
           >
             {loading
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Вхожу...</>
+              ? <><Loader2 className="w-4 h-4 animate-spin" /> Вхожу и проверяю токены…</>
               : <><LogIn className="w-4 h-4" /> Войти</>}
           </button>
         </form>
 
-        <p className="text-center text-xs text-text-muted/60 mt-4">
-          Закрытая корпоративная сеть
+        <p className="text-center text-xs text-text-muted/70 mt-4 leading-relaxed">
+          Токены Jira и Confluence при входе проверяются и, если нужно, выпускаются заново.<br />
+          Нет доступа к Jira — войдите универсальной учётной записью.
         </p>
       </div>
     </div>

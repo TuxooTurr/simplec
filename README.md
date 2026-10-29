@@ -128,7 +128,7 @@ SimpleTest/
 | Backend | FastAPI 0.128, Uvicorn 0.40, Python 3.12 |
 | База данных | PostgreSQL 16 (драйвер psycopg2) или SQLite, SQLAlchemy 2.x |
 | Vector DB | ChromaDB 1.4 (RAG для эталонов) |
-| Доступ | Bearer-токен; 2 пользователя захардкожены в `backend/api/auth.py` (`Sber911`, `SberMonitoring`) |
+| Доступ | Bearer-токен; вход логином Jira или универсальной учёткой `Sber911` из `backend/api/auth.py` |
 | Real-time | WebSockets (стриминг генерации) |
 | Мониторинг | APScheduler, Kubernetes Python client |
 | Сообщения | kafka-python, A2A/JSON-RPC 2.0 |
@@ -201,8 +201,8 @@ npm run dev
 ## Конфигурация (`.env`)
 
 ```dotenv
-# Авторизация: Bearer-токен, пользователи захардкожены в backend/api/auth.py
-# (Sber911 / SberMonitoring, пароль 1234567). Аккаунты в коде → валидны на любой машине.
+# Авторизация: вход логином и паролем Jira; без Jira — универсальная учётка Sber911 / 1234567
+# из backend/api/auth.py (в коде → валидна на любой машине).
 
 # LLM-провайдеры
 LLM_PROVIDER=gigachat

@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import WorkspaceShell from "@/components/WorkspaceShell";
+import LoginNote from "@/components/LoginNote";
 import { Loader2 } from "lucide-react";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -26,5 +27,5 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!user) return null;
 
-  return <WorkspaceShell>{children}</WorkspaceShell>;
+  return <WorkspaceShell>{children}<LoginNote /></WorkspaceShell>;
 }

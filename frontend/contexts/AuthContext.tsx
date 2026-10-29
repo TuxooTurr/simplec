@@ -6,13 +6,14 @@ import {
 import {
   loginApi, logoutApi, getMeApi,
   setStoredToken, clearStoredToken, getStoredToken,
-  type AuthUser,
+  type AuthUser, type LoginTokens,
 } from "@/lib/authApi";
 
 interface AuthCtx {
   user: AuthUser | null;
   loading: boolean;
-  login: (login: string, password: string) => Promise<void>;
+  /** Вошёл — что стало с маркерами Jira и Confluence (только при входе логином Jira). */
+  login: (login: string, password: string) => Promise<LoginTokens | undefined>;
   logout: () => Promise<void>;
   isSuperuser: boolean;
   isMonitoring: boolean;
@@ -21,7 +22,7 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx>({
   user: null,
   loading: true,
-  login: async () => {},
+  login: async () => undefined,
   logout: async () => {},
   isSuperuser: false,
   isMonitoring: false,
@@ -48,7 +49,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (loginStr: string, password: string) => {
     const res = await loginApi(loginStr, password);
     setStoredToken(res.token);
-    setUser({ login: res.login, role: res.role, display_name: res.display_name });
+    setUser({ login: res.login, role: res.role, display_name: res.display_name, source: res.source });
+    return res.tokens;
   }, []);
 
   const logout = useCallback(async () => {

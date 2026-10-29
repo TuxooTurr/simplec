@@ -63,7 +63,7 @@
 | Maven/Gradle | — | ❌ нет | только для модуля «Запуск автотестов» (на машине с фреймворком) |
 
 Дефолтные логины (захардкожены в `backend/api/auth.py`):
-`Sber911` / `1234567` (superuser), `SberMonitoring` / `1234567` (monitoring).
+`Sber911` / `1234567` — универсальная учётка; основной вход — логин и пароль Jira (с 29.10.2026, `SberMonitoring` убран).
 
 ---
 
@@ -404,8 +404,8 @@ curl -s -X POST http://localhost:8000/api/auth/login \
 
 ## 7. Авторизация (важные детали)
 
-- **2 захардкоженных пользователя** в `backend/api/auth.py`:
-  `Sber911` (superuser) и `SberMonitoring` (monitoring), пароль у обоих `1234567`.
+- **Вход логином Jira** (`corp_auth.sign_in`: пароль проверяет Jira, маркеры Jira/Confluence проверяются и выпускаются)
+  и **универсальная учётка** `Sber911` / `1234567` в `backend/api/auth.py`. `SberMonitoring` убран 29.10.2026, права у всех одинаковые.
 - Логин: `POST /api/auth/login {"login": "...", "password": "..."}` → `{token, login, role, display_name}`.
 - Токен передаётся в заголовке **`Authorization: Bearer <token>`** (НЕ кука!). На фронте — localStorage, добавляется `authHeaders()`.
 - Сессии — in-memory (`_sessions` dict), сбрасываются при рестарте backend.

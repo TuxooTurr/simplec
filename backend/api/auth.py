@@ -1,8 +1,14 @@
 """
-Авторизация — два пользователя, cookie/Bearer-токен.
+Авторизация — Bearer-токен сессии.
+
+Вход — логином и паролем Jira: пароль проверяет Jira, тут же проверяются маркеры (PAT) Jira и Confluence —
+свои рабочие остаются, иначе выпускаются новые (corp_auth.sign_in). Пароль не хранится.
+Универсальная учётная запись (USERS) — вход без Jira: дома, без корпоративной сети; маркеры тогда получают
+в настройках, как раньше.
+Права у всех вошедших одинаковые (роль superuser); разделение прав — когда появится общий сервер.
 
 REST:
-  POST /api/auth/login  — войти (login + password)
+  POST /api/auth/login  — войти (login + password) → {token, login, role, display_name, source, tokens?}
   POST /api/auth/logout — выйти
   GET  /api/auth/me     — текущий пользователь
 """
@@ -10,8 +16,11 @@ REST:
 import secrets
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from db.postgres import get_db
 
 router = APIRouter()
 
@@ -20,11 +29,6 @@ USERS: dict[str, dict] = {
         "password": "1234567",
         "role": "superuser",
         "display_name": "Sber911",
-    },
-    "SberMonitoring": {
-        "password": "1234567",
-        "role": "monitoring",
-        "display_name": "SberMonitoring",
     },
 }
 
@@ -63,18 +67,22 @@ def require_superuser(request: Request) -> dict:
 
 
 @router.post("/api/auth/login")
-def login(req: LoginRequest):
-    user_data = USERS.get(req.login)
-    if not user_data or user_data["password"] != req.password:
-        raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+def login(req: LoginRequest, db: Session = Depends(get_db)):
+    user_data = USERS.get(req.login.strip())
+    if user_data:
+        # Универсальная учётная запись — без Jira; неверный пароль к ней в Jira не уходит.
+        if user_data["password"] != req.password:
+            raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+        session = {"login": req.login.strip(), "role": user_data["role"], "display_name": user_data["display_name"], "source": "local"}
+        tokens = None
+    else:
+        from backend.api.corp_auth import sign_in
+        r = sign_in(req.login, req.password, db)
+        session = {"login": r["login"], "role": "superuser", "display_name": r["display_name"], "source": "jira"}
+        tokens = r["tokens"]
     token = secrets.token_hex(32)
-    session = {
-        "login": req.login,
-        "role": user_data["role"],
-        "display_name": user_data["display_name"],
-    }
     _sessions[token] = session
-    return {"token": token, **session}
+    return {"token": token, **session, **({"tokens": tokens} if tokens is not None else {})}
 
 
 @router.post("/api/auth/logout")

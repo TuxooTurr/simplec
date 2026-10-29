@@ -8,7 +8,7 @@
 - **Фронтенд:** Next.js App Router, TypeScript, Tailwind CSS, порт **3000**
 - **БД:** SQLite (`simpletest.db`) + ChromaDB
 - **LLM:** GigaChat, DeepSeek и пользовательские chat/completions-compatible подключения из UI
-- **Авторизация:** Bearer-токен; 2 пользователя захардкожены в `backend/api/auth.py` (`Sber911`, `SberMonitoring`, пароль `1234567`), сессии in-memory
+- **Авторизация:** Bearer-токен; вход логином и паролем Jira (маркеры Jira/Confluence проверяются и выпускаются при входе) или универсальной учёткой `Sber911` / `1234567` из `backend/api/auth.py`; сессии in-memory
 
 ## Как запустить локально
 

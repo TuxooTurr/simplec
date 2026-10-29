@@ -30,7 +30,7 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from backend.api.db_connector import get_db_connection, introspect_schema, load_jdbc_driver
+from backend.api.db_connector import describe_db_error, get_db_connection, introspect_schema, load_jdbc_driver
 from db.jdbc_drivers_store import JdbcDriversStore
 from db.testdata_connections import TestDataConnectionsStore
 
@@ -315,7 +315,7 @@ async def test_connection(conn_id: str) -> dict:
             conn.close()
             return {"status": "green", "message": "Соединение установлено"}
         except Exception as e:
-            return {"status": "red", "message": f"Ошибка подключения: {str(e)[:300]}"}
+            return {"status": "red", "message": f"Ошибка подключения: {describe_db_error(e)}"}
 
     return await asyncio.to_thread(_test)
 
@@ -346,7 +346,7 @@ async def introspect_connection(conn_id: str) -> dict:
             "column_count": sum(len(cols) for cols in schema.values()),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка introspect: {str(e)[:300]}")
+        raise HTTPException(status_code=500, detail=f"Ошибка introspect: {describe_db_error(e)}")
 
 
 # ── Execute query ─────────────────────────────────────────────────────────────
@@ -392,7 +392,7 @@ async def execute_query(req: QueryRequest) -> dict:
             results[conn_id] = result
         except Exception as e:
             results[conn_id] = {
-                "error": str(e)[:300],
+                "error": describe_db_error(e),
                 "rows": [],
                 "columns": [],
                 "db_name": conn_cfg.get("display_name", conn_id),
@@ -626,6 +626,6 @@ async def test_driver(driver_id: str) -> dict:
             load_jdbc_driver(driver["driver_class"], jar_path)
             return {"status": "green", "message": "Класс драйвера успешно загружен"}
         except Exception as e:
-            return {"status": "red", "message": f"Ошибка загрузки драйвера: {str(e)[:300]}"}
+            return {"status": "red", "message": f"Ошибка загрузки драйвера: {describe_db_error(e)}"}
 
     return await asyncio.to_thread(_test)

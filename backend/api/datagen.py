@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from agents.datagen_presets import tcsmember_rules
 from agents.datagen_sync import list_parents, plan_sync, sync_members
-from backend.api.db_connector import get_db_connection, introspect_schema
+from backend.api.db_connector import describe_db_error, get_db_connection, introspect_schema
 from db.datagen_config_store import DatagenConfigStore
 from db.testdata_connections import TestDataConnectionsStore
 
@@ -76,7 +76,7 @@ async def tcs_parents(connection_id: str, limit: int = 500) -> dict:
             _with_connection, cfg, lambda c: list_parents(c, _sync_config(), limit=limit)
         )
     except Exception as e:
-        raise HTTPException(502, f"Не удалось получить список ТКС: {str(e)[:300]}")
+        raise HTTPException(502, f"Не удалось получить список ТКС: {describe_db_error(e)}")
 
     return {
         "items": [{"id": r[0], "label": r[1] or f"ТКС #{r[0]}"} for r in rows],
@@ -100,7 +100,7 @@ async def tcs_plan(req: SyncRequest) -> dict:
             lambda c: plan_sync(c, _sync_config(), req.parent_id, req.target),
         )
     except Exception as e:
-        raise HTTPException(502, f"Ошибка подключения: {str(e)[:300]}")
+        raise HTTPException(502, f"Ошибка подключения: {describe_db_error(e)}")
 
     if not plan.ok:
         raise HTTPException(400, plan.error)
@@ -125,7 +125,7 @@ async def tcs_sync(req: SyncRequest) -> dict:
             lambda c: sync_members(c, _sync_config(), req.parent_id, req.target),
         )
     except Exception as e:
-        raise HTTPException(502, f"Ошибка подключения: {str(e)[:300]}")
+        raise HTTPException(502, f"Ошибка подключения: {describe_db_error(e)}")
 
     if not res.ok:
         raise HTTPException(400, res.error)
@@ -193,7 +193,7 @@ async def datagen_schema(connection_id: str, refresh: bool = False) -> dict:
         try:
             schema = await asyncio.to_thread(_with_connection, cfg, _read)
         except Exception as e:
-            raise HTTPException(502, f"Не удалось прочитать схему: {str(e)[:300]}")
+            raise HTTPException(502, f"Не удалось прочитать схему: {describe_db_error(e)}")
 
     tables = []
     for full_name, columns in (schema or {}).items():

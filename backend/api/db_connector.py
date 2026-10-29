@@ -169,6 +169,63 @@ def get_db_connection(conn_config: dict):
     return conn, driver
 
 
+# ── Понятная ошибка подключения ──────────────────────────────────────────────
+# pgjdbc на любую сетевую беду отвечает общим «Ошибка при попытке подсоединения»
+# (The connection attempt failed), а настоящая причина — в цепочке getCause():
+# хост не найден, порт закрыт, таймаут, SSL, сервер оборвал соединение. Её и показываем.
+
+_ROOT_HINTS = (
+    ("UnknownHostException", "хост не найден в DNS — проверьте адрес и VPN"),
+    ("NoRouteToHostException", "нет маршрута до хоста — VPN или сеть не пускают в этот сегмент"),
+    ("ConnectException", "порт закрыт или БД не слушает — проверьте порт и что доступ с вашей машины открыт"),
+    ("SocketTimeoutException", "хост не ответил — сеть или межсетевой экран не пропускают до хоста и порта"),
+    ("SSLHandshakeException", "ошибка SSL — проверьте sslmode в шаблоне URL драйвера и сертификаты"),
+    ("SSLException", "ошибка SSL — проверьте sslmode в шаблоне URL драйвера и сертификаты"),
+    ("EOFException", "сервер оборвал соединение — часто нужен SSL (?sslmode=require в шаблоне URL) "
+                     "или балансировщик не пускает с вашего адреса"),
+    ("SocketException", "соединение сброшено сетью — проверьте VPN и доступ до хоста и порта"),
+)
+_TEXT_HINTS = (
+    ("password authentication failed", "неверный логин или пароль"),
+    ("pg_hba.conf", "БД не пускает с вашего адреса или без SSL (pg_hba.conf) — нужен доступ у администратора БД"),
+    ("does not exist", "нет такой базы или пользователя — проверьте имя БД и логин"),
+)
+
+
+def describe_db_error(e: BaseException, limit: int = 700) -> str:
+    """Текст ошибки подключения с причинами из цепочки Java-исключений и подсказкой по корневой.
+
+    Работает и с обычными Python-исключениями (там цепочки нет — просто str(e))."""
+    chain, cur, seen = [], e, set()
+    while cur is not None and id(cur) not in seen and len(chain) < 6:
+        seen.add(id(cur))
+        try:
+            name = str(cur.getClass().getName())
+            msg = cur.getMessage()
+            chain.append((name, str(msg) if msg is not None else ""))
+            cur = cur.getCause()
+        except AttributeError:                               # не Java-исключение
+            if not chain:
+                return str(e)[:limit]
+            break
+    parts = []
+    for name, msg in chain:
+        short = name.rsplit(".", 1)[-1]
+        text = f"{short}: {msg}" if msg else short
+        if text not in parts:
+            parts.append(text)
+    hint = ""
+    for short in (n.rsplit(".", 1)[-1] for n, _ in reversed(chain)):    # от корня к верху
+        hint = next((h for k, h in _ROOT_HINTS if k == short), "")
+        if hint:
+            break
+    if not hint:
+        low = " ".join(m for _, m in chain).lower()
+        hint = next((h for k, h in _TEXT_HINTS if k in low), "")
+    out = " ← ".join(parts)
+    return (f"{out}. Похоже: {hint}" if hint else out)[:limit]
+
+
 def _safe_meta(fn, default):
     """Необязательные метаданные: экзотический драйвер не должен ронять интроспекцию.
 

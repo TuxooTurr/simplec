@@ -25,7 +25,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.api.db_connector import get_db_connection
+from backend.api.db_connector import describe_db_error, get_db_connection
 from db.jobs_store import JobsStore
 from db.testdata_connections import TestDataConnectionsStore
 
@@ -163,6 +163,7 @@ async def execute_job(job_id: str, req: ExecuteRequest = ExecuteRequest()) -> di
         }
     except Exception as e:
         logger.error("Job execute error: %s", e)
+        err = describe_db_error(e)
         JobsStore.add_history({
             "job_id":        job_id,
             "job_name":      job.get("name", job_id),
@@ -170,9 +171,9 @@ async def execute_job(job_id: str, req: ExecuteRequest = ExecuteRequest()) -> di
             "sql":           sql,
             "nextfiretime":  nextfiretime,
             "status":        "error",
-            "error":         str(e),
+            "error":         err,
         })
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=err)
 
 
 @router.post("/api/jobs/execute-batch")

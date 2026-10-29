@@ -19,6 +19,9 @@ import {
   type ModelBenchScenario, type ModelBenchStats,
 } from "@/lib/api";
 
+/** Встроенные подключения GigaChat: модели у каждого свои, тянутся со стенда (GET /models). */
+const GIGA_IDS = ["gigachat_pers", "gigachat_corp", "gigachat"];
+
 /* ── Style constants (локальные — как в остальных секциях) ─────────── */
 
 const INPUT_CLS =
@@ -144,7 +147,8 @@ export default function ModelBenchSection() {
 
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [customProviders, setCustomProviders] = useState<CustomLlmProvider[]>([]);
-  const [gigachatModels, setGigachatModels] = useState<string[]>([]);
+  /** Модели подключений GigaChat (Личный / Corp / IFT) — по id провайдера. */
+  const [gigachatModels, setGigachatModels] = useState<Record<string, string[]>>({});
 
   const [modelsCount, setModelsCount] = useState(2);
   const [targetRows, setTargetRows] = useState<TargetRow[]>([]);
@@ -166,9 +170,15 @@ export default function ModelBenchSection() {
   }, []);
 
   useEffect(() => {
-    getProviders().then(setProviders).catch(() => {});
+    getProviders().then((list) => {
+      setProviders(list);
+      for (const p of list.filter((x) => GIGA_IDS.includes(x.id) && x.status !== "red")) {
+        getGigachatModels({ provider: p.id })
+          .then((r) => setGigachatModels((prev) => ({ ...prev, [p.id]: r.models })))
+          .catch(() => {});
+      }
+    }).catch(() => {});
     getCustomLlmProviders().then(setCustomProviders).catch(() => {});
-    getGigachatModels({}).then((r) => setGigachatModels(r.models)).catch(() => {});
     listModelBenchSessions().then(setHistory).catch(() => {});
     refreshScenarios();
   }, [refreshScenarios]);
@@ -217,12 +227,12 @@ export default function ModelBenchSection() {
   }, [scenarioId, refreshScenarios]);
 
   const defaultModelFor = useCallback((providerId: string) => {
-    if (providerId === "gigachat") return gigachatModels[0] ?? "";
+    if (GIGA_IDS.includes(providerId)) return gigachatModels[providerId]?.[0] ?? "";
     return customProviders.find((p) => p.id === providerId)?.model ?? "";
   }, [gigachatModels, customProviders]);
 
   const modelOptionsFor = useCallback((providerId: string): string[] => {
-    if (providerId === "gigachat") return gigachatModels;
+    if (GIGA_IDS.includes(providerId)) return gigachatModels[providerId] ?? [];
     const m = customProviders.find((p) => p.id === providerId)?.model;
     return m ? [m] : [];
   }, [gigachatModels, customProviders]);

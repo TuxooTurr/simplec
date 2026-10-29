@@ -107,7 +107,9 @@ SimpleTest/
 
 | Провайдер | Тип | Настройка | Статус без подключения |
 |-----------|-----|-----------|------------------------|
-| GigaChat | Встроенный | `GIGACHAT_AUTH_TYPE`, ключ или сертификат | Красный |
+| Giga Личный | Встроенный | ключ авторизации, scope `GIGACHAT_API_PERS` | Красный |
+| Giga Corp | Встроенный | ключ авторизации юрлица, scope `GIGACHAT_API_CORP` / `GIGACHAT_API_B2B` | Красный |
+| Giga IFT | Встроенный | клиентский сертификат, стенд IFT | Красный |
 | DeepSeek | Встроенный | `DEEPSEEK_AUTH_TYPE`, ключ или сертификат | Красный |
 | Пользовательский LLM | Настраиваемый | через UI Settings | зависит от API key/сертификата |
 
@@ -159,7 +161,7 @@ pip install -r requirements.txt
 
 cp .env.example .env
 # Отредактировать .env:
-#   GIGACHAT_AUTH_KEY=<ключ>     # или настройте сертификат в UI
+#   GIGACHAT_PERS_AUTH_KEY=<ключ>  # или настройте GigaChat в UI: Личный / Corp / IFT
 #   DEEPSEEK_API_KEY=<ключ>      # или настройте сертификат в UI
 #   DATABASE_URL=sqlite:///./simpletest.db   # уже стоит по умолчанию
 
@@ -206,12 +208,11 @@ npm run dev
 
 # LLM-провайдеры
 LLM_PROVIDER=gigachat
-GIGACHAT_AUTH_TYPE=api_key
-GIGACHAT_AUTH_KEY=       # Base64(client_id:client_secret)
-GIGACHAT_SCOPE=GIGACHAT_API_PERS
-GIGACHAT_BASE_URL=https://gigachat.devices.sberbank.ru/api/v1
+GIGACHAT_PERS_AUTH_KEY=  # Giga Личный: Base64(client_id:client_secret), scope GIGACHAT_API_PERS
+GIGACHAT_CORP_AUTH_KEY=  # Giga Corp: ключ юрлица
+GIGACHAT_CORP_SCOPE=GIGACHAT_API_CORP
 GIGACHAT_AUTH_URL=https://ngw.devices.sberbank.ru:9443/api/v2/oauth
-GIGACHAT_MODEL=GigaChat
+GIGACHAT_BASE_URL=https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1   # Giga IFT (по сертификату)
 DEEPSEEK_AUTH_TYPE=api_key
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1

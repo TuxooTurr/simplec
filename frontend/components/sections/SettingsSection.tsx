@@ -29,9 +29,34 @@ const INPUT_CLS =
   "focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/60 transition";
 const MASKED_PLACEHOLDER = "●●●●●●●●●●●●";
 
-/* GigaChat: публичный API (по ключу) и ИФТ-стенд (по сертификату, дефолт) */
-const GIGACHAT_PUBLIC_URL = "https://gigachat.devices.sberbank.ru/api/v1";
+/* Три подключения GigaChat (бэкенд: GIGA_PROFILES в agents/llm_client.py).
+   Личный и Corp — публичный API по ключу авторизации, различаются scope; IFT — стенд по сертификату.
+   Везде порядок один: «Подключиться» (GET /models) → выбрать модель → сохранить. */
 const GIGACHAT_IFT_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1";
+const GIGA_CORP_SCOPES = [
+  { value: "GIGACHAT_API_CORP", label: "GIGACHAT_API_CORP — оплата по факту" },
+  { value: "GIGACHAT_API_B2B", label: "GIGACHAT_API_B2B — пакеты токенов" },
+];
+
+interface GigaConn {
+  id: string;
+  name: string;
+  auth: "api_key" | "certificate";
+  modelField: string;
+  keyField?: string;
+  scopeField?: string;
+  /** Подпись под названием: куда и как ходим. */
+  note: string;
+}
+
+const GIGA_CONNS: GigaConn[] = [
+  { id: "gigachat_pers", name: "Giga Личный", auth: "api_key", keyField: "gigachat_pers_auth_key",
+    modelField: "gigachat_pers_model", note: "по ключу · GIGACHAT_API_PERS" },
+  { id: "gigachat_corp", name: "Giga Corp", auth: "api_key", keyField: "gigachat_corp_auth_key",
+    scopeField: "gigachat_corp_scope", modelField: "gigachat_corp_model", note: "по ключу" },
+  { id: "gigachat", name: "Giga IFT", auth: "certificate", modelField: "gigachat_model", note: "по сертификату" },
+];
+const GIGA_BY_ID: Record<string, GigaConn> = Object.fromEntries(GIGA_CONNS.map(g => [g.id, g]));
 
 // ── Field definitions ─────────────────────────────────────────────────────────
 
@@ -43,10 +68,6 @@ interface FieldDef {
   /** Для type: "file" — что принимать в диалоге выбора. */
   accept?: string;
 }
-
-const GIGACHAT_FIELDS: FieldDef[] = [
-  { key: "gigachat_auth_key", label: "AUTH_KEY", type: "password" },
-];
 
 // ── Provider presets — Top-10 нейросетей ─────────────────────────────────────
 
@@ -81,13 +102,12 @@ function ProviderIcon({ preset, size = 20 }: { preset: ProviderPreset; size?: nu
 }
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
-  {
-    id: "gigachat", name: "GigaChat", color: "#21A038", iconLetter: "G",
+  ...GIGA_CONNS.map((g): ProviderPreset => ({
+    id: g.id, name: g.name, color: "#21A038", iconLetter: "G",
     logo: "/logos/gigachat.svg",
-    base_url: "", model: "GigaChat",
-    models: ["GigaChat", "GigaChat-Pro", "GigaChat-Max"],
-    apiKeyLabel: "AUTH_KEY (Base64 из СберID)", builtin: true, settingsKey: "gigachat_auth_key", modelSettingsKey: "gigachat_model",
-  },
+    base_url: "", model: "", models: [],
+    apiKeyLabel: "Ключ авторизации", builtin: true,
+  })),
   {
     id: "deepseek", name: "DeepSeek", color: "#4D6BFE", iconLetter: "D",
     logo: "/logos/deepseek.svg",
@@ -297,6 +317,7 @@ function UnifiedLlmProviders({
   const [editBaseUrl, setEditBaseUrl] = useState("");
   const [editModel, setEditModel] = useState("");
   const [editNoVerify, setEditNoVerify] = useState(true);
+  const [editScope, setEditScope] = useState("GIGACHAT_API_CORP");
   const [gigaModels, setGigaModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
   const [modelsErr, setModelsErr] = useState("");
@@ -320,14 +341,13 @@ function UnifiedLlmProviders({
 
   useEffect(() => {
     // Initial status check for all providers
-    const allIds: string[] = [];
-    allIds.push("gigachat");
+    const allIds: string[] = GIGA_CONNS.map(g => g.id);
     for (const cp of customProviders) allIds.push(cp.id ?? cp.name);
     runStatusChecks(allIds);
 
     // Auto-refresh every 60s
     autoRefreshRef.current = setInterval(() => {
-      const ids: string[] = ["gigachat"];
+      const ids: string[] = GIGA_CONNS.map(g => g.id);
       for (const cp of customProviders) ids.push(cp.id ?? cp.name);
       runStatusChecks(ids);
     }, 60000);
@@ -336,16 +356,17 @@ function UnifiedLlmProviders({
   }, [customProviders, runStatusChecks]);
 
   // Build list of active providers
-  type ActiveProvider = { id: string; name: string; model: string; hasKey: boolean; builtin?: boolean; preset?: ProviderPreset; authType?: string };
+  type ActiveProvider = { id: string; name: string; model: string; hasKey: boolean; builtin?: boolean; preset?: ProviderPreset; giga?: GigaConn };
   const activeProviders: ActiveProvider[] = [];
 
-  // Built-in: GigaChat — по API-ключу или по клиентскому сертификату
-  const gcPreset = PROVIDER_PRESETS.find(p => p.id === "gigachat")!;
-  const gcAuthType = builtinValues["gigachat_auth_type"] || "api_key";
-  const gcHasKey = gcAuthType === "certificate"
-    ? !!(builtinValues["gigachat_client_cert_path"] && builtinValues["gigachat_client_key_path"])
-    : !!(builtinValues["gigachat_auth_key"] && builtinValues["gigachat_auth_key"] !== "");
-  activeProviders.push({ id: "gigachat", name: gcPreset.name, model: builtinValues["gigachat_model"] || gcPreset.model, hasKey: gcHasKey, builtin: true, preset: gcPreset, authType: gcAuthType });
+  // Встроенные: три подключения GigaChat — Личный и Corp по ключу, IFT по сертификату
+  for (const g of GIGA_CONNS) {
+    const hasKey = g.auth === "certificate"
+      ? !!(builtinValues["gigachat_client_cert_path"] && builtinValues["gigachat_client_key_path"])
+      : !!builtinValues[g.keyField!];
+    activeProviders.push({ id: g.id, name: g.name, model: builtinValues[g.modelField] || "", hasKey, builtin: true,
+      preset: PROVIDER_PRESETS.find(p => p.id === g.id), giga: g });
+  }
 
   // Custom providers
   for (const cp of customProviders) {
@@ -412,7 +433,7 @@ function UnifiedLlmProviders({
   }
 
   function resetEditFields() {
-    setEditKey(""); setEditAuthType("api_key");
+    setEditKey(""); setEditAuthType("api_key"); setEditModel(""); setGigaModels([]);
     setEditCaCertPath(""); setEditClientCertPath(""); setEditClientKeyPath("");
     setEditBaseUrl("");
   }
@@ -422,13 +443,15 @@ function UnifiedLlmProviders({
     setEditingId(provider.id);
     setEditKey("");
     setGigaModels([]); setModelsErr(""); setChatTestResult(null);
-    if (provider.id === "gigachat") {
-      setEditAuthType((builtinValues["gigachat_auth_type"] as "api_key" | "certificate") || "api_key");
+    const g = provider.giga;
+    if (g) {
+      setEditAuthType(g.auth);
+      setEditModel(builtinValues[g.modelField] || "");
+      setEditScope((g.scopeField && builtinValues[g.scopeField]) || "GIGACHAT_API_CORP");
       setEditCaCertPath(builtinValues["gigachat_ca_cert_path"] || "");
       setEditClientCertPath(builtinValues["gigachat_client_cert_path"] || "");
       setEditClientKeyPath(builtinValues["gigachat_client_key_path"] || "");
-      setEditBaseUrl(builtinValues["gigachat_base_url"] || GIGACHAT_PUBLIC_URL);
-      setEditModel(builtinValues["gigachat_model"] || "");
+      setEditBaseUrl(builtinValues["gigachat_base_url"] || GIGACHAT_IFT_URL);
       // no_verify по умолчанию включён (корп. BIG IP), если настройка ещё не задана
       setEditNoVerify(builtinValues["gigachat_no_verify"] !== "");
     } else {
@@ -438,29 +461,19 @@ function UnifiedLlmProviders({
     }
   }
 
-  /* Переключение режима GigaChat: по сертификату по умолчанию идём на ИФТ-стенд,
-     по API-ключу — на публичный API (если пользователь не задал свой URL) */
-  function switchGigachatAuthType(next: "api_key" | "certificate") {
-    setEditAuthType(next);
-    if (next === "certificate" && (!editBaseUrl || editBaseUrl === GIGACHAT_PUBLIC_URL)) {
-      setEditBaseUrl(GIGACHAT_IFT_URL);
-    } else if (next === "api_key" && editBaseUrl === GIGACHAT_IFT_URL) {
-      setEditBaseUrl(GIGACHAT_PUBLIC_URL);
-    }
+  /* Живые поля формы подключения GigaChat: пустой ключ — бэкенд возьмёт сохранённый. */
+  function gigaParams(g: GigaConn) {
+    return g.auth === "api_key"
+      ? { provider: g.id, credentials: editKey.trim(), scope: g.scopeField ? editScope : "" }
+      : { provider: g.id, base_url: editBaseUrl.trim(), client_cert_path: editClientCertPath.trim(),
+          client_key_path: editClientKeyPath.trim(), ca_cert_path: editCaCertPath.trim(), no_verify: editNoVerify };
   }
 
-  /* Автоподгрузка списка моделей со стенда (GET {base_url}/models) по текущим полям формы. */
-  async function loadGigaModels() {
-    setLoadingModels(true); setModelsErr("");
+  /* «Подключиться» — GET /models по текущим полям формы: дозвонились — выбираем модель из списка. */
+  async function loadGigaModels(g: GigaConn) {
+    setLoadingModels(true); setModelsErr(""); setGigaModels([]); setChatTestResult(null);
     try {
-      const r = await getGigachatModels({
-        base_url: editBaseUrl.trim(),
-        auth_type: editAuthType,
-        client_cert_path: editClientCertPath.trim(),
-        client_key_path: editClientKeyPath.trim(),
-        ca_cert_path: editCaCertPath.trim(),
-        no_verify: editNoVerify,
-      });
+      const r = await getGigachatModels(gigaParams(g));
       setGigaModels(r.models);
       if (r.models.length && !r.models.includes(editModel)) setEditModel(r.models[0]);
       if (!r.models.length) setModelsErr("Стенд вернул пустой список моделей");
@@ -484,18 +497,10 @@ function UnifiedLlmProviders({
   }
 
   /* Тест чата по живым параметрам формы (единый источник с «Загрузить модели»). */
-  async function handleTestChat() {
+  async function handleTestChat(g: GigaConn) {
     setChatTesting(true); setChatTestResult(null);
     try {
-      const r = await testGigachatChat({
-        model: editModel.trim(),
-        base_url: editBaseUrl.trim(),
-        auth_type: editAuthType,
-        client_cert_path: editClientCertPath.trim(),
-        client_key_path: editClientKeyPath.trim(),
-        ca_cert_path: editCaCertPath.trim(),
-        no_verify: editNoVerify,
-      });
+      const r = await testGigachatChat({ ...gigaParams(g), model: editModel.trim() });
       setChatTestResult(r);
     } catch (e) {
       setChatTestResult({ status: "red", message: e instanceof Error ? e.message : String(e) });
@@ -505,28 +510,26 @@ function UnifiedLlmProviders({
   async function handleSaveConnection(provider: ActiveProvider) {
     setSaving(true); setErrMsg("");
     try {
-      if (provider.id === "gigachat") {
-        if (editAuthType === "certificate") {
-          if (!editClientCertPath.trim() || !editClientKeyPath.trim()) {
-            setErrMsg("Укажите путь к клиентскому сертификату и приватному ключу");
-            setSaving(false);
-            return;
-          }
+      const g = provider.giga;
+      if (g) {
+        // Сохраняем только то, до чего дозвонились: модель — из списка, полученного «Подключиться»
+        if (!gigaModels.includes(editModel)) {
+          setErrMsg("Сначала нажмите «Подключиться» и выберите модель"); setSaving(false); return;
+        }
+        if (g.auth === "certificate") {
           await onSaveBuiltinBatch({
-            gigachat_auth_type: "certificate",
             gigachat_base_url: editBaseUrl.trim() || GIGACHAT_IFT_URL,
             gigachat_ca_cert_path: editCaCertPath.trim(),
             gigachat_client_cert_path: editClientCertPath.trim(),
             gigachat_client_key_path: editClientKeyPath.trim(),
             gigachat_no_verify: editNoVerify ? "1" : "",
-            ...(editModel.trim() ? { gigachat_model: editModel.trim() } : {}),
+            gigachat_model: editModel,
           });
         } else {
-          if (!editKey.trim()) { setErrMsg("Введите AUTH_KEY"); setSaving(false); return; }
           await onSaveBuiltinBatch({
-            gigachat_auth_type: "api_key",
-            gigachat_auth_key: editKey.trim(),
-            gigachat_base_url: editBaseUrl.trim() || GIGACHAT_PUBLIC_URL,
+            [g.modelField]: editModel,
+            ...(editKey.trim() ? { [g.keyField!]: editKey.trim() } : {}),   // пусто — ключ прежний
+            ...(g.scopeField ? { [g.scopeField]: editScope } : {}),
           });
         }
       } else if (provider.builtin && provider.preset?.settingsKey) {
@@ -591,8 +594,8 @@ function UnifiedLlmProviders({
                     </Select>
                   ) : (
                     <p className="text-xs text-text-muted">
-                      {p.model}{!hasKeyOrNoNeed ? " · нет ключа" : ""}
-                      {p.id === "gigachat" && hasKeyOrNoNeed ? (p.authType === "certificate" ? " · по сертификату" : " · по API-ключу") : ""}
+                      {p.giga ? (p.model || "модель не выбрана") : p.model}{!hasKeyOrNoNeed ? (p.giga?.auth === "certificate" ? " · нет сертификата" : " · нет ключа") : ""}
+                      {p.giga && ` · ${p.giga.note}${p.giga.scopeField && builtinValues[p.giga.scopeField] ? " · " + builtinValues[p.giga.scopeField] : ""}`}
                     </p>
                   )}
                 </div>
@@ -619,71 +622,81 @@ function UnifiedLlmProviders({
               </div>
               {editingId === p.id && (
                 <div className="mt-2 pl-8 space-y-2">
-                  {p.id === "gigachat" && (
-                    <div className="flex items-center gap-4">
-                      <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
-                        <input type="radio" checked={editAuthType === "api_key"} onChange={() => switchGigachatAuthType("api_key")}
-                          className="text-primary focus:ring-primary/30" />
-                        По API-ключу
-                      </label>
-                      <label className="flex items-center gap-1.5 text-xs text-text-main cursor-pointer">
-                        <input type="radio" checked={editAuthType === "certificate"} onChange={() => switchGigachatAuthType("certificate")}
-                          className="text-primary focus:ring-primary/30" />
-                        По сертификату
-                      </label>
-                    </div>
-                  )}
-                  {p.id === "gigachat" && editAuthType === "certificate" ? (
+                  {p.giga ? (
                     <div className="space-y-1.5">
-                      <div>
-                        <label className={LABEL_CLS}>Куда обращаемся (Base URL стенда)</label>
-                        <input className={`${INPUT_CLS} font-mono`} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)}
-                          placeholder={GIGACHAT_IFT_URL} spellCheck={false} />
-                      </div>
-                      {([
-                        { kind: "ca" as const, value: editCaCertPath, set: setEditCaCertPath, ph: "Путь к CA bundle (опционально)", accept: ".pem,.crt,.cer,.txt" },
-                        { kind: "cert" as const, value: editClientCertPath, set: setEditClientCertPath, ph: "Путь к клиентскому сертификату (.pem/.crt)", accept: ".pem,.crt,.cer,.txt" },
-                        { kind: "key" as const, value: editClientKeyPath, set: setEditClientKeyPath, ph: "Путь к приватному ключу сертификата", accept: ".pem,.key,.txt" },
-                      ]).map((f) => (
-                        <div key={f.kind} className="flex gap-2">
-                          <input className={`${INPUT_CLS} flex-1`} value={f.value} onChange={(e) => f.set(e.target.value)}
-                            placeholder={f.ph} spellCheck={false} />
-                          <label className="shrink-0 flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-2 text-xs font-medium text-text-main hover:bg-bg-subtle cursor-pointer">
-                            {uploadingKind === f.kind ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                            Файл
-                            <input type="file" accept={f.accept} className="hidden"
-                              onChange={(e) => { const file = e.target.files?.[0]; if (file) handleCertUpload(f.kind, file); e.target.value = ""; }} />
-                          </label>
+                      {p.giga.auth === "api_key" ? (
+                        <>
+                          <div>
+                            <label className={LABEL_CLS}>Ключ авторизации {p.giga.id === "gigachat_corp" ? "(кабинет юрлица)" : "(личный кабинет)"}</label>
+                            <PasswordInput fieldKey="edit_key" value={editKey} onChange={(_, v) => { setEditKey(v); setGigaModels([]); }}
+                              placeholder={p.hasKey ? "Сохранён — оставьте пустым или вставьте новый" : "Studio → GigaChat API → проект → Настройки API"} />
+                          </div>
+                          {p.giga.scopeField && (
+                            <div>
+                              <label className={LABEL_CLS}>Scope</label>
+                              <Select value={editScope} onChange={(v) => { setEditScope(v); setGigaModels([]); }}>
+                                {GIGA_CORP_SCOPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                              </Select>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                        <div>
+                          <label className={LABEL_CLS}>Куда обращаемся (Base URL стенда)</label>
+                          <input className={`${INPUT_CLS} font-mono`} value={editBaseUrl} onChange={(e) => setEditBaseUrl(e.target.value)}
+                            placeholder={GIGACHAT_IFT_URL} spellCheck={false} />
                         </div>
-                      ))}
-                      <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer select-none pt-0.5">
-                        <input type="checkbox" checked={editNoVerify} onChange={(e) => setEditNoVerify(e.target.checked)}
-                          className="rounded border-border-main accent-primary" />
-                        Не проверять серверный сертификат (корп. BIG IP)
-                      </label>
-                      {/* Модель: список тянется со стенда GET {base_url}/models */}
+                        {([
+                          { kind: "ca" as const, value: editCaCertPath, set: setEditCaCertPath, ph: "Путь к CA bundle (опционально)", accept: ".pem,.crt,.cer,.txt" },
+                          { kind: "cert" as const, value: editClientCertPath, set: setEditClientCertPath, ph: "Путь к клиентскому сертификату (.pem/.crt)", accept: ".pem,.crt,.cer,.txt" },
+                          { kind: "key" as const, value: editClientKeyPath, set: setEditClientKeyPath, ph: "Путь к приватному ключу сертификата", accept: ".pem,.key,.txt" },
+                        ]).map((f) => (
+                          <div key={f.kind} className="flex gap-2">
+                            <input className={`${INPUT_CLS} flex-1`} value={f.value} onChange={(e) => f.set(e.target.value)}
+                              placeholder={f.ph} spellCheck={false} />
+                            <label className="shrink-0 flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-2 text-xs font-medium text-text-main hover:bg-bg-subtle cursor-pointer">
+                              {uploadingKind === f.kind ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                              Файл
+                              <input type="file" accept={f.accept} className="hidden"
+                                onChange={(e) => { const file = e.target.files?.[0]; if (file) handleCertUpload(f.kind, file); e.target.value = ""; }} />
+                            </label>
+                          </div>
+                        ))}
+                        <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer select-none pt-0.5">
+                          <input type="checkbox" checked={editNoVerify} onChange={(e) => setEditNoVerify(e.target.checked)}
+                            className="rounded border-border-main accent-primary" />
+                          Не проверять серверный сертификат (корп. BIG IP)
+                        </label>
+                        </>
+                      )}
+                      {/* Сначала дозвониться: GET /models; модель выбирается только из полученного списка */}
                       <div>
                         <label className={LABEL_CLS}>Модель</label>
                         <div className="flex gap-2">
                           {gigaModels.length > 0 ? (
-                            <Select className="flex-1" value={editModel} onChange={setEditModel}>
+                            <Select className="flex-1" value={editModel} onChange={(v) => { setEditModel(v); setChatTestResult(null); }}>
                               {gigaModels.map((m) => <option key={m} value={m}>{m}</option>)}
                             </Select>
                           ) : (
-                            <input className={`${INPUT_CLS} flex-1 font-mono`} value={editModel} onChange={(e) => setEditModel(e.target.value)}
-                              placeholder="напр. GigaChat-2-Max" spellCheck={false} />
+                            <p className={`${INPUT_CLS} flex-1 text-text-muted`}>
+                              {editModel ? `${editModel} — подключитесь, чтобы сменить` : "Нажмите «Подключиться» — появится список моделей"}</p>
                           )}
-                          <button type="button" onClick={loadGigaModels} disabled={loadingModels || !editClientCertPath.trim()}
+                          <button type="button" onClick={() => loadGigaModels(p.giga!)}
+                            disabled={loadingModels || (p.giga.auth === "api_key" ? !(editKey.trim() || p.hasKey) : !editClientCertPath.trim())}
                             className="shrink-0 flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-2 text-xs font-medium text-text-main hover:bg-bg-subtle disabled:opacity-50">
                             {loadingModels ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                            Загрузить модели
+                            Подключиться
                           </button>
                         </div>
                         {modelsErr && <p className="mt-1 text-xs text-red-500">{modelsErr}</p>}
+                        {gigaModels.length > 0 && !modelsErr && (
+                          <p className="mt-1 text-xs text-green-600">Подключено — моделей: {gigaModels.length}</p>
+                        )}
                       </div>
                       {/* Тест чата — POST /chat/completions теми же живыми параметрами формы */}
                       <div className="flex items-center gap-2 pt-0.5">
-                        <button type="button" onClick={handleTestChat} disabled={chatTesting || !editModel.trim() || !editClientCertPath.trim()}
+                        <button type="button" onClick={() => handleTestChat(p.giga!)} disabled={chatTesting || !gigaModels.includes(editModel)}
                           className="shrink-0 flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-2 text-xs font-medium text-text-main hover:bg-bg-subtle disabled:opacity-50">
                           {chatTesting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                           Тест чата
@@ -701,7 +714,8 @@ function UnifiedLlmProviders({
                   )}
                   {errMsg && editingId === p.id && <p className="text-xs text-red-500">{errMsg}</p>}
                   <div className="flex justify-end">
-                    <button onClick={() => handleSaveConnection(p)} disabled={saving}
+                    <button onClick={() => handleSaveConnection(p)} disabled={saving || (!!p.giga && !gigaModels.includes(editModel))}
+                      title={p.giga && !gigaModels.includes(editModel) ? "Сначала «Подключиться» и выбрать модель" : undefined}
                       className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
                       <Save className="w-3 h-3" /> Сохранить
                     </button>
@@ -799,9 +813,6 @@ export default function SettingsSection() {
   const [pgResult, setPgResult] = useState<TestResult | null>(null);
   const [pgTesting, setPgTesting] = useState(false);
 
-  // Save statuses per section
-  const [llmSave, setLlmSave] = useState<{ status: SaveStatus; err: string }>({ status: "idle", err: "" });
-
   const loadSettings = useCallback(async () => {
     setLoading(true); setError("");
     try {
@@ -839,15 +850,6 @@ export default function SettingsSection() {
     try { const r = await testLlmConnection(providerId); setLlmStatuses(prev => ({ ...prev, [providerId]: r })); }
     catch { setLlmStatuses(prev => ({ ...prev, [providerId]: { status: "red", message: "Ошибка" } })); }
     finally { setLlmTesting(null); }
-  }
-
-  // Save handlers for sections
-  async function saveLlm() {
-    setLlmSave({ status: "saving", err: "" });
-    try {
-      await handleSaveFields(GIGACHAT_FIELDS.map(f => f.key), true);
-      setLlmSave({ status: "saved", err: "" }); setTimeout(() => setLlmSave({ status: "idle", err: "" }), 3000);
-    } catch (e) { setLlmSave({ status: "error", err: e instanceof Error ? e.message : String(e) }); }
   }
 
   // Compute overall LLM status

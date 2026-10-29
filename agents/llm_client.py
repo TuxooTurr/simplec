@@ -1,7 +1,8 @@
 """
 Универсальный LLM клиент.
 
-Встроенный провайдер: GigaChat.
+Встроенные провайдеры — три подключения GigaChat (GIGA_PROFILES): Giga Личный и Giga Corp
+(публичный API по ключу, отличаются scope) и Giga IFT (стенд по клиентскому сертификату).
 Остальные (DeepSeek, OpenAI, Gemini, Ollama и т.д.) подключаются пользователем
 в настройках как chat/completions-compatible endpoint через API key или
 TLS/client certificate.
@@ -177,13 +178,6 @@ def _env(name: str, default: str = "") -> str:
     return str(os.getenv(name, default) or "").strip()
 
 
-def _auth_type(prefix: str) -> str:
-    value = _env(prefix + "_AUTH_TYPE", "api_key").lower()
-    if value not in ("api_key", "certificate"):
-        raise ValueError(prefix + "_AUTH_TYPE must be api_key or certificate")
-    return value
-
-
 def _gigachat_ssl_context(ca_cert: str, no_verify: bool):
     """SSLContext для GigaChat SDK с потолком TLS 1.2 — лечит 'Connection reset by
     peer' от старых BIG IP, которые не умеют TLS 1.3 и рвут рукопожатие."""
@@ -207,7 +201,56 @@ def _gigachat_ssl_context(ca_cert: str, no_verify: bool):
     return ctx
 
 
-def _gigachat_tls_kwargs() -> dict:
+# ── Три подключения GigaChat ─────────────────────────────────────────────────
+# Личный и Corp — публичный API по ключу (OAuth-токен через ngw), разница только в scope.
+# IFT — стенд по клиентскому сертификату (mTLS); id "gigachat" исторический: так он назывался,
+# когда подключение было одно, и так сохранён в настройках (gigachat_*) и в коде вызова.
+
+GIGA_PUBLIC_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+GIGA_IFT_URL = "https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1"
+GIGA_CORP_SCOPES = ("GIGACHAT_API_CORP", "GIGACHAT_API_B2B")
+
+GIGA_PROFILES: dict[str, dict] = {
+    "gigachat_pers": {"name": "Giga Личный", "env": "GIGACHAT_PERS", "auth": "api_key", "scope": "GIGACHAT_API_PERS"},
+    "gigachat_corp": {"name": "Giga Corp", "env": "GIGACHAT_CORP", "auth": "api_key", "scope": "GIGACHAT_API_CORP"},
+    "gigachat":      {"name": "Giga IFT", "env": "GIGACHAT", "auth": "certificate"},
+}
+
+
+def _giga_profile(provider_id: str) -> dict:
+    prof = GIGA_PROFILES.get((provider_id or "gigachat").lower())
+    if not prof:
+        raise ValueError(f"Неизвестное подключение GigaChat: {provider_id}")
+    return prof
+
+
+def _giga_key_scope(prof: dict, credentials: str = "", scope: str = "") -> tuple[str, str]:
+    """Ключ и scope подключения по ключу: из формы, иначе из сохранённых настроек."""
+    key = (credentials or _env(prof["env"] + "_AUTH_KEY")).strip()
+    if not key:
+        raise ValueError(f"Не задан ключ авторизации {prof['name']}")
+    if prof["scope"] == "GIGACHAT_API_PERS":
+        return key, "GIGACHAT_API_PERS"
+    sc = (scope or _env(prof["env"] + "_SCOPE") or prof["scope"]).strip().upper()
+    return key, sc if sc in GIGA_CORP_SCOPES else prof["scope"]
+
+
+def _giga_sdk(credentials: str, scope: str, model: str = "", timeout: float | None = None):
+    """SDK GigaChat для публичного API по ключу. Клиентский сертификат IFT сюда не передаётся."""
+    from gigachat import GigaChat
+    kwargs = {"credentials": credentials, "scope": scope, "base_url": GIGA_PUBLIC_URL,
+              **_gigachat_tls_kwargs(client_cert=False)}
+    auth_url = _env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
+    if auth_url:
+        kwargs["auth_url"] = auth_url
+    if model:
+        kwargs["model"] = model
+    if timeout:
+        kwargs["timeout"] = timeout
+    return GigaChat(**kwargs)
+
+
+def _gigachat_tls_kwargs(client_cert: bool = True) -> dict:
     """Translate shared env/cert settings into kwargs accepted by gigachat SDK."""
     kwargs: dict = {}
     explicit_ca = _env("GIGACHAT_CA_CERT_PATH")
@@ -229,6 +272,8 @@ def _gigachat_tls_kwargs() -> dict:
         # often rely on disabled verification unless a CA bundle is configured.
         kwargs["verify_ssl_certs"] = False
 
+    if not client_cert:
+        return kwargs
     cert_file = _env("GIGACHAT_CLIENT_CERT_PATH")
     key_file = _env("GIGACHAT_CLIENT_KEY_PATH")
     if cert_file:
@@ -239,20 +284,23 @@ def _gigachat_tls_kwargs() -> dict:
 
 
 def list_gigachat_models(
+    provider: str = "gigachat",
     base_url: str = "",
-    auth_type: str = "",
     client_cert_path: str = "",
     client_key_path: str = "",
     ca_cert_path: str = "",
     no_verify: bool | None = None,
+    credentials: str = "",
+    scope: str = "",
 ) -> list[str]:
-    """Список моделей стенда GigaChat (`GET {base_url}/models`). Пустые аргументы
-    берутся из сохранённых настроек (env). Для cert-режима — прямой httpx (mTLS),
-    для api_key — OAuth-токен через SDK. Возвращает id моделей, отсортированные."""
+    """Список моделей подключения GigaChat (`GET /models`) — «дозвониться» до выбора модели.
+    Пустые аргументы берутся из сохранённых настроек (env). IFT — прямой httpx (mTLS) на свой стенд,
+    Личный и Corp — OAuth-токен по ключу через SDK. Возвращает id моделей, отсортированные."""
     import httpx
 
-    base_url = (base_url or _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")).rstrip("/")
-    auth_type = (auth_type or _env("GIGACHAT_AUTH_TYPE", "api_key")).lower()
+    prof = _giga_profile(provider)
+    auth_type = prof["auth"]
+    base_url = (base_url or _env("GIGACHAT_BASE_URL", GIGA_IFT_URL)).rstrip("/") if auth_type == "certificate" else GIGA_PUBLIC_URL
     ca = ca_cert_path or _env("GIGACHAT_CA_CERT_PATH")
     if no_verify is None:
         no_verify = _gigachat_no_verify()
@@ -279,28 +327,21 @@ def list_gigachat_models(
             return _extract(r.json())
 
     # api_key: получить токен через SDK и дёрнуть список моделей
-    from gigachat import GigaChat
-    credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
-    if not credentials:
-        raise ValueError("Не задан GIGACHAT_AUTH_KEY")
-    g = GigaChat(
-        credentials=credentials,
-        scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
-        base_url=base_url,
-        **_gigachat_tls_kwargs(),
-    )
-    models = g.get_models()
+    key, sc = _giga_key_scope(prof, credentials, scope)
+    models = _giga_sdk(key, sc).get_models()
     return sorted({str(getattr(m, "id_", getattr(m, "id", ""))) for m in models.data if getattr(m, "id_", getattr(m, "id", ""))})
 
 
 def probe_gigachat_chat(
     model: str,
+    provider: str = "gigachat",
     base_url: str = "",
-    auth_type: str = "",
     client_cert_path: str = "",
     client_key_path: str = "",
     ca_cert_path: str = "",
     no_verify: bool | None = None,
+    credentials: str = "",
+    scope: str = "",
     prompt: str = "ping",
 ) -> str:
     """Пробный чат к стенду GigaChat теми же параметрами, что и «Загрузить модели».
@@ -310,9 +351,10 @@ def probe_gigachat_chat(
     Пустые аргументы берутся из сохранённых настроек (env)."""
     import httpx
 
-    base_url = (base_url or _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")).rstrip("/")
-    auth_type = (auth_type or _env("GIGACHAT_AUTH_TYPE", "api_key")).lower()
-    model = (model or _env("GIGACHAT_MODEL", "GigaChat")).strip()
+    prof = _giga_profile(provider)
+    auth_type = prof["auth"]
+    base_url = (base_url or _env("GIGACHAT_BASE_URL", GIGA_IFT_URL)).rstrip("/") if auth_type == "certificate" else GIGA_PUBLIC_URL
+    model = (model or _env(prof["env"] + "_MODEL", "GigaChat")).strip()
     if not base_url:
         raise ValueError("Не указан base_url стенда")
     if not model:
@@ -343,50 +385,33 @@ def probe_gigachat_chat(
         return str(data["choices"][0]["message"]["content"])
 
     # api_key: через SDK (OAuth-токен), модель из формы.
-    from gigachat import GigaChat
     from gigachat.models import Chat, Messages
-    credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
-    if not credentials:
-        raise ValueError("Не задан GIGACHAT_AUTH_KEY")
-    g = GigaChat(
-        credentials=credentials,
-        scope=_env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
-        base_url=base_url,
-        model=model,
-        **_gigachat_tls_kwargs(),
-    )
-    resp = g.chat(Chat(model=model, messages=[Messages(role="user", content=prompt)], max_tokens=8))
+    key, sc = _giga_key_scope(prof, credentials, scope)
+    resp = _giga_sdk(key, sc, model).chat(Chat(model=model, messages=[Messages(role="user", content=prompt)], max_tokens=8))
     return str(resp.choices[0].message.content)
 
 
 def _builtin_status(provider_id: str) -> dict:
     """Return readiness without making a network request."""
-    if provider_id == "gigachat":
-        try:
-            auth = _auth_type("GIGACHAT")
-        except ValueError as e:
-            return {"id": "gigachat", "name": "GigaChat", "status": "no_key", "message": str(e)}
-        base_url = _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1")
-        model = _env("GIGACHAT_MODEL", "GigaChat")
-        credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
-        cert_file = _env("GIGACHAT_CLIENT_CERT_PATH")
-        missing = []
-        if not base_url:
-            missing.append("URL")
-        if not model:
-            missing.append("модель")
-        if auth == "api_key" and not credentials:
-            missing.append("GIGACHAT_AUTH_KEY")
-        if auth == "certificate" and not cert_file:
+    prof = GIGA_PROFILES.get(provider_id)
+    if not prof:
+        return {"id": provider_id, "name": provider_id, "status": "no_key", "message": "Неизвестный провайдер"}
+    missing = []
+    if not _env(prof["env"] + "_MODEL"):
+        missing.append("модель")
+    if prof["auth"] == "api_key" and not _env(prof["env"] + "_AUTH_KEY"):
+        missing.append("ключ авторизации")
+    if prof["auth"] == "certificate":
+        if not _env("GIGACHAT_BASE_URL"):
+            missing.append("URL стенда")
+        if not _env("GIGACHAT_CLIENT_CERT_PATH"):
             missing.append("клиентский сертификат")
-        return {
-            "id": "gigachat",
-            "name": "GigaChat",
-            "status": "ready" if not missing else "no_key",
-            "message": "OK" if not missing else "Не настроено: " + ", ".join(missing),
-        }
-
-    return {"id": provider_id, "name": provider_id, "status": "no_key", "message": "Неизвестный провайдер"}
+    return {
+        "id": provider_id,
+        "name": prof["name"],
+        "status": "ready" if not missing else "no_key",
+        "message": "OK" if not missing else "Не настроено: " + ", ".join(missing),
+    }
 
 
 @dataclass
@@ -408,9 +433,9 @@ class LLMResponse:
 
 
 class LLMClient:
-    # Единственный встроенный (обязательный) провайдер — GigaChat.
+    # Встроенные провайдеры — три подключения GigaChat (GIGA_PROFILES).
     # DeepSeek и прочие подключаются пользователем как custom (OpenAI-совместимый эндпоинт).
-    BUILTIN_PROVIDERS = ["gigachat"]
+    BUILTIN_PROVIDERS = list(GIGA_PROFILES)
     SUPPORTED_PROVIDERS = BUILTIN_PROVIDERS
 
     def __init__(self, provider: str = "gigachat", timeout: float | None = None):
@@ -432,15 +457,16 @@ class LLMClient:
         self._init_client()
 
     def _init_client(self):
-        if self.provider == "gigachat":
+        if self.provider in GIGA_PROFILES:
             self._init_gigachat()
         else:
             self._init_custom()
 
     def _init_gigachat(self):
-        self.auth_type = _auth_type("GIGACHAT")
-        self.model = _env("GIGACHAT_MODEL", "GigaChat") or "GigaChat"
-        self.base_url = _env("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1").rstrip("/")
+        prof = _giga_profile(self.provider)
+        self.auth_type = prof["auth"]
+        self.model = _env(prof["env"] + "_MODEL", "GigaChat") or "GigaChat"
+        self.base_url = (_env("GIGACHAT_BASE_URL", GIGA_IFT_URL) if self.auth_type == "certificate" else GIGA_PUBLIC_URL).rstrip("/")
 
         # Certificate (mTLS): ходим НАПРЯМУЮ по httpx, как рабочий curl — без SDK и без OAuth.
         # SDK в ряде версий даже в cert-режиме пытается получить токен; прямой путь надёжнее.
@@ -467,28 +493,10 @@ class LLMClient:
             self.client = None
             return
 
-        # API key: через SDK (OAuth-токен).
-        from gigachat import GigaChat
-        credentials = _env("GIGACHAT_AUTH_KEY") or _env("GIGACHAT_CREDENTIALS")
-        if not credentials:
-            raise ValueError("GIGACHAT_AUTH_KEY not found in settings")
-        client_kwargs = {
-            "scope": _env("GIGACHAT_SCOPE", "GIGACHAT_API_PERS") or "GIGACHAT_API_PERS",
-            "model": self.model,
-            "timeout": self._timeout_override or 120.0,
-            "credentials": credentials,
-            **_gigachat_tls_kwargs(),
-        }
-        if self.base_url:
-            client_kwargs["base_url"] = self.base_url
-        auth_url = _env("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth")
-        if auth_url:
-            client_kwargs["auth_url"] = auth_url
-        logger.info(
-            "GigaChat init (api_key): base_url=%s model=%s auth_url=%s",
-            self.base_url, self.model, auth_url,
-        )
-        self.client = GigaChat(**client_kwargs)
+        # API key (Личный / Corp): через SDK (OAuth-токен), scope — по подключению.
+        key, scope = _giga_key_scope(prof)
+        logger.info("GigaChat init (%s): model=%s scope=%s", self.provider, self.model, scope)
+        self.client = _giga_sdk(key, scope, self.model, self._timeout_override or 120.0)
 
     def _init_custom(self):
         import httpx
@@ -519,7 +527,7 @@ class LLMClient:
              temperature: float = 0.7,
              max_tokens: int = 4000,
              model: str = "") -> LLMResponse:
-        if self.provider == "gigachat":
+        if self.provider in GIGA_PROFILES:
             return self._chat_gigachat(messages, temperature, max_tokens, model)
         return self._chat_custom(messages, temperature, max_tokens, model)
 
@@ -752,7 +760,8 @@ class LLMClient:
         """
         providers = []
 
-        providers.append(_builtin_status("gigachat"))
+        for provider_id in GIGA_PROFILES:
+            providers.append(_builtin_status(provider_id))
 
         for cfg in _load_custom_providers():
             provider_id = str(cfg.get("id", "")).strip().lower()

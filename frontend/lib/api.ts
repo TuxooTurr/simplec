@@ -636,15 +636,24 @@ export async function removeJdbcDriverLibrary(id: string): Promise<{ driver: Jdb
   return fetchJson(`/api/testdata/drivers/${id}/library`, { method: "DELETE" });
 }
 
-// ─── GigaChat — список моделей стенда (GET {base_url}/models) ─────────────────
-export async function getGigachatModels(params: {
+// ─── GigaChat — «дозвониться»: список моделей подключения (GET /models) ───────
+/** Живые поля формы подключения GigaChat. provider — gigachat_pers (Личный), gigachat_corp (Corp),
+ *  gigachat (IFT). Пустые поля и маска ключа — бэкенд берёт из сохранённых настроек. */
+export interface GigachatConnParams {
+  provider?: string;
+  /** Личный / Corp: ключ авторизации. */
+  credentials?: string;
+  /** Corp: GIGACHAT_API_CORP или GIGACHAT_API_B2B. */
+  scope?: string;
+  /** IFT: адрес стенда и сертификаты. */
   base_url?: string;
-  auth_type?: string;
   client_cert_path?: string;
   client_key_path?: string;
   ca_cert_path?: string;
   no_verify?: boolean;
-}): Promise<{ models: string[] }> {
+}
+
+export async function getGigachatModels(params: GigachatConnParams): Promise<{ models: string[] }> {
   return fetchJson("/api/settings/gigachat/models", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -653,15 +662,7 @@ export async function getGigachatModels(params: {
 }
 
 // ─── GigaChat — пробный чат (POST {base_url}/chat/completions) ────────────────
-export async function testGigachatChat(params: {
-  model: string;
-  base_url?: string;
-  auth_type?: string;
-  client_cert_path?: string;
-  client_key_path?: string;
-  ca_cert_path?: string;
-  no_verify?: boolean;
-}): Promise<{ status: "green" | "yellow" | "red"; message: string }> {
+export async function testGigachatChat(params: GigachatConnParams & { model: string }): Promise<{ status: "green" | "yellow" | "red"; message: string }> {
   return fetchJson("/api/settings/gigachat/test-chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

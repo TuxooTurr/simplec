@@ -6,7 +6,7 @@ const LABEL_CLS = "block text-xs font-medium text-text-muted mb-1";
 
 /** Ключи, которые бэкенд отдаёт замаскированными — подписываем их как секреты. */
 export const SECRET_KEYS = new Set([
-  "gigachat_auth_key",
+  "gigachat_pers_auth_key", "gigachat_corp_auth_key",
   "kafka_sasl_password", "kafka_ssl_password",
 ]);
 

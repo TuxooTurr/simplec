@@ -16,6 +16,7 @@ export default function LLMStatusBar() {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
   const providerRef = useRef(provider);
+  const userPicked = useRef(false);
 
   useEffect(() => {
     providerRef.current = provider;
@@ -29,9 +30,11 @@ export default function LLMStatusBar() {
         if (cancelled) return;
 
         setProviders(statuses);
-        const providerIds = new Set(statuses.map((s) => s.id));
-        if (statuses.length > 0 && !providerIds.has(providerRef.current)) {
-          setProvider(statuses[0].id);
+        // Выбранного нет или он не работает, а пользователь сам ничего не выбирал — берём первый рабочий:
+        // подключений GigaChat три, и по умолчанию стоящий IFT дома недоступен.
+        const current = statuses.find((s) => s.id === providerRef.current);
+        if (statuses.length > 0 && (!current || (current.status === "red" && !userPicked.current))) {
+          setProvider((statuses.find((s) => s.status === "green") ?? statuses[0]).id);
         }
       })
       .catch(() => {})
@@ -57,7 +60,7 @@ export default function LLMStatusBar() {
             <button
               key={p.id}
               type="button"
-              onClick={() => setProvider(p.id)}
+              onClick={() => { userPicked.current = true; setProvider(p.id); }}
               title={`${p.name}: ${p.message}`}
               className={`
                 flex w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-xs

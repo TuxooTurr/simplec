@@ -24,14 +24,15 @@ from sqlalchemy.orm import Session
 
 from db.postgres import get_db
 from db.metrics_models import MetricsSettings
-from agents.llm_client import gigachat_only
+from agents.llm_client import GIGA_CORP_SCOPES, GIGA_IFT_URL, GIGA_PUBLIC_URL, gigachat_only
 
 router = APIRouter()
 
 # ── Секретные поля — маскируются в GET ───────────────────────────────────────
 
 _SECRET_FIELDS = {
-    "gigachat_auth_key",
+    "gigachat_pers_auth_key",
+    "gigachat_corp_auth_key",
     "kafka_sasl_password",
     "kafka_ssl_password",
 }
@@ -40,40 +41,50 @@ _MASKED_PLACEHOLDER = "●●●●●●●●●●●●"
 _CUSTOM_LLM_KEY = "custom_llm_providers"
 _REVISOR_STANDS_KEY = "revisor_api_stands"
 _LOGS_VPS_KEY = "logs_vps_connections"
-_AUTH_TYPE_FIELDS = {"gigachat_auth_type"}
+_GIGA_SPLIT_FLAG = "gigachat_split_v1"   # старое одно подключение уже разнесено на Личный / Corp / IFT
 
 # ── Дефолтные значения для новых ключей ──────────────────────────────────────
 
 _DEFAULTS: Dict[str, Dict[str, str]] = {
-    # LLM
-    "gigachat_auth_type": {
-        "value":       os.getenv("GIGACHAT_AUTH_TYPE", "api_key"),
-        "description": "Тип подключения GigaChat: api_key или certificate",
+    # LLM: три подключения GigaChat. Личный и Corp — публичный API по ключу, IFT — стенд по сертификату (gigachat_*)
+    "gigachat_pers_auth_key": {
+        "value":       os.getenv("GIGACHAT_PERS_AUTH_KEY", ""),
+        "description": "Giga Личный: ключ авторизации (Base64 из личного кабинета, scope GIGACHAT_API_PERS)",
         "group":       "llm",
     },
-    "gigachat_auth_key": {
-        "value":       os.getenv("GIGACHAT_AUTH_KEY", ""),
-        "description": "GigaChat AUTH_KEY (Base64-строка из личного кабинета)",
+    "gigachat_pers_model": {
+        "value":       os.getenv("GIGACHAT_PERS_MODEL", ""),
+        "description": "Giga Личный: модель",
         "group":       "llm",
     },
-    "gigachat_scope": {
-        "value":       os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS"),
-        "description": "Scope: GIGACHAT_API_PERS (физ.лица) или GIGACHAT_API_CORP (юр.лица)",
+    "gigachat_corp_auth_key": {
+        "value":       os.getenv("GIGACHAT_CORP_AUTH_KEY", ""),
+        "description": "Giga Corp: ключ авторизации (Base64 из кабинета юрлица)",
+        "group":       "llm",
+    },
+    "gigachat_corp_scope": {
+        "value":       os.getenv("GIGACHAT_CORP_SCOPE", "GIGACHAT_API_CORP"),
+        "description": "Giga Corp: scope — GIGACHAT_API_CORP (оплата по факту) или GIGACHAT_API_B2B (пакеты)",
+        "group":       "llm",
+    },
+    "gigachat_corp_model": {
+        "value":       os.getenv("GIGACHAT_CORP_MODEL", ""),
+        "description": "Giga Corp: модель",
         "group":       "llm",
     },
     "gigachat_base_url": {
-        "value":       os.getenv("GIGACHAT_BASE_URL", "https://gigachat.devices.sberbank.ru/api/v1"),
-        "description": "Base URL GigaChat API",
+        "value":       os.getenv("GIGACHAT_BASE_URL", GIGA_IFT_URL),
+        "description": "Giga IFT: адрес стенда",
         "group":       "llm",
     },
     "gigachat_auth_url": {
         "value":       os.getenv("GIGACHAT_AUTH_URL", "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"),
-        "description": "OAuth URL GigaChat для режима API key",
+        "description": "OAuth URL GigaChat для подключений по ключу (Личный, Corp)",
         "group":       "llm",
     },
     "gigachat_model": {
         "value":       os.getenv("GIGACHAT_MODEL", "GigaChat"),
-        "description": "Модель GigaChat",
+        "description": "Giga IFT: модель",
         "group":       "llm",
     },
     "gigachat_ca_cert_path": {
@@ -125,9 +136,11 @@ _DEFAULTS: Dict[str, Dict[str, str]] = {
 
 # Маппинг: ключ настройки → env-переменная (для apply_saved_settings_to_env)
 _ENV_MAP: Dict[str, str] = {
-    "gigachat_auth_type":             "GIGACHAT_AUTH_TYPE",
-    "gigachat_auth_key":              "GIGACHAT_AUTH_KEY",
-    "gigachat_scope":                 "GIGACHAT_SCOPE",
+    "gigachat_pers_auth_key":         "GIGACHAT_PERS_AUTH_KEY",
+    "gigachat_pers_model":            "GIGACHAT_PERS_MODEL",
+    "gigachat_corp_auth_key":         "GIGACHAT_CORP_AUTH_KEY",
+    "gigachat_corp_scope":            "GIGACHAT_CORP_SCOPE",
+    "gigachat_corp_model":            "GIGACHAT_CORP_MODEL",
     "gigachat_base_url":              "GIGACHAT_BASE_URL",
     "gigachat_auth_url":              "GIGACHAT_AUTH_URL",
     "gigachat_model":                 "GIGACHAT_MODEL",
@@ -152,6 +165,48 @@ def _ensure_defaults(db: Session) -> None:
                 value=meta["value"],
                 description=meta["description"],
             ))
+    db.commit()
+    _split_gigachat(db)
+
+
+def _split_gigachat(db: Session) -> None:
+    """Один раз: старое единое подключение GigaChat → Личный / Corp / IFT.
+
+    Ключ (из настроек или .env GIGACHAT_AUTH_KEY) уходит в Личный или Corp по прежнему scope, вместе с
+    моделью, если подключение было по ключу. Подключение «gigachat» остаётся IFT (сертификат); если оно
+    смотрело на публичный API, адрес меняется на стенд IFT. Прежние ключи gigachat_auth_type/_auth_key/_scope
+    удаляются — они больше ничего не значат."""
+    q = lambda k: db.query(MetricsSettings).filter(MetricsSettings.key == k).first()  # noqa: E731
+    if q(_GIGA_SPLIT_FLAG):
+        return
+    val = lambda k: ((q(k).value if q(k) else "") or "").strip()  # noqa: E731
+
+    def put(k: str, v: str) -> None:
+        row = q(k)
+        if row:
+            row.value, row.updated_at = v, datetime.utcnow()
+        else:
+            db.add(MetricsSettings(key=k, value=v))
+
+    old_type = (val("gigachat_auth_type") or os.getenv("GIGACHAT_AUTH_TYPE", "") or "api_key").lower()
+    old_key = val("gigachat_auth_key") or os.getenv("GIGACHAT_AUTH_KEY", "").strip()
+    old_scope = (val("gigachat_scope") or os.getenv("GIGACHAT_SCOPE", "") or "GIGACHAT_API_PERS").upper()
+    target = "gigachat_corp" if old_scope in GIGA_CORP_SCOPES else "gigachat_pers"
+    if old_key and not val(f"{target}_auth_key"):
+        put(f"{target}_auth_key", old_key)
+        if target == "gigachat_corp":
+            put("gigachat_corp_scope", old_scope)
+        if old_type == "api_key" and val("gigachat_model") and not val(f"{target}_model"):
+            put(f"{target}_model", val("gigachat_model"))
+    if old_type == "api_key" and val("gigachat_base_url") in ("", GIGA_PUBLIC_URL):
+        put("gigachat_base_url", GIGA_IFT_URL)
+    for k in ("gigachat_auth_type", "gigachat_auth_key", "gigachat_scope"):
+        row = q(k)
+        if row:
+            db.delete(row)
+    for ev in ("GIGACHAT_AUTH_TYPE", "GIGACHAT_AUTH_KEY", "GIGACHAT_SCOPE"):
+        os.environ.pop(ev, None)
+    db.add(MetricsSettings(key=_GIGA_SPLIT_FLAG, value="1", description="GigaChat разнесён на Личный / Corp / IFT"))
     db.commit()
 
 
@@ -364,10 +419,10 @@ def save_settings(body: SettingsUpdate, db: Session = Depends(get_db)) -> dict:
         # Игнорировать пустые значения для секретных полей
         if key in _SECRET_FIELDS and not value.strip():
             continue
-        if key in _AUTH_TYPE_FIELDS:
-            value = value.strip().lower() or "api_key"
-            if value not in ("api_key", "certificate"):
-                raise HTTPException(422, f"{key} должен быть api_key или certificate")
+        if key == "gigachat_corp_scope":
+            value = value.strip().upper() or "GIGACHAT_API_CORP"
+            if value not in GIGA_CORP_SCOPES:
+                raise HTTPException(422, "Scope Giga Corp: " + " или ".join(GIGA_CORP_SCOPES))
 
         row = db.query(MetricsSettings).filter(MetricsSettings.key == key).first()
         if row:
@@ -686,23 +741,33 @@ def test_llm_connection(provider_id: str) -> dict:
 
 
 class GigachatModelsRequest(BaseModel):
-    base_url: str = Field(default="")
-    auth_type: str = Field(default="")
+    """Живые поля формы подключения. provider — gigachat_pers / gigachat_corp / gigachat (IFT).
+    Пустые поля и маска ключа — взять из сохранённых настроек."""
+    provider: str = Field(default="gigachat")
+    credentials: str = Field(default="")       # Личный / Corp: ключ авторизации
+    scope: str = Field(default="")             # Corp: GIGACHAT_API_CORP / GIGACHAT_API_B2B
+    base_url: str = Field(default="")          # IFT: адрес стенда
     client_cert_path: str = Field(default="")
     client_key_path: str = Field(default="")
     ca_cert_path: str = Field(default="")
     no_verify: Optional[bool] = None
 
+    def key(self) -> str:
+        k = self.credentials.strip()
+        return "" if k == _MASKED_PLACEHOLDER else k
+
 
 @router.post("/api/settings/gigachat/models")
 def gigachat_models(req: GigachatModelsRequest) -> dict:
-    """Список моделей стенда GigaChat (`GET {base_url}/models`) для автоподгрузки в UI.
-    Пустые поля берутся из сохранённых настроек; для cert-режима — прямой mTLS."""
+    """«Дозвониться»: список моделей подключения GigaChat (`GET /models`) — по нему выбирается модель.
+    IFT — прямой mTLS на стенд, Личный и Corp — токен по ключу."""
     from agents.llm_client import list_gigachat_models
     try:
         models = list_gigachat_models(
+            provider=req.provider.strip() or "gigachat",
+            credentials=req.key(),
+            scope=req.scope.strip(),
             base_url=req.base_url.strip(),
-            auth_type=req.auth_type.strip(),
             client_cert_path=req.client_cert_path.strip(),
             client_key_path=req.client_key_path.strip(),
             ca_cert_path=req.ca_cert_path.strip(),
@@ -711,7 +776,19 @@ def gigachat_models(req: GigachatModelsRequest) -> dict:
         return {"models": models}
     except Exception as e:
         from agents.llm_client import connection_reset_hint
-        raise HTTPException(status_code=400, detail=connection_reset_hint(e) or f"Не удалось получить модели: {str(e)[:200]}")
+        raise HTTPException(status_code=400, detail=connection_reset_hint(e) or _giga_auth_hint(e)
+                            or f"Не удалось получить модели: {str(e)[:200]}")
+
+
+def _giga_auth_hint(e: BaseException) -> str:
+    """401/403 от OAuth или стенда — понятным текстом вместо сырого ответа SDK."""
+    msg = str(e)
+    if "401" in msg or "credentials doesn't match" in msg.lower():
+        return ("Ключ авторизации не подошёл (401). Проверьте ключ и scope: Личный — GIGACHAT_API_PERS, "
+                "Corp — GIGACHAT_API_CORP или GIGACHAT_API_B2B, как в проекте Studio.")
+    if "403" in msg:
+        return "Доступ запрещён (403): у ключа нет прав на этот scope или модель."
+    return ""
 
 
 class GigachatTestChatRequest(GigachatModelsRequest):
@@ -727,8 +804,10 @@ def gigachat_test_chat(req: GigachatTestChatRequest) -> dict:
     try:
         answer = probe_gigachat_chat(
             model=req.model.strip(),
+            provider=req.provider.strip() or "gigachat",
+            credentials=req.key(),
+            scope=req.scope.strip(),
             base_url=req.base_url.strip(),
-            auth_type=req.auth_type.strip(),
             client_cert_path=req.client_cert_path.strip(),
             client_key_path=req.client_key_path.strip(),
             ca_cert_path=req.ca_cert_path.strip(),

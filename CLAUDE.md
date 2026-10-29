@@ -7,7 +7,9 @@
 - **Бэкенд:** Python 3.10+, FastAPI, uvicorn, порт **8000**
 - **Фронтенд:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 3, порт **3000** (нужен Node.js 20 LTS)
 - **БД:** SQLite (`simpletest.db`) + ChromaDB (векторное хранилище)
-- **LLM:** GigaChat — единственный встроенный провайдер. Остальные (OpenAI, Groq, Ollama и др.)
+- **LLM:** GigaChat — встроенный, три подключения (`GIGA_PROFILES` в `agents/llm_client.py`): **Giga Личный**
+  (`gigachat_pers`, ключ, scope PERS), **Giga Corp** (`gigachat_corp`, ключ, scope CORP/B2B), **Giga IFT** (`gigachat`,
+  сертификат). Везде: «Подключиться» (GET /models) → выбрать модель → сохранить. Остальные (OpenAI, Groq, Ollama и др.)
   подключаются как сторонние по OpenAI-совместимому API. Флаг `GIGACHAT_ONLY=1` отключает сторонних технически
 
 ---
@@ -56,11 +58,12 @@ npm run dev --prefix frontend
 cp .env.example .env
 ```
 
-Обязательные ключи:
+GigaChat удобнее настраивать в UI (Настройки → LLM Провайдеры). Через `.env` — ключ нужного подключения:
 ```
-GIGACHAT_AUTH_KEY=<Base64 ключ из СберID>
-GIGACHAT_SCOPE=GIGACHAT_API_PERS
+GIGACHAT_PERS_AUTH_KEY=<Base64 ключ из Studio>   # Giga Личный
+GIGACHAT_CORP_AUTH_KEY=<ключ юрлица>             # Giga Corp (+ GIGACHAT_CORP_SCOPE)
 ```
+Прежний `GIGACHAT_AUTH_KEY` при первом запуске сам переносится в Личный или Corp (по `GIGACHAT_SCOPE`).
 
 Опциональные ключи:
 ```

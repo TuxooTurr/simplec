@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CheckCheck, Loader2, PlayCircle } from "lucide-react";
-import { fmtDate, passRun, resultTone, runKind, runKindLabel, type ZRun } from "@/lib/zephyrApi";
+import { fmtDate, passRun, resultTone, runKind, runKindLabel, zephyrRunUrl, type ZRun } from "@/lib/zephyrApi";
 import { ResultBar } from "./parts";
 
 /** Плашка вида прогона: НФ — фиолетовая, регресс — синяя, прочее — нейтральная. */
@@ -21,9 +21,13 @@ export function passedOf(run: Pick<ZRun, "counts">): number {
 /**
  * Карточка прогона — одинаковая везде: номер, вид тестирования, название, прогресс (сколько пройдено), дата создания
  * и «Пройти» — проставить Pass всем непройденным кейсам в Jira (с подтверждением). onPassed — раздел перечитывает данные.
+ * Номер (есть baseUrl) — ссылка: прогон в Jira в новой вкладке, страница прогона с правкой, а не плеер.
+ * Остальная карточка — выбрать прогон (onOpen); название — до двух строк.
  */
-export default function RunCard({ run, active, onOpen, onPassed }: {
+export default function RunCard({ run, baseUrl, active, onOpen, onPassed }: {
   run: ZRun;
+  /** Адрес Jira — номер прогона становится ссылкой на страницу прогона. */
+  baseUrl?: string;
   active?: boolean;
   onOpen?: () => void;
   onPassed?: () => void;
@@ -47,17 +51,24 @@ export default function RunCard({ run, active, onOpen, onPassed }: {
   };
 
   return (
-    <div className={`rounded-lg border px-2.5 py-2 ${active ? "border-primary/50 bg-primary/5" : "border-border-main bg-bg-card hover:bg-bg-subtle/60"}`}>
+    // Щелчок по любому месту карточки (кроме ссылки и кнопок) выбирает прогон; с клавиатуры — кнопка-название.
+    <div onClick={e => { if (onOpen && !(e.target as HTMLElement).closest("a, button, input")) onOpen(); }}
+      className={`rounded-lg border px-2.5 py-2 ${onOpen ? "cursor-pointer" : ""} ${active ? "border-primary/50 bg-primary/5" : "border-border-main bg-bg-card hover:bg-bg-subtle/60"}`}>
       <div className="flex items-start gap-2">
-        <button type="button" onClick={onOpen} disabled={!onOpen} aria-pressed={active} className="min-w-0 flex-1 text-left disabled:cursor-default">
+        {/* Ссылка не может лежать внутри кнопки — номер стоит рядом, а кнопка выбора прогона занимает остальное. */}
+        <div className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5">
             <PlayCircle className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
-            <span className="font-mono text-[11px] text-primary whitespace-nowrap">{run.key}</span>
+            {baseUrl
+              ? <a href={zephyrRunUrl(baseUrl, run.key)} target="_blank" rel="noopener noreferrer" title="Открыть прогон в Jira (страница прогона, не плеер)"
+                  className="font-mono text-[11px] text-primary whitespace-nowrap hover:underline">{run.key} ↗</a>
+              : <span className="font-mono text-[11px] text-primary whitespace-nowrap">{run.key}</span>}
             <RunTypeChip type={run.type} />
             <span className="ml-auto text-[10px] text-text-muted whitespace-nowrap" title="Дата создания прогона">{fmtDate(run.created)}</span>
           </span>
-          <span className="block text-sm text-text-main truncate mt-0.5" title={run.name}>{run.name || "—"}</span>
-        </button>
+          <button type="button" onClick={onOpen} disabled={!onOpen} aria-pressed={active} title={run.name}
+            className="w-full text-left text-sm text-text-main line-clamp-2 mt-0.5 disabled:cursor-default">{run.name || "—"}</button>
+        </div>
         {!ask && (
           <button type="button" onClick={() => setAsk(true)} disabled={busy || total === 0} title="Пройти прогон: Pass всем непройденным кейсам"
             className="flex items-center gap-1 px-2 py-0.5 rounded-md border border-border-main text-[11px] text-text-main hover:border-green-600 hover:text-green-700 disabled:opacity-40">

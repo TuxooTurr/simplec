@@ -1186,7 +1186,8 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
     return {"release": rel, "runs": order(clean(r) for r in rel_runs),
             "storyRuns": {k: order(v) for k, v in story_runs.items()}, "traceSource": source,
             "nfRuns": order(r for r in nf_runs if r), "attached": attached,
-            "jiraLinked": {s_: list(v) for s_, v in (stored.get("jiraLinks") or {}).items()}}
+            "jiraLinked": {s_: list(v) for s_, v in (stored.get("jiraLinks") or {}).items()},
+            "jiraLinksStale": _links_stale(stored)}
 
 
 # ── НФ-прогоны релиза и прогоны стори — у нас, а не в API ────────────────────
@@ -1308,13 +1309,27 @@ def _link_id(run: str) -> str:
     return f"simpletest:zephyr-run:{run}"
 
 
+def run_url(base_url: str, run: str) -> str:
+    """Прогон в Zephyr — страница прогона с правкой (кейсы, отслеживание, поля), а не плеер прохождения (#/testPlayer)."""
+    return f"{base_url}/secure/Tests.jspa#/testRun/{run}"
+
+
+# Версия адреса в ссылках на стори: 1 — плеер (#/testPlayer), 2 — страница прогона. Ссылки старой версии релиз
+# помечает устаревшими (jiraLinksStale), «Записать привязки в Jira» переписывает их тем же globalId — без дублей.
+LINK_V = 2
+
+
+def _links_stale(nf: dict) -> bool:
+    return bool(nf.get("jiraLinks")) and nf.get("jiraLinksV") != LINK_V
+
+
 def jira_link_run(cfg: dict, story: str, run: str, info: dict, rel: str) -> None:
     title = f"{run} · {info.get('name') or 'прогон Zephyr'}"
     _jira_request(cfg, "POST", f"/rest/api/2/issue/{story}/remotelink", json_body={
         "globalId": _link_id(run),
         "application": {"type": "simpletest.zephyr", "name": "Zephyr Scale"},
         "relationship": "НФ-прогон",
-        "object": {"url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{run}", "title": title[:255],
+        "object": {"url": run_url(cfg["base_url"], run), "title": title[:255],
                    "summary": f"Прогон нового функционала релиза {rel}"},
     })
 
@@ -1329,6 +1344,8 @@ def jira_unlink_run(cfg: dict, story: str, run: str) -> None:
 
 def _mark_jira(nf: dict, story: str, run: str, on: bool) -> None:
     links = nf.setdefault("jiraLinks", {})
+    if on and not links:                    # первая ссылка релиза — сразу нового вида
+        nf["jiraLinksV"] = LINK_V
     cur = [x for x in links.get(story, []) if x != run] + ([run] if on else [])
     if cur:
         links[story] = cur
@@ -1408,13 +1425,15 @@ class JiraSyncBody(BaseModel):
 
 @router.post("/api/zephyr/release/{key}/attached/jira")
 def release_attached_to_jira(key: str, body: JiraSyncBody, db: Session = Depends(get_db)) -> dict:
-    """Дописать в Jira ссылки для привязок, которых там ещё нет (сделаны до этой функции или Jira тогда не ответила)."""
+    """Дописать в Jira ссылки для привязок, которых там ещё нет (сделаны до этой функции или Jira тогда не ответила),
+    и переписать устаревшие (ссылка вела в плеер, а не на страницу прогона)."""
     rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
     cfg = _load_cfg(db)
     with _releases_lock:
         nf = dict(_rel_nf(_rel_project(_rel_load(), project), rel))
+    stale = _links_stale(nf)
     todo = [(st, run) for st, runs_ in (nf.get("attached") or {}).items() for run in runs_
-            if run not in (nf.get("jiraLinks") or {}).get(st, [])]
+            if stale or run not in (nf.get("jiraLinks") or {}).get(st, [])]
     results: list[dict] = []
     infos: dict[str, dict] = {}
     for st, run in todo:
@@ -1436,8 +1455,10 @@ def release_attached_to_jira(key: str, body: JiraSyncBody, db: Session = Depends
         for r in results:
             if r["ok"]:
                 _mark_jira(live, r["story"], r["run"], True)
+        if all(r["ok"] for r in results):
+            live["jiraLinksV"] = LINK_V
         _rel_save(data)
-        return {"results": results, "jiraLinked": live["jiraLinks"]}
+        return {"results": results, "jiraLinked": live.get("jiraLinks", {}), "jiraLinksStale": _links_stale(live)}
 
 
 def nf_type_value(cfg: dict, project: str) -> str:
@@ -1742,7 +1763,7 @@ def create_run(body: RunCreate, db: Session = Depends(get_db)) -> dict:
     if issue and tracked != issue:
         warnings.append(f"Прогон создан, но Zephyr не поставил {issue} в отслеживание (там: {tracked or 'пусто'}) — "
                         "добавьте релиз в отслеживание прогона в Zephyr вручную.")
-    return {"key": key, "url": f"{cfg['base_url']}/secure/Tests.jspa#/testPlayer/{key}", "issueKey": tracked, "warnings": warnings}
+    return {"key": key, "url": run_url(cfg["base_url"], key), "issueKey": tracked, "warnings": warnings}
 
 
 class StepResult(BaseModel):

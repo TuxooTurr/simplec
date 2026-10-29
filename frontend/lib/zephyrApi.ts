@@ -141,6 +141,9 @@ export function fmtDuration(ms?: number | null): string {
 /** ISO → «01.10.2026». */
 export const fmtDate = (iso?: string) => (iso ? new Date(iso).toLocaleDateString("ru-RU") : "—");
 
+/** Прогон в Zephyr — страница прогона с правкой, а не плеер прохождения (как run_url в backend/api/zephyr.py). */
+export const zephyrRunUrl = (baseUrl: string, key: string) => `${baseUrl}/secure/Tests.jspa#/testRun/${key}`;
+
 /**
  * Текстовые поля Zephyr (цель, предусловие, шаги) хранятся HTML-ом: <p>, <br>, <b>…
  * Для показа — обычный текст с переносами строк; разбор через DOMParser, без вставки HTML в страницу.
@@ -228,6 +231,8 @@ export interface ReleaseBoard {
   attached?: Record<string, string[]>;
   /** Стори → прикреплённые прогоны, ссылка на которые уже стоит на стори в Jira. */
   jiraLinked?: Record<string, string[]>;
+  /** Ссылки на стори в Jira старого вида (вели в плеер) — «Записать привязки в Jira» перепишет их на страницу прогона. */
+  jiraLinksStale?: boolean;
 }
 
 /** Итог записи в Jira по каждой стори: "ok" или текст ошибки. */

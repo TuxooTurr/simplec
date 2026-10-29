@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, FolderTree as FolderTreeIcon, Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
-import { fmtDate, fmtDuration, getRun, getRuns, type ZFolder, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
+import { fmtDate, fmtDuration, getRun, getRuns, zephyrRunUrl, type ZFolder, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
 import FolderTree from "./FolderTree";
 import { CaseCard, IssueLinks, ResultBar, ResultPill } from "./parts";
 import Player from "./Player";
@@ -61,7 +61,7 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
   const [caseKey, setCaseKey] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const listPane = usePaneSize("runs", 340, 260, 640);
+  const listPane = usePaneSize("runs", 460, 300, 900);
   useEffect(() => { if (openKey) setSel(openKey); }, [openKey]);
   useEffect(() => { try { const v = localStorage.getItem(SORT_KEY); if (v === "old" || v === "new") setSort(v); } catch { /* по умолчанию */ } }, []);
   const changeSort = (v: Sort) => { setSort(v); try { localStorage.setItem(SORT_KEY, v); } catch { /* не запомнится */ } };
@@ -147,7 +147,7 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
         <ul className="flex-1 min-h-0 overflow-y-auto scrollbar-thin space-y-1.5" aria-label="Прогоны">
           {shown.map(r => (
             <li key={r.key}>
-              <RunCard run={r} active={sel === r.key} onOpen={() => setSel(r.key)}
+              <RunCard run={r} baseUrl={baseUrl} active={sel === r.key} onOpen={() => setSel(r.key)}
                 onPassed={() => { void loadRuns(); if (sel === r.key) void openRun(r.key, true); else runCache.delete(r.key); }} />
             </li>
           ))}
@@ -164,7 +164,12 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
             <div>
               <div className="flex items-start gap-3">
                 <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-2 font-mono text-xs text-primary">{run.key} <RunTypeChip type={run.type} /></p>
+                  <p className="flex items-center gap-2 font-mono text-xs text-primary">
+                    {baseUrl
+                      ? <a href={zephyrRunUrl(baseUrl, run.key)} target="_blank" rel="noopener noreferrer" title="Открыть прогон в Jira (страница прогона)"
+                          className="hover:underline">{run.key} ↗</a>
+                      : run.key}
+                    <RunTypeChip type={run.type} /></p>
                   <h2 className="text-base font-semibold text-text-main">{run.name}</h2>
                 </div>
                 <button type="button" onClick={() => openRun(run.key, true)} disabled={runBusy} title="Перечитать кейсы прогона из Jira"

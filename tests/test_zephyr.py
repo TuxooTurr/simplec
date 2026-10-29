@@ -947,6 +947,44 @@ def test_дописать_старую_привязку_в_jira_с_назван�
     assert z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)["results"] == []   # повторно — нечего
 
 
+def test_ссылки_старого_вида_на_плеер_переписываются_на_страницу_прогона(jira):
+    _release_route(jira); _nf_search(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = {}
+    sent = []
+    orig = z._jira_request
+
+    def spy(cfg, method, path, params=None, json_body=None, **kw):
+        if path.endswith("/remotelink") and method == "POST":
+            sent.append(json_body)
+        return orig(cfg, method, path, params=params, json_body=json_body, **kw)
+    z._jira_request = spy
+    try:
+        # Привязка сделана раньше: ссылка в Jira уже стоит, но вела в плеер (версии ссылок у релиза нет).
+        data = z._rel_load()
+        nf = z._rel_nf(z._rel_project(data, "SBER911"), "SBER911-100")
+        nf["attached"] = {"SBER911-11": ["SBER911-C3"]}
+        nf["jiraLinks"] = {"SBER911-11": ["SBER911-C3"]}
+        z._rel_save(data)
+        assert z.release_board("SBER911-100", project="SBER911", db=None)["jiraLinksStale"] is True
+        s = z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)
+    finally:
+        z._jira_request = orig
+    assert s["results"] == [{"story": "SBER911-11", "run": "SBER911-C3", "ok": True}] and s["jiraLinksStale"] is False
+    assert sent[0]["object"]["url"].endswith("/secure/Tests.jspa#/testRun/SBER911-C3")
+    assert sent[0]["globalId"] == "simpletest:zephyr-run:SBER911-C3"          # тот же globalId — Jira обновит, а не продублирует
+    assert z.release_board("SBER911-100", project="SBER911", db=None)["jiraLinksStale"] is False
+    assert z.release_attached_to_jira("SBER911-100", z.JiraSyncBody(project="SBER911"), db=None)["results"] == []
+
+
+def test_новые_ссылки_сразу_на_страницу_прогона(jira):
+    _release_route(jira); _nf_search(jira)
+    jira["routes"]["/rest/atm/1.0/testrun/SBER911-C3"] = {**_run("SBER911-C3", "SBER911-12", "Новый функционал"), "name": "НФ общий"}
+    jira["routes"]["/rest/api/2/issue/SBER911-11/remotelink"] = {}
+    z.release_attach("SBER911-100", z.StoriesAttach(project="SBER911", stories=["SBER911-11"], run="SBER911-C3"), db=None)
+    assert z.release_board("SBER911-100", project="SBER911", db=None)["jiraLinksStale"] is False
+
+
 def test_нф_прогон_на_стори_с_её_кейсами_стори_в_отслеживании(jira, monkeypatch):
     _release_route(jira); _nf_search(jira)
     jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [

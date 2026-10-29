@@ -49,8 +49,8 @@ function Marker({ on, part, children, title }: { on: boolean; part?: boolean; ch
  * API показывает у прогона одну задачу отслеживания, поэтому прогон, где релиз не основная задача, сверка не найдёт —
  * его добавляют по номеру; лишний — убирают (сверка его больше не вернёт).
  */
-function NfRunsModal({ board, project, onOpenRun, onChanged, onClose }: {
-  board: ReleaseBoard; project: string; onOpenRun: (key: string) => void; onChanged: () => void; onClose: () => void;
+function NfRunsModal({ board, project, baseUrl, onOpenRun, onChanged, onClose }: {
+  board: ReleaseBoard; project: string; baseUrl: string; onOpenRun: (key: string) => void; onChanged: () => void; onClose: () => void;
 }) {
   const runs = nfRuns(board);
   const [draft, setDraft] = useState("");
@@ -62,7 +62,7 @@ function NfRunsModal({ board, project, onOpenRun, onChanged, onClose }: {
     setBusy(false);
   };
   return (
-    <Modal open onClose={onClose} title={`Прогоны НФ · ${board.release.key}`} size="max-w-3xl">
+    <Modal open onClose={onClose} title={`Прогоны НФ · ${board.release.key}`} size="max-w-6xl">
       <div className="space-y-3 text-sm">
         <p className="text-text-muted">
           НФ-прогонов релиза: <b className="text-text-main">{runs.length}</b>. Список хранится в SimpleTest: сверка добавляет прогоны,
@@ -80,7 +80,7 @@ function NfRunsModal({ board, project, onOpenRun, onChanged, onClose }: {
           <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {runs.map(r => (
               <li key={r.key} className="relative group/nf">
-                <RunCard run={r} onOpen={() => { onClose(); onOpenRun(r.key); }} onPassed={onChanged} />
+                <RunCard run={r} baseUrl={baseUrl} onOpen={() => { onClose(); onOpenRun(r.key); }} onPassed={onChanged} />
                 <button type="button" onClick={() => edit({ remove: r.key })} disabled={busy} aria-label={`Убрать ${r.key} из НФ релиза`}
                   title="Убрать из списка НФ релиза (в Zephyr ничего не меняется)"
                   className="absolute top-1.5 right-1.5 p-1 rounded-md text-text-muted opacity-0 group-hover/nf:opacity-100 focus-visible:opacity-100 hover:text-red-500 hover:bg-bg-subtle">
@@ -249,9 +249,10 @@ function StoryRunsModal({ board, project, stories: picked, onChanged, onClose }:
 }
 
 /** JQL по стори, которых нет в прогонах релиза, — чтобы руками добавить их в отслеживание прогона. */
-/** Сколько привязок стори ↔ прогон есть только в SimpleTest (ссылки на стори в Jira нет). */
+/** Сколько привязок стори ↔ прогон нужно записать в Jira: ссылки нет, или она старого вида (вела в плеер). */
 function notInJira(b: ReleaseBoard): number {
-  return Object.entries(b.attached ?? {}).reduce((n, [st, runs]) => n + runs.filter(r => !(b.jiraLinked?.[st] ?? []).includes(r)).length, 0);
+  return Object.entries(b.attached ?? {}).reduce((n, [st, runs]) =>
+    n + runs.filter(r => b.jiraLinksStale || !(b.jiraLinked?.[st] ?? []).includes(r)).length, 0);
 }
 
 function MissingNfJql({ board, baseUrl }: { board: ReleaseBoard; baseUrl: string }) {
@@ -428,7 +429,9 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
                 <Rocket className="w-4 h-4" /> Прогон для выбранных{picked.size ? ` (${picked.size})` : ""}</button>
               {notInJira(b) > 0 && (
                 <button type="button" className={BTN} disabled={syncing}
-                  title="Привязки стори к прогонам, сделанные только в SimpleTest (раньше или когда Jira не ответила), — ссылками на стори в Jira"
+                  title={b.jiraLinksStale
+                    ? "Ссылки на прогоны на стори в Jira ведут в плеер — переписать их на страницу прогона (и дописать недостающие)"
+                    : "Привязки стори к прогонам, сделанные только в SimpleTest (раньше или когда Jira не ответила), — ссылками на стори в Jira"}
                   onClick={async () => {
                     setSyncing(true);
                     try {
@@ -439,7 +442,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
                     } catch (e) { setNote([{ ok: false, text: (e as Error).message }]); }
                     setSyncing(false);
                   }}>
-                  {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />} Записать привязки в Jira ({notInJira(b)})</button>
+                  {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />} {b.jiraLinksStale ? "Обновить ссылки в Jira" : "Записать привязки в Jira"} ({notInJira(b)})</button>
               )}
               <MissingNfJql board={b} baseUrl={baseUrl} />
               <button type="button" onClick={() => setKeOpen(true)} className={BTN}
@@ -464,7 +467,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
         </Modal>
       )}
       {keOpen && <KeAlignModal releaseKey={relKey} baseUrl={baseUrl} onClose={() => setKeOpen(false)} />}
-      {nfOpen && b && <NfRunsModal board={b} project={project} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
+      {nfOpen && b && <NfRunsModal board={b} project={project} baseUrl={baseUrl} onOpenRun={onOpenRun} onChanged={onReload} onClose={() => setNfOpen(false)} />}
       {runsOpen && b && (
         <StoryRunsModal board={b} project={project} stories={stories.filter(x => picked.has(x.key))}
           onChanged={() => { setPicked(new Set()); onReload(); }} onClose={() => setRunsOpen(false)} />

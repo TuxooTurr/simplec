@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 K_BB_URL, K_BB_TOKEN = "aqa_bitbucket_url", "aqa_bitbucket_token"
 K_TO_URL, K_TO_TOKEN = "aqa_testops_url", "aqa_testops_token"
 K_EPICS = "aqa_epics"
+# Ссылки по умолчанию — пока настройку не сохраняли. Стёртая в настройках ссылка хранится пустой строкой и остаётся пустой.
+DEFAULT_BB_URL = "https://stash.sigma.sbrf.ru/projects/SBER911/repos/sber911-aqa/browse"
+DEFAULT_TO_URL = "https://testops.sigma.sbrf.ru/project/2414/test-cases"
 MAX_EPICS = 5
 CACHE_TTL = 300                        # 5 минут: вкладку открывают часто, а полный счёт коммитов — сотни запросов
 TODAY_STATS_LIMIT = 30                 # запусков за сегодня, по которым суммируются кейсы
@@ -83,13 +86,13 @@ def _ssl_verify(db: Session) -> Any:
 
 
 def bb_cfg(db: Session) -> dict:
-    url = _get(db, K_BB_URL)
+    url = _get(db, K_BB_URL, DEFAULT_BB_URL)
     p = parse_bitbucket(url) or {"base_url": "", "project": "", "repo": ""}
     return {**p, "url": url, "token": _get(db, K_BB_TOKEN), "token_path": "", "ssl_verify": _ssl_verify(db)}
 
 
 def to_cfg(db: Session) -> dict:
-    url = _get(db, K_TO_URL)
+    url = _get(db, K_TO_URL, DEFAULT_TO_URL)
     p = parse_testops(url) or {"base_url": "", "project_id": 0}
     return {**p, "url": url, "token": _get(db, K_TO_TOKEN), "ssl_verify": _ssl_verify(db)}
 
@@ -353,7 +356,7 @@ def _settings_view(db: Session) -> dict:
     bb, to = bb_cfg(db), to_cfg(db)
     return {"bitbucketUrl": bb["url"], "bitbucketOk": bool(bb["base_url"]), "bitbucketToken": _MASK if bb["token"] else "",
             "testopsUrl": to["url"], "testopsOk": bool(to["base_url"]), "testopsToken": _MASK if to["token"] else "",
-            "epics": _epics(db)}
+            "epics": _epics(db), "defaults": {"bitbucketUrl": DEFAULT_BB_URL, "testopsUrl": DEFAULT_TO_URL}}
 
 
 @router.get("/api/aqa/settings")

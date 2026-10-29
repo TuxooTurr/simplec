@@ -140,3 +140,17 @@ def test_настройки_проверяют_ссылки_и_эпики(monkey
     assert r["epics"] == ["SBER911-1", "SBER911-2"] and r["testopsToken"] == Q._MASK and r["bitbucketOk"] and r["testopsOk"]
     Q.put_settings(Q.SettingsBody(bitbucketUrl="https://stash.x/projects/P/repos/r/browse", testopsToken=Q._MASK, epics=[]), db=db)
     assert db.kv[Q.K_TO_TOKEN] == "secret"                       # маска — прежний токен остался
+
+
+def test_ссылки_по_умолчанию_и_их_можно_убрать(monkeypatch):
+    db = FakeDb()
+    monkeypatch.setattr(Q, "_get", lambda d, k, default="": d.kv.get(k, default))
+    monkeypatch.setattr(Q, "_set", lambda d, k, v, desc="": d.kv.__setitem__(k, v))
+    monkeypatch.setattr(Q, "_ssl_verify", lambda d: True)
+    r = Q.get_settings(db=db)                                    # ничего не сохраняли — ссылки по умолчанию
+    assert r["bitbucketUrl"] == Q.DEFAULT_BB_URL and r["bitbucketOk"]
+    assert r["testopsUrl"] == Q.DEFAULT_TO_URL and r["testopsOk"]
+    assert Q.bb_cfg(db)["repo"] == "sber911-aqa" and Q.to_cfg(db)["project_id"] == 2414
+    r = Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl=""), db=db)
+    assert r["bitbucketUrl"] == "" and not r["bitbucketOk"] and r["testopsUrl"] == "" and not r["testopsOk"]
+    assert Q.bb_cfg(db)["base_url"] == ""                        # стёртая ссылка не возвращается сама

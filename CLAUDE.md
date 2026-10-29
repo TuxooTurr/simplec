@@ -106,7 +106,7 @@ SimpleTest/
 │   │   ├── incident_catalog.py # Генератор инцидентов: 3 КЭ и ~20 сценариев текста (мониторинг, обращения, алерты Рефлекса)
 │   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA
-│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket, запуски Allure TestOps, роадмап эпиков AQA из Jira
+│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket, запуски Allure TestOps, роадмап эпиков AQA из Jira; ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL)
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения
 │   └── schemas.py           # Pydantic схемы

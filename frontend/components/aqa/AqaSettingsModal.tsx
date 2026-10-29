@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Plus, Rocket, X } from "lucide-react";
+import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Plus, Rocket, RotateCcw, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { bitbucketTokenFromLogin, getAqaSettings, saveAqaSettings, type AqaSettings } from "@/lib/aqaApi";
 
@@ -10,10 +10,20 @@ const INPUT = "w-full border border-border-main rounded-lg px-3 py-1.5 text-sm b
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
 const LABEL = "mb-1 flex items-center gap-1.5 text-xs font-semibold text-text-muted";
 
+/** «Вернуть по умолчанию» — только когда ссылка отличается от стандартной. */
+function ResetLink({ value, def, onReset }: { value: string; def?: string; onReset: () => void }) {
+  if (!def || value.trim() === def) return null;
+  return (
+    <button type="button" onClick={onReset} className="ml-auto inline-flex items-center gap-1 font-normal text-primary hover:underline">
+      <RotateCcw className="w-3 h-3" /> По умолчанию</button>
+  );
+}
+
 /**
  * Настройки «Трекинга AQA»: ссылки на репозиторий Bitbucket и проект Allure TestOps (как в браузере), маркеры
  * и эпики роадмапа. Маркер Bitbucket выпускается сам при входе логином Jira, здесь — получить по логину Сигмы
- * или вставить вручную; API-токен TestOps — из профиля TestOps.
+ * или вставить вручную; API-токен TestOps — из профиля TestOps. Ссылки стоят по умолчанию (SBER911): стереть поле —
+ * отключить источник, «По умолчанию» — вернуть.
  */
 export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
   const [s, setS] = useState<AqaSettings | null>(null);
@@ -56,11 +66,14 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
       {!s ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p> : (
         <div className="space-y-5 text-sm">
           <section className="space-y-2">
-            <label className="block">
-              <span className={LABEL}><GitCommitHorizontal className="w-3.5 h-3.5" /> Репозиторий автотестов в Bitbucket</span>
-              <input value={s.bitbucketUrl} onChange={e => setS({ ...s, bitbucketUrl: e.target.value })} className={`${INPUT} font-mono text-xs`}
-                placeholder="https://stash.sigma.sbrf.ru/projects/SBER911/repos/sber911-aqa/browse" />
-            </label>
+            <div>
+              <div className={LABEL}>
+                <label htmlFor="aqa-bb-url" className="inline-flex items-center gap-1.5"><GitCommitHorizontal className="w-3.5 h-3.5" /> Репозиторий автотестов в Bitbucket</label>
+                <ResetLink value={s.bitbucketUrl} def={s.defaults?.bitbucketUrl} onReset={() => setS({ ...s, bitbucketUrl: s.defaults?.bitbucketUrl ?? "" })} />
+              </div>
+              <input id="aqa-bb-url" value={s.bitbucketUrl} onChange={e => setS({ ...s, bitbucketUrl: e.target.value })} className={`${INPUT} font-mono text-xs`}
+                placeholder="Пусто — Bitbucket не подключён" />
+            </div>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className={s.bitbucketToken ? "text-emerald-700 dark:text-emerald-400" : "text-text-muted"}>
                 {s.bitbucketToken ? "Маркер есть" : "Маркера нет — выпустится при входе логином Jira"}</span>
@@ -84,11 +97,14 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
           </section>
 
           <section className="space-y-2">
-            <label className="block">
-              <span className={LABEL}><Rocket className="w-3.5 h-3.5" /> Проект в Allure TestOps</span>
-              <input value={s.testopsUrl} onChange={e => setS({ ...s, testopsUrl: e.target.value })} className={`${INPUT} font-mono text-xs`}
-                placeholder="https://testops.sigma.sbrf.ru/project/2414/test-cases" />
-            </label>
+            <div>
+              <div className={LABEL}>
+                <label htmlFor="aqa-to-url" className="inline-flex items-center gap-1.5"><Rocket className="w-3.5 h-3.5" /> Проект в Allure TestOps</label>
+                <ResetLink value={s.testopsUrl} def={s.defaults?.testopsUrl} onReset={() => setS({ ...s, testopsUrl: s.defaults?.testopsUrl ?? "" })} />
+              </div>
+              <input id="aqa-to-url" value={s.testopsUrl} onChange={e => setS({ ...s, testopsUrl: e.target.value })} className={`${INPUT} font-mono text-xs`}
+                placeholder="Пусто — TestOps не подключён" />
+            </div>
             <label className="block">
               <span className={LABEL}><KeyRound className="w-3.5 h-3.5" /> API-токен TestOps</span>
               <input type="password" value={s.testopsToken} onChange={e => setS({ ...s, testopsToken: e.target.value })}

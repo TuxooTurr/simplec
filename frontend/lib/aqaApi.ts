@@ -15,6 +15,8 @@ export interface AqaSettings {
   testopsOk: boolean;
   testopsToken: string;
   epics: string[];
+  /** Ссылки по умолчанию: действуют, пока настройку не сохраняли; стёртая ссылка остаётся пустой. */
+  defaults?: { bitbucketUrl: string; testopsUrl: string };
 }
 
 export interface AqaCommits {
@@ -66,7 +68,7 @@ export interface AqaEpic extends Partial<AqaIssue> {
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export const getAqaSettings = () => fetchJson<AqaSettings>("/api/aqa/settings");
-export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk">) =>
+export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk" | "defaults">) =>
   fetchJson<AqaSettings>("/api/aqa/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(s) });
 export const bitbucketTokenFromLogin = (login: string, password: string) =>
   fetchJson<{ status: string }>("/api/aqa/bitbucket/token-from-login", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ login, password }) });

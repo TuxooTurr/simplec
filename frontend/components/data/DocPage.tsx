@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, FileText, Folder, History, Link2, Loader2, Paperclip, Pencil, Save, Sparkles, Tag, Target, Trash2, X } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileText, Folder, History, Link2, Loader2, Paperclip, Pencil, RefreshCw, Save, SlidersHorizontal, Sparkles, Tag, Target, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import NotionRenderer, { headingSlug, looksLikeMarkdown } from "@/components/NotionRenderer";
 import QaDocView from "@/components/data/QaDocView";
@@ -9,7 +9,9 @@ import SourcesBar from "@/components/data/SourcesBar";
 import VersionChanges from "@/components/data/VersionChanges";
 import MarkdownEditor from "@/components/data/MarkdownEditor";
 import QaGenerateModal from "@/components/data/QaGenerateModal";
-import { newReqVersion, parseFile, type ReqFolder, type Requirement } from "@/lib/api";
+import DocAsk from "@/components/data/DocAsk";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { newReqVersion, parseFile, syncReqSources, type ReqFolder, type Requirement } from "@/lib/api";
 
 export const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.md,.markdown";
 
@@ -127,12 +129,12 @@ function NewVersionModal({ open, initial, onClose, onSave }: { open: boolean; in
 }
 
 /**
- * Документ «Данных», как страница в Notion: заголовок правится прямо в шапке, ниже — свойства и содержимое.
- *  • «Что нужно» — уточнение для документа QA, если в исходнике несколько СТ: ИИ смотрит на название и уточнение;
- *  • «Confluence» — страницы (СТ), из которых собран исходник: добавить СТ, обновить из Confluence;
- *  • «Версия» — переключатель версий (прошлые — только просмотр) и свод «что изменилось» со ссылками на разделы.
- * Пока QA-документа нет, содержимое — исходник; после «Преобразовать в документ QA» исходник — кнопка с окном,
- * на странице — QA-документ, внизу свёрнут текст для краткого рассказа о функционале.
+ * Документ «Данных», как страница в Notion. На странице — только главное:
+ *  • заголовок, под ним — ссылки на оригиналы в Confluence и «Обновить из Confluence»;
+ *  • поле вопроса к документу («Спросить», если выбранная LLM работает; иначе — поиск по документу);
+ *  • «Преобразовать в документ QA» (после — «Обновить документ QA») и содержимое.
+ * Остальное — в окне «Подробнее» (значок справа от заголовка): фича, «Что нужно» (уточнение для документа QA, если
+ * в исходнике несколько СТ), папка, страницы Confluence (добавить СТ), версии и свод «что изменилось», исходник, удаление.
  */
 export default function DocPage({ doc, folders, provider, onPatch, onGenerate, onDelete, onReplace, onSettings }: {
   doc: Requirement;
@@ -156,7 +158,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   const [note, setNote] = useState("");
   const cur = doc.version ?? 1;
   const [viewN, setViewN] = useState(cur);
-  useEffect(() => { setEditing(false); setSourceOpen(false); setErr(""); setNote(""); }, [doc.id]);
+  useEffect(() => { setEditing(false); setSourceOpen(false); setDetails(false); setErr(""); setNote(""); }, [doc.id]);
   useEffect(() => { setViewN(doc.version ?? 1); }, [doc.id, doc.version]);
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -181,6 +183,21 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   const saveFeature = () => { if (feature.trim() !== doc.feature) void save({ feature }).catch(() => setFeature(doc.feature)); };
   const saveFocus = () => { if (focus.trim() !== (doc.focus ?? "")) void save({ focus }).catch(() => setFocus(doc.focus ?? "")); };
   const [qaOpen, setQaOpen] = useState(false);
+  const [details, setDetails] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const { providerStatuses } = useWorkspace();
+  const llmStatus = providerStatuses?.[provider];
+  const llmOk = llmStatus === "green" || llmStatus === "yellow";
+  const sources = doc.sources ?? [];
+  const sync = async () => {
+    setSyncing(true); setErr("");
+    try {
+      const r = await syncReqSources(doc.id);
+      onReplace(r.item);
+      setNote(r.changed ? `Страницы изменились — создана версия ${r.item.version}` : "В Confluence изменений нет");
+    } catch (e) { setErr((e as Error).message); }
+    setSyncing(false);
+  };
   const generate = async () => {
     if (!provider) { setErr("Выберите LLM-провайдер в шапке"); return; }
     setErr("");
@@ -198,6 +215,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   };
   /** К месту в документе: раздел по якорю заголовка, подсветка на пару секунд. */
   const jump = (section: string) => {
+    setDetails(false);
     const root = bodyRef.current;
     if (!root) return;
     const el = (section ? root.querySelector<HTMLElement>(`#${CSS.escape(headingSlug(section))}`) : null) ?? root;
@@ -208,48 +226,47 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   const hasQa = !!view.qa_doc;
   const where = folderPath(folders, doc.folder_id ?? "");
 
+  const ROW_LABEL = "flex items-center gap-1.5 pt-0.5 text-text-muted";
+
   return (
     <article className="max-w-4xl mx-auto px-2 pb-16">
       <p className="mb-2 flex items-center gap-1.5 text-xs text-text-muted">
         <Folder className="w-3.5 h-3.5" /> {where || "Корень"}
       </p>
-      <input value={title} onChange={e => setTitle(e.target.value)} onBlur={saveTitle} aria-label="Заголовок документа"
-        onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setTitle(doc.name); (e.target as HTMLInputElement).blur(); } }}
-        placeholder="Без названия"
-        className="w-full bg-transparent text-3xl font-bold text-text-main placeholder:text-text-muted/50 rounded-md px-1 -mx-1 hover:bg-bg-subtle/60 focus:bg-transparent focus:outline-none focus:ring-2 focus:ring-primary/30" />
-
-      {/* Свойства — как строки свойств страницы в Notion */}
-      <div className="mt-3 grid grid-cols-[120px_1fr] items-start gap-y-1.5 text-sm">
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted"><Tag className="w-3.5 h-3.5" /> Фича</span>
-        <input value={feature} onChange={e => setFeature(e.target.value)} onBlur={saveFeature} placeholder="Пусто" aria-label="Фича"
-          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={PROP_INPUT} />
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted" title="Если в исходнике несколько СТ, ИИ возьмёт только то, что относится к функции из названия и этого уточнения">
-          <Target className="w-3.5 h-3.5" /> Что нужно</span>
-        <input value={focus} onChange={e => setFocus(e.target.value)} onBlur={saveFocus} aria-label="Что именно нужно"
-          placeholder="Уточнение для документа QA, если СТ несколько: например, только выгрузка карточки в PDF"
-          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={PROP_INPUT} />
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted"><Folder className="w-3.5 h-3.5" /> Папка</span>
-        <select value={doc.folder_id ?? ""} onChange={e => void save({ folder_id: e.target.value }).catch(() => undefined)} aria-label="Папка документа"
-          className="w-full max-w-sm bg-transparent rounded-md px-1 py-0.5 text-text-main hover:bg-bg-subtle focus:outline-none focus:ring-2 focus:ring-primary/30">
-          {folderOptions(folders).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-        </select>
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted"><Link2 className="w-3.5 h-3.5" /> Confluence</span>
-        <SourcesBar key={doc.id} doc={doc} onError={setErr} onSettings={onSettings}
-          onChanged={(d, msg) => { onReplace(d); if (msg) setNote(msg); }} />
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted"><History className="w-3.5 h-3.5" /> Версия</span>
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={viewN} onChange={e => setViewN(Number(e.target.value))} aria-label="Версия документа"
-            className="max-w-md bg-transparent rounded-md px-1 py-0.5 text-text-main hover:bg-bg-subtle focus:outline-none focus:ring-2 focus:ring-primary/30">
-            {versionsDesc.map(n => {
-              const v = n === cur ? { at: doc.version_at ?? doc.created_at, note: doc.version_note ?? "" } : history.find(h => h.n === n)!;
-              return <option key={n} value={n}>{`Версия ${n}${n === cur ? " (текущая)" : ""} · ${when(v.at)}${v.note ? ` · ${v.note.slice(0, 60)}` : ""}`}</option>;
-            })}
-          </select>
-          {isCur && <button type="button" className="text-xs text-primary hover:underline" onClick={() => setNewVer(true)}>+ Новая версия</button>}
-        </div>
-        <span className="flex items-center gap-1.5 pt-0.5 text-text-muted"><FileText className="w-3.5 h-3.5" /> Исходник</span>
-        <span className="text-text-muted text-xs pt-1">{size(view.text.length)} · изменён {when(isCur ? doc.updated_at : view.at)}</span>
+      <div className="flex items-start gap-2">
+        <input value={title} onChange={e => setTitle(e.target.value)} onBlur={saveTitle} aria-label="Заголовок документа"
+          onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setTitle(doc.name); (e.target as HTMLInputElement).blur(); } }}
+          placeholder="Без названия"
+          className="flex-1 min-w-0 bg-transparent text-3xl font-bold text-text-main placeholder:text-text-muted/50 rounded-md px-1 -mx-1 hover:bg-bg-subtle/60 focus:bg-transparent focus:outline-none focus:ring-2 focus:ring-primary/30" />
+        <button type="button" onClick={() => setDetails(true)} aria-haspopup="dialog" title="Подробнее: фича, папка, Confluence, версии, исходник"
+          className="mt-1.5 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1.5 text-sm text-text-muted hover:text-text-main hover:bg-bg-subtle hover:border-primary/40">
+          <SlidersHorizontal className="w-4 h-4" /> Подробнее
+        </button>
       </div>
+
+      {/* Под названием — только оригиналы в Confluence и обновление из них */}
+      {sources.length > 0 && (
+        <div className="relative mt-2 flex flex-wrap items-center gap-1.5">
+          {sources.map(src => (
+            <a key={src.id} href={src.url} target="_blank" rel="noopener noreferrer" title={`Открыть оригинал в Confluence: ${src.title} · версия ${src.version}`}
+              className="inline-flex max-w-xs items-center gap-1 rounded-md border border-border-main px-2 py-0.5 text-xs text-text-main hover:border-primary/50 hover:text-primary">
+              <ExternalLink className="w-3 h-3 shrink-0" /> <span className="truncate">{sources.length > 1 ? src.title : "Оригинал в Confluence"}</span>
+            </a>
+          ))}
+          {isCur && (
+            <span className="group inline-flex">
+              <button type="button" onClick={() => void sync()} disabled={syncing} aria-label="Обновить из Confluence"
+                className="inline-flex items-center gap-1 rounded-md border border-border-main px-2 py-0.5 text-xs text-text-main hover:border-primary/50 hover:text-primary disabled:opacity-50">
+                {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Обновить
+              </button>
+              <span role="tooltip"
+                className="pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-full max-w-sm rounded-lg border border-border-main bg-bg-card px-3 py-2 text-xs text-text-main shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                Обновить из Confluence: перечитать {sources.length > 1 ? "страницы" : "страницу"}. Если их изменили — появится новая версия документа, прежняя останется в истории.
+              </span>
+            </span>
+          )}
+        </div>
+      )}
 
       {!isCur && (
         <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
@@ -259,33 +276,24 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
         </div>
       )}
 
-      {/* Действия (у прошлой версии без документа QA их нет — полосу не рисуем) */}
-      {(isCur || hasQa) && <div className="mt-4 flex flex-wrap items-center gap-2 border-y border-border-main py-2.5">
-        {hasQa && (
-          <button type="button" className={BTN} onClick={() => setSourceOpen(true)} aria-haspopup="dialog">
-            <FileText className="w-4 h-4 text-emerald-500" /> Исходник <span className="text-xs text-text-muted">· {size(view.text.length)}</span>
-          </button>
-        )}
-        {isCur && (hasQa ? (
-          <button type="button" className={BTN} onClick={() => void generate()} disabled={gen}>
-            {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Обновить документ QA"}
-          </button>
-        ) : (
-          <>
-            <button type="button" className={BTN_PRIMARY} onClick={() => void generate()} disabled={gen || editing}>
-              {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Преобразовать в документ QA"}
-            </button>
-            {!editing && <button type="button" className={BTN} onClick={() => setEditing(true)}><Pencil className="w-4 h-4" /> Править исходник</button>}
-          </>
-        ))}
-        <span className="flex-1" />
+      {/* Вопрос к документу (или поиск, если LLM недоступна) и главное действие */}
+      <div className="mt-4 space-y-3 border-y border-border-main py-3">
+        <DocAsk docId={doc.id} provider={provider} llmOk={llmOk} root={bodyRef}
+          contentKey={`${viewN}:${view.text.length}:${(view.qa_doc ?? "").length}:${editing}`} />
         {isCur && (
-          <button type="button" onClick={onDelete} title="Удалить документ"
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40">
-            <Trash2 className="w-4 h-4" /> Удалить
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {hasQa ? (
+              <button type="button" className={BTN} onClick={() => void generate()} disabled={gen}>
+                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Обновить документ QA"}
+              </button>
+            ) : (
+              <button type="button" className={BTN_PRIMARY} onClick={() => void generate()} disabled={gen || editing}>
+                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Преобразовать в документ QA"}
+              </button>
+            )}
+          </div>
         )}
-      </div>}
+      </div>
 
       {err && (
         <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-lg px-3 py-2">
@@ -293,18 +301,9 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
         </div>
       )}
       {note && <p className="mt-3 text-sm text-text-muted">{note}</p>}
-      {isCur && hasQa && (doc.qa_links?.length || doc.qa_link_errors?.length) ? (
-        <div className="mt-3 text-xs text-text-muted">
-          {doc.qa_links?.length ? <p>Собран по исходнику и страницам: {doc.qa_links.map((l, i) => (
-            <span key={l.url}>{i > 0 && ", "}<a href={l.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{l.title}</a></span>))}</p> : null}
-          {doc.qa_link_errors?.length ? <p className="text-amber-700 dark:text-amber-300">Не прочитаны: {doc.qa_link_errors.join("; ")}</p> : null}
-        </div>
-      ) : null}
       {hasQa && view.qa_doc_truncated && (
         <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">Документ QA обрезан лимитом модели — конец может отсутствовать.</p>
       )}
-
-      {prevN !== undefined && <VersionChanges docId={doc.id} a={prevN} b={viewN} onJump={jump} />}
 
       <div ref={bodyRef} className="mt-5">
         {hasQa ? <QaDocView doc={view.qa_doc} anchors />
@@ -312,6 +311,70 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
           : <SourceView text={view.text} anchors />}
       </div>
 
+      {/* «Подробнее»: свойства документа, Confluence, версии, исходник */}
+      <Modal open={details} onClose={() => setDetails(false)} title={`Подробнее · ${doc.name}`} size="max-w-3xl">
+        <div className="max-h-[70vh] overflow-y-auto scrollbar-thin pr-1 space-y-4">
+          <div className="grid grid-cols-[120px_1fr] items-start gap-y-2 text-sm">
+            <span className={ROW_LABEL}><Tag className="w-3.5 h-3.5" /> Фича</span>
+            <input value={feature} onChange={e => setFeature(e.target.value)} onBlur={saveFeature} placeholder="Пусто" aria-label="Фича"
+              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={PROP_INPUT} />
+            <span className={ROW_LABEL} title="Если в исходнике несколько СТ, ИИ возьмёт только то, что относится к функции из названия и этого уточнения">
+              <Target className="w-3.5 h-3.5" /> Что нужно</span>
+            <input value={focus} onChange={e => setFocus(e.target.value)} onBlur={saveFocus} aria-label="Что именно нужно"
+              placeholder="Уточнение для документа QA, если СТ несколько: например, только выгрузка карточки в PDF"
+              onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} className={PROP_INPUT} />
+            <span className={ROW_LABEL}><Folder className="w-3.5 h-3.5" /> Папка</span>
+            <select value={doc.folder_id ?? ""} onChange={e => void save({ folder_id: e.target.value }).catch(() => undefined)} aria-label="Папка документа"
+              className="w-full max-w-sm bg-transparent rounded-md px-1 py-0.5 text-text-main hover:bg-bg-subtle focus:outline-none focus:ring-2 focus:ring-primary/30">
+              {folderOptions(folders).map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+            <span className={ROW_LABEL}><Link2 className="w-3.5 h-3.5" /> Confluence</span>
+            <SourcesBar key={doc.id} doc={doc} onError={setErr} onSettings={onSettings}
+              onChanged={(d, msg) => { onReplace(d); if (msg) setNote(msg); }} />
+            <span className={ROW_LABEL}><History className="w-3.5 h-3.5" /> Версия</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={viewN} onChange={e => setViewN(Number(e.target.value))} aria-label="Версия документа"
+                className="max-w-md bg-transparent rounded-md px-1 py-0.5 text-text-main hover:bg-bg-subtle focus:outline-none focus:ring-2 focus:ring-primary/30">
+                {versionsDesc.map(n => {
+                  const v = n === cur ? { at: doc.version_at ?? doc.created_at, note: doc.version_note ?? "" } : history.find(h => h.n === n)!;
+                  return <option key={n} value={n}>{`Версия ${n}${n === cur ? " (текущая)" : ""} · ${when(v.at)}${v.note ? ` · ${v.note.slice(0, 60)}` : ""}`}</option>;
+                })}
+              </select>
+              {isCur && <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setDetails(false); setNewVer(true); }}>+ Новая версия</button>}
+            </div>
+            <span className={ROW_LABEL}><FileText className="w-3.5 h-3.5" /> Исходник</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-text-muted text-xs">{size(view.text.length)} · изменён {when(isCur ? doc.updated_at : view.at)}</span>
+              {hasQa && (
+                <button type="button" className="text-xs text-primary hover:underline" onClick={() => { setDetails(false); setSourceOpen(true); }}>Открыть исходник</button>
+              )}
+              {isCur && !hasQa && !editing && (
+                <button type="button" className="inline-flex items-center gap-1 text-xs text-primary hover:underline" onClick={() => { setDetails(false); setEditing(true); }}>
+                  <Pencil className="w-3 h-3" /> Править исходник</button>
+              )}
+            </div>
+          </div>
+
+          {isCur && hasQa && (doc.qa_links?.length || doc.qa_link_errors?.length) ? (
+            <div className="text-xs text-text-muted">
+              {doc.qa_links?.length ? <p>Документ QA собран по исходнику и страницам: {doc.qa_links.map((l, i) => (
+                <span key={l.url}>{i > 0 && ", "}<a href={l.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{l.title}</a></span>))}</p> : null}
+              {doc.qa_link_errors?.length ? <p className="text-amber-700 dark:text-amber-300">Не прочитаны: {doc.qa_link_errors.join("; ")}</p> : null}
+            </div>
+          ) : null}
+
+          {prevN !== undefined && <VersionChanges docId={doc.id} a={prevN} b={viewN} onJump={jump} />}
+
+          {isCur && (
+            <div className="flex justify-end border-t border-border-main pt-3">
+              <button type="button" onClick={() => { setDetails(false); onDelete(); }} title="Удалить документ"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-lg text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40">
+                <Trash2 className="w-4 h-4" /> Удалить документ
+              </button>
+            </div>
+          )}
+        </div>
+      </Modal>
       <Modal open={sourceOpen} onClose={() => { setSourceOpen(false); setEditing(false); }} title={`Исходник · ${doc.name}${isCur ? "" : ` · версия ${viewN}`}`} size="max-w-4xl">
         <div className="max-h-[70vh] overflow-y-auto scrollbar-thin pr-1">
           {editing && isCur ? <SourceEditor initial={doc.text} onSave={saveSource} onCancel={() => setEditing(false)} />

@@ -1310,6 +1310,10 @@ export async function deleteReqFolder(id: string): Promise<{ status: string; mov
 }
 
 /** Документ QA. links — страницы Confluence, которые ИИ прочитает вместе с исходником; focus — «Что нужно». */
+/** Вопрос к документу «Данных»: LLM отвечает только по его тексту (документ QA и исходник). */
+export const askRequirement = (id: string, provider: string, question: string) =>
+  postJson<{ answer: string }>(`/api/requirements/${id}/ask`, { provider, question });
+
 export async function generateRequirementDoc(id: string, provider: string, links: string[] = [], focus?: string): Promise<Requirement> {
   return fetchJson(`/api/requirements/${id}/generate-doc`, {
     method: "POST",

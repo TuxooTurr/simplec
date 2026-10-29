@@ -32,6 +32,9 @@ interface WorkspaceCtx {
   /** Глобально выбранная LLM-модель */
   provider: string;
   setProvider: (id: string) => void;
+  /** Статусы LLM из «Статуса LLM» (null — ещё не проверяли): работает ли выбранная модель. */
+  providerStatuses: Record<string, "green" | "yellow" | "red"> | null;
+  setProviderStatuses: (s: Record<string, "green" | "yellow" | "red">) => void;
   /** Что показывается в правой панели */
   rightSection: SectionId | null;
   setRightSection: (id: SectionId | null) => void;
@@ -55,6 +58,8 @@ interface WorkspaceCtx {
 const WorkspaceContext = createContext<WorkspaceCtx>({
   provider: "gigachat",
   setProvider: () => {},
+  providerStatuses: null,
+  setProviderStatuses: () => {},
   rightSection: null,
   setRightSection: () => {},
   dragging: null,
@@ -71,6 +76,7 @@ const WorkspaceContext = createContext<WorkspaceCtx>({
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState("gigachat");
+  const [providerStatuses, setProviderStatuses] = useState<Record<string, "green" | "yellow" | "red"> | null>(null);
   const [rightSection, setRightSection] = useState<SectionId | null>(null);
   const [dragging, setDragging] = useState<SectionId | null>(null);
   const [leftVisible, setLeftVisible] = useState(true);
@@ -83,6 +89,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     <WorkspaceContext.Provider
       value={{
         provider, setProvider,
+        providerStatuses, setProviderStatuses,
         rightSection, setRightSection,
         dragging, setDragging,
         leftVisible, setLeftVisible,

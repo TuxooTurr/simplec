@@ -207,6 +207,47 @@ async def generate_requirement_doc(req_id: str, body: GenerateDocBody) -> dict:
     return updated
 
 
+# ── Вопрос по документу ──────────────────────────────────────────────────────
+
+MAX_ASK_CHARS = 80_000        # документа в контекст вопроса — не больше (QA-документ и исходник вместе)
+
+
+class AskBody(BaseModel):
+    provider: str = Field(..., min_length=1)
+    question: str = Field(..., min_length=1, max_length=2000)
+
+
+def ask_prompt(item: dict, question: str) -> str:
+    """Промпт «спросить документ»: отвечать только по тексту документа, не нашлось — так и сказать, со ссылкой на раздел."""
+    qa, src = (item.get("qa_doc") or "").strip(), (item.get("text") or "").strip()
+    body = (f"# ДОКУМЕНТ QA\n{qa}\n\n# ИСХОДНИК (требования)\n{src}" if qa else f"# ИСХОДНИК (требования)\n{src}")
+    if len(body) > MAX_ASK_CHARS:
+        body = body[:MAX_ASK_CHARS] + "\n\n[…документ обрезан по длине…]"
+    return (
+        "Ты — QA-инженер и отвечаешь на вопрос по документу требований. Отвечай ТОЛЬКО по тексту документа ниже: "
+        "ничего не додумывай. Если ответа в документе нет — так и скажи и подскажи, что уточнить у аналитика. "
+        "Отвечай кратко, по-русски, в Markdown; где уместно — укажи раздел документа, на который опираешься.\n\n"
+        f"НАЗВАНИЕ: {item.get('name', '')}\nФИЧА: {item.get('feature', '') or '—'}\n\n{body}\n\n"
+        f"ВОПРОС: {question.strip()}"
+    )
+
+
+@router.post("/api/requirements/{req_id}/ask")
+async def ask_requirement(req_id: str, body: AskBody) -> dict:
+    """Вопрос к документу: ответ LLM только по его тексту (документ QA, если собран, и исходник)."""
+    item = RequirementsStore.get_requirement(req_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    from agents.llm_client import LLMClient, Message
+    try:
+        llm = LLMClient(provider=body.provider)
+        resp = await asyncio.to_thread(llm.chat, [Message(role="user", content=ask_prompt(item, body.question))], 0.2, 1500)
+    except Exception as e:
+        _, friendly = LLMClient.classify_error(e)
+        raise HTTPException(status_code=400, detail=f"Не удалось получить ответ: {friendly}")
+    return {"answer": (resp.content or "").strip()}
+
+
 # ── Confluence: требования со страниц ────────────────────────────────────────
 #
 # Страница (ссылка, id или «/display/ПРОСТРАНСТВО/Заголовок») → Markdown (agents/confluence_md.py). Документ помнит

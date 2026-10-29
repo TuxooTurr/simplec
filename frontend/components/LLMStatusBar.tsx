@@ -12,7 +12,7 @@ const STATUS_CONFIG: Record<string, { dot: string; ring: string; label: string }
 };
 
 export default function LLMStatusBar() {
-  const { provider, setProvider, providersRefreshKey } = useWorkspace();
+  const { provider, setProvider, providersRefreshKey, setProviderStatuses } = useWorkspace();
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
   const providerRef = useRef(provider);
@@ -30,6 +30,7 @@ export default function LLMStatusBar() {
         if (cancelled) return;
 
         setProviders(statuses);
+        setProviderStatuses(Object.fromEntries(statuses.map((s) => [s.id, s.status])));
         // Выбранного нет или он не работает, а пользователь сам ничего не выбирал — берём первый рабочий:
         // подключений GigaChat три, и по умолчанию стоящий IFT дома недоступен.
         const current = statuses.find((s) => s.id === providerRef.current);
@@ -45,7 +46,7 @@ export default function LLMStatusBar() {
     return () => {
       cancelled = true;
     };
-  }, [providersRefreshKey, setProvider]);
+  }, [providersRefreshKey, setProvider, setProviderStatuses]);
 
   return (
     <div>

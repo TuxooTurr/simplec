@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bug, ChevronDown, ChevronRight, Flag, SquareCheck } from "lucide-react";
+import { Check, Flag, Loader2, Plus, X } from "lucide-react";
 import { fmtDay, isOverdue, issueSpan, todayIso, type AqaEpic, type AqaIssue } from "@/lib/aqaApi";
 
 /** Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. */
@@ -12,56 +12,101 @@ export const ZOOMS = [
   { id: "quarter", label: "Квартал", w: 2 },
   { id: "year", label: "Год", w: 0.6 },
 ] as const;
+export type ColorBy = "status" | "assignee";
 const MIN_W = 0.3, MAX_W = 120;
-const ROW = 30, HEAD = 46, LEFT = 320;
+const LANE = 28, PAD = 10, HEAD = 46, LEFT = 300, MIN_SECTION = 64, CHECK = 18;
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 const dayNum = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return Date.UTC(y, m - 1, d) / 86_400_000; };
 
-/** Цвет полосы: дефект — красный, решённое — зелёное, в работе — синее, не начато — серое. */
-function barCls(i: Pick<AqaIssue, "defect" | "statusCategory">): string {
-  if (i.statusCategory === "done") return "bg-emerald-500/80 text-white";
-  if (i.defect) return "bg-red-500/85 text-white";
-  if (i.statusCategory === "indeterminate") return "bg-blue-500/85 text-white";
-  return "bg-slate-400/80 text-white dark:bg-slate-500/80";
+/** Статус: дефект — красный, в работе — синий, не начата — серый, выполнена — зелёная (и галочка сбоку). */
+export const STATUS_COLORS = [
+  { id: "indeterminate", label: "в работе", cls: "bg-blue-500/85 text-white" },
+  { id: "new", label: "не начата", cls: "bg-slate-400/80 text-white dark:bg-slate-500/80" },
+  { id: "defect", label: "дефект", cls: "bg-red-500/85 text-white" },
+  { id: "done", label: "выполнена", cls: "bg-emerald-500/75 text-white" },
+] as const;
+function statusCls(i: Pick<AqaIssue, "defect" | "statusCategory">): string {
+  const id = i.statusCategory === "done" ? "done" : i.defect ? "defect" : i.statusCategory === "indeterminate" ? "indeterminate" : "new";
+  return STATUS_COLORS.find(c => c.id === id)!.cls;
 }
 
-type Row = { kind: "epic"; epic: AqaEpic; span: { start: string; end: string } | null }
-  | { kind: "issue"; issue: AqaIssue; span: { start: string; end: string } | null };
+/** Исполнители — своими цветами по порядку появления; не назначена — серая. */
+const PEOPLE_CLS = [
+  "bg-violet-500/85", "bg-teal-500/85", "bg-orange-500/85", "bg-pink-500/85", "bg-sky-500/85",
+  "bg-lime-600/85", "bg-amber-500/85", "bg-indigo-500/85", "bg-rose-500/85", "bg-cyan-600/85",
+];
+export function peopleColors(epics: AqaEpic[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const e of epics) for (const i of e.issues) {
+    if (i.assignee && !out.has(i.assignee)) out.set(i.assignee, `${PEOPLE_CLS[out.size % PEOPLE_CLS.length]} text-white`);
+  }
+  return out;
+}
+const NOBODY = "bg-slate-400/70 text-white";
+
+type Placed = { issue: AqaIssue; start: number; end: number; lane: number };
+
+/** Задачи эпика по дорожкам: полосы не наезжают друг на друга (с местом под галочку выполненной). */
+function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: number } {
+  const gap = Math.ceil((CHECK + 4) / Math.max(dayW, 0.01));
+  const items = issues.flatMap(i => {
+    const s = issueSpan(i);
+    return s ? [{ issue: i, start: dayNum(s.start), end: dayNum(s.end) }] : [];
+  }).sort((a, b) => a.start - b.start || a.end - b.end);
+  const laneEnd: number[] = [];
+  const placed = items.map(it => {
+    let lane = laneEnd.findIndex(e => e < it.start);
+    if (lane < 0) lane = laneEnd.length;
+    laneEnd[lane] = it.end + gap;
+    return { ...it, lane };
+  });
+  return { placed, lanes: Math.max(1, laneEnd.length) };
+}
 
 /**
- * Роадмап AQA таймлайном: строки — эпик, под ним его задачи и дефекты; по горизонтали — дни.
- * Полоса задачи — от создания до срока (без срока — до решения, не решена — до сегодня). Полоса эпика — по его датам,
- * а без них — от первой до последней задачи. Масштаб — кнопками снаружи (dayW) или Ctrl + колесо, от дня до года;
- * перетаскивание — прокрутка. Наведение — суть задачи, исполнитель, статус и даты; щелчок — задача в Jira.
+ * Роадмап AQA таймлайном. Ось слева — только разделы эпиков (и «+ Добавить эпик»); в разделе — все задачи и дефекты
+ * эпика полосами по дорожкам. Полоса — от создания до срока (без срока — до решения, не решена — до сегодня).
+ * Цвет — по статусу или по исполнителю (colorBy); выполненная задача — с галочкой сбоку. Масштаб — кнопками снаружи
+ * (dayW) или Ctrl + колесо, от дня до года; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
+ * статус и даты; щелчок — задача в Jira.
  */
-export default function RoadmapTimeline({ epics, dayW, onDayW }: {
-  epics: AqaEpic[]; dayW: number; onDayW: (w: number) => void;
+export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpic, onRemoveEpic }: {
+  epics: AqaEpic[]; dayW: number; onDayW: (w: number) => void; colorBy: ColorBy;
+  /** Добавить эпик в роадмап (сохраняется в настройках вкладки); ошибка — текстом. */
+  onAddEpic: (key: string) => Promise<void>;
+  onRemoveEpic: (key: string) => Promise<void>;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
   const [hover, setHover] = useState<{ i: AqaIssue | AqaEpic; x: number; y: number } | null>(null);
-  const [closed, setClosed] = useState<Set<string>>(new Set());
   /** Прокрутка по горизонтали — месяц (год) дня у левого края держится подписью, пока не придёт следующий. */
   const [scrollX, setScrollX] = useState(0);
+  const [adding, setAdding] = useState<string | null>(null);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addErr, setAddErr] = useState("");
+  const people = useMemo(() => peopleColors(epics), [epics]);
+  const barCls = (i: AqaIssue) => (colorBy === "assignee" ? (i.assignee ? people.get(i.assignee)! : NOBODY) : statusCls(i));
 
-  const rows: Row[] = useMemo(() => epics.flatMap(e => {
-    const spans = e.issues.map(issueSpan).filter((s): s is { start: string; end: string } => !!s);
-    const own = e.created ? issueSpan(e as AqaIssue) : null;
-    const span = own ?? (spans.length ? { start: spans.map(s => s.start).sort()[0], end: spans.map(s => s.end).sort().at(-1)! } : null);
-    const head: Row = { kind: "epic", epic: e, span };
-    return closed.has(e.key) ? [head] : [head, ...e.issues.map(i => ({ kind: "issue" as const, issue: i, span: issueSpan(i) }))];
-  }), [epics, closed]);
+  const sections = useMemo(() => {
+    let y = HEAD;
+    return epics.map(e => {
+      const { placed, lanes } = lanesOf(e.issues, dayW);
+      const height = Math.max(MIN_SECTION, lanes * LANE + PAD * 2);
+      const s = { epic: e, placed, top: y, height };
+      y += height;
+      return s;
+    });
+  }, [epics, dayW]);
+  const bodyBottom = sections.length ? sections[sections.length - 1].top + sections[sections.length - 1].height : HEAD;
 
   // Период: от первой полосы минус неделя до последней (или сегодня) плюс две недели.
   const today = dayNum(todayIso());
-  const starts = rows.flatMap(r => (r.span ? [dayNum(r.span.start)] : []));
-  const ends = rows.flatMap(r => (r.span ? [dayNum(r.span.end)] : []));
-  const from = Math.min(today, ...starts) - 7;
-  const to = Math.max(today, ...ends) + 14;
+  const all = sections.flatMap(s => s.placed);
+  const from = Math.min(today, ...all.map(p => p.start)) - 7;
+  const to = Math.max(today, ...all.map(p => p.end)) + 14;
   const days = to - from + 1;
   const W = Math.max(1, days * dayW);
-  const x = (iso: string) => (dayNum(iso) - from) * dayW;
 
   // Ctrl + колесо — масштаб вокруг курсора.
   useEffect(() => {
@@ -111,37 +156,72 @@ export default function RoadmapTimeline({ epics, dayW, onDayW }: {
   const nextTop = ticks.top.find(t => t.left > scrollX);
   const showPinned = !nextTop || nextTop.left - scrollX > 70;
 
-  const toggle = (k: string) => setClosed(s => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
-  const bodyH = rows.length * ROW;
-
   const tip = (i: AqaIssue | AqaEpic, e: React.MouseEvent) => setHover({ i, x: e.clientX, y: e.clientY });
+
+  const add = async () => {
+    const key = (adding ?? "").trim();
+    if (!key) return;
+    setAddBusy(true); setAddErr("");
+    try { await onAddEpic(key); setAdding(null); } catch (e) { setAddErr((e as Error).message); }
+    setAddBusy(false);
+  };
 
   return (
     <div className="relative grid border border-border-main rounded-xl overflow-hidden bg-bg-card select-none"
       style={{ gridTemplateColumns: `${LEFT}px minmax(0,1fr)` }}>
-      {/* Эпики и задачи — неподвижная колонка */}
+      {/* Ось — только разделы эпиков */}
       <div className="border-r border-border-main bg-bg-subtle/40 text-sm">
         <div style={{ height: HEAD }} className="flex items-end px-3 pb-1.5 border-b border-border-main text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-          Эпик · задача
+          Эпики
         </div>
-        {rows.map(r => r.kind === "epic" ? (
-          <button key={`e-${r.epic.key}`} type="button" onClick={() => toggle(r.epic.key)} aria-expanded={!closed.has(r.epic.key)}
-            style={{ height: ROW }} className="w-full flex items-center gap-1.5 px-2 border-b border-border-main bg-bg-subtle/70 text-left hover:bg-bg-subtle">
-            {closed.has(r.epic.key) ? <ChevronRight className="w-3.5 h-3.5 text-text-muted" /> : <ChevronDown className="w-3.5 h-3.5 text-text-muted" />}
-            <Flag className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
-            <span className="font-mono text-[11px] text-primary flex-shrink-0">{r.epic.key}</span>
-            <span className="min-w-0 truncate font-semibold text-text-main" title={r.epic.summary}>{r.epic.missing ? "не найден в Jira" : r.epic.summary}</span>
-            <span className="ml-auto text-[11px] text-text-muted tabular-nums">{r.epic.issues.length}</span>
-          </button>
-        ) : (
-          <div key={`i-${r.issue.key}`} style={{ height: ROW }} className="flex items-center gap-1.5 pl-7 pr-2 border-b border-border-main"
-            onMouseEnter={e => tip(r.issue, e)} onMouseLeave={() => setHover(null)}>
-            {r.issue.defect ? <Bug className="w-3.5 h-3.5 text-red-500 flex-shrink-0" /> : <SquareCheck className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />}
-            <a href={r.issue.url} target="_blank" rel="noopener noreferrer" className="font-mono text-[11px] text-primary hover:underline flex-shrink-0">{r.issue.key}</a>
-            <span className={`min-w-0 truncate ${r.issue.statusCategory === "done" ? "text-text-muted line-through" : "text-text-main"}`}>{r.issue.summary}</span>
-          </div>
-        ))}
-        {rows.length === 0 && <div style={{ height: ROW * 2 }} />}
+        {sections.map(({ epic: e, height }) => {
+          const done = e.issues.filter(i => i.statusCategory === "done").length;
+          return (
+            <div key={e.key} style={{ height }} className="group/ep relative flex flex-col justify-center gap-1 px-3 border-b border-border-main"
+              onMouseEnter={ev => !e.missing && tip(e, ev)} onMouseLeave={() => setHover(null)}>
+              <span className="flex items-center gap-1.5 min-w-0">
+                <Flag className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
+                {e.url ? <a href={e.url} target="_blank" rel="noopener noreferrer" className="font-mono text-[11px] text-primary hover:underline flex-shrink-0">{e.key}</a>
+                  : <span className="font-mono text-[11px] text-primary flex-shrink-0">{e.key}</span>}
+              </span>
+              <span className={`line-clamp-2 leading-snug ${e.missing ? "text-red-600 dark:text-red-400" : "font-semibold text-text-main"}`}>
+                {e.missing ? "не найден в Jira" : e.summary}</span>
+              {!e.missing && (
+                <span className="flex items-center gap-2 text-[11px] text-text-muted">
+                  <span className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-subtle">
+                    <span className="block h-full bg-emerald-500" style={{ width: `${e.issues.length ? (done / e.issues.length) * 100 : 0}%` }} />
+                  </span>
+                  выполнено {done} из {e.issues.length}
+                </span>
+              )}
+              <button type="button" onClick={() => void onRemoveEpic(e.key)} aria-label={`Убрать эпик ${e.key} из роадмапа`}
+                title="Убрать эпик из роадмапа (в Jira ничего не меняется)"
+                className="absolute top-1.5 right-1.5 p-0.5 rounded text-text-muted opacity-0 group-hover/ep:opacity-100 focus-visible:opacity-100 hover:text-red-500">
+                <X className="w-3.5 h-3.5" /></button>
+            </div>
+          );
+        })}
+        <div className="px-3 py-2.5">
+          {adding === null ? (
+            <button type="button" onClick={() => { setAdding(""); setAddErr(""); }} disabled={epics.length >= 5}
+              title={epics.length >= 5 ? "Эпиков не больше пяти" : "Добавить эпик в роадмап"}
+              className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline disabled:opacity-40 disabled:no-underline">
+              <Plus className="w-4 h-4" /> Добавить эпик</button>
+          ) : (
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5">
+                <input autoFocus value={adding} onChange={e => setAdding(e.target.value)} placeholder="SBER911-… или ссылка"
+                  onKeyDown={e => { if (e.key === "Enter") void add(); if (e.key === "Escape") setAdding(null); }}
+                  aria-label="Номер эпика" className="min-w-0 flex-1 rounded-md border border-border-main bg-[var(--color-input-bg)] px-2 py-1 font-mono text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                <button type="button" onClick={() => void add()} disabled={addBusy || !adding.trim()} aria-label="Добавить"
+                  className="rounded-md bg-primary p-1 text-white disabled:opacity-40">
+                  {addBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}</button>
+                <button type="button" onClick={() => setAdding(null)} aria-label="Отмена" className="p-1 text-text-muted hover:text-text-main"><X className="w-3.5 h-3.5" /></button>
+              </div>
+              {addErr && <p className="text-[11px] text-red-600 dark:text-red-400">{addErr}</p>}
+            </div>
+          )}
+        </div>
       </div>
 
       <div ref={box} className="overflow-x-auto scrollbar-thin cursor-grab active:cursor-grabbing"
@@ -154,7 +234,7 @@ export default function RoadmapTimeline({ epics, dayW, onDayW }: {
           el.scrollLeft = d.left - (e.clientX - d.x);
         }}
         onMouseUp={() => { drag.current = null; }} onMouseLeave={() => { drag.current = null; }}>
-        <div style={{ width: W, height: HEAD + Math.max(bodyH, ROW * 2) }} className="relative">
+        <div style={{ width: W, height: bodyBottom }} className="relative">
           {/* Шкала */}
           <div style={{ height: HEAD }} className="sticky top-0 z-10 border-b border-border-main bg-bg-card">
             {showPinned && (
@@ -171,32 +251,39 @@ export default function RoadmapTimeline({ epics, dayW, onDayW }: {
           {/* Выходные и сетка */}
           {ticks.weekend.map(l => <div key={`w${l}`} style={{ left: l, width: dayW, top: HEAD, bottom: 0 }} className="absolute bg-bg-subtle/60" />)}
           {ticks.bottom.map(t => <div key={`g${t.left}`} style={{ left: t.left, top: HEAD, bottom: 0 }} className="absolute w-px bg-border-main/50" />)}
-          {/* Строки */}
-          {rows.map((r, n) => {
-            const top = HEAD + n * ROW;
-            const line = <div key={`l${n}`} style={{ top: top + ROW - 1 }} className="absolute inset-x-0 h-px bg-border-main/70" />;
-            if (!r.span) return line;
-            const left = x(r.span.start);
-            const width = Math.max(dayW, x(r.span.end) + dayW - left, 4);
-            if (r.kind === "epic") {
-              return [line, (
-                <div key={`eb${n}`} style={{ left, width, top: top + 9, height: ROW - 18 }}
-                  className="absolute rounded-full bg-violet-500/30 border border-violet-500/60"
-                  onMouseEnter={e => tip(r.epic, e)} onMouseMove={e => tip(r.epic, e)} onMouseLeave={() => setHover(null)} />
-              )];
-            }
-            const i = r.issue;
-            return [line, (
-              <a key={`ib${n}`} href={i.url} target="_blank" rel="noopener noreferrer" draggable={false}
-                onClick={e => { if (drag.current?.moved) e.preventDefault(); }}
-                style={{ left, width, top: top + 5, height: ROW - 10 }}
-                className={`absolute flex items-center rounded-md px-1.5 text-[10px] font-medium overflow-hidden whitespace-nowrap ${barCls(i)}
-                  ${isOverdue(i) ? "ring-2 ring-red-600 ring-offset-1 ring-offset-bg-card" : ""}`}
-                onMouseEnter={e => tip(i, e)} onMouseMove={e => tip(i, e)} onMouseLeave={() => setHover(null)}>
-                {width > 70 && <span className="truncate">{i.key}{width > 180 ? ` · ${i.summary}` : ""}</span>}
-              </a>
-            )];
-          })}
+          {/* Разделы эпиков: граница снизу и полосы задач по дорожкам */}
+          {sections.map(({ epic: e, placed, top, height }) => (
+            <div key={e.key}>
+              <div style={{ top: top + height - 1 }} className="absolute inset-x-0 h-px bg-border-main" />
+              {placed.length === 0 && (
+                <span style={{ top: top + height / 2 - 8, left: Math.max(8, scrollX + 8) }} className="absolute text-xs text-text-muted">
+                  {e.missing ? "" : "Задач и дефектов нет"}</span>
+              )}
+              {placed.map(p => {
+                const i = p.issue;
+                const left = (p.start - from) * dayW;
+                const width = Math.max(4, (p.end - p.start + 1) * dayW);
+                const done = i.statusCategory === "done";
+                return (
+                  <div key={i.key}>
+                    <a href={i.url} target="_blank" rel="noopener noreferrer" draggable={false}
+                      onClick={ev => { if (drag.current?.moved) ev.preventDefault(); }}
+                      style={{ left, width, top: top + PAD + p.lane * LANE, height: LANE - 6 }}
+                      className={`absolute flex items-center rounded-md px-1.5 text-[10px] font-medium overflow-hidden whitespace-nowrap ${barCls(i)}
+                        ${isOverdue(i) ? "ring-2 ring-red-600 ring-offset-1 ring-offset-bg-card" : ""}`}
+                      onMouseEnter={ev => tip(i, ev)} onMouseMove={ev => tip(i, ev)} onMouseLeave={() => setHover(null)}>
+                      {width > 60 && <span className="truncate">{i.key}{width > 170 ? ` · ${i.summary}` : ""}</span>}
+                    </a>
+                    {done && (
+                      <span style={{ left: left + width + 3, top: top + PAD + p.lane * LANE + (LANE - 6 - CHECK + 2) / 2, width: CHECK - 2, height: CHECK - 2 }}
+                        title="Выполнена" className="absolute flex items-center justify-center rounded-full bg-emerald-500 text-white pointer-events-none">
+                        <Check className="w-3 h-3" strokeWidth={3} /></span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
           {/* Сегодня */}
           <div style={{ left: (today - from) * dayW + dayW / 2, top: 0, bottom: 0 }} className="absolute w-0.5 bg-red-500/80 z-20 pointer-events-none">
             <span className="absolute top-0 -translate-x-1/2 rounded bg-red-500 px-1 text-[9px] font-semibold text-white">сегодня</span>
@@ -229,6 +316,7 @@ function Tip({ i, x, y }: { i: AqaIssue | AqaEpic; x: number; y: number }) {
       <p className="mt-1.5 text-text-muted">Исполнитель: <span className="text-text-main">{i.assignee || "не назначен"}</span></p>
       {span && <p className="text-text-muted">Создана {fmtDay(i.created ?? "")} → {end}</p>}
       {"issues" in i && <p className="text-text-muted">Задач и дефектов: {i.issues.length}</p>}
+      {i.statusCategory === "done" && <p className="mt-1 font-semibold text-emerald-600 dark:text-emerald-400">Выполнена</p>}
       {i.due && isOverdue(i as AqaIssue) && <p className="mt-1 font-semibold text-red-600 dark:text-red-400">Просрочена</p>}
     </div>
   );

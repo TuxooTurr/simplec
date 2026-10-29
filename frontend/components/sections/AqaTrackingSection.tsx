@@ -6,14 +6,15 @@ import {
 } from "lucide-react";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
 import RoadmapList from "@/components/aqa/RoadmapList";
-import RoadmapTimeline, { ZOOMS } from "@/components/aqa/RoadmapTimeline";
+import RoadmapTimeline, { STATUS_COLORS, ZOOMS, peopleColors, type ColorBy } from "@/components/aqa/RoadmapTimeline";
 import {
-  getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops,
+  getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
   type AqaCommits, type AqaEpic, type AqaSettings, type AqaStats, type AqaTestops,
 } from "@/lib/aqaApi";
 
 const VIEW_KEY = "st_aqa_view";
 const ZOOM_KEY = "st_aqa_zoom";
+const COLOR_KEY = "st_aqa_color";
 
 type Load<T> = { data: T | null; err: string; busy: boolean };
 const EMPTY = { data: null, err: "", busy: false };
@@ -105,9 +106,11 @@ export default function AqaTrackingSection() {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [dayW, setDayW] = useState<number>(ZOOMS[1].w);
+  const [colorBy, setColorBy] = useState<ColorBy>("status");
 
   useEffect(() => {
     setView(readLs(VIEW_KEY, "timeline") === "list" ? "list" : "timeline");
+    setColorBy(readLs(COLOR_KEY, "status") === "assignee" ? "assignee" : "status");
     const z = Number(readLs(ZOOM_KEY, ""));
     if (z > 0) setDayW(z);
   }, []);
@@ -132,6 +135,19 @@ export default function AqaTrackingSection() {
 
   const pickView = (v: "timeline" | "list") => { setView(v); writeLs(VIEW_KEY, v); };
   const pickZoom = (w: number) => { setDayW(w); writeLs(ZOOM_KEY, String(w)); };
+  const pickColor = (c: ColorBy) => { setColorBy(c); writeLs(COLOR_KEY, c); };
+
+  /** Эпики роадмапа меняются прямо с графика: сохраняем в настройках (маркеры — масками, они не меняются) и перечитываем. */
+  const setEpics = async (next: string[]) => {
+    const cur = settings ?? await getAqaSettings();
+    const saved = await saveAqaSettings({ bitbucketUrl: cur.bitbucketUrl, bitbucketToken: cur.bitbucketToken, testopsUrl: cur.testopsUrl,
+      testopsToken: cur.testopsToken, epics: next });
+    setSettings(saved);
+    if (saved.epics.length) loadRoad(true); else setRoad(EMPTY);
+  };
+  const addEpic = (key: string) => setEpics([...(settings?.epics ?? []), key]);
+  const removeEpic = (key: string) => setEpics((settings?.epics ?? []).filter(k => k !== key));
+  const people = peopleColors(road.data?.epics ?? []);
   const epics = road.data?.epics ?? [];
   const issuesTotal = epics.reduce((n, e) => n + e.issues.length, 0);
   const ZBTN = "px-2.5 py-1 text-xs rounded-md transition-colors";
@@ -214,6 +230,14 @@ export default function AqaTrackingSection() {
               <RefreshCw className={`h-3.5 w-3.5 ${road.busy ? "animate-spin" : ""}`} /></button>
             <span className="flex-1" />
             {view === "timeline" && (
+              <div role="group" aria-label="Цвет полос" className="flex rounded-lg border border-border-main p-0.5">
+                {([["status", "По статусу"], ["assignee", "По исполнителю"]] as const).map(([id, label]) => (
+                  <button key={id} type="button" onClick={() => pickColor(id)} aria-pressed={colorBy === id}
+                    className={`${ZBTN} ${colorBy === id ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>{label}</button>
+                ))}
+              </div>
+            )}
+            {view === "timeline" && (
               <div role="group" aria-label="Масштаб" className="flex rounded-lg border border-border-main p-0.5">
                 {ZOOMS.map(z => (
                   <button key={z.id} type="button" onClick={() => pickZoom(z.w)} aria-pressed={dayW === z.w}
@@ -230,20 +254,26 @@ export default function AqaTrackingSection() {
                 <List className="h-3.5 w-3.5" /> Список</button>
             </div>
           </div>
-          {view === "timeline" && road.data && (
+          {view === "timeline" && (road.data || (settings && !settings.epics.length)) && (
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-muted">
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-blue-500/85" /> в работе</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-slate-400/80" /> не начата</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-red-500/85" /> дефект</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-emerald-500/80" /> решена</span>
+              {colorBy === "status"
+                ? STATUS_COLORS.map(c => <span key={c.id} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${c.cls}`} /> {c.label}</span>)
+                : <>
+                  {[...people.entries()].map(([name, cls]) => <span key={name} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${cls}`} /> {name}</span>)}
+                  {epics.some(e => e.issues.some(i => !i.assignee)) && <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-slate-400/70" /> не назначен</span>}
+                </>}
+              <span className="inline-flex items-center gap-1"><span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">✓</span> выполнена</span>
               <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded ring-2 ring-red-600" /> просрочена</span>
               <span>Полоса — от создания до срока; Ctrl + колесо — масштаб, перетаскивание — прокрутка</span>
             </p>
           )}
-          {!settings?.epics.length ? <Problem err="Эпики роадмапа не заданы." onSettings={() => setOpen(true)} />
+          {settings && !settings.epics.length
+            ? (view === "timeline"
+              ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
+              : <Problem err="Эпики роадмапа не заданы — добавьте их на таймлайне или в «Подключениях»." onSettings={() => setOpen(true)} />)
             : road.err ? <Problem err={road.err} onSettings={() => setOpen(true)} />
             : !road.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю эпики из Jira…</p>
-            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} />
+            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
             : <RoadmapList epics={epics} />}
         </section>
       </div>

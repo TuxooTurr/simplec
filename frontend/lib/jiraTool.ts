@@ -623,37 +623,57 @@ export interface ToolState {
 
 /**
  * Шаблон списка — структура без данных: колонки по порядку, свои поля (с вариантами, тегами
- * и цветами) и папки. Задачи, значения полей, участники, трудозатраты, группировка и проект
- * в шаблон не входят.
+ * и цветами), папки и все представления (наборы колонок с закреплением и ширинами). Задачи,
+ * значения полей, участники, трудозатраты, группировка и проект в шаблон не входят.
  */
 export interface ListTemplate {
   id: string;
   name: string;
+  /** Колонки действующего представления — шаблоны до представлений хранили только их. */
   columns: ColRef[];
   ownFields: OwnField[];
   folderList: string[];
   createdAt: string;
+  /** Все представления списка; нет — у списка по шаблону одно «Основное» из columns. */
+  views?: ListView[];
+  /** Представление, которое было открыто при сохранении шаблона. */
+  activeView?: string;
 }
 
 export function templateOf(list: TaskList, name: string): ListTemplate {
+  // listViews: у действующего представления колонки — живые, из полей списка.
+  const views = list.views?.length
+    ? listViews(list).map(v => ({ ...v, columns: [...v.columns], pinned: v.pinned ? [...v.pinned] : undefined, widths: v.widths ? { ...v.widths } : undefined }))
+    : undefined;
   return {
     id: newId("tpl"), name, createdAt: new Date().toISOString(),
     columns: [...list.columns],
     ownFields: list.ownFields.map(f => ({ ...f, options: [...f.options], colors: f.colors ? { ...f.colors } : undefined })),
     folderList: [...(list.folderList ?? [])],
+    views, activeView: views ? list.activeView ?? views[0].id : undefined,
   };
 }
 
-/** Новый пустой список по шаблону: структура из шаблона, задач нет. */
+/** Новый пустой список по шаблону: структура и представления из шаблона, задач нет. */
 export function listFromTemplate(name: string, project: string, tpl: ListTemplate): TaskList {
   const ownIds = new Set(tpl.ownFields.map(f => f.id));
-  return {
+  // Колонка своего поля, которого в шаблоне нет, — мусор; колонка папки без папок не нужна.
+  const clean = (cols: ColRef[]) => dropRemovedCols(cols).filter(c =>
+    (!c.startsWith("own:") || ownIds.has(c.slice(4))) && (c !== FOLDER_COL || tpl.folderList.length > 0));
+  const base: TaskList = {
     ...emptyList(name, project),
-    // Колонка своего поля, которого в шаблоне нет, — мусор; колонка папки без папок не нужна.
-    columns: dropRemovedCols(tpl.columns).filter(c => (!c.startsWith("own:") || ownIds.has(c.slice(4))) && (c !== FOLDER_COL || tpl.folderList.length > 0)),
+    columns: clean(tpl.columns),
     ownFields: tpl.ownFields.map(f => ({ ...f, options: [...f.options], colors: f.colors ? { ...f.colors } : undefined })),
     folderList: tpl.folderList.length ? [...tpl.folderList] : undefined,
   };
+  if (!tpl.views?.length) return base;
+  const views: ListView[] = tpl.views.map(v => {
+    const columns = clean(v.columns);
+    const pinned = v.pinned?.filter(c => columns.includes(c));
+    return { ...v, columns, pinned: pinned?.length ? pinned : undefined, widths: v.widths ? { ...v.widths } : undefined };
+  });
+  const active = views.find(v => v.id === tpl.activeView) ?? views[0];
+  return { ...base, views, activeView: active.id, columns: [...active.columns], pinned: active.pinned, widths: active.widths };
 }
 
 export const DEFAULT_COLUMNS: ColRef[] = ["jira:summary", "jira:issuetype", "jira:status", STAGE_COL, "jira:priority", PARTICIPANT_COL];

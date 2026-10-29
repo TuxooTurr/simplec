@@ -1262,7 +1262,7 @@ export default function JiraToolSection() {
                   <div className="flex flex-col gap-0.5">
                     {state.templates.map(t => (
                       <span key={t.id} className="group/tp flex items-center gap-1.5 text-xs text-text-main py-0.5"
-                        title={`Колонок: ${t.columns.length} · своих полей: ${t.ownFields.length} · папок: ${t.folderList.length}`}>
+                        title={`${t.views?.length ? `Представлений: ${t.views.length} (${t.views.map(v => v.name).join(", ")})` : `Колонок: ${t.columns.length}`} · своих полей: ${t.ownFields.length} · папок: ${t.folderList.length}`}>
                         <LayoutTemplate className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
                         <span className="truncate flex-1">{t.name}</span>
                         <button type="button" onClick={() => update(s => ({ ...s, templates: s.templates.filter(x => x.id !== t.id) }))}

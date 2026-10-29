@@ -13,7 +13,7 @@ import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
 import { ThemeToggle } from "./ui";
 import WhatsNewModal from "./WhatsNewModal";
-import { LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
+import { CURRENT_VERSION, LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
@@ -283,8 +283,8 @@ export default function Sidebar() {
           <button
             type="button"
             onClick={() => setWhatsNewOpen(true)}
-            title="Что нового"
-            aria-label="Что нового в этой версии"
+            title={`Что нового · версия ${CURRENT_VERSION}`}
+            aria-label={`Что нового в версии ${CURRENT_VERSION}`}
             className="relative p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors"
           >
             <Sparkles className="w-4 h-4" />

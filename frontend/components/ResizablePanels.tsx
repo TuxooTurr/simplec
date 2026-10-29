@@ -14,6 +14,7 @@ const SECTION_LABELS: Record<string, string> = {
   bugs: "Jira tool",
   zephyr: "Zephyr Tool",
   stands: "График стендов",
+  aqa: "Трекинг AQA",
   alerts: "Алерты",
   metrics: "Метрики",
   revisor: "Ревизор",

@@ -68,6 +68,7 @@ SECTIONS: dict[str, str] = {
     "event_generators": "Генераторы событий",
     "etalons": "Данные",
     "model_bench": "Тестирование моделей LLM",
+    "aqa": "Трекинг AQA",
     "auto_model": "Автотесты",
     "settings": "Настройки и общее",
 }
@@ -96,7 +97,7 @@ TABLE_SECTION: dict[str, str] = {
 }
 SETTING_PREFIX: list[tuple[str, str]] = [
     ("jira_", "bugs"), ("confluence_", "stands"), ("stands_", "stands"), ("zephyr_", "zephyr"),
-    ("logs_", "logs"), ("revisor_", "auto_model"), ("kafka_", "kafka"), ("tcs_", "event_generators"),
+    ("logs_", "logs"), ("revisor_", "auto_model"), ("kafka_", "kafka"), ("tcs_", "event_generators"), ("aqa_", "aqa"),
 ]
 SETTINGS_TABLE = "metrics_settings"
 ETALONS = "etalons"

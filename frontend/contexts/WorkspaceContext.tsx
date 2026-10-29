@@ -9,6 +9,7 @@ export type SectionId =
   | "bugs"
   | "zephyr"
   | "stands"
+  | "aqa"
   | "logs"
   | "alerts"
   | "kafka"

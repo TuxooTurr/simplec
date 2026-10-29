@@ -12,9 +12,9 @@ export interface AuthUser {
 
 /** Что стало с маркером системы при входе по логину Jira: свой рабочий остался, выпущен новый или не вышло. */
 export interface LoginToken { state: "reused" | "new" | "error"; text?: string }
-export type LoginTokens = Partial<Record<"jira" | "confluence", LoginToken>>;
+export type LoginTokens = Partial<Record<"jira" | "confluence" | "bitbucket", LoginToken>>;
 
-const NAMES = { jira: "Jira", confluence: "Confluence" } as const;
+const NAMES = { jira: "Jira", confluence: "Confluence", bitbucket: "Bitbucket" } as const;
 const NOTE_KEY = "st_login_note";
 
 /** Сообщение после входа о маркерах: новые получены — сказать; не вышло — сказать почему; свои рабочие — молчать. */

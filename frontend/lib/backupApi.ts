@@ -33,6 +33,7 @@ export const SECTIONS: { id: string; title: string }[] = [
   { id: "event_generators", title: "Генераторы событий" },
   { id: "etalons", title: "Данные" },
   { id: "model_bench", title: "Тестирование моделей LLM" },
+  { id: "aqa", title: "Трекинг AQA" },
   { id: "auto_model", title: "Автотесты" },
   { id: "settings", title: "Настройки и общее" },
 ];
@@ -45,7 +46,7 @@ export function sectionOfPath(path: string): string {
     generation: "generation", "test-data": "test_data", bugs: "bugs", zephyr: "zephyr", stands: "stands", logs: "logs",
     kafka: "kafka", "event-generators": "event_generators", alerts: "event_generators", jobs: "event_generators",
     metrics: "event_generators", etalons: "etalons", "model-bench": "model_bench", "auto-model": "auto_model",
-    revisor: "auto_model", settings: "settings",
+    revisor: "auto_model", settings: "settings", aqa: "aqa",
   };
   return map[p] ?? "settings";
 }

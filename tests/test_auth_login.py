@@ -3,6 +3,7 @@
 import pytest
 from fastapi import HTTPException
 
+import backend.api.aqa_tracking as AQ
 import backend.api.auth as A
 import backend.api.confluence as C
 import backend.api.jira_defects as J
@@ -17,7 +18,8 @@ class FakeDb:
 def env(monkeypatch):
     st = {"jira": {"base_url": "https://jira.test", "token": "", "token_path": ""},
           "conf": {"base_url": "https://conf.test", "token": "", "token_path": ""},
-          "password": "secret", "jira_owner": "", "conf_owner": "", "issued": [], "down": False, "captcha": False}
+          "bb": {"base_url": "", "token": "", "token_path": "", "ssl_verify": True},
+          "password": "secret", "jira_owner": "", "conf_owner": "", "bb_owner": "", "issued": [], "down": False, "captcha": False}
 
     def jira_req(cfg, method, path, auth=None, timeout=30, **kw):
         if st["down"]:
@@ -50,6 +52,12 @@ def env(monkeypatch):
     monkeypatch.setattr(C, "_whoami", conf_whoami)
     monkeypatch.setattr(J, "token_from_login", jira_issue)
     monkeypatch.setattr(C, "token_from_login", conf_issue)
+    def bb_issue(body, db):
+        st["issued"].append("bitbucket"); st["bb"]["token"] = "PAT"; st["bb_owner"] = body.login
+
+    monkeypatch.setattr(AQ, "bb_cfg", lambda db: st["bb"])
+    monkeypatch.setattr(AQ, "bb_whoami", lambda cfg: st["bb_owner"])
+    monkeypatch.setattr(AQ, "token_from_login", bb_issue)
     monkeypatch.setattr(A, "_sessions", {})
     return st
 
@@ -109,3 +117,13 @@ def test_нет_адреса_confluence_вход_не_ломает(env):
 
 def test_мониторинга_больше_нет():
     assert set(A.USERS) == {"Sber911"}
+
+
+def test_bitbucket_только_если_подключён_во_вкладке(env):
+    r = login("ivanov", "secret")
+    assert "bitbucket" not in r["tokens"]                 # вкладка «Трекинг AQA» Bitbucket не подключала
+    env["bb"]["base_url"] = "https://stash.test"
+    r = login("ivanov", "secret")
+    assert r["tokens"]["bitbucket"] == {"state": "new"} and env["bb_owner"] == "ivanov"
+    r = login("ivanov", "secret")
+    assert r["tokens"]["bitbucket"] == {"state": "reused"}

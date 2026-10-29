@@ -15,17 +15,18 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.api import confluence, jira_defects
+from backend.api import aqa_tracking, confluence, jira_defects
 from db.postgres import get_db
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-NAMES = {"jira": "Jira", "confluence": "Confluence"}
+NAMES = {"jira": "Jira", "confluence": "Confluence", "bitbucket": "Bitbucket"}
 
 
 class CorpLogin(BaseModel):
@@ -87,14 +88,19 @@ def _ensure_token(system: str, login: str, password: str, db: Session) -> dict:
     (на этом SimpleTest раньше входил другой) — выпускаем новый по паролю («new»). Сбой — «error» с причиной:
     вход в SimpleTest он не отменяет, маркер можно получить позже в настройках.
     """
-    mod = jira_defects if system == "jira" else confluence
-    cfg = mod._load_cfg(db)
+    if system == "bitbucket":
+        mod: Any = aqa_tracking
+        cfg = aqa_tracking.bb_cfg(db)
+    else:
+        mod = jira_defects if system == "jira" else confluence
+        cfg = mod._load_cfg(db)
     if not cfg["base_url"]:
         return {"state": "error", "text": f"адрес {NAMES[system]} не задан в настройках"}
     if cfg["token"] or cfg["token_path"]:
         try:
             name = (jira_defects._jira_request(cfg, "GET", "/rest/api/2/myself", timeout=15).get("name", "")
-                    if system == "jira" else confluence._whoami(cfg)["name"])
+                    if system == "jira" else confluence._whoami(cfg)["name"] if system == "confluence"
+                    else aqa_tracking.bb_whoami(cfg))
             if _same_user(name, login):
                 return {"state": "reused"}
         except HTTPException:
@@ -128,4 +134,7 @@ def sign_in(login: str, password: str, db: Session) -> dict:
         raise HTTPException(503, f"Jira не ответила ({e.detail}). Без Jira войдите универсальной учётной записью")
     name = str(me.get("name") or login).strip()
     tokens = {sys_: _ensure_token(sys_, name, password, db) for sys_ in ("jira", "confluence")}
+    # Bitbucket — только если вкладка «Трекинг AQA» его подключила: иначе не о чем сообщать.
+    if aqa_tracking.bb_cfg(db)["base_url"]:
+        tokens["bitbucket"] = _ensure_token("bitbucket", name, password, db)
     return {"login": name, "display_name": str(me.get("displayName") or name), "tokens": tokens}

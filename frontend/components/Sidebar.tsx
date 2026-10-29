@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
   LogOut, User, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays, Activity,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
@@ -33,6 +33,7 @@ const NAV: {
   { id: "zephyr",      href: "/zephyr",      label: "Zephyr Tool",             Icon: FlaskConical },
   // Кто какие КЭ когда ставит на Major-Check / Major-GO; оригинал графика — страница Confluence.
   { id: "stands",      href: "/stands",      label: "График стендов",          Icon: CalendarDays },
+  { id: "aqa",         href: "/aqa",         label: "Трекинг AQA",             Icon: Activity },
   // Логи — анализатор на сценарии веб-коннектора. Пока коннекторы отключены (lib/features.ts) — скрыт.
   { id: "logs",        href: "/logs",        label: "Логи",                    Icon: ScrollText },
   { id: "kafka",       href: "/kafka",       label: "Просмотр Kafka",          Icon: Network },

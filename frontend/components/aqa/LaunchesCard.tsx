@@ -31,7 +31,7 @@ export default function LaunchesCard({ ok, state, onRefresh, onSettings, onOpen 
         : state.err ? <Problem err={state.err} onSettings={onSettings} />
         : !d ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю запуски…</p>
         : (
-          <div className={`space-y-4 transition-opacity ${state.busy ? "opacity-60" : ""}`}>
+          <div className={`flex min-h-0 flex-1 flex-col gap-4 transition-opacity ${state.busy ? "opacity-60" : ""}`}>
             <div className="grid grid-cols-3 gap-2">
               <Kpi value={d.todayLaunches} label="запусков сегодня" />
               <Kpi value={rate === null ? "—" : `${rate}%`} label="успешно в последнем"
@@ -45,10 +45,11 @@ export default function LaunchesCard({ ok, state, onRefresh, onSettings, onOpen 
                 <StatsBar stats={d.todayStats} />
               </div>
             )}
-            <div>
+            {/* Список занимает всё, что осталось до низа карточки: обе карточки одной высоты, без пустоты внизу */}
+            <div className="flex min-h-[120px] flex-1 flex-col">
               <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-text-muted">Последние запуски</p>
               {!recent.length ? <p className="text-xs text-text-muted">Запусков нет</p> : (
-                <ul className="max-h-60 divide-y divide-border-main overflow-y-auto rounded-lg border border-border-main scrollbar-thin">
+                <ul className="min-h-0 flex-1 divide-y divide-border-main overflow-y-auto rounded-lg border border-border-main scrollbar-thin">
                   {recent.map(l => {
                     const r = passRate(l.stats);
                     return (

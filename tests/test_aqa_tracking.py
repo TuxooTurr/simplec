@@ -376,3 +376,30 @@ def test_роадмап_снимок_сохраняется_и_выручает_
 def test_снимок_роадмапа_в_разделе_трекинг_aqa_резервной_копии():
     import backend.api.backup as bk
     assert bk.FILE_SECTION["aqa_roadmap.json"] == "aqa" and Q.SNAPSHOT_FILE.name == "aqa_roadmap.json"
+
+
+def test_файл_коммита_было_стало_рядом(monkeypatch):
+    seen = {}
+
+    def http(name, method, url, verify, **kw):
+        seen["url"], seen["params"] = url, kw["params"]
+        line = lambda s, d, t: {"source": s, "destination": d, "line": t}
+        return {"diffs": [{"hunks": [{"segments": [
+            {"type": "CONTEXT", "lines": [line(10, 10, "class A {")]},
+            {"type": "REMOVED", "lines": [line(11, None, "  int a = 1;"), line(12, None, "  int b = 2;")]},
+            {"type": "ADDED", "lines": [line(None, 11, "  int a = 10;")]},
+            {"type": "CONTEXT", "lines": [line(13, 12, "}")]},
+            {"type": "ADDED", "lines": [line(None, 13, "// конец")]},
+        ]}]}]}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.bb_file_diff(BB, "abcdef1", "src/my dir/A.java", "src/old/A.java")
+    assert seen["url"].endswith("/commits/abcdef1/diff/src/my%20dir/A.java")
+    assert seen["params"]["srcPath"] == "src/old/A.java" and seen["params"]["contextLines"] == Q.DIFF_CONTEXT
+    rows = r["hunks"][0]
+    assert rows[0]["l"]["text"] == rows[0]["r"]["text"] == "class A {"
+    assert (rows[1]["l"]["text"], rows[1]["r"]["text"]) == ("  int a = 1;", "  int a = 10;")       # пара было / стало
+    assert rows[2]["l"]["n"] == 12 and rows[2]["r"] is None                                        # удалённая без пары
+    assert rows[3]["l"]["type"] == "context" and rows[4] == {"l": None, "r": {"n": 13, "text": "// конец", "type": "added"}}
+    assert not r["binary"] and not r["truncated"]
+    monkeypatch.setattr(Q, "MAX_DIFF_ROWS", 2)
+    assert Q.bb_file_diff(BB, "abcdef1", "A.java")["truncated"]

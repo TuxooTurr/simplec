@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, FileCode2, GitMerge, Loader2, Search } from "lucide-react";
+import { ChevronRight, ExternalLink, GitMerge, Loader2, Search } from "lucide-react";
 import Modal from "@/components/ui/Modal";
+import FileDiff from "@/components/aqa/FileDiff";
 import { Kpi, fmtWhen } from "@/components/aqa/widgets";
 import { getAqaCommit, type AqaCommitDetails, type AqaCommitFile } from "@/lib/aqaApi";
 
@@ -31,18 +32,22 @@ function Churn({ added, removed, max, className = "h-1.5" }: { added: number; re
 
 /**
  * Коммит подробно: сообщение, автор, свод (файлов, строк добавлено и удалено, итог), файлы по типам изменений,
- * свод по расширениям и список файлов — больше всего строк сверху, с поиском по пути. Коммит — ссылкой в Bitbucket.
+ * свод по расширениям и список файлов — больше всего строк сверху, с поиском по пути. Щелчок по файлу — «было / стало»
+ * рядом (FileDiff). Коммит — ссылкой в Bitbucket.
  */
 export default function CommitModal({ hash, onClose }: { hash: string | null; onClose: () => void }) {
   const [data, setData] = useState<AqaCommitDetails | null>(null);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
+  /** Раскрытые файлы — под ними «было / стало». */
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (path: string) => setOpen(o => { const n = new Set(o); if (n.has(path)) n.delete(path); else n.add(path); return n; });
   const seq = useRef(0);
 
   useEffect(() => {
     if (!hash) return;
     const s = ++seq.current;
-    setData(null); setErr(""); setQ("");
+    setData(null); setErr(""); setQ(""); setOpen(new Set());
     getAqaCommit(hash).then(r => { if (s === seq.current) setData(r); }, e => { if (s === seq.current) setErr((e as Error).message); });
   }, [hash]);
 
@@ -57,7 +62,7 @@ export default function CommitModal({ hash, onClose }: { hash: string | null; on
   const net = t ? t.added - t.removed : 0;
 
   return (
-    <Modal open={!!hash} onClose={onClose} title="Коммит" size="max-w-5xl">
+    <Modal open={!!hash} onClose={onClose} title="Коммит" size="max-w-7xl">
       {err ? <p className="text-sm text-red-600 dark:text-red-400">{err}</p>
         : !data || !t ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Считаю изменения…</p>
         : (
@@ -132,25 +137,33 @@ export default function CommitModal({ hash, onClose }: { hash: string | null; on
                 )}
               </div>
               {!files.length ? <p className="text-xs text-text-muted">{data.files.length ? "Ничего не найдено" : "Файлы не изменены"}</p> : (
-                <ul className="max-h-80 divide-y divide-border-main overflow-y-auto rounded-lg border border-border-main scrollbar-thin">
-                  {files.map(f => (
-                    <li key={f.path} className="flex items-center gap-2.5 px-3 py-1.5 text-xs">
-                      <FileCode2 className="h-3.5 w-3.5 flex-shrink-0 text-text-muted" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate font-mono text-text-main" title={f.path}>{f.path}</span>
-                        {f.from && <span className="block truncate text-[11px] text-text-muted" title={f.from}>из {f.from}</span>}
-                      </span>
-                      <span className={`flex-shrink-0 rounded px-1.5 py-px text-[10px] ${TYPES[f.type].cls}`}>{TYPES[f.type].label}</span>
-                      {f.binary ? <span className="w-40 flex-shrink-0 text-right text-text-muted">двоичный файл</span> : (
-                        <>
-                          <span className="w-16 flex-shrink-0"><Churn added={f.added} removed={f.removed} max={maxFile} /></span>
-                          <span className="w-24 flex-shrink-0 text-right tabular-nums">
-                            <span className="text-emerald-600 dark:text-emerald-400">+{n(f.added)}</span>{" "}
-                            <span className="text-red-600 dark:text-red-400">−{n(f.removed)}</span></span>
-                        </>
-                      )}
-                    </li>
-                  ))}
+                <ul className="divide-y divide-border-main overflow-hidden rounded-lg border border-border-main">
+                  {files.map(f => {
+                    const on = open.has(f.path);
+                    return (
+                      <li key={f.path}>
+                        <button type="button" onClick={() => toggle(f.path)} aria-expanded={on} disabled={f.binary}
+                          title={f.binary ? "Двоичный файл" : on ? "Свернуть" : "Показать, что изменено: было / стало"}
+                          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs ${f.binary ? "cursor-default" : "hover:bg-bg-subtle"} ${on ? "bg-bg-subtle/60" : ""}`}>
+                          <ChevronRight className={`h-3.5 w-3.5 flex-shrink-0 text-text-muted transition-transform ${on ? "rotate-90" : ""} ${f.binary ? "invisible" : ""}`} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-mono text-text-main" title={f.path}>{f.path}</span>
+                            {f.from && <span className="block truncate text-[11px] text-text-muted" title={f.from}>из {f.from}</span>}
+                          </span>
+                          <span className={`flex-shrink-0 rounded px-1.5 py-px text-[10px] ${TYPES[f.type].cls}`}>{TYPES[f.type].label}</span>
+                          {f.binary ? <span className="w-40 flex-shrink-0 text-right text-text-muted">двоичный файл</span> : (
+                            <>
+                              <span className="w-16 flex-shrink-0"><Churn added={f.added} removed={f.removed} max={maxFile} /></span>
+                              <span className="w-24 flex-shrink-0 text-right tabular-nums">
+                                <span className="text-emerald-600 dark:text-emerald-400">+{n(f.added)}</span>{" "}
+                                <span className="text-red-600 dark:text-red-400">−{n(f.removed)}</span></span>
+                            </>
+                          )}
+                        </button>
+                        {on && <FileDiff hash={data.hash || data.id} path={f.path} src={f.from} />}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

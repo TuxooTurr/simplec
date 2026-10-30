@@ -150,11 +150,12 @@ export function barsOf(v: StandView): StandBlock[] {
 }
 
 /**
- * Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. С HOURS_FROM px день делится на часы:
+ * Ширина дня по масштабу, px. Ctrl (Cmd) + колесо — плавно до MAX_W и обратно до трёх кварталов на экран. С HOURS_FROM px день делится на часы:
  * сетка по часам, бронь со временем стоит на своих часах; «Часы» — 40 px на час.
  */
-export const ZOOM = { hours: 960, day: 120, week: 44 } as const;
-const MIN_W = 6, MAX_W = 1440, HOURS_FROM = 192;
+export const ZOOM = { hours: 960, day: 120, week: 44, fit: 0 } as const;
+/** Самое крупное отдаление (width = 0 — «3 квартала»): неделя до сегодня и три квартала вперёд на экран. */
+const MAX_W = 1440, HOURS_FROM = 192, BACK_DAYS = 7, FIT_DAYS = BACK_DAYS + 274;
 const LANE = 26;          // высота одной брони в строке команды
 const HEAD = 44;          // шапка: месяц + число
 const FOOT = 26;          // строка «установок за день»
@@ -179,18 +180,30 @@ const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "и�
  * микросервиса (lib/msColor.ts), как у лейблов в Jira tool. Несколько фич
  * в одном микросервисе — одна полоса со счётчиком; добавилась фича в другой день — полоса обрывается, дальше новая. При наведении —
  * фичи: номер, название, период, время и статус (st) из Jira tool.
- * Масштаб — от часов внутри дня (сетка по часам, бронь со временем стоит на своих часах, линия «сейчас») до
- * квартала: кнопками снаружи (width) или Ctrl + колесо; перетаскивание — прокрутка.
+ * Масштаб — от часов внутри дня (сетка по часам, бронь со временем стоит на своих часах, линия «сейчас») до трёх
+ * кварталов вперёд от сегодня: кнопками снаружи (width; 0 — «3 квартала») или Ctrl (Cmd) + колесо; перетаскивание —
+ * прокрутка. Календарь — на год вперёд (бэкенд дотягивает период).
  * Конфликт (тот же микросервис у двух команд в пересекающееся время) — красная обводка и значок; заморозка — жёлтая полоса;
  * дата релиза — пунктир; выходные — серые. Щелчок по пустому месту строки — новая бронь этой команде на этот день
  * (в часах — с этого часа), по брони — она сама.
  */
-export default function StandTimeline({ v, width, onWidth, selected, onPickCell, onPickBlock, featureStage }: {
+export default function StandTimeline({ v, width: zoom, onWidth, selected, onPickCell, onPickBlock, featureStage }: {
   v: StandView; width: number; onWidth: (w: number) => void; selected: string | null;
   /** Щелчок по пустому месту: день, команда и (в часовом масштабе) час, на который пришёлся щелчок, в минутах. */
   onPickCell: (date: string, team: string, minute: number | null) => void; onPickBlock: (b: StandBlock) => void; featureStage: FeatureStage;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  // Ширина видимой части — от неё самый мелкий масштаб (три квартала на экран).
+  const [viewW, setViewW] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setViewW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const minW = viewW ? viewW / FIT_DAYS : 4;
+  const width = zoom <= 0 ? minW : Math.max(minW, Math.min(MAX_W, zoom));
   const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
   const [hover, setHover] = useState<{ b: StandBlock; x: number; y: number } | null>(null);
   /** Прокрутка по горизонтали — в часах подпись дня, видимого слева, держится у левого края. */
@@ -205,13 +218,17 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const x = e.clientX - r.left + el.scrollLeft;
-      const next = Math.max(MIN_W, Math.min(MAX_W, Math.round(width * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+      const next = Math.min(MAX_W, +(width * (e.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(2));
+      if (next <= minW) {                       // дальше не отдаляем: три квартала от сегодня на экран
+        if (zoom > 0) onWidth(0);
+        return;
+      }
       onWidth(next);
       requestAnimationFrame(() => { el.scrollLeft = x * (next / width) - (e.clientX - r.left); });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [width, onWidth]);
+  }, [width, minW, zoom, onWidth]);
 
   const hourMode = width >= HOURS_FROM;
   // Сегодня — в видимую часть при открытии, смене периода и переходе в часы (там — с 8 утра).
@@ -219,8 +236,9 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
     const el = box.current;
     const i = v.days.findIndex(d => d.today);
     if (!el || i < 0) return;
-    el.scrollLeft = hourMode ? Math.max(0, i * width + (8 / 24) * width - 40) : Math.max(0, i * width - 2 * width);
-  }, [v.stand, v.range.from, v.range.to, hourMode]);   // eslint-disable-line react-hooks/exhaustive-deps
+    el.scrollLeft = hourMode ? Math.max(0, i * width + (8 / 24) * width - 40)
+      : Math.max(0, (i - (zoom <= 0 ? BACK_DAYS : 2)) * width);
+  }, [v.stand, v.range.from, v.range.to, hourMode, zoom <= 0, viewW > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const idx = new Map(v.days.map((d, i) => [d.date, i]));
   // Полосы: команда + микросервис, непрерывно от начала до конца; одновременные — друг под другом.
@@ -233,6 +251,7 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
   const bodyH = tops.length ? tops[tops.length - 1] + lanes[lanes.length - 1] * LANE + 10 : HEAD;
   const W = v.days.length * width;
   const teamCls = (t: string) => TEAM_CLS[Math.max(0, v.teams.indexOf(t)) % TEAM_CLS.length];
+  // Мелко (три квартала на экран) день уже 4–5 px: число — раз в две недели, линии — только по месяцам.
   const labelEvery = width >= 34 ? 1 : width >= 18 ? 7 : 14;
   const pxHour = width / 24;
   const hourStep = pxHour >= 36 ? 1 : pxHour >= 18 ? 2 : pxHour >= 12 ? 3 : 6;
@@ -268,7 +287,7 @@ export default function StandTimeline({ v, width, onWidth, selected, onPickCell,
             const dt = new Date(`${d.date}T00:00`);
             const first = i === 0 || dt.getDate() === 1;
             return (
-              <div key={d.date} className={`absolute top-0 bottom-0 border-l ${hourMode ? "border-border-main" : "border-border-main/60"}
+              <div key={d.date} className={`absolute top-0 bottom-0 border-l ${hourMode ? "border-border-main" : width < 6 && !first ? "border-transparent" : "border-border-main/60"}
                 ${d.weekend ? "bg-bg-subtle/70" : ""} ${!d.inWindow ? "bg-bg-subtle/50 [background-image:repeating-linear-gradient(135deg,transparent_0,transparent_6px,rgba(127,127,127,.08)_6px,rgba(127,127,127,.08)_12px)]" : ""}
                 ${d.today ? "bg-primary/5" : ""}`}
                 style={{ left: i * width, width }} title={d.inWindow ? undefined : "Вне окна планирования — только просмотр"}>

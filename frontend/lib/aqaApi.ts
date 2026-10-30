@@ -168,6 +168,12 @@ export const getAqaBranches = (filter = "", refresh = false) => fetchJson<AqaBra
 export const getAqaCommits = (branch = "", refresh = false) => fetchJson<AqaCommits>(`/api/aqa/commits${qs({ branch, refresh })}`);
 export const getAqaTestops = (refresh = false) => fetchJson<AqaTestops>(`/api/aqa/testops${qs({ refresh })}`);
 export const getAqaLaunch = (id: number, refresh = false) => fetchJson<AqaLaunchDetails>(`/api/aqa/testops/launch/${id}${qs({ refresh })}`);
+/** Строка diff с одной стороны: номер строки, текст, что с ней (удалена слева, добавлена справа, без изменений). */
+export interface DiffLine { n: number | null; text: string; type: "removed" | "added" | "context" }
+/** Файл коммита построчно: куски строк «было» (l) и «стало» (r) рядом; null — пустая сторона. */
+export interface AqaFileDiff { path: string; binary: boolean; truncated: boolean; hunks: { l: DiffLine | null; r: DiffLine | null }[][] }
+export const getAqaCommitDiff = (hash: string, path: string, src = "") =>
+  fetchJson<AqaFileDiff>(`/api/aqa/commit/${encodeURIComponent(hash)}/diff${qs({ path, src: src || undefined })}`);
 export const getAqaCommit = (hash: string) => fetchJson<AqaCommitDetails>(`/api/aqa/commit/${encodeURIComponent(hash)}`);
 export const getAqaRoadmap = (refresh = false) => fetchJson<AqaRoadmap>(`/api/aqa/roadmap${qs({ refresh })}`);
 

@@ -56,7 +56,7 @@ export function Card({ icon, title, extra, link, onRefresh, busy, children }: {
   icon: ReactNode; title: string; extra?: ReactNode; link?: string; onRefresh: () => void; busy: boolean; children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col rounded-xl border border-border-main bg-bg-card">
+    <section className="flex min-h-0 flex-col rounded-xl border border-border-main bg-bg-card">
       <div className="flex items-center gap-2 border-b border-border-main px-4 py-2.5">
         {icon}
         <h2 className="text-sm font-semibold text-text-main">{title}</h2>
@@ -68,7 +68,7 @@ export function Card({ icon, title, extra, link, onRefresh, busy, children }: {
           className="p-1 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
           <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} /></button>
       </div>
-      <div className="flex-1 p-4">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col p-4">{children}</div>
     </section>
   );
 }

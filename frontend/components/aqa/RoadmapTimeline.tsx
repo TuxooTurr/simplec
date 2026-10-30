@@ -6,16 +6,20 @@ import {
   daysBetween, fmtDay, isLate, isOverdue, issueSpan, planStartOf, todayIso, type AqaEpic, type AqaIssue, type IssueSpan,
 } from "@/lib/aqaApi";
 
-/** Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. */
+/**
+ * Ширина дня по масштабу, px. Ctrl (Cmd) + колесо — плавно до MAX_W и обратно до «3 кварталов» (w = 0): тогда в экран
+ * входит неделя до сегодня и три квартала вперёд — дальше не отдаляется.
+ */
 export const ZOOMS = [
   { id: "day", label: "День", w: 48 },
   { id: "week", label: "Неделя", w: 18 },
   { id: "month", label: "Месяц", w: 6 },
-  { id: "quarter", label: "Квартал", w: 2 },
-  { id: "year", label: "Год", w: 0.6 },
+  { id: "fit", label: "3 квартала", w: 0 },
 ] as const;
 export type ColorBy = "status" | "assignee";
-const MIN_W = 0.3, MAX_W = 120;
+const MAX_W = 120;
+/** Самое крупное отдаление: неделя до сегодня + три квартала вперёд. Календарь размечен на год вперёд. */
+const BACK_DAYS = 7, FIT_DAYS = BACK_DAYS + 274, YEAR_DAYS = 365;
 const LANE = 28, PAD = 10, HEAD = 46, LEFT = 300, MIN_SECTION = 64, CHECK = 18;
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
@@ -76,16 +80,27 @@ function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: n
  * Не закрыта к плановому окончанию — там точка, дальше полоса штрихом до фактического закрытия (не закрыта — до сегодня).
  * Цвет открытой — по статусу или по исполнителю (colorBy); закрытая — зелёная с галочкой (в срок) или красная
  * с «!» (нарушение срока). Масштаб — кнопками снаружи
- * (dayW) или Ctrl + колесо, от дня до года; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
+ * (dayW) или Ctrl (Cmd) + колесо, от дня до трёх кварталов вперёд от сегодня; календарь — на год вперёд; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
  * статус и даты; щелчок — задача в Jira.
  */
-export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpic, onRemoveEpic }: {
+export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, onAddEpic, onRemoveEpic }: {
   epics: AqaEpic[]; dayW: number; onDayW: (w: number) => void; colorBy: ColorBy;
   /** Добавить эпик в роадмап (сохраняется в настройках вкладки); ошибка — текстом. */
   onAddEpic: (key: string) => Promise<void>;
   onRemoveEpic: (key: string) => Promise<void>;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  // Ширина видимой части — от неё самый мелкий масштаб (три квартала на экран).
+  const [viewW, setViewW] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setViewW(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const minW = viewW ? viewW / FIT_DAYS : 3;
+  const dayW = zoom <= 0 ? minW : Math.max(minW, Math.min(MAX_W, zoom));
   const drag = useRef<{ x: number; left: number; moved: boolean } | null>(null);
   const [hover, setHover] = useState<{ i: AqaIssue | AqaEpic; x: number; y: number } | null>(null);
   /** Прокрутка по горизонтали — месяц (год) дня у левого края держится подписью, пока не придёт следующий. */
@@ -109,11 +124,11 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
   }, [epics, dayW]);
   const bodyBottom = sections.length ? sections[sections.length - 1].top + sections[sections.length - 1].height : HEAD;
 
-  // Период: от первой полосы минус неделя до последней (или сегодня) плюс две недели.
+  // Период: от первой полосы (или недели до сегодня) до года вперёд от сегодня — или до последней полосы, если она дальше.
   const today = dayNum(todayIso());
   const all = sections.flatMap(s => s.placed);
-  const from = Math.min(today, ...all.map(p => p.start)) - 7;
-  const to = Math.max(today, ...all.map(p => p.end)) + 14;
+  const from = Math.min(today, ...all.map(p => p.start)) - BACK_DAYS;
+  const to = Math.max(today + YEAR_DAYS, ...all.map(p => p.end + 14));
   const days = to - from + 1;
   const W = Math.max(1, days * dayW);
 
@@ -126,19 +141,25 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
       e.preventDefault();
       const r = el.getBoundingClientRect();
       const px = e.clientX - r.left + el.scrollLeft;
-      const next = Math.max(MIN_W, Math.min(MAX_W, +(dayW * (e.deltaY < 0 ? 1.2 : 1 / 1.2)).toFixed(2)));
-      onDayW(next);
-      requestAnimationFrame(() => { el.scrollLeft = px * (next / dayW) - (e.clientX - r.left); });
+      const want = Math.min(MAX_W, +(dayW * (e.deltaY < 0 ? 1.2 : 1 / 1.2)).toFixed(2));
+      if (want <= minW) {                       // дальше не отдаляем: три квартала от сегодня на экран
+        if (zoom > 0) onDayW(0);
+        return;
+      }
+      onDayW(want);
+      requestAnimationFrame(() => { el.scrollLeft = px * (want / dayW) - (e.clientX - r.left); });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [dayW, onDayW]);
+  }, [dayW, minW, zoom, onDayW]);
 
-  // Сегодня — в видимой части при открытии и смене масштаба.
+  // Сегодня — в видимой части при открытии и смене масштаба; на «3 кварталах» — неделя до сегодня у левого края.
   useEffect(() => {
     const el = box.current;
-    if (el) el.scrollLeft = Math.max(0, (today - from) * dayW - el.clientWidth / 3);
-  }, [dayW, from]);   // eslint-disable-line react-hooks/exhaustive-deps
+    if (!el) return;
+    el.scrollLeft = zoom <= 0 ? Math.max(0, (today - BACK_DAYS - from) * dayW)
+      : Math.max(0, (today - from) * dayW - el.clientWidth / 3);
+  }, [zoom <= 0 ? -1 : zoom, from, viewW > 0]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Шкала: верхний ряд — месяцы (мелко — годы), нижний — дни, недели, месяцы или кварталы — что помещается.
   const ticks = useMemo(() => {

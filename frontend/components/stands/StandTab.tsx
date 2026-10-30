@@ -193,9 +193,9 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
             {period === "quarter" && <> · показано {ddmm(v.range.from)}.{v.range.from.slice(0, 4)} — {ddmm(v.range.to)}.{v.range.to.slice(0, 4)}</>}</span>
           {v.releases.map(r => <span key={r.id} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-400">{r.name} · {ddmm(r.date)}</span>)}
           <span className="ml-auto flex items-center gap-1" role="group" aria-label="Масштаб">
-            {([["Часы", ZOOM.hours], ["День", ZOOM.day], ["Неделя", ZOOM.week]] as const).map(([label, w]) => (
+            {([["Часы", ZOOM.hours], ["День", ZOOM.day], ["Неделя", ZOOM.week], ["3 квартала", ZOOM.fit]] as const).map(([label, w]) => (
               <button key={label} type="button" onClick={() => setWidth(w)} aria-pressed={width === w}
-                title={label === "Часы" ? "День по часам: бронь со временем — на своих часах" : undefined}
+                title={label === "Часы" ? "День по часам: бронь со временем — на своих часах" : label === "3 квартала" ? "Неделя до сегодня и три квартала вперёд на экране" : undefined}
                 className={`px-2.5 py-1 rounded-md border text-xs ${width === w ? "border-primary text-primary bg-primary/10" : "border-border-main text-text-muted hover:text-text-main"}`}>{label}</button>
             ))}
             <span className="w-px h-4 bg-border-main mx-0.5" />
@@ -205,7 +205,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
             <button type="button" onClick={() => showPeriod("quarter", fitOf(qDays))} aria-pressed={period === "quarter"}
               title="Последние 3 месяца от сегодня и всё окно планирования; дни вне окна — только просмотр"
               className={`px-2.5 py-1 rounded-md border text-xs ${period === "quarter" ? "border-primary text-primary bg-primary/10" : "border-border-main text-text-muted hover:text-text-main"}`}>3 месяца</button>
-            <span className="ml-1">Ctrl + колесо — масштаб · тянуть — прокрутка</span>
+            <span className="ml-1">Ctrl (Cmd) + колесо — масштаб, дальше всего — три квартала от сегодня · тянуть — прокрутка</span>
             <button type="button" onClick={() => setFull(f => !f)} title={full ? "Свернуть (Esc)" : "График во весь экран"}
               aria-label={full ? "Свернуть график" : "График во весь экран"}
               className="ml-1 p-1.5 rounded-md border border-border-main text-text-muted hover:text-text-main">

@@ -1,6 +1,6 @@
 """График стендов: правила, заявки из комментариев Confluence, защита от одновременной записи, сборка страницы."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -317,11 +317,14 @@ def test_график_за_период_последние_3_месяца(conf):
     _settings()
     conf["prop"]["bookings"].append(st._new_booking(date(2026, 8, 3), "SC", "notify", "SBER911-7", "SimpleTest", "simpletest"))
     v = st.get_stand("Major-Check", start="2026-07-21", end="2026-11-13", db=None)
-    assert v["range"] == {"from": "2026-07-21", "to": "2026-11-13"} and len(v["days"]) == 116
+    # Календарь — на год вперёд от сегодня: конец периода дотянут до TODAY + 365.
+    end = (TODAY + timedelta(days=st.YEAR_AHEAD)).isoformat()
+    assert v["range"] == {"from": "2026-07-21", "to": end} and len(v["days"]) == (TODAY + timedelta(days=365) - date(2026, 7, 21)).days + 1
     aug = next(x for x in v["days"] if x["date"] == "2026-08-03")
     assert aug["bookings"][0]["task"] == "SBER911-7" and aug["status"] == "ПРОШЁЛ" and not aug["inWindow"]
     assert next(x for x in v["days"] if x["date"] == "2026-10-21")["inWindow"]
-    assert len(st.get_stand("Major-Check", start="2026-01-01", end="2026-12-31", db=None)["days"]) == st.MAX_VIEW_DAYS
+    assert len(st.get_stand("Major-Check", start="2025-01-01", end="2026-12-31", db=None)["days"]) == st.MAX_VIEW_DAYS
+    assert st.get_stand("Major-Check", db=None)["range"]["to"] == end             # окно планирования — тоже до года вперёд
     with pytest.raises(HTTPException):
         st.get_stand("Major-Check", start="вчера", db=None)
 

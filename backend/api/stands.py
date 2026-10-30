@@ -733,16 +733,21 @@ def publish(cfg: dict, pid: str, data: dict) -> Optional[str]:
 
 # ── Ответ API ────────────────────────────────────────────────────────────────
 
-MAX_VIEW_DAYS = 200
+MAX_VIEW_DAYS = 500
+YEAR_AHEAD = 365
 
 
-def view_days(data: dict, rng: Optional[tuple[date, date]] = None) -> list[date]:
-    """Дни графика: окно планирования или выбранный период (например, последние 3 месяца) — не длиннее MAX_VIEW_DAYS."""
-    if not rng:
-        return window_days(data)
-    a, b = rng
-    if b < a:
-        a, b = b, a
+def view_days(data: dict, rng: Optional[tuple[date, date]] = None, now: Optional[date] = None) -> list[date]:
+    """Дни графика: окно планирования или выбранный период (например, последние 3 месяца). Календарь размечен
+    на год вперёд от сегодня: конец дотягивается до now + YEAR_AHEAD (дни вне окна — только просмотр).
+    Всего — не длиннее MAX_VIEW_DAYS."""
+    if rng:
+        a, b = min(rng), max(rng)
+    else:
+        a, b = date.fromisoformat(data["window"]["from"]), date.fromisoformat(data["window"]["to"])
+        if b < a:
+            return []
+    b = max(b, (now or today()) + timedelta(days=YEAR_AHEAD))
     b = min(b, a + timedelta(days=MAX_VIEW_DAYS - 1))
     return [a + timedelta(days=i) for i in range((b - a).days + 1)]
 
@@ -751,7 +756,7 @@ def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None, rng: Optio
     now = now or today()
     win = set(window_days(data))
     days = []
-    for d in view_days(data, rng):
+    for d in view_days(data, rng, now):
         label, colour = day_status(data, d, now)
         conf = conflicts_on(data, d)
         ids = conflict_ids(data, d)

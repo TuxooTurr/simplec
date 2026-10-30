@@ -53,8 +53,9 @@ export default function AqaTrackingSection() {
     setView(readLs(VIEW_KEY, "timeline") === "list" ? "list" : "timeline");
     setColorBy(readLs(COLOR_KEY, "status") === "assignee" ? "assignee" : "status");
     setBranch(readLs(BRANCH_KEY, ""));
-    const z = Number(readLs(ZOOM_KEY, ""));
-    if (z > 0) setDayW(z);
+    const raw = readLs(ZOOM_KEY, "");
+    const z = Number(raw);
+    if (raw !== "" && Number.isFinite(z) && z >= 0) setDayW(z);     // 0 — «3 квартала»
   }, []);
 
   const run = <T,>(set: (f: (p: Load<T>) => Load<T>) => void, fn: () => Promise<T>) => {
@@ -116,7 +117,8 @@ export default function AqaTrackingSection() {
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-6 scrollbar-thin">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Одинаковая высота виджетов: списки внутри дотягиваются до низа и прокручиваются */}
+        <div className="grid grid-cols-1 gap-4 lg:h-[540px] lg:grid-cols-2">
           <CommitsCard ok={!!settings?.bitbucketOk} state={commits} branch={branch ?? ""} onBranch={pickBranch}
             onRefresh={() => loadCommits(true, branch ?? "")} onSettings={() => setOpen(true)} onOpen={setCommit} />
           <LaunchesCard ok={!!settings?.testopsOk} state={testops} onRefresh={() => loadTestops(true)} onSettings={() => setOpen(true)}
@@ -157,26 +159,6 @@ export default function AqaTrackingSection() {
                 <List className="h-3.5 w-3.5" /> Список</button>
             </div>
           </div>
-          {view === "timeline" && (road.data || (settings && !settings.epics.length)) && (
-            <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-muted">
-              {colorBy === "status"
-                ? STATUS_COLORS.map(c => <span key={c.id} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${c.cls}`} /> {c.label}</span>)
-                : <>
-                  {[...people.entries()].map(([name, cls]) => <span key={name} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${cls}`} /> {name}</span>)}
-                  {epics.some(e => e.issues.some(i => !i.assignee)) && <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-slate-400/70" /> не назначен</span>}
-                </>}
-              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${DONE_CLS}`} />
-                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">✓</span> выполнена в срок</span>
-              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${LATE_CLS}`} />
-                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white">!</span> нарушение срока</span>
-              <span className="inline-flex items-center gap-1">
-                <span className="relative h-2.5 w-7 overflow-hidden rounded">
-                  <span className="absolute inset-y-0 left-0 w-3 bg-blue-500/85" />
-                  <span className="absolute inset-y-0 left-3 right-0" style={{ background: "repeating-linear-gradient(135deg, rgb(220 38 38 / .85) 0 3px, rgb(220 38 38 / .45) 3px 6px)" }} />
-                </span> после точки — сверх планового окончания</span>
-              <span>Полоса — от планового начала до планового окончания; Ctrl + колесо — масштаб, перетаскивание — прокрутка</span>
-            </p>
-          )}
           {road.data?.snapshot && (
             <p className="text-[11px] text-amber-700 dark:text-amber-400" title={road.data.snapshot.reason}>
               Jira недоступна — показан снимок от {fmtWhen(road.data.snapshot.savedAt)}: он сохраняется при каждой загрузке
@@ -192,6 +174,27 @@ export default function AqaTrackingSection() {
             : !road.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю эпики из Jira…</p>
             : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
             : <RoadmapList epics={epics} />}
+          {/* Легенда — под графиком */}
+          {view === "timeline" && (road.data || (settings && !settings.epics.length)) && (
+            <p className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[11px] text-text-muted">
+              {colorBy === "status"
+                ? STATUS_COLORS.map(c => <span key={c.id} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${c.cls}`} /> {c.label}</span>)
+                : <>
+                  {[...people.entries()].map(([name, cls]) => <span key={name} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${cls}`} /> {name}</span>)}
+                  {epics.some(e => e.issues.some(i => !i.assignee)) && <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-slate-400/70" /> не назначен</span>}
+                </>}
+              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${DONE_CLS}`} />
+                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">✓</span> выполнена в срок</span>
+              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${LATE_CLS}`} />
+                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white">!</span> нарушение срока</span>
+              <span className="inline-flex items-center gap-1">
+                <span className="relative h-2.5 w-7 overflow-hidden rounded">
+                  <span className="absolute inset-y-0 left-0 w-3 bg-blue-500/85" />
+                  <span className="absolute inset-y-0 left-3 right-0" style={{ background: "repeating-linear-gradient(135deg, rgb(220 38 38 / .85) 0 3px, rgb(220 38 38 / .45) 3px 6px)" }} />
+                </span> после точки — сверх планового окончания</span>
+              <span>Полоса — от планового начала до планового окончания; календарь — на год вперёд; Ctrl (Cmd) + колесо — масштаб, дальше всего — три квартала от сегодня; перетаскивание — прокрутка</span>
+            </p>
+          )}
         </section>
       </div>
 

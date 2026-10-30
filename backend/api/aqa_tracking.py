@@ -25,6 +25,7 @@ API-токен TestOps вставляется в настройках (по па
   GET  /api/aqa/testops?refresh=             — запуски
   GET  /api/aqa/testops/launch/{id}          — запуск подробно: кейсы с результатами
   GET  /api/aqa/commit/{hash}                — коммит подробно: файлы, строки +/−, свод по типам и расширениям
+  GET  /api/aqa/commit/{hash}/diff?path=     — файл коммита построчно: «было» слева, «стало» справа
   GET  /api/aqa/roadmap?refresh=             — эпики с задачами; Jira недоступна — последний снимок
 
 Снимок роадмапа (data/aqa_roadmap.json) обновляется при каждой удачной загрузке и входит в резервную копию
@@ -40,6 +41,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -353,6 +355,67 @@ def bb_commit(cfg: dict, commit_id: str) -> dict:
             "totals": {"files": len(rows), "added": sum(f["added"] for f in rows), "removed": sum(f["removed"] for f in rows),
                        "byType": by_type},
             "byExt": sorted(by_ext.values(), key=lambda e: (-(e["added"] + e["removed"]), e["ext"]))}
+
+
+MAX_DIFF_ROWS = 3000                   # строк «было / стало» на файл в окне коммита
+DIFF_CONTEXT = 3                       # строк вокруг изменений
+
+
+def side_by_side(diff: dict) -> list[list[dict]]:
+    """Diff файла из Bitbucket → куски строк «было / стало» рядом: [[{l, r}, …], …]. l / r — {n, text, type} или None.
+    Неизменённые строки — с обеих сторон; удалённые и добавленные подряд встают парами (было слева, стало справа),
+    лишние — против пустоты."""
+    out: list[list[dict]] = []
+    for h in diff.get("hunks") or []:
+        rows: list[dict] = []
+        removed: list[dict] = []
+        added: list[dict] = []
+
+        def flush():
+            for k in range(max(len(removed), len(added))):
+                rows.append({"l": removed[k] if k < len(removed) else None, "r": added[k] if k < len(added) else None})
+            removed.clear()
+            added.clear()
+
+        for seg in h.get("segments") or []:
+            kind = str(seg.get("type", "")).upper()
+            for ln in seg.get("lines") or []:
+                text = str(ln.get("line", ""))
+                if kind == "REMOVED":
+                    removed.append({"n": ln.get("source"), "text": text, "type": "removed"})
+                elif kind == "ADDED":
+                    added.append({"n": ln.get("destination"), "text": text, "type": "added"})
+                else:
+                    flush()
+                    rows.append({"l": {"n": ln.get("source"), "text": text, "type": "context"},
+                                 "r": {"n": ln.get("destination"), "text": text, "type": "context"}})
+        flush()
+        if rows:
+            out.append(rows)
+    return out
+
+
+def bb_file_diff(cfg: dict, commit_id: str, path: str, src_path: str = "") -> dict:
+    """Файл коммита построчно «было / стало» (DIFF_CONTEXT строк вокруг изменений). Двоичный — без строк;
+    больше MAX_DIFF_ROWS строк — обрезается, это помечается."""
+    enc = "/".join(quote(p, safe="") for p in path.split("/"))
+    params: dict[str, Any] = {"contextLines": DIFF_CONTEXT, "withComments": "false"}
+    if src_path:
+        params["srcPath"] = src_path
+    data = _http("Bitbucket", "GET", f"{_repo_url(cfg)}/commits/{commit_id}/diff/{enc}", cfg["ssl_verify"],
+                 token=cfg["token"], params=params, timeout=60)
+    diffs = data.get("diffs") or []
+    d = diffs[0] if diffs else {}
+    hunks = side_by_side(d)
+    total, cut, truncated = 0, [], bool(data.get("truncated") or d.get("truncated"))
+    for h in hunks:
+        if total + len(h) > MAX_DIFF_ROWS:
+            cut.append(h[:MAX_DIFF_ROWS - total])
+            truncated = True
+            break
+        cut.append(h)
+        total += len(h)
+    return {"path": path, "binary": bool(d.get("binary")), "hunks": [h for h in cut if h], "truncated": truncated}
 
 
 # ── Allure TestOps ───────────────────────────────────────────────────────────
@@ -725,6 +788,16 @@ def commit_route(commit_id: str, db: Session = Depends(get_db)) -> dict:
     cfg = _bb_ready(db)
     # Коммит не меняется — кэш без refresh.
     return _cached(f"bbc:{cfg['url']}:{commit_id.lower()}", False, lambda: bb_commit(cfg, commit_id))
+
+
+@router.get("/api/aqa/commit/{commit_id}/diff")
+def commit_file_diff_route(commit_id: str, path: str, src: str = "", db: Session = Depends(get_db)) -> dict:
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_id):
+        raise HTTPException(422, "Не хеш коммита")
+    if not path.strip() or ".." in path.split("/"):
+        raise HTTPException(422, "Путь к файлу не указан")
+    cfg = _bb_ready(db)
+    return _cached(f"bbd:{cfg['url']}:{commit_id.lower()}:{path}:{src}", False, lambda: bb_file_diff(cfg, commit_id, path, src))
 
 
 def save_snapshot(epics: list[str], data: dict) -> None:

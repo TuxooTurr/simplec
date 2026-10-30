@@ -572,6 +572,8 @@ export interface TaskList {
   views?: ListView[];
   /** id действующего представления (если представлений больше одного). */
   activeView?: string;
+  /** «Поля в чат»: какие поля писать под задачей в «Скопировать в чат» (по порядку); по умолчанию — никаких. */
+  chatFields?: ColRef[];
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -1220,15 +1222,51 @@ export function jqlExamples(project: string): string[] {
 /** Задачи для отчёта: по папкам (если есть) в порядке таблицы; folder — заголовок раздела или null. */
 export type ReportSection = { folder: string | null; issues: Issue[] };
 
+/** Поля, которых нет в выборе «Поля в чат»: статус (st), номер и название и так есть в строке задачи. */
+export const CHAT_FIXED_COLS: ColRef[] = [STAGE_COL, "jira:summary"];
+
+/**
+ * Выбранные поля задачи для чата — по строке «Поле: значение» в порядке выбора. Пустое поле пропускается
+ * целиком, вместе с названием. Пометка «(st)» у полей SimpleTest в чат не идёт.
+ */
+export function chatFieldLines(refs: ColRef[], issue: Issue, ctx: ColCtx): string[] {
+  const out: string[] = [];
+  for (const ref of refs) {
+    const kind = jiraDateKind(ref);
+    const vals = colValues(ref, issue, ctx).map(v => (kind ? fmtJiraDate(v, kind === "datetime") : v).trim()).filter(Boolean);
+    if (vals.length) out.push(`${colLabel(ref, ctx.list).replace(/\s*\(st\)$/, "")}: ${vals.join(", ")}`);
+  }
+  return out;
+}
+
+/** Строки выбранных полей задачи (chatFieldLines); полей не выбрано — пусто. */
+export type ChatFields = (issue: Issue) => string[];
+const NO_FIELDS: ChatFields = () => [];
+
+/** Задача в чат: сначала статус (st), потом номер, потом название; под ней — выбранные поля. */
+function chatIssue(out: string[], bullet: string, key: string, i: Issue, info: StageInfo, fields: ChatFields) {
+  out.push(`${bullet}${stageDot(info)} ${stageText(info)} — ${key} ${String(i.fields.summary ?? "").trim()}`, ...fields(i));
+}
+
+/** Неустранённые дефекты под задачей: «Дефекты:», дальше каждый — без точки и скобок у номера. */
+function chatDefects(out: string[], defects: Issue[] | null, stageOf: (i: Issue) => StageInfo, fields: ChatFields) {
+  const open = defects?.filter(isOpenDefect) ?? [];
+  if (!open.length) return;
+  out.push("Дефекты:");
+  for (const d of open) chatIssue(out, "", d.key, d, stageOf(d), fields);
+}
+
 /**
  * «Скопировать в чат» (Сберчат: *жирный*). Сверху «Статус — <название списка>», дальше разделы по папкам через пустую строку:
  *   *Папка*
- *   • [*SBER911-1*] Тема — 🟢 Готово к релизу
+ *   • 🟢 Готово к релизу — [*SBER911-1*] Тема
+ *   Краткое: не перезагружен инцидент
  *   Дефекты:
- *   SBER911-2 Тема дефекта. Приоритет: Высокий
- * Жирным — только номер фичи; точка «•» — перечисление фич. Под фичей — только её неустранённые дефекты, без точек и скобок.
+ *   🔴 Исправление — SBER911-2 Тема дефекта
+ * Жирным — только номер фичи; точка «•» — перечисление фич. Под фичей — только её неустранённые дефекты.
+ * Под каждой задачей — выбранные поля («Поля в чат»), пустые не пишутся.
  */
-export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
+export function chatReport(sections: ReportSection[], ctx: ColCtx, fields: ChatFields = NO_FIELDS): string {
   const name = ctx.list.name.trim();
   const out: string[] = [name ? `*Статус — ${name}*` : "*Статус*"];
   for (const sec of sections) {
@@ -1236,15 +1274,8 @@ export function chatReport(sections: ReportSection[], ctx: ColCtx): string {
     out.push("");
     if (sec.folder !== null) out.push(`*${sec.folder}*`);
     for (const i of sec.issues) {
-      const info = ctx.stageOf(i);
-      out.push(`• [*${i.key}*] ${String(i.fields.summary ?? "").trim()} — ${stageDot(info)} ${stageText(info)}`);
-      const open = ctx.defectsOf(i)?.filter(isOpenDefect) ?? [];
-      if (open.length) {
-        out.push("Дефекты:");
-        for (const d of open) {
-          out.push(`${d.key} ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
-        }
-      }
+      chatIssue(out, "• ", `[*${i.key}*]`, i, ctx.stageOf(i), fields);
+      chatDefects(out, ctx.defectsOf(i), ctx.stageOf, fields);
     }
   }
   return out.join("\n").trimEnd();
@@ -1262,34 +1293,24 @@ export function ownStageInfo(info: StageInfo, ownDefects: Issue[] | undefined): 
   return by.length ? { ...info, by } : info.base;
 }
 
-/** Дефекты задачи для чата: номер, название, приоритет и статус (st) каждого дефекта — в формате «Скопировать в чат». */
 /**
  * «Скопировать в чат» в окне сторей эпика — как отчёт общего списка: стори с её статусом (st), под ней активные
- * дефекты (номер, название, приоритет). Заголовок — эпик и его статус (st).
+ * дефекты. Заголовок — статус (st) эпика и сам эпик.
  */
 export function storiesChatReport(epic: Issue, stories: Issue[], epicStage: StageInfo, stageOf: (i: Issue) => StageInfo,
-                                  defectsOf: (i: Issue) => Issue[] | null): string {
-  const out = [`*Стори эпика ${epic.key}* ${String(epic.fields.summary ?? "").trim()} — ${stageDot(epicStage)} ${stageText(epicStage)}`, ""];
+                                  defectsOf: (i: Issue) => Issue[] | null, fields: ChatFields = NO_FIELDS): string {
+  const out = [`${stageDot(epicStage)} ${stageText(epicStage)} — *Стори эпика ${epic.key}* ${String(epic.fields.summary ?? "").trim()}`, ""];
   for (const i of stories) {
-    const info = stageOf(i);
-    out.push(`• [*${i.key}*] ${String(i.fields.summary ?? "").trim()} — ${stageDot(info)} ${stageText(info)}`);
-    const open = defectsOf(i)?.filter(isOpenDefect) ?? [];
-    if (open.length) {
-      out.push("Дефекты:");
-      for (const d of open) {
-        out.push(`${d.key} ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")}`);
-      }
-    }
+    chatIssue(out, "• ", `[*${i.key}*]`, i, stageOf(i), fields);
+    chatDefects(out, defectsOf(i), stageOf, fields);
   }
   return out.join("\n").trimEnd();
 }
 
-export function defectsChatReport(issue: Issue, defects: Issue[], stageOf: (i: Issue) => StageInfo): string {
+/** Дефекты задачи для чата: статус (st), номер и название каждого дефекта, под ним — выбранные поля. */
+export function defectsChatReport(issue: Issue, defects: Issue[], stageOf: (i: Issue) => StageInfo, fields: ChatFields = NO_FIELDS): string {
   const out = [`*Дефекты ${issue.key}* ${String(issue.fields.summary ?? "").trim()}`];
-  for (const d of defects) {
-    const info = stageOf(d);
-    out.push(`• [*${d.key}*] ${String(d.fields.summary ?? "").trim().replace(/\.$/, "")}. Приоритет: ${String(d.fields.priority ?? "—")} — ${stageDot(info)} ${stageText(info)}`);
-  }
+  for (const d of defects) chatIssue(out, "• ", `[*${d.key}*]`, d, stageOf(d), fields);
   return out.join("\n");
 }
 

@@ -9,6 +9,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
 import BulkStatusModal from "./BulkStatusModal";
+import ChatFieldsPicker, { type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок для сортировки по статусу (st): заблокированные и отстающие — первыми. */
 function stageRank(info: StageInfo): number {
@@ -23,11 +24,11 @@ function stageRank(info: StageInfo): number {
  * Дефекты здесь не показываются — они только в «Дефекты (st)», включая блокирующие, из-за которых эпик «Заблокирован».
  * Статус (st) меняется стрелкой в строке списка; статус Jira отмеченных стори — «Сменить статус».
  * «Скопировать в чат» — отмеченные галочками стори (по умолчанию все) в порядке таблицы, как отчёт общего списка:
- * стори со статусом (st), под ней её активные дефекты.
+ * статус (st), номер и название стори, под ней — «Поля в чат» и её активные дефекты.
  * «Сменить статус» — отмеченные стори переводятся в Jira тем же окном, что и в списке (переходы workflow).
  * Поиск и фильтры колонок сужают таблицу; в чат и в смену статуса уходят только видимые отмеченные стори.
  */
-export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, onTransitions, onClose }: {
+export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, chat, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   /** Стори эпика (через Epic Link). */
@@ -37,6 +38,8 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   ownStageOf: (i: Issue) => StageInfo;
   /** Дефекты задачи (свои и унаследованные) — для отчёта в чат; null — у дефекта поля нет. */
   defectsOf: (i: Issue) => Issue[] | null;
+  /** «Поля в чат» списка; нет — выбора нет, в чат только статус, номер и название. */
+  chat?: ChatFieldsCfg;
   /** Переходы выполнены — перечитать эти задачи из Jira. */
   onTransitions?: (keys: string[]) => void;
   onClose: () => void;
@@ -56,7 +59,7 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
     const n = new Set(p); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n;
   });
   const copy = async () => {
-    const ok = await copyToClipboard(storiesChatReport(issue, toSend, info, ownStageOf, defectsOf));
+    const ok = await copyToClipboard(storiesChatReport(issue, toSend, info, ownStageOf, defectsOf, chat?.lines));
     setNote(ok ? `Скопировано для чата: сторей ${toSend.length}` : "Браузер не дал скопировать — попробуйте ещё раз");
     setTimeout(() => setNote(""), 3000);
   };
@@ -87,8 +90,9 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                       <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
                   )}
+                  {chat && <ChatFieldsPicker cfg={chat} align="right" />}
                   <button type="button" onClick={copy} disabled={!toSend.length}
-                    title="Стори со статусом (st) и их активные дефекты — как отчёт списка; галочками выберите, что отправить"
+                    title="Статус (st), номер и название стори, «Поля в чат» и активные дефекты — как отчёт списка; галочками выберите, что отправить"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                     <MessageSquareShare className="w-4 h-4" /> Скопировать в чат ({toSend.length} из {visible.length})</button>
                 </span>

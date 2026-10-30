@@ -101,8 +101,8 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
   );
 }
 
-/** Кнопка со всплывающим выбором. */
-export default function FieldPicker(props: PickerProps & { icon?: ReactNode }) {
+/** Кнопка со всплывающим выбором. align — к какому краю кнопки прижать окно; up — раскрыть вверх (кнопка у нижнего края страницы). */
+export default function FieldPicker({ align = "left", up = false, ...props }: PickerProps & { icon?: ReactNode; align?: "left" | "right"; up?: boolean }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -130,7 +130,7 @@ export default function FieldPicker(props: PickerProps & { icon?: ReactNode }) {
         <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute z-40 left-0 mt-1.5 w-80 rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-xl p-2 animate-fade-in">
+        <div className={`absolute z-40 ${align === "right" ? "right-0" : "left-0"} ${up ? "bottom-full mb-1.5" : "mt-1.5"} w-80 rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-xl p-2 animate-fade-in`}>
           <PickerPanel {...props} />
         </div>
       )}

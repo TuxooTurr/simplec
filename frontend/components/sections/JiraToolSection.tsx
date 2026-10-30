@@ -25,6 +25,7 @@ import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
+import ChatFieldsPicker, { type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
 import BackupModal from "@/components/BackupModal";
 import { downloadBacklog } from "@/lib/backlogExport";
 import { addMs, getMsCatalog } from "@/lib/standsApi";
@@ -38,7 +39,7 @@ import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople, saveJiraPeopleFields, type JiraPeopleFields } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -509,6 +510,13 @@ export default function JiraToolSection() {
   // Папка — не группировка, а уровень над ней (разделы таблицы), поэтому в группировке её нет.
   // Числа и время (дефекты, трудозатраты) — не для группировки: у каждой задачи своё значение.
   // Ссылки тоже не группируем — у каждой задачи своя.
+  // «Поля в чат»: любые поля списка, кроме статуса (st) и названия — они и так в строке задачи.
+  const chat: ChatFieldsCfg | undefined = list && ctx ? {
+    options: fieldOptions.filter(o => !CHAT_FIXED_COLS.includes(o.value)),
+    selected: list.chatFields ?? [],
+    onChange: next => updateList(l => ({ ...l, chatFields: next })),
+    lines: i => chatFieldLines(list.chatFields ?? [], i, ctx),
+  } : undefined;
   const linkCols = list ? list.ownFields.filter(f => f.type === "link").map(f => `own:${f.id}`) : [];
   const groupOptions = fieldOptions.filter(o => ![
     "jira:summary", "jira:description", "jira:environment", DEFECTS_COL, FOLDER_COL, ...linkCols,
@@ -829,7 +837,7 @@ export default function JiraToolSection() {
     if (!ctx) return;
     const sections = reportSections();
     const n = sections.reduce((a, x) => a + x.issues.length, 0);
-    await deliver(chatReport(sections, ctx), `Скопировано для чата: задач ${n}.`);
+    await deliver(chatReport(sections, ctx, chat?.lines), `Скопировано для чата: задач ${n}.`);
   };
 
   /**
@@ -1616,10 +1624,11 @@ export default function JiraToolSection() {
               {selecting && (
                 <div className="flex items-center gap-4 flex-wrap text-sm -mt-1">
                   <button type="button" onClick={copyChatReport} disabled={!selected.size || !!reportBusy}
-                    title="Код, наименование, статус (st), дефекты, участник; под фичей — её неустранённые дефекты"
+                    title="Статус (st), номер и название; под задачей — «Поля в чат» и её неустранённые дефекты"
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
                     <MessageSquareShare className="w-4 h-4" /> Скопировать в чат
                   </button>
+                  {chat && <ChatFieldsPicker cfg={chat} up />}
                   <button type="button" onClick={copyChecklist} disabled={!selected.size || !!reportBusy}
                     title="Код и наименование фичи, проверки по требованиям (если привязаны и выбрана модель) и «Результат проверок:»"
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
@@ -1670,7 +1679,7 @@ export default function JiraToolSection() {
           initial={draftOf(modal.draft)} onSave={d => saveDraft(modal.draft, d)} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
-        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf}
+        <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf} chat={chat}
           ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onTransitions={afterTransitions} onClose={() => setModal(null)} />
       )}
       {STRUCTURE_ENABLED && modal === "import" && list && (
@@ -1731,7 +1740,7 @@ export default function JiraToolSection() {
         <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
-        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf}
+        <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} chat={chat}
           onCreate={modal.defectsFor.local ? undefined : () => setDefectFor(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />
       )}
       {/* Поверх окна «Дефекты» — поэтому ниже него */}

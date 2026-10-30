@@ -9,6 +9,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
 import BulkStatusModal from "./BulkStatusModal";
+import ChatFieldsPicker, { type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок по статусу (st): раньше по процессу — выше. */
 function stageRank(info: StageInfo): number {
@@ -23,16 +24,18 @@ function stageRank(info: StageInfo): number {
  * их отдельной группой ниже; сортировка по колонке работает внутри каждой группы.
  * «Статус (st)» — у каждого дефекта свой, по его статусу Jira (блокировка задачи на дефекты не переносится).
  * «Скопировать в чат» — отмеченные галочками показанные дефекты (по умолчанию все) в порядке таблицы:
- * номер, название, приоритет, статус (st).
+ * статус (st), номер, название; под дефектом — поля, выбранные в «Поля в чат» (пустые не пишутся).
  * «Создать дефект» — форма дефекта: у эпика эпик подставлен, у стори дефект после создания связывается с ней.
  * «Сменить статус» — отмеченные дефекты переводятся в Jira тем же окном, что и в списке (переходы workflow).
  * Поиск и фильтры колонок сужают таблицу; в чат и в смену статуса уходят только видимые отмеченные дефекты.
  */
-export default function DefectsModal({ open, issue, defects, stageOf, onCreate, onTransitions, onClose }: {
+export default function DefectsModal({ open, issue, defects, stageOf, chat, onCreate, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   defects: Issue[];
   stageOf: (i: Issue) => StageInfo;
+  /** «Поля в чат» списка; нет — выбора нет, в чат только статус, номер и название. */
+  chat?: ChatFieldsCfg;
   /** Создать дефект к этой задаче; нет — кнопки нет (задача — черновик, её нет в Jira). */
   onCreate?: () => void;
   /** Переходы выполнены — перечитать эти задачи из Jira. */
@@ -60,7 +63,7 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
   });
 
   const copy = async () => {
-    const ok = await copyToClipboard(defectsChatReport(issue, toSend, stageOf));
+    const ok = await copyToClipboard(defectsChatReport(issue, toSend, stageOf, chat?.lines));
     setNote(ok ? `Скопировано для чата: дефектов ${toSend.length}` : "Браузер не дал скопировать — попробуйте ещё раз");
     setTimeout(() => setNote(""), 3000);
   };
@@ -93,8 +96,9 @@ export default function DefectsModal({ open, issue, defects, stageOf, onCreate, 
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                 <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
             )}
+            {chat && <ChatFieldsPicker cfg={chat} align="right" />}
             <button type="button" onClick={copy} disabled={!toSend.length}
-              title="Номер, название, приоритет и статус (st) отмеченных дефектов — для чата; галочками выберите, что отправить"
+              title="Статус (st), номер и название отмеченных дефектов, под каждым — «Поля в чат»; галочками выберите, что отправить"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
               <MessageSquareShare className="w-4 h-4" /> Скопировать в чат{shown.length ? ` (${toSend.length} из ${shown.length})` : ""}</button>
           </span>

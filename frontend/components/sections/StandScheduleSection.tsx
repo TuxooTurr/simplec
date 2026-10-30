@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardCopy, ExternalLink, Loader2, MinusCircle, PenLine, Settings2, Stethoscope, XCircle } from "lucide-react";
+import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardCopy, ExternalLink, Link2, Loader2, MinusCircle, PenLine, RotateCcw, Settings2, Stethoscope, XCircle } from "lucide-react";
 import {
   getConfluenceSettings, probeConfluenceRead, probeConfluenceWrite, testConfluence,
   type ConfProbeReport,
 } from "@/lib/confluenceApi";
-import { getStandsConfig } from "@/lib/standsApi";
+import { getStandsConfig, saveStandsConfig, type StandsConfig } from "@/lib/standsApi";
 import StandTab from "@/components/stands/StandTab";
 import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
 import Modal from "@/components/ui/Modal";
@@ -26,7 +26,8 @@ type Conn = { state: "loading" } | { state: "ok"; user: string; baseUrl: string 
 
 export default function StandScheduleSection() {
   const [tab, setTab] = useState<string>(STANDS[0]);
-  const [pages, setPages] = useState<Record<string, string> | null>(null);
+  const [cfg, setCfg] = useState<StandsConfig | null>(null);
+  const pages = cfg?.pages ?? null;
   const [conn, setConn] = useState<Conn>({ state: "loading" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [probeOpen, setProbeOpen] = useState(false);
@@ -34,7 +35,7 @@ export default function StandScheduleSection() {
   const connect = () => {
     setConn({ state: "loading" });
     Promise.all([testConfluence(), getConfluenceSettings(), getStandsConfig()])
-      .then(([me, st, cfg]) => { setConn({ state: "ok", user: me.user || me.name, baseUrl: st.base_url }); setPages(cfg.pages); })
+      .then(([me, st, c]) => { setConn({ state: "ok", user: me.user || me.name, baseUrl: st.base_url }); setCfg(c); })
       .catch(e => setConn({ state: "error", message: (e as Error).message }));
   };
   useEffect(connect, []);
@@ -86,7 +87,8 @@ export default function StandScheduleSection() {
                   {t}</button>
               ))}
             </div>
-            <StandTab key={tab} stand={tab} pageId={pages[tab] ?? ""} onPageBound={connect} />
+            {cfg && <PageLink stand={tab} cfg={cfg} onSaved={setCfg} />}
+            <StandTab key={`${tab}:${pages[tab] ?? ""}`} stand={tab} pageId={pages[tab] ?? ""} onPageBound={connect} defaultUrl={cfg?.defaults?.[tab] ?? ""} />
           </>
         )}
       </div>
@@ -199,6 +201,55 @@ function ReportList({ title, rep }: { title: string; rep: ConfProbeReport }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+
+/**
+ * Страница стенда в Confluence — ссылкой, с правкой, как ссылки источников в «Трекинге AQA»: «Изменить» — вставить
+ * другую ссылку (или id), пусто — отвязать; «По умолчанию» — вернуть постоянную страницу стенда (если она задана).
+ */
+function PageLink({ stand, cfg, onSaved }: { stand: string; cfg: StandsConfig; onSaved: (c: StandsConfig) => void }) {
+  const url = cfg.urls[stand] ?? "";
+  const def = cfg.defaults?.[stand] ?? "";
+  const [edit, setEdit] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { setEdit(null); setErr(""); }, [stand]);
+  const save = async (link: string) => {
+    setBusy(true); setErr("");
+    try { onSaved(await saveStandsConfig({ [stand]: link })); setEdit(null); } catch (e) { setErr((e as Error).message); }
+    setBusy(false);
+  };
+  if (!url && edit === null) return null;          // не привязана — форма привязки ниже, в самой вкладке
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <Link2 className="w-3.5 h-3.5 text-text-muted" />
+      <span className="text-text-muted">Страница стенда:</span>
+      {edit === null ? (
+        <>
+          <a href={url} target="_blank" rel="noopener noreferrer" className="max-w-[520px] truncate text-primary hover:underline">{url}</a>
+          {def && url !== def && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-700 dark:text-amber-300">не по умолчанию</span>}
+          <button type="button" onClick={() => setEdit(url)} className="text-text-muted hover:text-primary underline">Изменить</button>
+        </>
+      ) : (
+        <>
+          <input autoFocus value={edit} onChange={e => setEdit(e.target.value)} placeholder="Ссылка на страницу: …pageId=123456 (пусто — отвязать)"
+            onKeyDown={e => { if (e.key === "Enter") void save(edit); if (e.key === "Escape") setEdit(null); }}
+            aria-label={`Ссылка на страницу стенда ${stand}`} className={`${INPUT} w-[460px]`} />
+          <button type="button" disabled={busy} onClick={() => void save(edit)}
+            className="px-2.5 py-1 rounded-lg bg-primary text-white font-semibold disabled:opacity-50">
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Сохранить"}</button>
+          {def && (
+            <button type="button" disabled={busy} onClick={() => setEdit(def)} title={def}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle disabled:opacity-50">
+              <RotateCcw className="w-3.5 h-3.5" /> По умолчанию</button>
+          )}
+          <button type="button" onClick={() => setEdit(null)} className="text-text-muted hover:text-text-main">Отмена</button>
+        </>
+      )}
+      {err && <span className="text-red-600 dark:text-red-400">{err}</span>}
     </div>
   );
 }

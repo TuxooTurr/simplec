@@ -20,7 +20,8 @@ export type ColorBy = "status" | "assignee";
 const MAX_W = 120;
 /** Самое крупное отдаление: неделя до сегодня + три квартала вперёд. Календарь размечен на год вперёд. */
 const BACK_DAYS = 7, FIT_DAYS = BACK_DAYS + 274, YEAR_DAYS = 365;
-const LANE = 28, PAD = 10, HEAD = 46, LEFT = 300, MIN_SECTION = 64, CHECK = 18;
+// Колонка эпиков широкая, а раздел не ниже MIN_SECTION: название эпика — в две строки целиком, под ним прогресс.
+const LANE = 28, PAD = 10, HEAD = 46, LEFT = 380, MIN_SECTION = 96, CHECK = 18;
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
 const dayNum = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return Date.UTC(y, m - 1, d) / 86_400_000; };
@@ -215,7 +216,8 @@ export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, on
                 {e.url ? <a href={e.url} target="_blank" rel="noopener noreferrer" className="font-mono text-[11px] text-primary hover:underline flex-shrink-0">{e.key}</a>
                   : <span className="font-mono text-[11px] text-primary flex-shrink-0">{e.key}</span>}
               </span>
-              <span className={`line-clamp-2 leading-snug ${e.missing ? "text-red-600 dark:text-red-400" : "font-semibold text-text-main"}`}>
+              <span title={e.missing ? undefined : e.summary}
+                className={`line-clamp-2 break-words leading-snug ${e.missing ? "text-red-600 dark:text-red-400" : "font-semibold text-text-main"}`}>
                 {e.missing ? "не найден в Jira" : e.summary}</span>
               {!e.missing && (
                 <span className="flex items-center gap-2 text-[11px] text-text-muted">

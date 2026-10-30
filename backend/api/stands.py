@@ -18,6 +18,8 @@
     «На рассмотрении»; на комментарий уходит ответ с итогом (и предупреждением о конфликте, если он есть).
 
 Локально (metrics_settings, ключ stands_config) хранится привязка стенд → страница: она у каждого SimpleTest своя.
+Пока привязку не меняли — страница по умолчанию (DEFAULT_PAGES: Major-Check → pageId 25529949354); её можно
+заменить или стереть, «По умолчанию» возвращает.
 Справочник микросервисов для выпадающего списка — файл на сервере (db/ms_store.py → data/ms_catalog.json), один на оба
 стенда. Справочник КЭ (db/ke_store.py → data/ke_catalog.json, 83 КЭ платформы) остаётся для переиспользования.
 
@@ -64,6 +66,9 @@ router = APIRouter()
 STANDS = ("Major-Check", "Major-GO")
 PROPERTY = "simpletest-stand"
 _K_CONFIG = "stands_config"
+# Постоянные страницы по умолчанию — пока привязку не меняли. Стёртая привязка хранится пустой строкой и остаётся
+# пустой; «По умолчанию» в интерфейсе возвращает эту.
+DEFAULT_PAGES = {"Major-Check": "25529949354"}
 DEFAULT_TEAMS = ["Базовые сервисы", "Агенты", "B2C", "SC"]
 WEEKDAYS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
@@ -87,7 +92,7 @@ def _config(db: Session) -> dict:
     except ValueError:
         data = {}
     pages = data.get("pages") if isinstance(data.get("pages"), dict) else {}
-    return {"pages": {s: str(pages.get(s) or "") for s in STANDS}}
+    return {"pages": {s: str(pages[s] or "") if s in pages else DEFAULT_PAGES.get(s, "") for s in STANDS}}
 
 
 class ConfigBody(BaseModel):
@@ -98,8 +103,9 @@ class ConfigBody(BaseModel):
 def get_config(db: Session = Depends(get_db)) -> dict:
     cfg = _load_cfg(db)
     pages = _config(db)["pages"]
-    return {"stands": list(STANDS), "pages": pages,
-            "urls": {s: f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}" if pid else "" for s, pid in pages.items()}}
+    url = lambda pid: f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}" if pid else ""
+    return {"stands": list(STANDS), "pages": pages, "urls": {s: url(pid) for s, pid in pages.items()},
+            "defaults": {s: url(DEFAULT_PAGES.get(s, "")) for s in STANDS}}
 
 
 @router.put("/api/stands/config")

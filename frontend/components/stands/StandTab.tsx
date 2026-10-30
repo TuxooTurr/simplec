@@ -42,7 +42,11 @@ function Status({ s }: { s: string }) {
  * со статусом (st) и удалением по одной), заявки из комментариев Confluence, заморозки, настройки окна, релизов
  * и справочника микросервисов. Любое изменение сохраняется в свойство страницы и пересобирает её текст.
  */
-export default function StandTab({ stand, pageId, onPageBound }: { stand: string; pageId: string; onPageBound: () => void }) {
+export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }: {
+  stand: string; pageId: string; onPageBound: () => void;
+  /** Постоянная страница стенда — в форме привязки кнопкой «По умолчанию». */
+  defaultUrl?: string;
+}) {
   const [v, setV] = useState<StandView | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -114,7 +118,7 @@ export default function StandTab({ stand, pageId, onPageBound }: { stand: string
     return barsOf(v).find(b => b.key === pickedKey) ?? null;
   }, [v, pickedKey]);
 
-  if (!pageId) return <BindPage stand={stand} onBound={onPageBound} />;
+  if (!pageId) return <BindPage stand={stand} onBound={onPageBound} defaultUrl={defaultUrl} />;
   if (!v) return <p className="flex items-center gap-2 text-sm text-text-muted">{busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Читаю график из Confluence…</> : msg?.text}</p>;
 
   const teamCls = (t: string) => TEAM_CLS[Math.max(0, v.teams.indexOf(t)) % TEAM_CLS.length];
@@ -589,7 +593,7 @@ function FreezeForm({ busy, onAdd }: { busy: boolean; onAdd: (f: { start: string
   );
 }
 
-function BindPage({ stand, onBound }: { stand: string; onBound: () => void }) {
+function BindPage({ stand, onBound, defaultUrl }: { stand: string; onBound: () => void; defaultUrl: string }) {
   const [link, setLink] = useState("");
   const [parent, setParent] = useState("");
   const [busy, setBusy] = useState(false);
@@ -613,6 +617,11 @@ function BindPage({ stand, onBound }: { stand: string; onBound: () => void }) {
         <button type="button" disabled={busy || !link.trim()} onClick={() => act(() => saveStandsConfig({ [stand]: link }))}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-text-main disabled:opacity-50">
           <Link2 className="w-4 h-4" /> Привязать</button>
+        {defaultUrl && (
+          <button type="button" disabled={busy} onClick={() => act(() => saveStandsConfig({ [stand]: defaultUrl }))} title={defaultUrl}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-text-main disabled:opacity-50">
+            По умолчанию</button>
+        )}
       </div>
       <p className="text-xs text-text-muted">Страница создаётся в пространстве из настроек Confluence (шестерёнка вверху). Коллегам, у которых свой SimpleTest, достаточно привязать ту же ссылку.</p>
       {err && <p className="text-red-600 dark:text-red-400">{err}</p>}

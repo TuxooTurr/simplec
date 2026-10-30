@@ -418,3 +418,21 @@ def test_график_на_странице_сплошные_полосы_цве
     assert b2c.count(f'data-highlight-colour="{colour}"') == 3 and ">09:00<" in b2c
     assert 'data-highlight-colour="#ffbdad">! до 18:00<' in b2c
     assert "<strong>SC</strong>" in chart and "<th>Команда</th><th>Микросервис</th>" in chart
+
+
+def test_страница_по_умолчанию_и_её_можно_заменить_или_убрать(monkeypatch):
+    kv: dict = {}
+    monkeypatch.setattr(st, "_get", lambda db, key, default="": kv.get(key, default))
+    monkeypatch.setattr(st, "_set", lambda db, key, value, desc="": kv.__setitem__(key, value))
+    monkeypatch.setattr(st, "_load_cfg", lambda db: CFG)
+
+    class Db:
+        def commit(self):
+            pass
+    r = st.get_config(Db())
+    assert r["pages"] == {"Major-Check": "25529949354", "Major-GO": ""}                # не меняли — по умолчанию
+    assert r["defaults"]["Major-Check"].endswith("pageId=25529949354") and r["defaults"]["Major-GO"] == ""
+    r = st.put_config(st.ConfigBody(pages={"Major-Check": f"{CFG['base_url']}/pages/viewpage.action?pageId=777"}), Db())
+    assert r["pages"]["Major-Check"] == "777"
+    r = st.put_config(st.ConfigBody(pages={"Major-Check": ""}), Db())
+    assert r["pages"]["Major-Check"] == ""                                               # стёрли — остаётся пустой

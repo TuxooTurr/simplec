@@ -40,7 +40,8 @@ export interface StandView {
   pulled?: { accepted: number; pending: number; replyErrors: string[] };
   replyErrors?: string[];
 }
-export interface StandsConfig { stands: string[]; pages: Record<string, string>; urls: Record<string, string> }
+/** Привязка стендов к страницам Confluence; defaults — постоянная ссылка стенда («По умолчанию»), пусто — нет такой. */
+export interface StandsConfig { stands: string[]; pages: Record<string, string>; urls: Record<string, string>; defaults?: Record<string, string> }
 export interface StandSettings { windowFrom: string; windowTo: string; releases: { name: string; date: string }[]; teams: string[]; limit: number }
 export interface NewBooking { date: string; dateTo?: string; timeFrom?: string; timeTo?: string; team: string; service: string; features: string; task: string; hotfix: boolean }
 

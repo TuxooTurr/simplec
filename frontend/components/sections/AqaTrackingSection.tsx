@@ -14,6 +14,7 @@ import {
   getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
   type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops, type PlanFields,
 } from "@/lib/aqaApi";
+import { AQA_REFRESH_MS, aqaCache, isFresh, persistAqaCache, putCommits, sameSource, type Entry } from "@/lib/aqaCache";
 
 const VIEW_KEY = "st_aqa_view";
 const ZOOM_KEY = "st_aqa_zoom";
@@ -34,7 +35,8 @@ function writeLs(key: string, v: string) {
  * «Трекинг AQA» — развитие автотестов: коммиты выбранной ветки репозитория (Bitbucket), запуски Allure TestOps
  * (щелчок по запуску — окно с подробностями) и роадмап эпиков AQA из Jira таймлайном (масштаб от дня до года)
  * или списком. Источники — в «Подключениях» (ссылками, как в браузере).
- * Данные кэшируются на сервере 5 минут; «Обновить» — заново.
+ * Данные — из кэша сессии (lib/aqaCache.ts, как у Jira tool): видны сразу, фоном обновляются раз в 30 минут;
+ * сервер дополнительно держит ответы 5 минут. «Обновить» — заново, мимо кэшей.
  */
 export default function AqaTrackingSection() {
   const [settings, setSettings] = useState<AqaSettings | null>(null);
@@ -58,31 +60,83 @@ export default function AqaTrackingSection() {
     if (raw !== "" && Number.isFinite(z) && z >= 0) setDayW(z);     // 0 — «3 квартала»
   }, []);
 
-  const run = <T,>(set: (f: (p: Load<T>) => Load<T>) => void, fn: () => Promise<T>) => {
+  /**
+   * Загрузка через кэш сессии (lib/aqaCache.ts): запись того же источника видна сразу; свежая (до 30 минут) —
+   * запроса нет; устарела или «Обновить» — грузим, старые данные остаются на экране. Сбой при данных на экране —
+   * данные остаются, причина — строкой в шапке; без данных — в карточке. Ответ, пришедший после более нового
+   * запроса (сменили ветку), отбрасывается.
+   */
+  const settingsRef = useRef<AqaSettings | null>(null);
+  settingsRef.current = settings;
+  const seqs = useRef({ commits: 0, testops: 0, road: 0 });
+  const [stale, setStale] = useState<Record<string, string>>({});
+  const loadVia = useCallback(<T,>(slot: "commits" | "testops" | "road", label: string, set: (f: (p: Load<T>) => Load<T>) => void,
+                                   hit: Entry<T> | null, key: string, force: boolean, fetch: () => Promise<T>, put: (d: T) => void) => {
+    if (hit) set(() => ({ data: hit.data, err: "", busy: false }));
+    if (!force && hit && isFresh(hit, key)) return;
+    const n = ++seqs.current[slot];
     set(p => ({ ...p, busy: true, err: "" }));
-    fn().then(data => set(() => ({ data, err: "", busy: false })), e => set(() => ({ data: null, err: (e as Error).message, busy: false })));
-  };
-  // Прежние данные остаются на экране, пока грузятся данные другой ветки; ответ по старой ветке, пришедший позже, отбрасывается.
-  const commitsSeq = useRef(0);
-  const loadCommits = useCallback((r = false, b = "") => {
-    const n = ++commitsSeq.current;
-    setCommits(p => ({ ...p, busy: true, err: "" }));
-    getAqaCommits(b, r).then(data => { if (n === commitsSeq.current) setCommits({ data, err: "", busy: false }); },
-      e => { if (n === commitsSeq.current) setCommits({ data: null, err: (e as Error).message, busy: false }); });
+    fetch().then(data => {
+      if (n !== seqs.current[slot]) return;
+      put(data);
+      set(() => ({ data, err: "", busy: false }));
+      setStale(st => { const { [slot]: _, ...rest } = st; return rest; });
+    }, e => {
+      if (n !== seqs.current[slot]) return;
+      const msg = (e as Error).message;
+      set(p => (p.data ? { ...p, busy: false } : { data: null, err: msg, busy: false }));
+      if (hit) setStale(st => ({ ...st, [slot]: `${label}: ${msg}` }));
+    });
   }, []);
-  const loadTestops = useCallback((r = false) => run(setTestops, () => getAqaTestops(r)), []);
-  const loadRoad = useCallback((r = false) => run(setRoad, () => getAqaRoadmap(r)), []);
+
+  const loadCommits = useCallback((r = false, b = "") => {
+    const key = `${settingsRef.current?.bitbucketUrl ?? ""}|${b}`;
+    const hit = sameSource(aqaCache().commits[key], key);
+    loadVia("commits", "Коммиты", setCommits, hit, key, r, () => getAqaCommits(b, r), d => putCommits(key, d));
+  }, [loadVia]);
+  const loadTestops = useCallback((r = false) => {
+    const key = settingsRef.current?.testopsUrl ?? "";
+    loadVia("testops", "Запуски", setTestops, sameSource(aqaCache().testops, key), key, r, () => getAqaTestops(r),
+      d => { aqaCache().testops = { key, data: d, at: Date.now() }; persistAqaCache(); });
+  }, [loadVia]);
+  const loadRoad = useCallback((r = false) => {
+    const key = (settingsRef.current?.epics ?? []).join(",");
+    loadVia("road", "Роадмап", setRoad, sameSource(aqaCache().roadmap, key), key, r, () => getAqaRoadmap(r),
+      d => { aqaCache().roadmap = { key, data: d, at: Date.now() }; persistAqaCache(); });
+  }, [loadVia]);
 
   const loadAll = useCallback((refresh = false) => {
     if (branch === null) return;                     // ветка ещё не прочитана из браузера
-    getAqaSettings().then(s => {
-      setSettings(s);
+    const apply = (s: AqaSettings) => {
+      setSettings(s); settingsRef.current = s;
       if (s.bitbucketOk) loadCommits(refresh, branch); else setCommits(EMPTY);
       if (s.testopsOk) loadTestops(refresh); else setTestops(EMPTY);
       if (s.epics.length) loadRoad(refresh); else setRoad(EMPTY);
-    }, e => setCommits({ data: null, err: (e as Error).message, busy: false }));
+    };
+    getAqaSettings().then(s => { aqaCache().settings = s; persistAqaCache(); apply(s); },
+      e => {
+        const cached = aqaCache().settings;           // бэкенд недоступен — показываем, что было в кэше
+        if (cached && !refresh) apply(cached);
+        else setCommits({ data: null, err: (e as Error).message, busy: false });
+      });
   }, [loadCommits, loadTestops, loadRoad, branch]);
-  useEffect(() => { loadAll(); }, [branch === null]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Сразу — из кэша (без ожидания настроек), потом проверка свежести; пока раздел открыт — фоном раз в 30 минут.
+  useEffect(() => {
+    if (branch === null) return;
+    const s = aqaCache().settings;
+    if (s) {
+      setSettings(s); settingsRef.current = s;
+      const c = sameSource(aqaCache().commits[`${s.bitbucketUrl}|${branch}`], `${s.bitbucketUrl}|${branch}`);
+      if (c) setCommits({ data: c.data, err: "", busy: false });
+      const t = sameSource(aqaCache().testops, s.testopsUrl);
+      if (t) setTestops({ data: t.data, err: "", busy: false });
+      const rm = sameSource(aqaCache().roadmap, s.epics.join(","));
+      if (rm) setRoad({ data: rm.data, err: "", busy: false });
+    }
+    loadAll();
+    const id = window.setInterval(() => loadAll(), AQA_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [branch === null]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickView = (v: "timeline" | "list") => { setView(v); writeLs(VIEW_KEY, v); };
   const pickZoom = (w: number) => { setDayW(w); writeLs(ZOOM_KEY, String(w)); };
@@ -110,6 +164,10 @@ export default function AqaTrackingSection() {
         <Activity className="h-5 w-5 text-primary" />
         <h1 className="text-lg font-bold text-text-main">Трекинг AQA</h1>
         <span className="text-xs text-text-muted">коммиты, запуски автотестов и роадмап</span>
+        {Object.keys(stale).length > 0 && (
+          <span className="truncate text-xs text-amber-700 dark:text-amber-400" title={Object.values(stale).join("\n")}>
+            Не обновилось — показано из кэша: {Object.values(stale).map(m => m.split(":")[0]).join(", ")}</span>
+        )}
         <button type="button" onClick={() => loadAll(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
           <RefreshCw className="h-4 w-4" /> Обновить всё</button>
         <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">

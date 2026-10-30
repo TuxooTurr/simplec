@@ -1,34 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import {
-  Activity, CalendarRange, ExternalLink, GitCommitHorizontal, List, Loader2, RefreshCw, Rocket, Settings2,
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Activity, CalendarRange, List, Loader2, RefreshCw, Settings2 } from "lucide-react";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
+import CommitsCard from "@/components/aqa/CommitsCard";
+import LaunchesCard from "@/components/aqa/LaunchesCard";
+import LaunchModal from "@/components/aqa/LaunchModal";
 import RoadmapList from "@/components/aqa/RoadmapList";
-import RoadmapTimeline, { STATUS_COLORS, ZOOMS, peopleColors, type ColorBy } from "@/components/aqa/RoadmapTimeline";
+import RoadmapTimeline, { DONE_CLS, LATE_CLS, STATUS_COLORS, ZOOMS, peopleColors, type ColorBy } from "@/components/aqa/RoadmapTimeline";
+import { Problem } from "@/components/aqa/widgets";
 import {
   getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
-  type AqaCommits, type AqaEpic, type AqaSettings, type AqaStats, type AqaTestops,
+  type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops,
 } from "@/lib/aqaApi";
 
 const VIEW_KEY = "st_aqa_view";
 const ZOOM_KEY = "st_aqa_zoom";
 const COLOR_KEY = "st_aqa_color";
+const BRANCH_KEY = "st_aqa_branch";
 
 type Load<T> = { data: T | null; err: string; busy: boolean };
 const EMPTY = { data: null, err: "", busy: false };
-
-/** Порядок и цвета статусов кейсов TestOps. */
-const STATUS: { id: string; label: string; cls: string }[] = [
-  { id: "passed", label: "успешно", cls: "bg-emerald-500" },
-  { id: "failed", label: "упало", cls: "bg-red-500" },
-  { id: "broken", label: "сломано", cls: "bg-amber-500" },
-  { id: "skipped", label: "пропущено", cls: "bg-slate-400" },
-  { id: "unknown", label: "неизвестно", cls: "bg-violet-400" },
-];
-
-const fmtWhen = (iso: string) => (iso ? new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 
 function readLs(key: string, fallback: string): string {
   try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
@@ -37,73 +29,20 @@ function writeLs(key: string, v: string) {
   try { localStorage.setItem(key, v); } catch { /* только на этот раз */ }
 }
 
-function Card({ icon, title, link, onRefresh, busy, children }: {
-  icon: ReactNode; title: string; link?: string; onRefresh: () => void; busy: boolean; children: ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border border-border-main bg-bg-card p-4">
-      <div className="mb-3 flex items-center gap-2">
-        {icon}
-        <h2 className="text-sm font-semibold text-text-main">{title}</h2>
-        {link && <a href={link} target="_blank" rel="noopener noreferrer" title="Открыть" className="text-text-muted hover:text-primary"><ExternalLink className="w-3.5 h-3.5" /></a>}
-        <button type="button" onClick={onRefresh} disabled={busy} title="Обновить" aria-label={`Обновить: ${title}`}
-          className="ml-auto p-1 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
-          <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} /></button>
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Big({ value, label }: { value: ReactNode; label: string }) {
-  return (
-    <div>
-      <p className="text-2xl font-bold tabular-nums text-text-main">{value}</p>
-      <p className="text-[11px] text-text-muted">{label}</p>
-    </div>
-  );
-}
-
-function StatsBar({ stats }: { stats: AqaStats }) {
-  const total = Object.values(stats).reduce((a, b) => a + b, 0);
-  if (!total) return <p className="text-xs text-text-muted">Кейсов нет</p>;
-  const known = new Set(STATUS.map(s => s.id));
-  const items = [...STATUS.filter(s => stats[s.id]), ...Object.keys(stats).filter(k => !known.has(k)).map(k => ({ id: k, label: k, cls: "bg-slate-300" }))];
-  return (
-    <div className="space-y-1">
-      <div className="flex h-2 overflow-hidden rounded-full bg-bg-subtle">
-        {items.map(s => <div key={s.id} className={s.cls} style={{ width: `${(stats[s.id] / total) * 100}%` }} title={`${s.label}: ${stats[s.id]}`} />)}
-      </div>
-      <p className="flex flex-wrap gap-x-3 text-[11px] text-text-muted">
-        {items.map(s => (
-          <span key={s.id} className="inline-flex items-center gap-1"><span className={`h-2 w-2 rounded-full ${s.cls}`} />{s.label} <b className="text-text-main tabular-nums">{stats[s.id]}</b></span>
-        ))}
-      </p>
-    </div>
-  );
-}
-
-function Problem({ err, onSettings }: { err: string; onSettings: () => void }) {
-  return (
-    <div className="space-y-2 text-sm">
-      <p className="text-red-600 dark:text-red-400">{err}</p>
-      <button type="button" onClick={onSettings} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
-        <Settings2 className="w-3.5 h-3.5" /> Подключения</button>
-    </div>
-  );
-}
-
 /**
- * «Трекинг AQA» — развитие автотестов: коммиты репозитория (Bitbucket), запуски Allure TestOps и роадмап эпиков AQA
- * из Jira таймлайном (масштаб от дня до года) или списком. Источники — в «Подключениях» (ссылками, как в браузере).
+ * «Трекинг AQA» — развитие автотестов: коммиты выбранной ветки репозитория (Bitbucket), запуски Allure TestOps
+ * (щелчок по запуску — окно с подробностями) и роадмап эпиков AQA из Jira таймлайном (масштаб от дня до года)
+ * или списком. Источники — в «Подключениях» (ссылками, как в браузере).
  * Данные кэшируются на сервере 5 минут; «Обновить» — заново.
  */
 export default function AqaTrackingSection() {
   const [settings, setSettings] = useState<AqaSettings | null>(null);
   const [commits, setCommits] = useState<Load<AqaCommits>>(EMPTY);
   const [testops, setTestops] = useState<Load<AqaTestops>>(EMPTY);
-  const [road, setRoad] = useState<Load<{ epics: AqaEpic[]; loadedAt: string }>>(EMPTY);
+  const [road, setRoad] = useState<Load<AqaRoadmap>>(EMPTY);
   const [open, setOpen] = useState(false);
+  const [branch, setBranch] = useState<string | null>(null);
+  const [launch, setLaunch] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [dayW, setDayW] = useState<number>(ZOOMS[1].w);
   const [colorBy, setColorBy] = useState<ColorBy>("status");
@@ -111,6 +50,7 @@ export default function AqaTrackingSection() {
   useEffect(() => {
     setView(readLs(VIEW_KEY, "timeline") === "list" ? "list" : "timeline");
     setColorBy(readLs(COLOR_KEY, "status") === "assignee" ? "assignee" : "status");
+    setBranch(readLs(BRANCH_KEY, ""));
     const z = Number(readLs(ZOOM_KEY, ""));
     if (z > 0) setDayW(z);
   }, []);
@@ -119,23 +59,32 @@ export default function AqaTrackingSection() {
     set(p => ({ ...p, busy: true, err: "" }));
     fn().then(data => set(() => ({ data, err: "", busy: false })), e => set(() => ({ data: null, err: (e as Error).message, busy: false })));
   };
-  const loadCommits = useCallback((r = false) => run(setCommits, () => getAqaCommits(r)), []);
+  // Прежние данные остаются на экране, пока грузятся данные другой ветки; ответ по старой ветке, пришедший позже, отбрасывается.
+  const commitsSeq = useRef(0);
+  const loadCommits = useCallback((r = false, b = "") => {
+    const n = ++commitsSeq.current;
+    setCommits(p => ({ ...p, busy: true, err: "" }));
+    getAqaCommits(b, r).then(data => { if (n === commitsSeq.current) setCommits({ data, err: "", busy: false }); },
+      e => { if (n === commitsSeq.current) setCommits({ data: null, err: (e as Error).message, busy: false }); });
+  }, []);
   const loadTestops = useCallback((r = false) => run(setTestops, () => getAqaTestops(r)), []);
   const loadRoad = useCallback((r = false) => run(setRoad, () => getAqaRoadmap(r)), []);
 
   const loadAll = useCallback((refresh = false) => {
+    if (branch === null) return;                     // ветка ещё не прочитана из браузера
     getAqaSettings().then(s => {
       setSettings(s);
-      if (s.bitbucketOk) loadCommits(refresh); else setCommits(EMPTY);
+      if (s.bitbucketOk) loadCommits(refresh, branch); else setCommits(EMPTY);
       if (s.testopsOk) loadTestops(refresh); else setTestops(EMPTY);
       if (s.epics.length) loadRoad(refresh); else setRoad(EMPTY);
     }, e => setCommits({ data: null, err: (e as Error).message, busy: false }));
-  }, [loadCommits, loadTestops, loadRoad]);
-  useEffect(() => { loadAll(); }, [loadAll]);
+  }, [loadCommits, loadTestops, loadRoad, branch]);
+  useEffect(() => { loadAll(); }, [branch === null]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickView = (v: "timeline" | "list") => { setView(v); writeLs(VIEW_KEY, v); };
   const pickZoom = (w: number) => { setDayW(w); writeLs(ZOOM_KEY, String(w)); };
   const pickColor = (c: ColorBy) => { setColorBy(c); writeLs(COLOR_KEY, c); };
+  const pickBranch = (b: string) => { setBranch(b); writeLs(BRANCH_KEY, b); loadCommits(false, b); };
 
   /** Эпики роадмапа меняются прямо с графика: сохраняем в настройках (маркеры — масками, они не меняются) и перечитываем. */
   const setEpics = async (next: string[]) => {
@@ -166,58 +115,10 @@ export default function AqaTrackingSection() {
 
       <div className="flex-1 space-y-4 overflow-y-auto p-6 scrollbar-thin">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card icon={<GitCommitHorizontal className="h-4 w-4 text-primary" />} title="Коммиты автотестов" link={commits.data?.repoUrl}
-            onRefresh={() => loadCommits(true)} busy={commits.busy}>
-            {!settings?.bitbucketOk ? <Problem err="Репозиторий Bitbucket не подключён." onSettings={() => setOpen(true)} />
-              : commits.err ? <Problem err={commits.err} onSettings={() => setOpen(true)} />
-              : !commits.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Считаю коммиты…</p>
-              : (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-3">
-                    <Big value={commits.data.today} label="сегодня" />
-                    <Big value={commits.data.week} label="за 7 дней" />
-                    <Big value={`${commits.data.total}${commits.data.totalTruncated ? "+" : ""}`} label="всего" />
-                  </div>
-                  {commits.data.last && (
-                    <p className="text-xs text-text-muted">
-                      Последний: <a href={commits.data.last.url} target="_blank" rel="noopener noreferrer" className="font-mono text-primary hover:underline">{commits.data.last.id}</a>
-                      {" "}· {commits.data.last.author} · {fmtWhen(commits.data.last.date)}
-                      <span className="block truncate text-text-main" title={commits.data.last.message}>{commits.data.last.message}</span>
-                    </p>
-                  )}
-                </div>
-              )}
-          </Card>
-
-          <Card icon={<Rocket className="h-4 w-4 text-primary" />} title="Запуски Allure TestOps" link={testops.data?.projectUrl}
-            onRefresh={() => loadTestops(true)} busy={testops.busy}>
-            {!settings?.testopsOk ? <Problem err="Проект Allure TestOps не подключён." onSettings={() => setOpen(true)} />
-              : testops.err ? <Problem err={testops.err} onSettings={() => setOpen(true)} />
-              : !testops.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю запуски…</p>
-              : (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Big value={testops.data.todayLaunches} label="запусков сегодня" />
-                    <Big value={testops.data.last ? fmtWhen(testops.data.last.date) : "—"} label="последний запуск" />
-                  </div>
-                  {testops.data.last && (
-                    <div className="space-y-1">
-                      <p className="text-xs text-text-muted">
-                        Последний: <a href={testops.data.last.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{testops.data.last.name || `#${testops.data.last.id}`}</a>
-                        {!testops.data.last.closed && <span className="ml-1 rounded bg-blue-100 px-1 text-[10px] text-blue-700 dark:bg-blue-950/50 dark:text-blue-300">идёт</span>}
-                      </p>
-                      <StatsBar stats={testops.data.last.stats} />
-                    </div>
-                  )}
-                  {testops.data.todayLaunches > 0 && (
-                    <div className="space-y-1">
-                      <p className="text-xs text-text-muted">Все запуски за сегодня{testops.data.todayStatsPartial ? " (первые 30)" : ""}:</p>
-                      <StatsBar stats={testops.data.todayStats} />
-                    </div>
-                  )}
-                </div>
-              )}
-          </Card>
+          <CommitsCard ok={!!settings?.bitbucketOk} state={commits} branch={branch ?? ""} onBranch={pickBranch}
+            onRefresh={() => loadCommits(true, branch ?? "")} onSettings={() => setOpen(true)} />
+          <LaunchesCard ok={!!settings?.testopsOk} state={testops} onRefresh={() => loadTestops(true)} onSettings={() => setOpen(true)}
+            onOpen={id => setLaunch({ open: true, id })} />
         </div>
 
         <section className="space-y-3">
@@ -262,9 +163,22 @@ export default function AqaTrackingSection() {
                   {[...people.entries()].map(([name, cls]) => <span key={name} className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${cls}`} /> {name}</span>)}
                   {epics.some(e => e.issues.some(i => !i.assignee)) && <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded bg-slate-400/70" /> не назначен</span>}
                 </>}
-              <span className="inline-flex items-center gap-1"><span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">✓</span> выполнена</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-4 rounded ring-2 ring-red-600" /> просрочена</span>
-              <span>Полоса — от создания до срока; Ctrl + колесо — масштаб, перетаскивание — прокрутка</span>
+              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${DONE_CLS}`} />
+                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">✓</span> выполнена в срок</span>
+              <span className="inline-flex items-center gap-1"><span className={`h-2.5 w-4 rounded ${LATE_CLS}`} />
+                <span className="flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white">!</span> нарушение срока</span>
+              <span className="inline-flex items-center gap-1">
+                <span className="relative h-2.5 w-7 overflow-hidden rounded">
+                  <span className="absolute inset-y-0 left-0 w-3 bg-blue-500/85" />
+                  <span className="absolute inset-y-0 left-3 right-0" style={{ background: "repeating-linear-gradient(135deg, rgb(220 38 38 / .85) 0 3px, rgb(220 38 38 / .45) 3px 6px)" }} />
+                </span> после точки — сверх планового окончания</span>
+              <span>Полоса — от планового начала до планового окончания; Ctrl + колесо — масштаб, перетаскивание — прокрутка</span>
+            </p>
+          )}
+          {road.data?.planFields && (!road.data.planFields.start || !road.data.planFields.end) && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400">
+              {[!road.data.planFields.start && "«Плановое начало» — берётся дата создания", !road.data.planFields.end && "«Плановое окончание» — берётся срок (duedate)"]
+                .filter(Boolean).join("; ")}: поле не найдено в Jira по названию.
             </p>
           )}
           {settings && !settings.epics.length
@@ -279,6 +193,7 @@ export default function AqaTrackingSection() {
       </div>
 
       <AqaSettingsModal open={open} onClose={() => setOpen(false)} onSaved={() => loadAll(true)} />
+      <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))} />
     </div>
   );
 }

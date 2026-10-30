@@ -109,7 +109,7 @@ SimpleTest/
 │   │   ├── incident_catalog.py # Генератор инцидентов: 3 КЭ и ~20 сценариев текста (мониторинг, обращения, алерты Рефлекса)
 │   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA, вопрос к документу
-│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket, запуски Allure TestOps, роадмап эпиков AQA из Jira; ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL)
+│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket по ветке, запуски Allure TestOps и запуск подробно, роадмап эпиков AQA из Jira по плановым датам (поля «Плановое начало/окончание» ищутся по названию); ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL)
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения
 │   └── schemas.py           # Pydantic схемы
@@ -119,7 +119,7 @@ SimpleTest/
 │   │   ├── sections/        # Основные секции UI
 │   │   │   ├── GenerationSection.tsx   # «Тестовая модель»: генерация тест-кейсов
 │   │   │   ├── BugsSection.tsx         # Баг-трекер
-│   │   │   ├── AqaTrackingSection.tsx  # «Трекинг AQA»: карточки коммитов и запусков, роадмап таймлайном/списком (components/aqa/)
+│   │   │   ├── AqaTrackingSection.tsx  # «Трекинг AQA»: виджеты коммитов (выбор ветки) и запусков (окно запуска), роадмап таймлайном/списком (components/aqa/)
 │   │   │   ├── ZephyrSection.tsx       # Zephyr Tool: вкладки Кейсы · Прогоны · Релиз (components/zephyr/)
 │   │   │   ├── EventGeneratorsSection.tsx # Хаб: Метрики, ТКС, Jobs, папки алертов
 │   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)
@@ -186,7 +186,7 @@ SimpleTest/
   кейсов; `st_zephyr_runs_sort` — сортировка прогонов (новые/старые); `st_zephyr_children` — тумблер «Кейсы вложенных папок»;
   `st_zephyr_filter_tpls` — шаблоны фильтров списка кейсов; `st_zephyr_col_widths`, `st_zephyr_pinned` — ширины и закреплённые колонки;
   `st_zephyr_ke_skip:<релиз>` — КЭ, исключённые у отдельных стори в «КЭ релиза → на все стори»
-- `st_aqa_view`, `st_aqa_zoom`, `st_aqa_color` — вид роадмапа «Трекинга AQA» (таймлайн / список), масштаб таймлайна (px на день) и цвет полос (статус / исполнитель)
+- `st_aqa_view`, `st_aqa_zoom`, `st_aqa_color` — вид роадмапа «Трекинга AQA» (таймлайн / список), масштаб таймлайна (px на день) и цвет полос (статус / исполнитель); `st_aqa_branch` — ветка коммитов (пусто — по умолчанию)
 - `st_login_note` — **sessionStorage**: сообщение о маркерах после входа, показывается один раз
 - `st_jira_tool_list_setup` — раскрыта ли «Настройка списка» вверху левой колонки Jira tool
 - `st_jira_issue_table_w:<окно>` — ширины колонок таблиц в окнах Jira tool (`defects` — «Дефекты», `stories` — «Статус (st)»)

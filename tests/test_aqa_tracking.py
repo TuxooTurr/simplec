@@ -55,7 +55,7 @@ def test_testops_запуски_сегодня_и_последний(monkeypatch
                 {"id": 2, "name": "Смоук", "createdDate": ms(0, 9)},
                 {"id": 1, "name": "Вчера", "createdDate": ms(1)}]
     stats = {3: [{"status": "passed", "count": 10}, {"status": "failed", "count": 2}],
-             2: [{"status": "passed", "count": 5}, {"status": "broken", "count": 1}]}
+             2: [{"status": "passed", "count": 5}, {"status": "broken", "count": 1}], 1: []}
 
     def http(name, method, url, verify, **kw):
         if url.endswith("/api/uaa/oauth/token"):
@@ -71,7 +71,7 @@ def test_testops_запуски_сегодня_и_последний(monkeypatch
     assert r["todayLaunches"] == 2
     assert r["todayStats"] == {"passed": 15, "failed": 2, "broken": 1}
     assert r["last"]["name"] == "Регресс" and r["last"]["stats"] == {"passed": 10, "failed": 2}
-    assert r["last"]["url"] == "https://testops.test/launch/3"
+    assert r["last"]["url"] == "https://testops.test/launch/3" and [x["id"] for x in r["recent"]] == [3, 2, 1]
 
 
 def test_testops_без_токена_понятная_ошибка(monkeypatch):
@@ -154,3 +154,131 @@ def test_ссылки_по_умолчанию_и_их_можно_убрать(mo
     r = Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl=""), db=db)
     assert r["bitbucketUrl"] == "" and not r["bitbucketOk"] and r["testopsUrl"] == "" and not r["testopsOk"]
     assert Q.bb_cfg(db)["base_url"] == ""                        # стёртая ссылка не возвращается сама
+
+
+def test_коммиты_ветки_по_дням_последние_и_авторы(monkeypatch):
+    seen = {}
+
+    def http(name, method, url, verify, **kw):
+        seen.update(kw["params"])
+        return {"values": [
+            {"id": "a", "displayId": "aaa", "message": "Сегодня", "committerTimestamp": ms(0), "author": {"displayName": "Иванов"}},
+            {"id": "b", "committerTimestamp": ms(1), "author": {"name": "petrov"}},
+            {"id": "c", "committerTimestamp": ms(1, 9), "author": {"displayName": "Иванов"}},
+            {"id": "d", "committerTimestamp": ms(20)},
+        ], "isLastPage": True}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.bb_commits(BB, "feature/login")
+    assert seen["until"] == "refs/heads/feature/login"
+    assert (r["today"], r["week"], r["total"]) == (1, 3, 4) and r["branch"] == "feature/login"
+    assert len(r["daily"]) == Q.DAILY_DAYS and [d["count"] for d in r["daily"]][-2:] == [2, 1]
+    assert r["daily"][-1]["date"] == datetime.now().date().isoformat()
+    assert [c["id"] for c in r["recent"]] == ["aaa", "b", "c", "d"] and r["last"]["id"] == "aaa"
+    assert r["authors"] == [{"name": "Иванов", "count": 2}, {"name": "petrov", "count": 1}]
+    assert r["repoUrl"].endswith("/browse?at=refs/heads/feature/login")
+    Q.bb_commits(BB, "")
+    assert "until" not in seen or seen.get("until") == "refs/heads/feature/login"   # без ветки until не передаётся
+
+
+def test_ветки_репозитория_и_ветка_по_умолчанию(monkeypatch):
+    calls = []
+
+    def http(name, method, url, verify, **kw):
+        calls.append((url, kw.get("params")))
+        return {"values": [{"displayId": "develop"}, {"displayId": "master", "isDefault": True}], "isLastPage": False}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.bb_branches(BB, " feat ")
+    assert r == {"branches": [{"name": "develop", "default": False}, {"name": "master", "default": True}], "default": "master", "more": True}
+    assert calls[0][0].endswith("/repos/aqa/branches") and calls[0][1]["filterText"] == "feat"
+
+
+def _testops_http(launches, stats, extra=None):
+    def http(name, method, url, verify, **kw):
+        if url.endswith("/api/uaa/oauth/token"):
+            return {"access_token": "JWT", "expires_in": 3600}
+        if url.endswith("/api/rs/launch"):
+            return {"content": launches}
+        for suffix, value in (extra or {}).items():
+            if url.endswith(suffix):
+                return value(kw) if callable(value) else value
+        return stats[int(url.split("/")[-2])]
+    return http
+
+
+def test_testops_последние_запуски_со_статистикой_без_повторных_запросов(monkeypatch):
+    Q._jwt.clear()
+    launches = [{"id": i, "name": f"Запуск {i}", "createdDate": ms(16 - i)} for i in range(15, 0, -1)]
+    calls = []
+    stats = {i: [{"status": "passed", "count": i}] for i in range(1, 16)}
+    http = _testops_http(launches, stats)
+
+    def counting(name, method, url, verify, **kw):
+        calls.append(url)
+        return http(name, method, url, verify, **kw)
+    monkeypatch.setattr(Q, "_http", counting)
+    r = Q.testops_launches(TO)
+    assert len(r["recent"]) == Q.RECENT_LAUNCHES and r["recent"][0]["id"] == 15 and r["last"] == r["recent"][0]
+    assert r["recent"][0]["stats"] == {"passed": 15}
+    stat_calls = [c for c in calls if c.endswith("/statistic")]
+    assert len(stat_calls) == len(set(stat_calls)) == Q.RECENT_LAUNCHES
+
+
+def test_testops_запуск_подробно_упавшие_сверху(monkeypatch):
+    Q._jwt.clear()
+    pages = {0: {"content": [{"id": 1, "name": "Вход", "status": "PASSED", "duration": 1200, "start": 1000, "stop": 2200, "testCaseId": 77},
+                             {"id": 2, "name": "Оплата", "status": "failed", "start": 1500, "stop": 5000, "message": "AssertionError"}],
+                 "totalPages": 2},
+             1: {"content": [{"id": 3, "name": "Выход", "status": "broken"}], "totalPages": 2}}
+    http = _testops_http([], {9: [{"status": "passed", "count": 1}, {"status": "failed", "count": 1}, {"status": "broken", "count": 1}]}, {
+        "/api/rs/launch/9": {"id": 9, "name": "Регресс", "createdDate": ms(0), "closed": True, "createdBy": "ci",
+                             "tags": [{"name": "nightly"}]},
+        "/api/rs/launch/9/env": [{"name": "stand", "value": "ift"}],
+        "/api/rs/testresult": lambda kw: pages[kw["params"]["page"]],
+    })
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.testops_launch(TO, 9)
+    assert r["name"] == "Регресс" and r["tags"] == ["nightly"] and r["env"] == ["stand: ift"] and r["createdBy"] == "ci"
+    assert [t["name"] for t in r["results"]] == ["Оплата", "Выход", "Вход"]
+    assert r["results"][0]["duration"] == 3500 and r["results"][0]["message"] == "AssertionError"
+    assert r["results"][2]["url"] == "https://testops.test/project/2414/test-cases/77" and r["results"][2]["status"] == "passed"
+    assert r["duration"] == 4000 and r["resultsTotal"] == 3 and not r["resultsPartial"]
+
+
+def test_плановые_поля_находятся_по_названию():
+    fields = [{"id": "customfield_1", "name": "Плановое начало", "kind": "date"},
+              {"id": "customfield_2", "name": "Плановое окончание", "kind": "date"},
+              {"id": "customfield_3", "name": "Плановое начало работ (текст)", "kind": "text"},
+              {"id": "duedate", "name": "Срок", "kind": "date"}]
+    assert Q.plan_fields(fields) == {"start": {"id": "customfield_1", "name": "Плановое начало"},
+                                     "end": {"id": "customfield_2", "name": "Плановое окончание"}}
+    assert Q.plan_fields([{"id": "cf9", "name": "Target end", "kind": "date"}]) == {"start": None, "end": {"id": "cf9", "name": "Target end"}}
+    assert Q.plan_fields([]) == {"start": None, "end": None}
+
+
+def test_роадмап_плановые_даты_и_фактическое_закрытие(monkeypatch):
+    epic = _raw("SBER911-1", "Эпик")
+    a = _raw("SBER911-11", "Задача", "Закрыт", "done", resolved="2026-10-12T10:00:00.000+0300", epic="SBER911-1")
+    a["fields"].update({"customfield_1": "2026-10-01", "customfield_2": "2026-10-10"})
+    b = _raw("SBER911-12", "Задача", "Готово", "done", epic="SBER911-1")        # резолюцию не ставят
+    b["fields"].update({"customfield_1": "2026-09-20", "statuscategorychangedate": "2026-10-03T09:00:00.000+0300"})
+    c = _raw("SBER911-13", epic="SBER911-1")
+    c["fields"]["statuscategorychangedate"] = "2026-10-02T09:00:00.000+0300"    # в работе — не закрытие
+    asked = []
+
+    def search(cfg, jql, limit=0, fields=""):
+        asked.append(fields)
+        return ([epic], 1) if jql.startswith("key in") else ([a, b, c], 3)
+    monkeypatch.setattr(JT, "_search", search)
+    monkeypatch.setattr(JT, "catalog", lambda db=None: {"epic_link": "customfield_10006", "fields": [
+        {"id": "customfield_1", "name": "Плановое начало", "kind": "date"},
+        {"id": "customfield_2", "name": "Плановое окончание", "kind": "date"}]})
+    monkeypatch.setattr(JT, "_by_keys", lambda cfg, keys: [])
+    monkeypatch.setattr(Q.jira_defects, "_load_cfg", lambda db: {"base_url": "https://jira.test"})
+    r = Q.roadmap(None, ["SBER911-1"])
+    assert "customfield_1" in asked[0] and "customfield_2" in asked[1] and "statuscategorychangedate" in asked[1]
+    assert r["planFields"]["start"]["name"] == "Плановое начало"
+    by = {i["key"]: i for i in r["epics"][0]["issues"]}
+    assert [i["key"] for i in r["epics"][0]["issues"]] == ["SBER911-12", "SBER911-11", "SBER911-13"]   # по плановому началу
+    assert (by["SBER911-11"]["planStart"], by["SBER911-11"]["planEnd"], by["SBER911-11"]["closed"]) == ("2026-10-01", "2026-10-10", "2026-10-12")
+    assert by["SBER911-12"]["closed"] == "2026-10-03" and by["SBER911-12"]["planEnd"] == ""
+    assert by["SBER911-13"]["closed"] == ""

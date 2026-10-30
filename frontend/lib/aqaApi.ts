@@ -19,25 +19,68 @@ export interface AqaSettings {
   defaults?: { bitbucketUrl: string; testopsUrl: string };
 }
 
+export interface AqaCommit { id: string; message: string; author: string; date: string; url: string }
+
 export interface AqaCommits {
   today: number;
   week: number;
   total: number;
   totalTruncated: boolean;
-  last: { id: string; message: string; author: string; date: string; url: string } | null;
+  last: AqaCommit | null;
+  /** Последние коммиты ветки, новые сверху. */
+  recent: AqaCommit[];
+  /** Коммиты по дням за две недели, сегодня — последним. */
+  daily: { date: string; count: number }[];
+  /** Авторы за 7 дней, кто больше — выше. */
+  authors: { name: string; count: number }[];
+  /** Пусто — ветка по умолчанию. */
+  branch: string;
   repoUrl: string;
   loadedAt: string;
 }
 
+export interface AqaBranches { branches: { name: string; default: boolean }[]; default: string; more: boolean }
+
 /** Статус кейса → сколько: passed, failed, broken, skipped, unknown… */
 export type AqaStats = Record<string, number>;
+
+export interface AqaLaunch { id: number; name: string; date: string; closed: boolean; url: string; stats: AqaStats }
 
 export interface AqaTestops {
   todayLaunches: number;
   todayStats: AqaStats;
   todayStatsPartial: boolean;
-  last: { id: number; name: string; date: string; closed: boolean; url: string; stats: AqaStats } | null;
+  last: AqaLaunch | null;
+  /** Последние запуски, новые сверху. */
+  recent: AqaLaunch[];
   projectUrl: string;
+  loadedAt: string;
+}
+
+export interface AqaResult {
+  id: number;
+  name: string;
+  /** passed / failed / broken / skipped / unknown */
+  status: string;
+  /** мс */
+  duration: number;
+  message: string;
+  assignee: string;
+  testCaseId: number | null;
+  /** Тест-кейс в TestOps; пусто — нет. */
+  url: string;
+}
+
+export interface AqaLaunchDetails extends AqaLaunch {
+  createdBy: string;
+  tags: string[];
+  env: string[];
+  /** мс от начала первого кейса до конца последнего; 0 — неизвестно. */
+  duration: number;
+  /** Упавшие и сломанные сверху. */
+  results: AqaResult[];
+  resultsTotal: number;
+  resultsPartial: boolean;
   loadedAt: string;
 }
 
@@ -57,7 +100,15 @@ export interface AqaIssue {
   created: string;
   due: string;
   resolved: string;
+  /** Плановое начало и окончание — поля Jira; пусто — поля нет или не заполнено. */
+  planStart: string;
+  planEnd: string;
+  /** Фактическое закрытие (дата решения или переход в «готово»); пусто — не закрыта. */
+  closed: string;
 }
+
+export type PlanField = { id: string; name: string } | null;
+export interface AqaRoadmap { epics: AqaEpic[]; planFields?: { start: PlanField; end: PlanField }; loadedAt: string }
 
 export interface AqaEpic extends Partial<AqaIssue> {
   key: string;
@@ -72,26 +123,64 @@ export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk"
   fetchJson<AqaSettings>("/api/aqa/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(s) });
 export const bitbucketTokenFromLogin = (login: string, password: string) =>
   fetchJson<{ status: string }>("/api/aqa/bitbucket/token-from-login", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ login, password }) });
-export const getAqaCommits = (refresh = false) => fetchJson<AqaCommits>(`/api/aqa/commits${refresh ? "?refresh=true" : ""}`);
-export const getAqaTestops = (refresh = false) => fetchJson<AqaTestops>(`/api/aqa/testops${refresh ? "?refresh=true" : ""}`);
-export const getAqaRoadmap = (refresh = false) =>
-  fetchJson<{ epics: AqaEpic[]; loadedAt: string }>(`/api/aqa/roadmap${refresh ? "?refresh=true" : ""}`);
+const qs = (p: Record<string, string | boolean | undefined>) => {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) if (v) q.set(k, String(v));
+  const t = q.toString();
+  return t ? `?${t}` : "";
+};
+
+export const getAqaBranches = (filter = "", refresh = false) => fetchJson<AqaBranches>(`/api/aqa/branches${qs({ filter, refresh })}`);
+export const getAqaCommits = (branch = "", refresh = false) => fetchJson<AqaCommits>(`/api/aqa/commits${qs({ branch, refresh })}`);
+export const getAqaTestops = (refresh = false) => fetchJson<AqaTestops>(`/api/aqa/testops${qs({ refresh })}`);
+export const getAqaLaunch = (id: number, refresh = false) => fetchJson<AqaLaunchDetails>(`/api/aqa/testops/launch/${id}${qs({ refresh })}`);
+export const getAqaRoadmap = (refresh = false) => fetchJson<AqaRoadmap>(`/api/aqa/roadmap${qs({ refresh })}`);
 
 /* ── Даты задачи на таймлайне ─────────────────────────────────────────────
-   Начало — создание; конец — срок, без срока — дата решения, не решена — сегодня. */
+   Полоса — от планового начала до планового окончания (нет полей — создание и срок). Не закрыта к плановому
+   окончанию — там точка, а полоса тянется дальше: до фактического закрытия, не закрыта — до сегодня. */
 
 export const todayIso = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-export function issueSpan(i: Pick<AqaIssue, "created" | "due" | "resolved">): { start: string; end: string } | null {
-  if (!i.created) return null;
-  const end = i.due || i.resolved || todayIso();
-  return { start: i.created, end: end < i.created ? i.created : end };
+type SpanFields = Pick<AqaIssue, "created" | "due" | "resolved" | "statusCategory"> & Partial<Pick<AqaIssue, "planStart" | "planEnd" | "closed">>;
+
+export interface IssueSpan {
+  start: string;
+  /** Плановое окончание (или срок); пусто — плана нет, полоса до закрытия или сегодня. */
+  planEnd: string;
+  /** Конец полосы: плановое окончание, а при опоздании — фактическое закрытие или сегодня. */
+  end: string;
+  done: boolean;
+  /** Фактическое закрытие; пусто — не закрыта. */
+  closed: string;
+  /** Плановое окончание прошло без закрытия: закрыта позже — нарушение срока, не закрыта — просрочена. */
+  late: boolean;
 }
 
-/** Срок прошёл, а задача не решена. */
-export const isOverdue = (i: Pick<AqaIssue, "due" | "statusCategory">) => !!i.due && i.statusCategory !== "done" && i.due < todayIso();
+export const planStartOf = (i: SpanFields) => i.planStart || i.created;
+export const planEndOf = (i: SpanFields) => i.planEnd || i.due;
+export const closedOf = (i: SpanFields) => (i.statusCategory === "done" ? i.closed || i.resolved : "");
+
+export function issueSpan(i: SpanFields): IssueSpan | null {
+  const start = planStartOf(i);
+  if (!start) return null;
+  const done = i.statusCategory === "done";
+  const closed = closedOf(i);
+  const planEnd = planEndOf(i) ? (planEndOf(i) < start ? start : planEndOf(i)) : "";
+  const actual = done ? closed || planEnd || start : todayIso();
+  const late = !!planEnd && actual > planEnd;
+  const end = planEnd && !late ? planEnd : actual;
+  return { start, planEnd, end: end < start ? start : end, done, closed, late };
+}
+
+/** Плановое окончание прошло, а задача не закрыта. */
+export const isOverdue = (i: SpanFields) => i.statusCategory !== "done" && !!planEndOf(i) && planEndOf(i) < todayIso();
+/** Закрыта позже планового окончания — нарушение срока. */
+export const isLate = (i: SpanFields) => { const c = closedOf(i), e = planEndOf(i); return !!c && !!e && c > e; };
+/** Дней между датами ГГГГ-ММ-ДД. */
+export const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 
 export const fmtDay = (iso: string) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}` : "—");

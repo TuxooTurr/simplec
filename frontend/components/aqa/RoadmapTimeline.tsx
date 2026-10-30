@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Flag, Loader2, Plus, X } from "lucide-react";
-import { fmtDay, isOverdue, issueSpan, todayIso, type AqaEpic, type AqaIssue } from "@/lib/aqaApi";
+import {
+  daysBetween, fmtDay, isLate, isOverdue, issueSpan, planStartOf, todayIso, type AqaEpic, type AqaIssue, type IssueSpan,
+} from "@/lib/aqaApi";
 
 /** Ширина дня по масштабу, px. Ctrl + колесо — плавно между MIN и MAX. */
 export const ZOOMS = [
@@ -19,15 +21,19 @@ const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "и�
 
 const dayNum = (iso: string) => { const [y, m, d] = iso.split("-").map(Number); return Date.UTC(y, m - 1, d) / 86_400_000; };
 
-/** Статус: дефект — красный, в работе — синий, не начата — серый, выполнена — зелёная (и галочка сбоку). */
+/** Открытые: в работе — синий, не начата — серый, дефект — оранжевый. Закрытые — зелёная (в срок) или красная
+ *  (позже планового окончания): так при любой раскраске. Красный занят нарушением срока, поэтому дефект — оранжевый. */
 export const STATUS_COLORS = [
   { id: "indeterminate", label: "в работе", cls: "bg-blue-500/85 text-white" },
   { id: "new", label: "не начата", cls: "bg-slate-400/80 text-white dark:bg-slate-500/80" },
-  { id: "defect", label: "дефект", cls: "bg-red-500/85 text-white" },
-  { id: "done", label: "выполнена", cls: "bg-emerald-500/75 text-white" },
+  { id: "defect", label: "дефект", cls: "bg-orange-500/85 text-white" },
 ] as const;
+export const DONE_CLS = "bg-emerald-500/80 text-white";
+export const LATE_CLS = "bg-red-600/85 text-white";
+/** Отрезок после планового окончания: не закрыта вовремя. */
+const OVERRUN_BG = "repeating-linear-gradient(135deg, rgb(220 38 38 / .85) 0 5px, rgb(220 38 38 / .45) 5px 10px)";
 function statusCls(i: Pick<AqaIssue, "defect" | "statusCategory">): string {
-  const id = i.statusCategory === "done" ? "done" : i.defect ? "defect" : i.statusCategory === "indeterminate" ? "indeterminate" : "new";
+  const id = i.defect ? "defect" : i.statusCategory === "indeterminate" ? "indeterminate" : "new";
   return STATUS_COLORS.find(c => c.id === id)!.cls;
 }
 
@@ -45,14 +51,14 @@ export function peopleColors(epics: AqaEpic[]): Map<string, string> {
 }
 const NOBODY = "bg-slate-400/70 text-white";
 
-type Placed = { issue: AqaIssue; start: number; end: number; lane: number };
+type Placed = { issue: AqaIssue; span: IssueSpan; start: number; end: number; planEnd: number | null; lane: number };
 
-/** Задачи эпика по дорожкам: полосы не наезжают друг на друга (с местом под галочку выполненной). */
+/** Задачи эпика по дорожкам: полосы не наезжают друг на друга (с местом под отметку закрытой). */
 function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: number } {
   const gap = Math.ceil((CHECK + 4) / Math.max(dayW, 0.01));
   const items = issues.flatMap(i => {
     const s = issueSpan(i);
-    return s ? [{ issue: i, start: dayNum(s.start), end: dayNum(s.end) }] : [];
+    return s ? [{ issue: i, span: s, start: dayNum(s.start), end: dayNum(s.end), planEnd: s.planEnd ? dayNum(s.planEnd) : null }] : [];
   }).sort((a, b) => a.start - b.start || a.end - b.end);
   const laneEnd: number[] = [];
   const placed = items.map(it => {
@@ -66,8 +72,10 @@ function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: n
 
 /**
  * Роадмап AQA таймлайном. Ось слева — только разделы эпиков (и «+ Добавить эпик»); в разделе — все задачи и дефекты
- * эпика полосами по дорожкам. Полоса — от создания до срока (без срока — до решения, не решена — до сегодня).
- * Цвет — по статусу или по исполнителю (colorBy); выполненная задача — с галочкой сбоку. Масштаб — кнопками снаружи
+ * эпика полосами по дорожкам. Полоса — от планового начала до планового окончания (полей нет — создание и срок).
+ * Не закрыта к плановому окончанию — там точка, дальше полоса штрихом до фактического закрытия (не закрыта — до сегодня).
+ * Цвет открытой — по статусу или по исполнителю (colorBy); закрытая — зелёная с галочкой (в срок) или красная
+ * с «!» (нарушение срока). Масштаб — кнопками снаружи
  * (dayW) или Ctrl + колесо, от дня до года; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
  * статус и даты; щелчок — задача в Jira.
  */
@@ -86,7 +94,8 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
   const [addBusy, setAddBusy] = useState(false);
   const [addErr, setAddErr] = useState("");
   const people = useMemo(() => peopleColors(epics), [epics]);
-  const barCls = (i: AqaIssue) => (colorBy === "assignee" ? (i.assignee ? people.get(i.assignee)! : NOBODY) : statusCls(i));
+  const barCls = (i: AqaIssue, s: IssueSpan) =>
+    s.done ? (s.late ? LATE_CLS : DONE_CLS) : colorBy === "assignee" ? (i.assignee ? people.get(i.assignee)! : NOBODY) : statusCls(i);
 
   const sections = useMemo(() => {
     let y = HEAD;
@@ -176,6 +185,7 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
         </div>
         {sections.map(({ epic: e, height }) => {
           const done = e.issues.filter(i => i.statusCategory === "done").length;
+          const late = e.issues.filter(i => isLate(i) || isOverdue(i)).length;
           return (
             <div key={e.key} style={{ height }} className="group/ep relative flex flex-col justify-center gap-1 px-3 border-b border-border-main"
               onMouseEnter={ev => !e.missing && tip(e, ev)} onMouseLeave={() => setHover(null)}>
@@ -192,6 +202,7 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
                     <span className="block h-full bg-emerald-500" style={{ width: `${e.issues.length ? (done / e.issues.length) * 100 : 0}%` }} />
                   </span>
                   выполнено {done} из {e.issues.length}
+                  {late > 0 && <span className="font-semibold text-red-600 dark:text-red-400" title="Закрыты позже планового окончания или просрочены">· срок нарушен: {late}</span>}
                 </span>
               )}
               <button type="button" onClick={() => void onRemoveEpic(e.key)} aria-label={`Убрать эпик ${e.key} из роадмапа`}
@@ -260,24 +271,32 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
                   {e.missing ? "" : "Задач и дефектов нет"}</span>
               )}
               {placed.map(p => {
-                const i = p.issue;
+                const i = p.issue, s = p.span;
                 const left = (p.start - from) * dayW;
                 const width = Math.max(4, (p.end - p.start + 1) * dayW);
-                const done = i.statusCategory === "done";
+                // Плановая часть — до планового окончания; опоздание — штрихом после точки.
+                const planW = s.late && p.planEnd !== null ? Math.max(2, (p.planEnd - p.start + 1) * dayW) : width;
+                const barTop = top + PAD + p.lane * LANE, barH = LANE - 6;
                 return (
                   <div key={i.key}>
                     <a href={i.url} target="_blank" rel="noopener noreferrer" draggable={false}
                       onClick={ev => { if (drag.current?.moved) ev.preventDefault(); }}
-                      style={{ left, width, top: top + PAD + p.lane * LANE, height: LANE - 6 }}
-                      className={`absolute flex items-center rounded-md px-1.5 text-[10px] font-medium overflow-hidden whitespace-nowrap ${barCls(i)}
-                        ${isOverdue(i) ? "ring-2 ring-red-600 ring-offset-1 ring-offset-bg-card" : ""}`}
+                      style={{ left, width, top: barTop, height: barH }}
+                      className="absolute flex items-center overflow-hidden rounded-md px-1.5 text-[10px] font-medium text-white whitespace-nowrap"
                       onMouseEnter={ev => tip(i, ev)} onMouseMove={ev => tip(i, ev)} onMouseLeave={() => setHover(null)}>
-                      {width > 60 && <span className="truncate">{i.key}{width > 170 ? ` · ${i.summary}` : ""}</span>}
+                      <span aria-hidden style={{ width: planW }} className={`absolute inset-y-0 left-0 ${barCls(i, s)}`} />
+                      {planW < width && <span aria-hidden style={{ left: planW, background: OVERRUN_BG }} className="absolute inset-y-0 right-0" />}
+                      {width > 60 && <span className="relative truncate drop-shadow-sm">{i.key}{width > 170 ? ` · ${i.summary}` : ""}</span>}
                     </a>
-                    {done && (
-                      <span style={{ left: left + width + 3, top: top + PAD + p.lane * LANE + (LANE - 6 - CHECK + 2) / 2, width: CHECK - 2, height: CHECK - 2 }}
-                        title="Выполнена" className="absolute flex items-center justify-center rounded-full bg-emerald-500 text-white pointer-events-none">
-                        <Check className="w-3 h-3" strokeWidth={3} /></span>
+                    {planW < width && (
+                      <span style={{ left: left + planW - 4, top: barTop + barH / 2 - 4 }} title={`Плановое окончание ${fmtDay(s.planEnd)}`}
+                        className="absolute z-[1] h-2 w-2 rounded-full bg-white ring-2 ring-red-700 pointer-events-none" />
+                    )}
+                    {s.done && (
+                      <span style={{ left: left + width + 3, top: barTop + (barH - CHECK + 2) / 2, width: CHECK - 2, height: CHECK - 2 }}
+                        title={s.late ? "Закрыта с нарушением срока" : "Выполнена в срок"}
+                        className={`absolute flex items-center justify-center rounded-full text-white pointer-events-none ${s.late ? "bg-red-600" : "bg-emerald-500"}`}>
+                        {s.late ? <span className="text-[11px] font-bold leading-none">!</span> : <Check className="w-3 h-3" strokeWidth={3} />}</span>
                     )}
                   </div>
                 );
@@ -296,10 +315,16 @@ export default function RoadmapTimeline({ epics, dayW, onDayW, colorBy, onAddEpi
   );
 }
 
-/** Подсказка у курсора: суть, исполнитель, статус, даты. */
+/** Подсказка у курсора: суть, исполнитель, статус, плановые даты, закрытие и срок. */
 function Tip({ i, x, y }: { i: AqaIssue | AqaEpic; x: number; y: number }) {
-  const span = i.created ? issueSpan(i as AqaIssue) : null;
-  const end = i.due ? `срок ${fmtDay(i.due)}` : i.resolved ? `решена ${fmtDay(i.resolved)}` : "не решена — до сегодня";
+  const span = i.created || i.planStart ? issueSpan(i as AqaIssue) : null;
+  const plan = span ? `${i.planStart ? "План" : "Создана"} ${fmtDay(planStartOf(i as AqaIssue))} → ${span.planEnd ? fmtDay(span.planEnd) : "без планового окончания"}` : "";
+  const verdict = !span ? null
+    : span.done ? (span.late
+      ? { cls: "text-red-600 dark:text-red-400", text: `Закрыта ${fmtDay(span.closed)} — нарушение срока на ${daysBetween(span.planEnd, span.closed)} дн.` }
+      : { cls: "text-emerald-600 dark:text-emerald-400", text: span.closed ? `Закрыта ${fmtDay(span.closed)} — в срок` : "Выполнена" })
+    : span.late ? { cls: "text-red-600 dark:text-red-400", text: `Не закрыта — просрочена на ${daysBetween(span.planEnd, todayIso())} дн.` }
+    : null;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1200;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
   const left = Math.min(x + 14, vw - 340);
@@ -314,10 +339,9 @@ function Tip({ i, x, y }: { i: AqaIssue | AqaEpic; x: number; y: number }) {
       </p>
       <p className="mt-1 text-sm font-medium text-text-main leading-snug">{i.summary || "—"}</p>
       <p className="mt-1.5 text-text-muted">Исполнитель: <span className="text-text-main">{i.assignee || "не назначен"}</span></p>
-      {span && <p className="text-text-muted">Создана {fmtDay(i.created ?? "")} → {end}</p>}
+      {span && <p className="text-text-muted">{plan}</p>}
       {"issues" in i && <p className="text-text-muted">Задач и дефектов: {i.issues.length}</p>}
-      {i.statusCategory === "done" && <p className="mt-1 font-semibold text-emerald-600 dark:text-emerald-400">Выполнена</p>}
-      {i.due && isOverdue(i as AqaIssue) && <p className="mt-1 font-semibold text-red-600 dark:text-red-400">Просрочена</p>}
+      {verdict && <p className={`mt-1 font-semibold ${verdict.cls}`}>{verdict.text}</p>}
     </div>
   );
 }

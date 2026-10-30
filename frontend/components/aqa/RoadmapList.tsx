@@ -1,9 +1,10 @@
 "use client";
 
 import { Bug, Flag, SquareCheck } from "lucide-react";
-import { fmtDay, isOverdue, type AqaEpic } from "@/lib/aqaApi";
+import { closedOf, daysBetween, fmtDay, isLate, isOverdue, planEndOf, planStartOf, todayIso, type AqaEpic } from "@/lib/aqaApi";
 
-/** Роадмап классическим списком: эпик — заголовком группы, под ним задачи и дефекты с датами и исполнителем. */
+/** Роадмап классическим списком: эпик — заголовком группы, под ним задачи и дефекты с плановыми датами, закрытием
+ *  и исполнителем. Плановое окончание прошло без закрытия — красным; закрыта позже — красным с днями опоздания. */
 export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
   const TH = "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap";
   return (
@@ -12,7 +13,7 @@ export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
         <thead className="sticky top-0 z-10 bg-bg-card">
           <tr className="text-left">
             <th className={TH}>Номер</th><th className={TH}>Название</th><th className={TH}>Тип</th><th className={TH}>Статус</th>
-            <th className={TH}>Исполнитель</th><th className={TH}>Создана</th><th className={TH}>Срок</th><th className={TH}>Решена</th>
+            <th className={TH}>Исполнитель</th><th className={TH}>План. начало</th><th className={TH}>План. окончание</th><th className={TH}>Закрыта</th>
           </tr>
         </thead>
         {epics.map(e => (
@@ -41,10 +42,15 @@ export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
                 </td>
                 <td className="px-3 py-1.5 whitespace-nowrap text-text-main">{i.status}</td>
                 <td className="px-3 py-1.5 text-text-main">{i.assignee || <span className="text-text-muted">—</span>}</td>
-                <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-text-main">{fmtDay(i.created)}</td>
+                <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-text-main"
+                  title={i.planStart ? undefined : "Планового начала нет — дата создания"}>
+                  {fmtDay(planStartOf(i))}{!i.planStart && i.created && <span className="text-text-muted"> *</span>}</td>
                 <td className={`px-3 py-1.5 whitespace-nowrap tabular-nums ${isOverdue(i) ? "text-red-600 dark:text-red-400 font-semibold" : "text-text-main"}`}
-                  title={isOverdue(i) ? "Срок прошёл, задача не решена" : undefined}>{fmtDay(i.due)}</td>
-                <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-text-main">{fmtDay(i.resolved)}</td>
+                  title={isOverdue(i) ? `Не закрыта — просрочена на ${daysBetween(planEndOf(i), todayIso())} дн.` : !i.planEnd && i.due ? "Планового окончания нет — срок" : undefined}>
+                  {fmtDay(planEndOf(i))}{!i.planEnd && i.due && <span className="text-text-muted"> *</span>}</td>
+                <td className={`px-3 py-1.5 whitespace-nowrap tabular-nums ${isLate(i) ? "text-red-600 dark:text-red-400 font-semibold" : closedOf(i) ? "text-emerald-600 dark:text-emerald-400" : "text-text-main"}`}
+                  title={isLate(i) ? "Закрыта позже планового окончания" : undefined}>
+                  {fmtDay(closedOf(i))}{isLate(i) && ` (+${daysBetween(planEndOf(i), closedOf(i))} дн.)`}</td>
               </tr>
             ))}
             {e.issues.length === 0 && (

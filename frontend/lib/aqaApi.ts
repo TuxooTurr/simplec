@@ -128,8 +128,18 @@ export interface AqaIssue {
 }
 
 export type PlanField = { id: string; name: string } | null;
+/**
+ * Поля плановых дат: start / end — откуда взято больше всего дат; candidates — все подошедшие по названию
+ * (дата берётся из первого непустого); filled — у скольких задач из total дата нашлась.
+ */
+export interface PlanFields {
+  start: PlanField; end: PlanField;
+  candidates?: { start: { id: string; name: string }[]; end: { id: string; name: string }[] };
+  filled?: { start: number; end: number };
+  total?: number;
+}
 export interface AqaRoadmap {
-  epics: AqaEpic[]; planFields?: { start: PlanField; end: PlanField }; loadedAt: string;
+  epics: AqaEpic[]; planFields?: PlanFields; loadedAt: string;
   /** Jira недоступна — показан последний сохранённый снимок (в том числе из резервной копии). */
   snapshot?: { savedAt: string; reason: string };
 }

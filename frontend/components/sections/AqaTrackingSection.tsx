@@ -12,7 +12,7 @@ import RoadmapTimeline, { DONE_CLS, LATE_CLS, STATUS_COLORS, ZOOMS, peopleColors
 import { Problem, fmtWhen } from "@/components/aqa/widgets";
 import {
   getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
-  type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops,
+  type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops, type PlanFields,
 } from "@/lib/aqaApi";
 
 const VIEW_KEY = "st_aqa_view";
@@ -183,12 +183,7 @@ export default function AqaTrackingSection() {
               и входит в резервную копию. Причина — в подсказке.
             </p>
           )}
-          {road.data?.planFields && (!road.data.planFields.start || !road.data.planFields.end) && (
-            <p className="text-[11px] text-amber-700 dark:text-amber-400">
-              {[!road.data.planFields.start && "«Плановое начало» — берётся дата создания", !road.data.planFields.end && "«Плановое окончание» — берётся срок (duedate)"]
-                .filter(Boolean).join("; ")}: поле не найдено в Jira по названию.
-            </p>
-          )}
+          {road.data?.planFields && <PlanFieldsNote pf={road.data.planFields} />}
           {settings && !settings.epics.length
             ? (view === "timeline"
               ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
@@ -204,5 +199,39 @@ export default function AqaTrackingSection() {
       <CommitModal hash={commit} onClose={() => setCommit(null)} />
       <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))} />
     </div>
+  );
+}
+
+
+/**
+ * Откуда роадмап берёт плановые даты: поле Jira и у скольких задач оно заполнено. Поле не нашлось или пусто у всех —
+ * жёлтым: полоса тогда идёт от даты создания до срока (duedate). Все подошедшие по названию поля — в подсказке.
+ */
+function PlanFieldsNote({ pf }: { pf: PlanFields }) {
+  const total = pf.total ?? 0;
+  const part = (k: "start" | "end", label: string, fallback: string) => {
+    const f = pf[k];
+    const n = pf.filled?.[k];
+    const all = pf.candidates?.[k] ?? [];
+    const tip = all.length ? `Подошли по названию: ${all.map(c => `«${c.name}» (${c.id})`).join(", ")}` : "Подходящих по названию полей нет";
+    const bad = !f || (n !== undefined && total > 0 && n === 0);
+    return {
+      bad,
+      node: (
+        <span key={k} title={tip} className={bad ? "text-amber-700 dark:text-amber-400" : undefined}>
+          {label}: {!f ? `поле не найдено — берётся ${fallback}`
+            : <>«{f.name}» <span className="font-mono">{f.id}</span>{n !== undefined && total > 0 && ` — заполнено у ${n} из ${total}`}
+              {n === 0 && total > 0 && `, берётся ${fallback}`}</>}
+          {all.length > 1 && ` · полей с таким названием: ${all.length}`}
+        </span>
+      ),
+    };
+  };
+  const s = part("start", "Плановое начало", "дата создания");
+  const e = part("end", "Плановое окончание", "срок (duedate)");
+  return (
+    <p className={`flex flex-wrap gap-x-4 text-[11px] ${s.bad || e.bad ? "" : "text-text-muted"}`}>
+      {s.node}{e.node}
+    </p>
   );
 }

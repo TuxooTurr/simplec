@@ -493,26 +493,56 @@ def testops_launch(cfg: dict, launch_id: int) -> dict:
 
 _ROADMAP_FIELDS = "summary,issuetype,status,assignee,priority,created,duedate,resolutiondate,statuscategorychangedate,issuelinks"
 # Плановые даты — пользовательские поля Jira, id у каждого сервера свой: ищем по названию (русскому или английскому).
-_PLAN_START_RE = re.compile(r"план\w*\s+(дата\s+)?начал|дата\s+начала\s+\(?план|planned\s*start|target\s*start|plan\s*start", re.I)
-_PLAN_END_RE = re.compile(r"план\w*\s+(дата\s+)?(окончан|заверш|конц)|дата\s+(окончания|завершения)\s+\(?план|"
+# Названия полей плановых дат: «Плановое начало», «Плановая дата начала», «План. начало», «Дата начала (план)»,
+# «Начало (план)», «Planned start»… Точка и скобки в названии — не помеха.
+_PLAN_START_RE = re.compile(r"план[\w.]*\s*(дата\s+)?(начал|старт)|(начал\w*|старт\w*)\s*[(\-–—,]?\s*план(?!\w)|"
+                            r"planned\s*start|target\s*start|plan\s*start", re.I)
+_PLAN_END_RE = re.compile(r"план[\w.]*\s*(дата\s+)?(окончан|заверш|конц|финиш)|(окончан\w*|заверш\w*)\s*[(\-–—,]?\s*план(?!\w)|"
                           r"planned\s*(end|finish)|target\s*end|plan\s*(end|finish)", re.I)
+_PLAN_EXACT = {"start": ("плановое начало", "плановая дата начала"), "end": ("плановое окончание", "плановая дата окончания")}
+_ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}")
+_DMY_DAY = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})")
 
 
 def plan_fields(fields: list[dict]) -> dict:
-    """Поля «Плановое начало» и «Плановое окончание» из списка полей Jira → {start, end}: {id, name} или None.
-    Из подходящих по названию — сначала поля-даты, потом короткое название."""
-    def pick(rx: re.Pattern) -> Optional[dict]:
+    """Поля плановых дат из списка полей Jira → {start: [...], end: [...]}: все подходящие по названию {id, name},
+    лучшие — первыми: точное название («Плановое начало»), потом поля-даты, потом короткое название.
+    Все — потому что в большой Jira одноимённых полей бывает несколько (из разных проектов и плагинов), а заполнено
+    у задач проекта только одно: значение берётся из первого непустого."""
+    def pick(rx: re.Pattern, exact: tuple) -> list[dict]:
         hits = [f for f in fields if f.get("id") and rx.search(str(f.get("name") or ""))]
-        hits.sort(key=lambda f: (f.get("kind") not in ("date", "datetime"), len(str(f.get("name") or ""))))
-        return {"id": hits[0]["id"], "name": hits[0].get("name") or hits[0]["id"]} if hits else None
-    return {"start": pick(_PLAN_START_RE), "end": pick(_PLAN_END_RE)}
+        hits.sort(key=lambda f: (str(f.get("name") or "").strip().lower() not in exact,
+                                 f.get("kind") not in ("date", "datetime"), len(str(f.get("name") or ""))))
+        return [{"id": f["id"], "name": f.get("name") or f["id"]} for f in hits]
+    return {"start": pick(_PLAN_START_RE, _PLAN_EXACT["start"]), "end": pick(_PLAN_END_RE, _PLAN_EXACT["end"])}
 
 
 def _day(v: Any) -> str:
     return str(v or "")[:10]
 
 
-def _item(raw: dict, base_url: str, epic: str, plan: Optional[dict] = None) -> dict:
+def _plan_day(v: Any) -> str:
+    """Значение поля плановой даты → «ГГГГ-ММ-ДД»: дата и дата со временем Jira, «ДД.ММ.ГГГГ» из текстового поля;
+    остальное — пусто (не дата)."""
+    s = str(v or "").strip() if isinstance(v, (str, int, float)) else ""
+    if _ISO_DAY.match(s):
+        return s[:10]
+    m = _DMY_DAY.match(s)
+    return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else ""
+
+
+def _plan_value(f: dict, cands: list[dict], used: Optional[dict]) -> str:
+    """Первое непустое из полей-кандидатов; used — счётчик, из какого поля сколько задач взяли дату."""
+    for c in cands:
+        d = _plan_day(f.get(c["id"]))
+        if d:
+            if used is not None:
+                used[c["id"]] = used.get(c["id"], 0) + 1
+            return d
+    return ""
+
+
+def _item(raw: dict, base_url: str, epic: str, plan: Optional[dict] = None, used: Optional[dict] = None) -> dict:
     f = raw.get("fields") or {}
     status = f.get("status") or {}
     itype = str((f.get("issuetype") or {}).get("name", ""))
@@ -528,8 +558,8 @@ def _item(raw: dict, base_url: str, epic: str, plan: Optional[dict] = None) -> d
         "assignee": str((f.get("assignee") or {}).get("displayName") or ""),
         "priority": str((f.get("priority") or {}).get("name") or ""),
         "created": _day(f.get("created")), "due": _day(f.get("duedate")), "resolved": resolved,
-        "planStart": _day(f.get(plan["start"]["id"])) if plan.get("start") else "",
-        "planEnd": _day(f.get(plan["end"]["id"])) if plan.get("end") else "",
+        "planStart": _plan_value(f, plan.get("start") or [], used and used["start"]),
+        "planEnd": _plan_value(f, plan.get("end") or [], used and used["end"]),
         # Фактическое закрытие: дата решения, а если резолюцию не ставят — когда статус перешёл в «готово».
         "closed": (resolved or _day(f.get("statuscategorychangedate"))) if cat == "done" else "",
     }
@@ -542,7 +572,8 @@ def roadmap(db: Session, epics: list[str]) -> dict:
         return {"epics": [], "planFields": {"start": None, "end": None}}
     cat = JT.catalog(db=db)
     plan = plan_fields(cat.get("fields") or [])
-    extra = "".join(f",{p['id']}" for p in plan.values() if p)
+    extra = "".join(f",{c['id']}" for cands in plan.values() for c in cands)
+    used: dict[str, dict[str, int]] = {"start": {}, "end": {}}
     fields = _ROADMAP_FIELDS + extra
     found, _ = JT._search(cfg, f"key in ({', '.join(epics)})", limit=len(epics), fields=fields)
     by_key = {e["key"]: e for e in found}
@@ -553,7 +584,7 @@ def roadmap(db: Session, epics: list[str]) -> dict:
     items: dict[str, dict] = {}
     for c in children:
         epic = str((c.get("fields") or {}).get(epic_link) or "")
-        items[c["key"]] = _item(c, cfg["base_url"], epic, plan)
+        items[c["key"]] = _item(c, cfg["base_url"], epic, plan, used)
     # Связанные с эпиком напрямую (обычно дефекты): из issuelinks эпика.
     linked: dict[str, str] = {}
     for k, e in by_key.items():
@@ -562,7 +593,7 @@ def roadmap(db: Session, epics: list[str]) -> dict:
                 linked.setdefault(other, k)
     if linked:
         for raw in JT._by_keys(cfg, list(linked)):
-            items[raw["key"]] = _item(raw, cfg["base_url"], linked.get(raw["key"], ""), plan)
+            items[raw["key"]] = _item(raw, cfg["base_url"], linked.get(raw["key"], ""), plan, used)
     out = []
     for k in epics:                                   # порядок — как в настройках
         if k not in by_key:
@@ -571,7 +602,20 @@ def roadmap(db: Session, epics: list[str]) -> dict:
         e = _item(by_key[k], cfg["base_url"], k, plan)
         out.append({**e, "issues": sorted((i for i in items.values() if i["epic"] == k),
                                           key=lambda i: (i["planStart"] or i["created"], i["key"]))})
-    return {"epics": out, "planFields": plan}
+    return {"epics": out, "planFields": _plan_report(plan, used, len(items))}
+
+
+def _plan_report(plan: dict, used: dict, total: int) -> dict:
+    """Что показать о плановых полях: start / end — поле, из которого взято больше всего дат (нет таких — лучшее
+    по названию; не нашлось — None), candidates — все подошедшие по названию, filled — у скольких задач из total
+    дата нашлась."""
+    out: dict[str, Any] = {"candidates": plan, "filled": {}, "total": total}
+    for k in ("start", "end"):
+        cands = plan.get(k) or []
+        best = max(cands, key=lambda c: used[k].get(c["id"], 0), default=None)
+        out[k] = (best if best and used[k].get(best["id"]) else cands[0]) if cands else None
+        out["filled"][k] = sum(used[k].values())
+    return out
 
 
 # ── API ──────────────────────────────────────────────────────────────────────

@@ -249,10 +249,44 @@ def test_плановые_поля_находятся_по_названию():
               {"id": "customfield_2", "name": "Плановое окончание", "kind": "date"},
               {"id": "customfield_3", "name": "Плановое начало работ (текст)", "kind": "text"},
               {"id": "duedate", "name": "Срок", "kind": "date"}]
-    assert Q.plan_fields(fields) == {"start": {"id": "customfield_1", "name": "Плановое начало"},
-                                     "end": {"id": "customfield_2", "name": "Плановое окончание"}}
-    assert Q.plan_fields([{"id": "cf9", "name": "Target end", "kind": "date"}]) == {"start": None, "end": {"id": "cf9", "name": "Target end"}}
-    assert Q.plan_fields([]) == {"start": None, "end": None}
+    r = Q.plan_fields(fields)
+    assert [c["id"] for c in r["start"]] == ["customfield_1", "customfield_3"]
+    assert r["end"] == [{"id": "customfield_2", "name": "Плановое окончание"}]
+    assert Q.plan_fields([{"id": "cf9", "name": "Target end", "kind": "date"}]) == {"start": [], "end": [{"id": "cf9", "name": "Target end"}]}
+    assert Q.plan_fields([]) == {"start": [], "end": []}
+
+
+def test_плановые_поля_сокращения_и_скобки():
+    names = {"План. начало": "start", "Начало (план)": "start", "Дата начала (план)": "start", "Плановая дата начала": "start",
+             "План. окончание": "end", "Окончание (план)": "end", "Плановая дата завершения": "end", "Planned finish": "end",
+             "Начало работ": None, "Дата окончания": None, "Начало планирования": None, "Окончание планирования": None}
+    for name, want in names.items():
+        r = Q.plan_fields([{"id": "cf", "name": name, "kind": "date"}])
+        got = "start" if r["start"] else "end" if r["end"] else None
+        assert got == want, name
+
+
+def test_роадмап_одноимённые_поля_берётся_заполненное(monkeypatch):
+    """В большой Jira два поля «Плановое начало»: первое по порядку у задач пустое, заполнено второе."""
+    epic = _raw("SBER911-1", "Эпик")
+    a = _raw("SBER911-11", epic="SBER911-1")
+    a["fields"].update({"customfield_7": "2026-10-05", "customfield_8": "20.10.2026"})       # окончание — текстом
+    b = _raw("SBER911-12", epic="SBER911-1")
+    b["fields"].update({"customfield_7": "2026-10-07T10:00:00.000+0300", "customfield_8": None})
+    monkeypatch.setattr(JT, "_search", lambda cfg, jql, limit=0, fields="": ([epic], 1) if jql.startswith("key in") else ([a, b], 2))
+    monkeypatch.setattr(JT, "catalog", lambda db=None: {"epic_link": "customfield_10006", "fields": [
+        {"id": "customfield_1", "name": "Плановое начало", "kind": "date"},
+        {"id": "customfield_7", "name": "Плановое начало", "kind": "date"},
+        {"id": "customfield_8", "name": "Плановое окончание", "kind": "text"}]})
+    monkeypatch.setattr(JT, "_by_keys", lambda cfg, keys: [])
+    monkeypatch.setattr(Q.jira_defects, "_load_cfg", lambda db: {"base_url": "https://jira.test"})
+    r = Q.roadmap(None, ["SBER911-1"])
+    i1, i2 = r["epics"][0]["issues"]
+    assert (i1["planStart"], i1["planEnd"]) == ("2026-10-05", "2026-10-20")
+    assert (i2["planStart"], i2["planEnd"]) == ("2026-10-07", "")
+    pf = r["planFields"]
+    assert pf["start"]["id"] == "customfield_7" and pf["end"]["id"] == "customfield_8"
+    assert pf["filled"] == {"start": 2, "end": 1} and pf["total"] == 2
 
 
 def test_роадмап_плановые_даты_и_фактическое_закрытие(monkeypatch):

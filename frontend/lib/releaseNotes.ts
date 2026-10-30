@@ -50,9 +50,9 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
-    id: "2026-10-30-jira-chat-fields",
-    version: "2.010.30",
-    date: "30 октября 2026",
+    id: "2026-10-31-jira-chat-fields",
+    version: "2.010.31",
+    date: "31 октября 2026",
     title: "Jira tool: «Скопировать в чат» — статус первым и любые поля",
     summary: "В сообщении для чата у задачи сначала статус, потом номер и название; под задачей — выбранные поля, пустые не пишутся.",
     sections: [
@@ -82,9 +82,9 @@ export const RELEASES: Release[] = [
     ],
   },
   {
-    id: "2026-10-30-aqa-branches-launches-plan",
-    version: "2.010.30",
-    date: "30 октября 2026",
+    id: "2026-10-31-aqa-branches-launches-plan",
+    version: "2.010.31",
+    date: "31 октября 2026",
     title: "Трекинг AQA: ветки, окно запуска и роадмап по плановым датам",
     summary: "Коммиты считаются по выбранной ветке, запуски открываются подробно, а задачи на роадмапе рисуются по плановым датам и показывают нарушение срока.",
     sections: [

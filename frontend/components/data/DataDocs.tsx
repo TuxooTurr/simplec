@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { FilePlus2, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import DocTree from "@/components/data/DocTree";
+import { Resizer, usePaneSize } from "@/components/zephyr/Resizer";
 import DocPage from "@/components/data/DocPage";
 import NewDocForm from "@/components/data/NewDocForm";
 import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
@@ -56,10 +57,12 @@ export default function DataDocs() {
   const fail = (e: unknown) => setErr((e as Error).message);
 
   const doc = docs.find(d => d.id === selected) ?? null;
+  // Дерево — шириной, которую тянут мышью (длинные названия папок видны целиком); запоминается в браузере.
+  const treePane = usePaneSize("tree", 288, 220, 720, "st_data_panes");
 
   return (
     <div className="flex gap-0 h-[calc(100vh-170px)] min-h-[480px] rounded-xl border border-border-main bg-bg-card overflow-hidden">
-      <aside className="w-72 flex-shrink-0 border-r border-border-main bg-bg-subtle/40 flex flex-col p-2 min-h-0">
+      <aside style={{ width: treePane.size }} className="flex-shrink-0 bg-bg-subtle/40 flex flex-col p-2 min-h-0">
         {loading ? (
           <p className="flex items-center gap-2 px-2 py-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загрузка…</p>
         ) : (
@@ -87,6 +90,7 @@ export default function DataDocs() {
           </button>
         </div>
       </aside>
+      <Resizer pane={treePane} label="Ширина дерева документов" />
 
       <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin px-8 py-6">
         {err && <p className="max-w-4xl mx-auto mb-3 text-sm text-red-600 dark:text-red-400">{err}</p>}

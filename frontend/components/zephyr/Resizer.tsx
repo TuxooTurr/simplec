@@ -4,20 +4,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const PANES_KEY = "st_zephyr_panes";
 
-function readPanes(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(PANES_KEY) ?? "{}") as Record<string, number>; } catch { return {}; }
+function readPanes(key: string): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, number>; } catch { return {}; }
 }
 
-/** Ширина зоны, которую тянут мышью; запоминается в браузере по id. */
-export function usePaneSize(id: string, initial: number, min: number, max: number) {
+/** Ширина зоны, которую тянут мышью; запоминается в браузере по id (в ключе storeKey — у каждого раздела свой). */
+export function usePaneSize(id: string, initial: number, min: number, max: number, storeKey = PANES_KEY) {
   const [size, setSize] = useState(initial);
   const clamp = useCallback((n: number) => Math.round(Math.min(max, Math.max(min, n))), [min, max]);
-  useEffect(() => { const v = readPanes()[id]; if (typeof v === "number") setSize(clamp(v)); }, [id, clamp]);
+  useEffect(() => { const v = readPanes(storeKey)[id]; if (typeof v === "number") setSize(clamp(v)); }, [id, clamp, storeKey]);
   const set = useCallback((n: number, save = false) => {
     const v = clamp(n);
     setSize(v);
-    if (save) try { localStorage.setItem(PANES_KEY, JSON.stringify({ ...readPanes(), [id]: v })); } catch { /* не запомнится */ }
-  }, [id, clamp]);
+    if (save) try { localStorage.setItem(storeKey, JSON.stringify({ ...readPanes(storeKey), [id]: v })); } catch { /* не запомнится */ }
+  }, [id, clamp, storeKey]);
   return { size, set, reset: () => set(initial, true), min, max };
 }
 

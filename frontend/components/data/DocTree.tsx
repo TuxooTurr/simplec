@@ -160,7 +160,7 @@ export default function DocTree({
           style={{ paddingLeft: 8 + depth * STEP }}>
           <ChevronRight className={`w-3.5 h-3.5 flex-shrink-0 text-text-muted transition-transform duration-150 ${isOpen ? "rotate-90" : ""}`} />
           {isOpen ? <FolderOpen className="w-4 h-4 flex-shrink-0 text-amber-500" /> : <Folder className="w-4 h-4 flex-shrink-0 text-amber-500" />}
-          <span className="truncate flex-1">{f.name}</span>
+          <span className="truncate flex-1" title={f.name}>{f.name}</span>
           <span className="text-[11px] text-text-muted group-hover:hidden">{count(f.id) || ""}</span>
           <span className="hidden group-hover:flex items-center gap-0.5" onClick={e => e.stopPropagation()}>
             <button type="button" className={iconBtn} title="Новый документ в папке" aria-label={`Новый документ в ${f.name}`}

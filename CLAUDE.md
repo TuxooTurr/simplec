@@ -109,7 +109,7 @@ SimpleTest/
 │   │   ├── incident_catalog.py # Генератор инцидентов: 3 КЭ и ~20 сценариев текста (мониторинг, обращения, алерты Рефлекса)
 │   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA, вопрос к документу
-│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket по ветке, запуски Allure TestOps и запуск подробно, роадмап эпиков AQA из Jira по плановым датам (поля «Плановое начало/окончание» ищутся по названию); ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL)
+│   │   ├── aqa_tracking.py  # «Трекинг AQA»: коммиты Bitbucket по ветке и коммит подробно (файлы, строки +/−), запуски Allure TestOps и запуск подробно, роадмап эпиков AQA из Jira по плановым датам (поля «Плановое начало/окончание» ищутся по названию; последний роадмап — снимок data/aqa_roadmap.json, входит в резервную копию и показывается без Jira); ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL)
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json)
 │   │   └── app_settings.py  # Настройки приложения
 │   └── schemas.py           # Pydantic схемы
@@ -119,7 +119,7 @@ SimpleTest/
 │   │   ├── sections/        # Основные секции UI
 │   │   │   ├── GenerationSection.tsx   # «Тестовая модель»: генерация тест-кейсов
 │   │   │   ├── BugsSection.tsx         # Баг-трекер
-│   │   │   ├── AqaTrackingSection.tsx  # «Трекинг AQA»: виджеты коммитов (выбор ветки) и запусков (окно запуска), роадмап таймлайном/списком (components/aqa/)
+│   │   │   ├── AqaTrackingSection.tsx  # «Трекинг AQA»: виджеты коммитов (выбор ветки, окно коммита) и запусков (окно запуска), роадмап таймлайном/списком (components/aqa/)
 │   │   │   ├── ZephyrSection.tsx       # Zephyr Tool: вкладки Кейсы · Прогоны · Релиз (components/zephyr/)
 │   │   │   ├── EventGeneratorsSection.tsx # Хаб: Метрики, ТКС, Jobs, папки алертов
 │   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)

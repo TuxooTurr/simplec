@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, GitBranch, GitCommitHorizontal, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, GitBranch, GitCommitHorizontal, Loader2, Search } from "lucide-react";
 import { Card, Kpi, Problem, ago, fmtWhen } from "@/components/aqa/widgets";
 import { getAqaBranches, type AqaBranches, type AqaCommits } from "@/lib/aqaApi";
 
@@ -108,10 +108,11 @@ function Daily({ daily }: { daily: AqaCommits["daily"] }) {
 
 /**
  * Виджет коммитов репозитория автотестов: ветка, сегодня / 7 дней / всего, столбики по дням, авторы недели
- * и последние коммиты (щелчок — коммит в Bitbucket).
+ * и последние коммиты (щелчок — окно коммита: файлы и строки, onOpen).
  */
-export default function CommitsCard({ ok, state, branch, onBranch, onRefresh, onSettings }: {
+export default function CommitsCard({ ok, state, branch, onBranch, onRefresh, onSettings, onOpen }: {
   ok: boolean; state: Load<AqaCommits>; branch: string; onBranch: (b: string) => void; onRefresh: () => void; onSettings: () => void;
+  onOpen: (hash: string) => void;
 }) {
   const d = state.data;
   return (
@@ -143,12 +144,13 @@ export default function CommitsCard({ ok, state, branch, onBranch, onRefresh, on
                 <ul className="max-h-60 divide-y divide-border-main overflow-y-auto rounded-lg border border-border-main scrollbar-thin">
                   {(d.recent ?? []).map(c => (
                     <li key={c.url}>
-                      <a href={c.url} target="_blank" rel="noopener noreferrer" title={`${c.message}\n${c.author} · ${fmtWhen(c.date)}`}
-                        className="flex items-center gap-2.5 px-3 py-1.5 text-xs hover:bg-bg-subtle">
+                      <button type="button" onClick={() => onOpen(c.hash || c.id)} title={`${c.message}\n${c.author} · ${fmtWhen(c.date)}\nЩелчок — что изменено`}
+                        className="group flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs hover:bg-bg-subtle">
                         <span className="flex-shrink-0 rounded bg-bg-subtle px-1.5 py-px font-mono text-[11px] text-primary">{c.id}</span>
                         <span className="min-w-0 flex-1 truncate text-text-main">{c.message || "—"}</span>
                         <span className="flex-shrink-0 text-text-muted">{c.author ? `${c.author} · ` : ""}{ago(c.date)}</span>
-                      </a>
+                        <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 text-text-muted group-hover:text-primary" />
+                      </button>
                     </li>
                   ))}
                 </ul>

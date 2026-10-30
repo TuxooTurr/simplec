@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Activity, CalendarRange, List, Loader2, RefreshCw, Settings2 } from "lucide-react";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
+import CommitModal from "@/components/aqa/CommitModal";
 import CommitsCard from "@/components/aqa/CommitsCard";
 import LaunchesCard from "@/components/aqa/LaunchesCard";
 import LaunchModal from "@/components/aqa/LaunchModal";
 import RoadmapList from "@/components/aqa/RoadmapList";
 import RoadmapTimeline, { DONE_CLS, LATE_CLS, STATUS_COLORS, ZOOMS, peopleColors, type ColorBy } from "@/components/aqa/RoadmapTimeline";
-import { Problem } from "@/components/aqa/widgets";
+import { Problem, fmtWhen } from "@/components/aqa/widgets";
 import {
   getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
   type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops,
@@ -43,6 +44,7 @@ export default function AqaTrackingSection() {
   const [open, setOpen] = useState(false);
   const [branch, setBranch] = useState<string | null>(null);
   const [launch, setLaunch] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
+  const [commit, setCommit] = useState<string | null>(null);
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [dayW, setDayW] = useState<number>(ZOOMS[1].w);
   const [colorBy, setColorBy] = useState<ColorBy>("status");
@@ -116,7 +118,7 @@ export default function AqaTrackingSection() {
       <div className="flex-1 space-y-4 overflow-y-auto p-6 scrollbar-thin">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <CommitsCard ok={!!settings?.bitbucketOk} state={commits} branch={branch ?? ""} onBranch={pickBranch}
-            onRefresh={() => loadCommits(true, branch ?? "")} onSettings={() => setOpen(true)} />
+            onRefresh={() => loadCommits(true, branch ?? "")} onSettings={() => setOpen(true)} onOpen={setCommit} />
           <LaunchesCard ok={!!settings?.testopsOk} state={testops} onRefresh={() => loadTestops(true)} onSettings={() => setOpen(true)}
             onOpen={id => setLaunch({ open: true, id })} />
         </div>
@@ -175,6 +177,12 @@ export default function AqaTrackingSection() {
               <span>Полоса — от планового начала до планового окончания; Ctrl + колесо — масштаб, перетаскивание — прокрутка</span>
             </p>
           )}
+          {road.data?.snapshot && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400" title={road.data.snapshot.reason}>
+              Jira недоступна — показан снимок от {fmtWhen(road.data.snapshot.savedAt)}: он сохраняется при каждой загрузке
+              и входит в резервную копию. Причина — в подсказке.
+            </p>
+          )}
           {road.data?.planFields && (!road.data.planFields.start || !road.data.planFields.end) && (
             <p className="text-[11px] text-amber-700 dark:text-amber-400">
               {[!road.data.planFields.start && "«Плановое начало» — берётся дата создания", !road.data.planFields.end && "«Плановое окончание» — берётся срок (duedate)"]
@@ -193,6 +201,7 @@ export default function AqaTrackingSection() {
       </div>
 
       <AqaSettingsModal open={open} onClose={() => setOpen(false)} onSaved={() => loadAll(true)} />
+      <CommitModal hash={commit} onClose={() => setCommit(null)} />
       <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))} />
     </div>
   );

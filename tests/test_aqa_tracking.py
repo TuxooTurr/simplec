@@ -282,3 +282,63 @@ def test_роадмап_плановые_даты_и_фактическое_за
     assert (by["SBER911-11"]["planStart"], by["SBER911-11"]["planEnd"], by["SBER911-11"]["closed"]) == ("2026-10-01", "2026-10-10", "2026-10-12")
     assert by["SBER911-12"]["closed"] == "2026-10-03" and by["SBER911-12"]["planEnd"] == ""
     assert by["SBER911-13"]["closed"] == ""
+
+
+def test_коммит_подробно_файлы_строки_и_свод(monkeypatch):
+    calls = []
+
+    def http(name, method, url, verify, **kw):
+        calls.append((url, kw.get("params")))
+        if url.endswith("/changes"):
+            return {"values": [
+                {"path": {"toString": "src/Login.java"}, "type": "MODIFY"},
+                {"path": {"toString": "src/New.java"}, "type": "ADD"},
+                {"path": {"toString": "old.yml"}, "type": "DELETE"},
+                {"path": {"toString": "docs/b.md"}, "srcPath": {"toString": "docs/a.md"}, "type": "MOVE"},
+                {"path": {"toString": "logo.png"}, "type": "ADD"},
+            ], "isLastPage": True}
+        if url.endswith("/diff"):
+            return {"diffs": [
+                {"destination": {"toString": "src/Login.java"}, "hunks": [{"segments": [
+                    {"type": "REMOVED", "lines": [{}, {}]}, {"type": "ADDED", "lines": [{}, {}, {}]}, {"type": "CONTEXT", "lines": [{}]}]}]},
+                {"destination": {"toString": "src/New.java"}, "hunks": [{"segments": [{"type": "ADDED", "lines": [{}] * 10}]}]},
+                {"source": {"toString": "old.yml"}, "hunks": [{"segments": [{"type": "REMOVED", "lines": [{}] * 4}]}], "truncated": True},
+                {"destination": {"toString": "logo.png"}, "binary": True},
+            ]}
+        return {"id": "abcdef1234567890", "displayId": "abcdef1", "message": "Вход\n\nподробно", "authorTimestamp": ms(0),
+                "author": {"displayName": "Иванов", "emailAddress": "i@x"}, "parents": [{"id": "p1"}, {"id": "p2"}]}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.bb_commit(BB, "abcdef1234567890")
+    assert calls[2][1]["contextLines"] == 0
+    assert r["hash"] == "abcdef1234567890" and r["message"] == "Вход\n\nподробно" and r["merge"] and r["email"] == "i@x"
+    assert [f["path"] for f in r["files"]][:3] == ["src/New.java", "src/Login.java", "old.yml"]
+    login = next(f for f in r["files"] if f["path"] == "src/Login.java")
+    assert (login["added"], login["removed"], login["type"]) == (3, 2, "modified")
+    assert next(f for f in r["files"] if f["path"] == "docs/b.md")["from"] == "docs/a.md"
+    assert next(f for f in r["files"] if f["path"] == "logo.png")["binary"]
+    assert r["totals"] == {"files": 5, "added": 13, "removed": 6,
+                           "byType": {"added": 2, "modified": 1, "deleted": 1, "moved": 1}}
+    assert r["byExt"][0] == {"ext": "java", "files": 2, "added": 13, "removed": 2} and r["truncated"]
+
+
+def test_роадмап_снимок_сохраняется_и_выручает_без_jira(monkeypatch, tmp_path):
+    monkeypatch.setattr(Q, "SNAPSHOT_FILE", tmp_path / "aqa_roadmap.json")
+    monkeypatch.setattr(Q, "_epics", lambda db: ["SBER911-1"])
+    monkeypatch.setattr(Q, "_cache", {})
+    monkeypatch.setattr(Q, "roadmap", lambda db, epics: {"epics": [{"key": "SBER911-1", "issues": []}], "planFields": {}})
+    r = Q.roadmap_route(db=None)
+    assert "snapshot" not in r and Q.load_snapshot()["keys"] == ["SBER911-1"]
+
+    def down(db, epics):
+        raise HTTPException(502, "Jira недоступна")
+    monkeypatch.setattr(Q, "roadmap", down)
+    r = Q.roadmap_route(refresh=True, db=None)
+    assert r["epics"][0]["key"] == "SBER911-1" and r["snapshot"]["reason"] == "Jira недоступна" and "keys" not in r
+    monkeypatch.setattr(Q, "_epics", lambda db: ["SBER911-2"])           # другие эпики — снимок не подходит
+    with pytest.raises(HTTPException):
+        Q.roadmap_route(refresh=True, db=None)
+
+
+def test_снимок_роадмапа_в_разделе_трекинг_aqa_резервной_копии():
+    import backend.api.backup as bk
+    assert bk.FILE_SECTION["aqa_roadmap.json"] == "aqa" and Q.SNAPSHOT_FILE.name == "aqa_roadmap.json"

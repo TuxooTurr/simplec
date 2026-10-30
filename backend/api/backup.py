@@ -87,6 +87,7 @@ FILE_SECTION: dict[str, str] = {
     "requirements.json": "etalons", "requirement_folders.json": "etalons", "requirement_folders_seeded.json": "etalons",
     "model_bench_scenarios.json": "model_bench", "model_bench_sessions.json": "model_bench",
     "autotest_run_config.json": "auto_model", "autotest_run_history.json": "auto_model",
+    "aqa_roadmap.json": "aqa",
 }
 TABLE_SECTION: dict[str, str] = {
     "test_systems": "event_generators", "test_metrics": "event_generators", "test_metric_values_config": "event_generators",

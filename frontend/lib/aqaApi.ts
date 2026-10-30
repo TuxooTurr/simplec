@@ -19,7 +19,27 @@ export interface AqaSettings {
   defaults?: { bitbucketUrl: string; testopsUrl: string };
 }
 
-export interface AqaCommit { id: string; message: string; author: string; date: string; url: string }
+export interface AqaCommit { id: string; hash: string; message: string; author: string; date: string; url: string }
+
+/** Файл коммита: что с ним сделано и сколько строк добавлено и удалено; from — прежний путь у перенесённого. */
+export interface AqaCommitFile {
+  path: string; from: string; type: "added" | "modified" | "deleted" | "moved" | "copied";
+  added: number; removed: number; binary: boolean;
+}
+
+/** Коммит подробно: полное сообщение, файлы (больше всего строк — сверху), свод по типам и расширениям. */
+export interface AqaCommitDetails extends AqaCommit {
+  email: string;
+  /** merge-коммит: изменения — относительно первого родителя. */
+  merge: boolean;
+  files: AqaCommitFile[];
+  /** Файлов больше, чем показано (первые 1000). */
+  filesMore: boolean;
+  /** Bitbucket обрезал большой diff — строки посчитаны не все. */
+  truncated: boolean;
+  totals: { files: number; added: number; removed: number; byType: Partial<Record<AqaCommitFile["type"], number>> };
+  byExt: { ext: string; files: number; added: number; removed: number }[];
+}
 
 export interface AqaCommits {
   today: number;
@@ -108,7 +128,11 @@ export interface AqaIssue {
 }
 
 export type PlanField = { id: string; name: string } | null;
-export interface AqaRoadmap { epics: AqaEpic[]; planFields?: { start: PlanField; end: PlanField }; loadedAt: string }
+export interface AqaRoadmap {
+  epics: AqaEpic[]; planFields?: { start: PlanField; end: PlanField }; loadedAt: string;
+  /** Jira недоступна — показан последний сохранённый снимок (в том числе из резервной копии). */
+  snapshot?: { savedAt: string; reason: string };
+}
 
 export interface AqaEpic extends Partial<AqaIssue> {
   key: string;
@@ -134,6 +158,7 @@ export const getAqaBranches = (filter = "", refresh = false) => fetchJson<AqaBra
 export const getAqaCommits = (branch = "", refresh = false) => fetchJson<AqaCommits>(`/api/aqa/commits${qs({ branch, refresh })}`);
 export const getAqaTestops = (refresh = false) => fetchJson<AqaTestops>(`/api/aqa/testops${qs({ refresh })}`);
 export const getAqaLaunch = (id: number, refresh = false) => fetchJson<AqaLaunchDetails>(`/api/aqa/testops/launch/${id}${qs({ refresh })}`);
+export const getAqaCommit = (hash: string) => fetchJson<AqaCommitDetails>(`/api/aqa/commit/${encodeURIComponent(hash)}`);
 export const getAqaRoadmap = (refresh = false) => fetchJson<AqaRoadmap>(`/api/aqa/roadmap${qs({ refresh })}`);
 
 /* ── Даты задачи на таймлайне ─────────────────────────────────────────────

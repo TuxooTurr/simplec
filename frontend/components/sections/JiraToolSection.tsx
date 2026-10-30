@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Download, Rocket, Upload, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
@@ -26,10 +26,8 @@ import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import ChatFieldsPicker, { type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
-import BackupModal from "@/components/BackupModal";
 import { downloadBacklog } from "@/lib/backlogExport";
 import { addMs, getMsCatalog } from "@/lib/standsApi";
-import { isBackup } from "@/lib/backupApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
 import LoadSettingsModal from "@/components/jiratool/LoadSettingsModal";
@@ -39,7 +37,7 @@ import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople, saveJiraPeopleFields, type JiraPeopleFields } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, ImportError, addView, applySourceCheck, exportLists, importLists, parseExportFile, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -110,11 +108,6 @@ export default function JiraToolSection() {
   const [panel, setPanel] = useState<Panel>(null);
   const [newFolder, setNewFolder] = useState<string | null>(null);
   const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
-  /* ── Экспорт и импорт списков файлом ── */
-  const [exportMenu, setExportMenu] = useState(false);
-  const [ioNote, setIoNote] = useState<{ ok: boolean; text: string } | null>(null);
-  /** Резервная копия всего SimpleTest: окно открыто; файл, который импорт узнал как резервную копию. */
-  const [backup, setBackup] = useState<{ file: File | null } | null>(null);
   /** Справочник микросервисов (общий с графиком стендов) — для поля «Микросервисы (st)». */
   const [msCatalog, setMsCatalog] = useState<{ ms: string[]; info: Record<string, string> }>({ ms: [], info: {} });
   useEffect(() => { getMsCatalog().then(setMsCatalog).catch(() => { /* бэкенд недоступен — поле работает без списка */ }); }, []);
@@ -126,7 +119,6 @@ export default function JiraToolSection() {
   const [timeFmt, setTimeFmtState] = useState<TimeFmt>(getTimeFmt);
   /** Создание дефекта из окна «Дефекты» задачи: эпику — Epic Link, стори и прочим — связь после создания. */
   const [defectFor, setDefectFor] = useState<Issue | null>(null);
-  const importInput = useRef<HTMLInputElement>(null);
 
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
   const [newTpl, setNewTpl] = useState("");
@@ -566,45 +558,6 @@ export default function JiraToolSection() {
     const l = tpl ? listFromTemplate(name, list?.project ?? DEFAULT_PROJECT, tpl) : emptyList(name, list?.project);
     update(s => ({ ...s, lists: [...s.lists, l] }));
     openList(l.id); setNewList(null); setNewTpl("");
-  };
-
-  /** Списки и весь справочник людей → файл .json: скачивается браузером, его можно переслать коллеге. ids пустой — только люди. */
-  const exportToFile = (ids: string[]) => {
-    if (!state || (!ids.length && !state.participants.length)) return;
-    const data = exportLists(state, ids);
-    const one = !ids.length ? "справочник людей" : ids.length === 1 ? state.lists.find(l => l.id === ids[0])?.name ?? "список" : "списки";
-    const safe = one.replace(/[\\/:*?"<>|]+/g, "_").trim().slice(0, 60) || "список";
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `SimpleTest — ${safe} — ${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-    setExportMenu(false);
-    const people = `людей в справочнике: ${state.participants.length}`;
-    setIoNote({ ok: true, text: !ids.length ? `Справочник сохранён в файл — ${people}`
-      : ids.length === 1 ? `Список «${one}» сохранён в файл, ${people}` : `Списков в файле: ${ids.length}, ${people}` });
-  };
-
-  /** Файл → списки добавляются новыми; ничего у получателя не затирается. */
-  const importFromFile = async (file: File) => {
-    try {
-      const text = await file.text();
-      try { if (isBackup(JSON.parse(text))) { setBackup({ file }); return; } } catch { /* не JSON — скажет parseExportFile */ }
-      const f = parseExportFile(text);
-      const cur = stateRef.current;
-      if (!cur) return;
-      // Считаем один раз (у импортированных списков новые id) и подставляем готовое состояние.
-      const r = importLists(cur, f);
-      update(() => r.state);
-      if (f.lists.length) openList(r.state.lists[r.state.lists.length - f.lists.length].id);
-      const people = r.peopleAdded ? `новых людей в справочнике: ${r.peopleAdded}` : "новых людей нет — все уже в справочнике";
-      setIoNote({ ok: true, text: f.lists.length
-        ? `Добавлено списков: ${f.lists.length} — ${f.lists.map(l => `«${l.name}»`).join(", ")}; ${people}`
-        : `Справочник из файла: ${people}` });
-    } catch (e) {
-      setIoNote({ ok: false, text: e instanceof ImportError ? e.message : `Файл не прочитался: ${(e as Error).message}` });
-    }
   };
 
   /** Структура текущего списка → шаблон. Шаблон с тем же названием перезаписывается. */
@@ -1205,37 +1158,6 @@ export default function JiraToolSection() {
                     className="flex-1 flex items-center gap-2 px-2.5 py-2 rounded-lg text-sm text-text-muted hover:text-primary">
                     <Plus className="w-4 h-4" /> Новый список
                   </button>
-                  <input ref={importInput} type="file" accept=".json,application/json" className="hidden" aria-hidden tabIndex={-1}
-                    onChange={e => { const f = e.target.files?.[0]; if (f) void importFromFile(f); e.target.value = ""; }} />
-                  <button type="button" onClick={() => importInput.current?.click()} aria-label="Импорт списков из файла"
-                    title="Импорт: списки и люди из файла .json (списки добавятся новыми, люди — в справочник; ваше не затрётся)"
-                    className="p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Upload className="w-4 h-4" /></button>
-                  <button type="button" onClick={() => setExportMenu(m => !m)} aria-label="Экспорт списков в файл" aria-expanded={exportMenu}
-                    disabled={!state.lists.length && !state.participants.length}
-                    title="Экспорт: списки и справочник людей в файл .json, чтобы переслать или не потерять"
-                    className="p-1.5 mr-0.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle disabled:opacity-40"><Download className="w-4 h-4" /></button>
-                  {exportMenu && (
-                    <div className="absolute z-30 right-0 top-full mt-1 w-64 rounded-lg border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-1 animate-fade-in">
-                      <button type="button" onClick={() => list && exportToFile([list.id])} disabled={!list}
-                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40 truncate">
-                        Текущий список{list ? ` «${list.name}»` : ""}
-                      </button>
-                      <button type="button" onClick={() => exportToFile(state.lists.map(l => l.id))}
-                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle">
-                        Все списки ({state.lists.length})
-                      </button>
-                      <button type="button" onClick={() => exportToFile([])} disabled={!state.participants.length}
-                        className="w-full text-left px-2.5 py-1.5 rounded text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                        Только справочник людей ({state.participants.length})
-                      </button>
-                      <p className="px-2.5 pt-1 pb-0.5 text-[10px] text-text-muted border-t border-border-main mt-1">
-                        Справочник людей и резервы нагрузки уходят в файл всегда — он общий на все списки.</p>
-                      <button type="button" onClick={() => { setExportMenu(false); setBackup({ file: null }); }}
-                        className="w-full text-left px-2.5 py-1.5 mt-1 rounded text-sm text-text-main hover:bg-bg-subtle border-t border-border-main">
-                        Резервная копия: весь Jira tool или все разделы…
-                      </button>
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="mx-1 flex flex-col gap-1.5 py-1">
@@ -1257,12 +1179,6 @@ export default function JiraToolSection() {
                       className="px-2.5 py-1 rounded-md border border-border-main text-xs text-text-muted">Отмена</button>
                   </div>
                 </div>
-              )}
-              {ioNote && (
-                <p role="status" className={`mx-2 my-1 text-[11px] ${ioNote.ok ? "text-emerald-700 dark:text-emerald-300" : "text-red-600"}`}>
-                  {ioNote.text}
-                  <button type="button" onClick={() => setIoNote(null)} aria-label="Скрыть" className="ml-1.5 text-text-muted hover:text-text-main">×</button>
-                </p>
               )}
               {state.templates.length > 0 && (
                 <div className="border-t border-border-main mt-1 pt-1.5 px-2">
@@ -1685,7 +1601,6 @@ export default function JiraToolSection() {
       {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
       )}
-      {backup && <BackupModal open section="bugs" file={backup.file} onClose={() => setBackup(null)} />}
       {modal === "participants" && (
         <ParticipantsModal open participants={state.participants} usage={usage} onClose={() => setModal(null)}
           jiraOk={jira.state === "ok"} jiraFields={jiraFields} onPushAll={() => { setModal(null); pushAllPeople(); }}

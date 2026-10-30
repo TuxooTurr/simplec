@@ -58,7 +58,7 @@ const SKIP_KEYS = new Set(["st_auth_token", "st_jira_tool_cache", "st_zephyr_imp
 const KEY_SECTION: [RegExp, string][] = [
   [/^st_(jira_|bug_|plan_unit|cell_icon)/, "bugs"], [/^st_zephyr_/, "zephyr"], [/^st_kafka_/, "kafka"],
   [/^st_(gen_|projects$|teams$|ke$|author$)/, "generation"], [/^st_automodel_|^st_autotest_/, "auto_model"],
-  [/^st_testdata_/, "test_data"], [/^st_alert/, "event_generators"], [/^st_logs_/, "logs"],
+  [/^st_testdata_/, "test_data"], [/^st_alert/, "event_generators"], [/^st_logs_/, "logs"], [/^st_aqa_/, "aqa"],
 ];
 export const keySection = (key: string) => KEY_SECTION.find(([re]) => re.test(key))?.[1] ?? "settings";
 

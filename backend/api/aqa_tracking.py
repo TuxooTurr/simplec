@@ -2,7 +2,7 @@
 Трекинг AQA — развитие автотестов одной вкладкой.
 
   • Bitbucket (stash): коммиты репозитория автотестов — за сегодня, за 7 дней (с сегодняшним), всего, по дням за две
-    недели, последние и авторы недели. Ветка выбирается (по умолчанию — ветка по умолчанию репозитория); считаются
+    недели, последние и авторы недели; по коммиту — файлы и строки добавлено/удалено. Ветка выбирается (по умолчанию — ветка по умолчанию репозитория); считаются
     коммиты, как их показывает Bitbucket (с merge-коммитами).
   • Allure TestOps: запуски проекта — сколько сегодня, последние с кейсами по статусам, кейсы всех запусков за сегодня;
     по запуску — подробности: кейсы с результатами.
@@ -24,7 +24,11 @@ API-токен TestOps вставляется в настройках (по па
   GET  /api/aqa/commits?branch=&refresh=     — коммиты ветки (пусто — ветка по умолчанию)
   GET  /api/aqa/testops?refresh=             — запуски
   GET  /api/aqa/testops/launch/{id}          — запуск подробно: кейсы с результатами
-  GET  /api/aqa/roadmap?refresh=             — эпики с задачами
+  GET  /api/aqa/commit/{hash}                — коммит подробно: файлы, строки +/−, свод по типам и расширениям
+  GET  /api/aqa/roadmap?refresh=             — эпики с задачами; Jira недоступна — последний снимок
+
+Снимок роадмапа (data/aqa_roadmap.json) обновляется при каждой удачной загрузке и входит в резервную копию
+(раздел «Трекинг AQA») вместе с эпиками из настроек: после восстановления роадмап виден и без Jira.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -60,6 +65,10 @@ RECENT_LAUNCHES = 12                   # последних запусков в 
 RECENT_COMMITS = 10
 DAILY_DAYS = 14                        # столбики коммитов по дням
 MAX_RESULTS = 2000                     # кейсов в подробностях запуска
+MAX_FILES = 1000                       # файлов в подробностях коммита
+# Последний загруженный роадмап — снимок: попадает в резервную копию (раздел «Трекинг AQA») и показывается,
+# когда Jira недоступна.
+SNAPSHOT_FILE = Path(__file__).resolve().parents[2] / "data" / "aqa_roadmap.json"
 
 _BB_RE = re.compile(r"^(https?://.+?)/projects/([^/]+)/repos/([^/?#]+)", re.I)
 _TO_RE = re.compile(r"^(https?://.+?)/project/(\d+)", re.I)
@@ -232,7 +241,7 @@ def _ref(branch: str) -> str:
 
 def _commit_view(c: dict, cfg: dict, ts: int) -> dict:
     author = c.get("author") or {}
-    return {"id": c.get("displayId") or str(c.get("id", ""))[:11], "message": str(c.get("message", "")).split("\n")[0][:200],
+    return {"id": c.get("displayId") or str(c.get("id", ""))[:11], "hash": str(c.get("id", "")), "message": str(c.get("message", "")).split("\n")[0][:200],
             "author": author.get("displayName") or author.get("name") or "", "date": _iso(ts),
             "url": f"{cfg['base_url']}/projects/{cfg['project']}/repos/{cfg['repo']}/commits/{c.get('id', '')}"}
 
@@ -282,6 +291,68 @@ def bb_commits(cfg: dict, branch: str = "") -> dict:
             "branch": branch.strip(),
             "repoUrl": f"{cfg['base_url']}/projects/{cfg['project']}/repos/{cfg['repo']}/browse"
                        + (f"?at={_ref(branch)}" if branch.strip() else "")}
+
+
+_CHANGE_TYPE = {"ADD": "added", "MODIFY": "modified", "DELETE": "deleted", "MOVE": "moved", "COPY": "copied"}
+
+
+def _ext(path: str) -> str:
+    """Расширение файла для свода: «java», «yml»; нет расширения — имя файла (Dockerfile, Jenkinsfile)."""
+    name = path.rsplit("/", 1)[-1]
+    return name.rsplit(".", 1)[-1].lower() if "." in name.strip(".") else name
+
+
+def bb_commit(cfg: dict, commit_id: str) -> dict:
+    """Коммит подробно: сообщение, автор, файлы (добавлен / изменён / удалён / перенесён) и строки +/− по каждому —
+    из diff без контекста. Свод: файлов, строк добавлено и удалено, по типам изменений и по расширениям.
+    У merge-коммита изменения — относительно первого родителя, как их показывает Bitbucket. Большой diff Bitbucket
+    обрезает (truncated) — тогда строки посчитаны не все, это помечается."""
+    base = f"{_repo_url(cfg)}/commits/{commit_id}"
+    c = _http("Bitbucket", "GET", base, cfg["ssl_verify"], token=cfg["token"])
+    ch = _http("Bitbucket", "GET", f"{base}/changes", cfg["ssl_verify"], token=cfg["token"], params={"limit": MAX_FILES})
+    diff = _http("Bitbucket", "GET", f"{base}/diff", cfg["ssl_verify"], token=cfg["token"],
+                 params={"contextLines": 0, "withComments": "false"}, timeout=60)
+
+    files: dict[str, dict] = {}
+    for x in ch.get("values") or []:
+        path = str((x.get("path") or {}).get("toString") or "")
+        if not path:
+            continue
+        files[path] = {"path": path, "from": str((x.get("srcPath") or {}).get("toString") or ""),
+                       "type": _CHANGE_TYPE.get(str(x.get("type", "")).upper(), "modified"),
+                       "added": 0, "removed": 0, "binary": False}
+    truncated = bool(diff.get("truncated"))
+    for d in diff.get("diffs") or []:
+        path = str((d.get("destination") or d.get("source") or {}).get("toString") or "")
+        if not path:
+            continue
+        f = files.setdefault(path, {"path": path, "from": "", "type": "modified", "added": 0, "removed": 0, "binary": False})
+        f["binary"] = bool(d.get("binary"))
+        truncated |= bool(d.get("truncated"))
+        for h in d.get("hunks") or []:
+            truncated |= bool(h.get("truncated"))
+            for seg in h.get("segments") or []:
+                kind = str(seg.get("type", "")).upper()
+                if kind in ("ADDED", "REMOVED"):
+                    f["added" if kind == "ADDED" else "removed"] += len(seg.get("lines") or [])
+
+    rows = sorted(files.values(), key=lambda f: (-(f["added"] + f["removed"]), f["path"]))
+    by_type: dict[str, int] = {}
+    by_ext: dict[str, dict] = {}
+    for f in rows:
+        by_type[f["type"]] = by_type.get(f["type"], 0) + 1
+        e = by_ext.setdefault(_ext(f["path"]), {"ext": _ext(f["path"]), "files": 0, "added": 0, "removed": 0})
+        e["files"] += 1
+        e["added"] += f["added"]
+        e["removed"] += f["removed"]
+    author = c.get("author") or {}
+    ts = int(c.get("authorTimestamp") or c.get("committerTimestamp") or 0)
+    return {**_commit_view(c, cfg, ts), "message": str(c.get("message", "")).strip(),
+            "email": str(author.get("emailAddress") or ""), "merge": len(c.get("parents") or []) > 1,
+            "files": rows, "filesMore": not ch.get("isLastPage", True), "truncated": truncated,
+            "totals": {"files": len(rows), "added": sum(f["added"] for f in rows), "removed": sum(f["removed"] for f in rows),
+                       "byType": by_type},
+            "byExt": sorted(by_ext.values(), key=lambda e: (-(e["added"] + e["removed"]), e["ext"]))}
 
 
 # ── Allure TestOps ───────────────────────────────────────────────────────────
@@ -603,7 +674,48 @@ def testops_launch_route(launch_id: int, refresh: bool = False, db: Session = De
             "loadedAt": datetime.now().isoformat(timespec="seconds")}
 
 
+@router.get("/api/aqa/commit/{commit_id}")
+def commit_route(commit_id: str, db: Session = Depends(get_db)) -> dict:
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit_id):
+        raise HTTPException(422, "Не хеш коммита")
+    cfg = _bb_ready(db)
+    # Коммит не меняется — кэш без refresh.
+    return _cached(f"bbc:{cfg['url']}:{commit_id.lower()}", False, lambda: bb_commit(cfg, commit_id))
+
+
+def save_snapshot(epics: list[str], data: dict) -> None:
+    """Роадмап → data/aqa_roadmap.json (через временный файл: оборванная запись не портит прежний снимок)."""
+    try:
+        SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SNAPSHOT_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"savedAt": datetime.now().isoformat(timespec="seconds"), "keys": epics, **data},
+                                  ensure_ascii=False), "utf-8")
+        tmp.replace(SNAPSHOT_FILE)
+    except OSError as e:
+        logger.warning("Трекинг AQA: снимок роадмапа не сохранён: %s", e)
+
+
+def load_snapshot() -> Optional[dict]:
+    try:
+        v = json.loads(SNAPSHOT_FILE.read_text("utf-8"))
+        return v if isinstance(v, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
 @router.get("/api/aqa/roadmap")
 def roadmap_route(refresh: bool = False, db: Session = Depends(get_db)) -> dict:
+    """Роадмап из Jira; каждый удачный ответ — в снимок. Jira недоступна, а снимок по тем же эпикам есть (в том числе
+    восстановленный из резервной копии) — отдаём его с пометкой snapshot: когда сохранён и почему не из Jira."""
     epics = _epics(db)
-    return {**_cached(f"rm:{','.join(epics)}", refresh, lambda: roadmap(db, epics)), "loadedAt": datetime.now().isoformat(timespec="seconds")}
+    try:
+        data = _cached(f"rm:{','.join(epics)}", refresh, lambda: roadmap(db, epics))
+    except HTTPException as e:
+        snap = load_snapshot()
+        if not epics or not snap or snap.get("keys") != epics:
+            raise
+        rest = {k: v for k, v in snap.items() if k not in ("savedAt", "keys")}
+        return {**rest, "loadedAt": snap.get("savedAt", ""), "snapshot": {"savedAt": snap.get("savedAt", ""), "reason": str(e.detail)}}
+    if epics:
+        save_snapshot(epics, data)
+    return {**data, "loadedAt": datetime.now().isoformat(timespec="seconds")}

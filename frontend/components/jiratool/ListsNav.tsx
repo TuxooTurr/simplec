@@ -1,7 +1,7 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState } from "react";
-import { FolderTree, GripVertical, LayoutList, Pencil, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Archive, ArchiveRestore, ChevronRight, FolderTree, GripVertical, LayoutList, Pencil, Trash2 } from "lucide-react";
 import { DRAG_ISSUES } from "@/lib/jiraTool";
 
 export interface ListsNavItem { id: string; name: string; project: string; count: number; structure: boolean }
@@ -14,8 +14,9 @@ const VISIBLE = 4;
  * (линия показывает, куда встанет список; у края области она сама прокручивается) или Alt+↑/↓ с клавиатуры.
  * На список можно бросить строки таблицы (DRAG_ISSUES) — задачи переедут в него из открытого списка.
  * Переименование — двойной щелчок по названию или карандаш при наведении; Enter — сохранить, Esc — отменить.
+ * Значок архива при наведении убирает список в блок «Архив» под колонкой (ArchivedLists).
  */
-export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove, onDropIssues, onRename }: {
+export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove, onDropIssues, onRename, onArchive }: {
   items: ListsNavItem[];
   activeId: string | null;
   askDeleteId: string | null;
@@ -26,6 +27,7 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
   onMove: (id: string, target: string, place: "before" | "after") => void;
   onDropIssues: (listId: string, keys: string[]) => void;
   onRename: (listId: string, name: string) => void;
+  onArchive: (listId: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [maxH, setMaxH] = useState<number | undefined>(undefined);
@@ -148,12 +150,74 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
             className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 rounded-md text-text-muted hover:text-primary">
             <Pencil className="w-3.5 h-3.5" />
           </button>
+          <button type="button" onClick={() => onArchive(l.id)} aria-label={`В архив: список ${l.name}`} title="Убрать в архив — список останется, но не будет мешать и открываться при входе"
+            className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 rounded-md text-text-muted hover:text-primary">
+            <Archive className="w-3.5 h-3.5" />
+          </button>
           <button type="button" onClick={() => onAskDelete(l.id)} aria-label={`Удалить список ${l.name}`} title="Удалить список"
             className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 mr-1 rounded-md text-text-muted hover:text-red-500">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Архив под колонкой списков: свёрнут, раскрывается щелчком. Архивный список можно открыть посмотреть, вернуть
+ * в работу или удалить. Открыт архивный — блок раскрыт, иначе его строку не видно.
+ */
+export function ArchivedLists({ items, activeId, onOpen, onRestore, onDelete }: {
+  items: ListsNavItem[];
+  activeId: string | null;
+  onOpen: (id: string) => void;
+  onRestore: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [ask, setAsk] = useState<string | null>(null);
+  const inside = items.some(l => l.id === activeId);
+  useEffect(() => { if (inside) setOpen(true); }, [inside]);
+  if (!items.length) return null;
+  return (
+    <div className="border-t border-border-main mt-0.5 pt-0.5">
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-sm text-text-muted hover:text-primary">
+        <Archive className="w-4 h-4 flex-shrink-0" />
+        <span className="flex-1 text-left">Архив</span>
+        <span className="text-[11px]">{items.length}</span>
+        <ChevronRight className={`w-3.5 h-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && (
+        <div role="list" aria-label="Архив списков" className="max-h-56 overflow-y-auto scrollbar-thin flex flex-col gap-0.5">
+          {items.map(l => ask === l.id ? (
+            <div key={l.id} role="listitem" className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-red-50 dark:bg-red-950/40 text-xs">
+              <span className="flex-1 min-w-0 truncate text-text-main">Удалить «{l.name}»?</span>
+              <button type="button" onClick={() => { setAsk(null); onDelete(l.id); }} className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Да</button>
+              <button type="button" onClick={() => setAsk(null)} className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
+            </div>
+          ) : (
+            <div key={l.id} role="listitem" className={`group/li flex items-center rounded-lg transition-colors ${l.id === activeId ? "bg-primary/10" : "hover:bg-bg-subtle"}`}>
+              <button type="button" onClick={() => onOpen(l.id)} className={`flex-1 min-w-0 flex items-center gap-2 px-2.5 py-1.5 text-left text-sm ${l.id === activeId ? "text-primary font-medium" : "text-text-muted"}`}>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{l.name}</span>
+                  <span className="block text-[10px] font-normal">{l.project}</span>
+                </span>
+                <span className="text-[11px] group-hover/li:hidden">{l.count}</span>
+              </button>
+              <button type="button" onClick={() => onRestore(l.id)} aria-label={`Вернуть из архива: ${l.name}`} title="Вернуть в работу"
+                className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 rounded-md text-text-muted hover:text-primary">
+                <ArchiveRestore className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" onClick={() => setAsk(l.id)} aria-label={`Удалить список ${l.name}`} title="Удалить список"
+                className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 mr-1 rounded-md text-text-muted hover:text-red-500">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

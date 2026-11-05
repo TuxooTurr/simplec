@@ -574,6 +574,8 @@ export interface TaskList {
   activeView?: string;
   /** «Поля в чат»: какие поля писать под задачей в «Скопировать в чат» (по порядку); по умолчанию — никаких. */
   chatFields?: ColRef[];
+  /** Когда список убран в архив; нет — в работе. Архивный не мешает в колонке, не открывается при входе и не обновляется фоном. */
+  archivedAt?: string;
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
@@ -681,6 +683,24 @@ export function listFromTemplate(name: string, project: string, tpl: ListTemplat
 export const DEFAULT_COLUMNS: ColRef[] = ["jira:summary", "jira:issuetype", "jira:status", STAGE_COL, "jira:priority", PARTICIPANT_COL];
 
 const PARTICIPANT_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9", "#8b5cf6", "#ef4444", "#14b8a6"];
+
+/** Списки в работе (без архива), в порядке колонки. */
+export const liveLists = (s: Pick<ToolState, "lists">): TaskList[] => s.lists.filter(l => !l.archivedAt);
+
+/** Какой список открыть при входе: последний открытый, если он есть и не в архиве, иначе первый в работе. */
+export function startList(s: Pick<ToolState, "lists">, last: string | null): string | null {
+  const live = liveLists(s);
+  return live.find(l => l.id === last)?.id ?? live[0]?.id ?? null;
+}
+
+/** Убрать список в архив или вернуть в работу: задачи, поля и настройки остаются как были. */
+export function setArchived(s: ToolState, id: string, on: boolean, now = new Date().toISOString()): ToolState {
+  return { ...s, lists: s.lists.map(l => {
+    if (l.id !== id) return l;
+    const { archivedAt: _was, ...rest } = l;
+    return on ? { ...rest, archivedAt: now } : rest;
+  }) };
+}
 
 export function newId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;

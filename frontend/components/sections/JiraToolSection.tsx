@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
+  AlertTriangle, Archive, ArchiveRestore, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
 } from "lucide-react";
 
@@ -13,7 +13,7 @@ import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAss
 import MsAssignModal from "@/components/jiratool/MsAssignModal";
 import MsOverlapModal from "@/components/jiratool/MsOverlapModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
-import ListsNav from "@/components/jiratool/ListsNav";
+import ListsNav, { ArchivedLists } from "@/components/jiratool/ListsNav";
 import type { ReqOption } from "@/components/jiratool/ListCells";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
@@ -39,7 +39,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import {
   BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
-  NO_FOLDER, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
+  NO_FOLDER, liveLists, setArchived, startList, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
   projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve, ownStageInfo,
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
@@ -73,6 +73,8 @@ type Panel = "columns" | "group" | null;
 const ASIDE_KEY = "st_jira_tool_aside";
 /** Раскрыта ли «Настройка списка» вверху колонки — тоже удобство одного браузера. */
 const LIST_SETUP_KEY = "st_jira_tool_list_setup";
+/** Последний открытый список — с него раздел и открывается (не с первого в колонке). */
+const LAST_LIST_KEY = "st_jira_last_list";
 
 function shortName(name: string): string {
   const words = name.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean);
@@ -169,7 +171,9 @@ export default function JiraToolSection() {
   useEffect(() => {
     const s = loadState();
     setState(s);
-    setActiveId(s.lists[0]?.id ?? null);
+    let last: string | null = null;
+    try { last = localStorage.getItem(LAST_LIST_KEY); } catch { /* приватный режим */ }
+    setActiveId(startList(s, last));
     const c = issueCache();
     setCache({ ...c.issues }); setMissingState(new Set(c.missing)); setRefreshedAt(c.refreshedAt);
     relatedDone.current = c.related;
@@ -444,17 +448,21 @@ export default function JiraToolSection() {
    */
   const stateRef = useRef(state);
   stateRef.current = state;
+  const activeIdRef = useRef(activeId);
+  activeIdRef.current = activeId;
   const refreshAll = async () => {
     if (!stateRef.current) return;
     await flushPeople();
     const st = stateRef.current;
     if (!st) return;
     const drafts = new Set(st.created.map(i => i.key));
-    const keys = Array.from(new Set(st.lists.flatMap(l => l.keys))).filter(k => !drafts.has(k));
+    // Архив фоном не обновляем — только если архивный список сейчас открыт.
+    const lists = st.lists.filter(l => !l.archivedAt || l.id === activeIdRef.current);
+    const keys = Array.from(new Set(lists.flatMap(l => l.keys))).filter(k => !drafts.has(k));
     if (!keys.length) return;
     relatedDone.current.clear();
     await sync(keys, []);
-    await checkSources(st.lists.map(l => l.id));
+    await checkSources(lists.map(l => l.id));
     const c = issueCache(); c.refreshedAt = Date.now(); persistCache();
     setRefreshedAt(c.refreshedAt);
   };
@@ -549,7 +557,19 @@ export default function JiraToolSection() {
   const pending = list ? list.keys.filter(k => !byKey.has(k) && !missing.has(k)).length : 0;
 
   /* ── Действия ── */
-  const openList = (id: string) => { setActiveId(id); setSort(null); setFilter(""); setColFilters({}); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null); };
+  const openList = (id: string) => {
+    try {
+      if (id && !state?.lists.find(l => l.id === id)?.archivedAt) localStorage.setItem(LAST_LIST_KEY, id);
+    } catch { /* приватный режим */ }
+    setActiveId(id); setSort(null); setFilter(""); setColFilters({}); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null);
+  };
+  /** В архив: открыт был он — переходим на следующий список в работе. */
+  const archiveList = (id: string) => {
+    update(s => setArchived(s, id, true));
+    if (id === activeId) openList(state ? startList({ lists: state.lists.filter(l => l.id !== id) }, null) ?? "" : "");
+  };
+  const restoreList = (id: string) => update(s => setArchived(s, id, false));
+  const navItem = (l: TaskList) => ({ id: l.id, name: l.name, project: l.project, count: l.keys.length, structure: !!l.structure });
 
   const createList = () => {
     const name = (newList ?? "").trim();
@@ -897,7 +917,7 @@ export default function JiraToolSection() {
           <aside aria-label="Списки (свёрнуто)" className="w-12 flex-shrink-0 flex flex-col items-center gap-2 overflow-hidden animate-fade-in">
             <RailButton label="Развернуть колонку  [" onClick={() => toggleAside(false)}><PanelLeftOpen className="w-4 h-4" /></RailButton>
             <div className="w-12 flex-1 min-h-0 bg-bg-card border border-border-main rounded-xl py-1.5 flex flex-col items-center gap-1 overflow-y-auto scrollbar-thin">
-              {state.lists.map(l => (
+              {state.lists.filter(l => !l.archivedAt || l.id === activeId).map(l => (
                 <button key={l.id} type="button" onClick={() => openList(l.id)} aria-label={l.name} aria-current={l.id === activeId}
                   title={`${l.name} · ${l.project} · задач: ${l.keys.length}`}
                   className={`w-9 h-9 flex-shrink-0 rounded-lg text-[11px] font-bold transition-colors
@@ -963,6 +983,10 @@ export default function JiraToolSection() {
                     </button>
                     <button type="button" onClick={() => setRenaming(list.name)} aria-label="Переименовать список" title="Переименовать список"
                       className="p-1 rounded-md text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={() => (list.archivedAt ? restoreList(list.id) : archiveList(list.id))}
+                      aria-label={list.archivedAt ? "Вернуть из архива" : "Убрать в архив"} title={list.archivedAt ? "Вернуть в работу" : "Убрать в архив"}
+                      className="p-1 rounded-md text-text-muted hover:text-primary">
+                      {list.archivedAt ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}</button>
                     <button type="button" onClick={() => setAskDelete(true)} aria-label="Удалить список" title="Удалить список"
                       className="p-1 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
@@ -991,7 +1015,7 @@ export default function JiraToolSection() {
                       <span className="text-text-muted flex-1">Удалить список? Задачи в Jira останутся.</span>
                       <button type="button" onClick={() => {
                         update(s => ({ ...s, lists: s.lists.filter(l => l.id !== list.id) }));
-                        openList(state.lists.find(l => l.id !== list.id)?.id ?? "");
+                        openList(startList({ lists: state.lists.filter(l => l.id !== list.id) }, null) ?? "");
                       }} className="px-2 py-1 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
                       <button type="button" onClick={() => setAskDelete(false)} className="px-2 py-1 rounded-md border border-border-main text-text-muted">Нет</button>
                     </div>
@@ -1137,12 +1161,12 @@ export default function JiraToolSection() {
                 </button>
               </div>
               <ListsNav
-                items={state.lists.map(l => ({ id: l.id, name: l.name, project: l.project, count: l.keys.length, structure: !!l.structure }))}
-                activeId={activeId} askDeleteId={askDeleteList}
+                items={liveLists(state).map(navItem)}
+                activeId={activeId} askDeleteId={askDeleteList} onArchive={archiveList}
                 onOpen={openList} onAskDelete={setAskDeleteList} onCancelDelete={() => setAskDeleteList(null)}
                 onConfirmDelete={id => {
                   update(s => ({ ...s, lists: s.lists.filter(x => x.id !== id) }));
-                  if (id === activeId) openList(state.lists.find(x => x.id !== id)?.id ?? "");
+                  if (id === activeId) openList(startList({ lists: state.lists.filter(x => x.id !== id) }, null) ?? "");
                   setAskDeleteList(null);
                 }}
                 onDropIssues={moveToList}
@@ -1180,6 +1204,11 @@ export default function JiraToolSection() {
                   </div>
                 </div>
               )}
+              <ArchivedLists items={state.lists.filter(l => l.archivedAt).map(navItem)} activeId={activeId} onOpen={openList} onRestore={restoreList}
+                onDelete={id => {
+                  update(s => ({ ...s, lists: s.lists.filter(x => x.id !== id) }));
+                  if (id === activeId) openList(startList({ lists: state.lists.filter(x => x.id !== id) }, null) ?? "");
+                }} />
               {state.templates.length > 0 && (
                 <div className="border-t border-border-main mt-1 pt-1.5 px-2">
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted mb-1">Шаблоны</p>
@@ -1326,7 +1355,10 @@ export default function JiraToolSection() {
                   className="w-32 text-sm font-semibold uppercase border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
                 <datalist id="jt-projects">{projects.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}</datalist>
                 <div className="min-w-[10rem] flex-1" title={list.name}>
-                  <p className="text-sm font-semibold text-text-main truncate">{list.name}</p>
+                  <p className="text-sm font-semibold text-text-main truncate">
+                    {list.name}
+                    {list.archivedAt && <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">в архиве</span>}
+                  </p>
                   <p className="text-[11px] text-text-muted truncate">задач: {list.keys.length}
                     {foreign > 0 && <span title="Поля этих задач берутся из их проектов"> · из других проектов: {foreign}</span>}
                     {pending > 0 && busy > 0 && <> · загружаю из Jira: {pending}</>}
@@ -1420,13 +1452,13 @@ export default function JiraToolSection() {
                       <option value="__none__">{NO_FOLDER}</option>
                     </select>
                   )}
-                  {state.lists.length > 1 && (
+                  {liveLists(state).some(l => l.id !== activeId) && (
                     <select value="" onChange={e => e.target.value && moveToList(e.target.value, [...selected])}
                       aria-label="Перенести выбранные в другой список" disabled={!selected.size}
                       title="Перенести в другой список — с участником, трудозатратами и своими полями, которые есть и там. Или перетащите строки на список слева"
                       className="px-2 py-1.5 rounded-lg border border-border-main text-sm text-text-main bg-[var(--color-input-bg)] disabled:opacity-40">
                       <option value="">В список…</option>
-                      {state.lists.filter(l => l.id !== activeId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                      {liveLists(state).filter(l => l.id !== activeId).map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
                   )}
                   {/* Удаление из списка — справа, отдельно от массовых действий и красным: его легко перепутать */}

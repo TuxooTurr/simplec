@@ -505,6 +505,10 @@ export async function exportGenSession(id: string, params: {
   use_llm?: boolean;
   provider?: string;
   crit_regress?: boolean;
+  project_id?: string;
+  jira_version?: string;
+  author_name?: string;
+  author_tab_num?: string;
 }): Promise<{ xml: string; csv: string; md: string }> {
   return fetchJson(`/api/generation/sessions/${id}/export`, {
     method:  "POST",

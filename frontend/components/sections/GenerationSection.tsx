@@ -10,17 +10,23 @@ import {
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import StatusPanel from "@/components/StatusPanel";
 import CaseCard from "@/components/CaseCard";
-import ExportPanel from "@/components/ExportPanel";
+import ExportPanel, { type ExportPanelParams } from "@/components/ExportPanel";
+import ModelPreviewModal from "@/components/taskgen/ModelPreviewModal";
+import TaskDrafts from "@/components/taskgen/TaskDrafts";
+import TaskJobsBar from "@/components/taskgen/TaskJobsBar";
+import TaskPickerModal from "@/components/taskgen/TaskPickerModal";
 import NotionRenderer from "@/components/NotionRenderer";
 import { Select } from "@/components/ui/Select";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import {
-  parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession,
+  parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession, exportGenSession,
   listTestDataConnections, getTestDataSchemasText,
   listRequirements, addRequirement,
   type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement,
 } from "@/lib/api";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { featureOf, modelFolder, taskSource, type ModelGroup, type TaskDraft, type TaskFile, type TaskJob, type TaskPick } from "@/lib/taskModel";
+import { parseZephyrXml } from "@/lib/zephyrStaging";
 
 type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
 
@@ -173,6 +179,16 @@ export default function GenerationSection() {
   const [selectedReqId, setSelectedReqId] = useState("");
   const [reqSaving, setReqSaving] = useState(false);
   const [reqSaved, setReqSaved] = useState(false);
+
+  // Генерация по задачам Jira tool: выбранные задачи (предзаполнено из требований), выгрузка и предпросмотр модели
+  const [taskDrafts, setTaskDrafts] = useState<TaskDraft[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [taskExportMode, setTaskExportMode] = useState(false);
+  const [taskFiles, setTaskFiles] = useState<TaskFile[] | null>(null);
+  const [taskExporting, setTaskExporting] = useState(false);
+  const [taskExportErr, setTaskExportErr] = useState("");
+  const [preview, setPreview] = useState<{ project: string; groups: ModelGroup[] } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const [stage, setStage]             = useState<Stage>("input");
   const [elapsedFinal, setElapsedFinal] = useState(0);
@@ -372,8 +388,69 @@ export default function GenerationSection() {
   }
   // ── End требования ─────────────────────────────────────────────
 
-  const { state, events, progress, cases, qaDoc, qaDocTruncated, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected } =
-    useGeneration();
+  const { state, events, progress, cases, qaDoc, qaDocTruncated, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected,
+    taskJobs, startTasks, continueTasks, clearTasks, attachToSession } = useGeneration();
+  const runningJob = taskJobs.find(j => j.status === "run");
+  const doneJobs = taskJobs.filter(j => j.status === "done" && j.sessionId);
+
+  // Шапка экрана генерации и «сохранить документ» — про задачу, что идёт сейчас.
+  useEffect(() => {
+    if (runningJob) genMetaRef.current = { ...genMetaRef.current, feature: runningJob.feature, requirement: runningJob.requirement };
+  }, [runningJob?.key]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // История — после каждой готовой задачи; на экране результата отмечены все кейсы открытой задачи.
+  useEffect(() => { if (doneJobs.length) refreshHistory(); }, [doneJobs.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (taskJobs.length && cases.length) setSelectedCases(new Set(cases.map((_, i) => i)));
+  }, [sessionId, cases.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Задачи выбраны: новые предзаполняем из требований, у оставшихся правки не трогаем. */
+  const pickTasks = (tasks: TaskPick[]) => setTaskDrafts(cur => tasks.map(t =>
+    cur.find(x => x.key === t.key) ?? { ...t, feature: featureOf(t), text: taskSource(t) }));
+
+  /** Параметры ExportPanel → выгрузка каждой задачи её сессией; папка в XML — корень модели. */
+  const exportTasks = async (p: ExportPanelParams) => {
+    setTaskExporting(true); setTaskExportErr(""); setTaskFiles(null);
+    try {
+      const out: TaskFile[] = [];
+      for (const job of doneJobs) {
+        const r = await exportGenSession(job.sessionId!, {
+          project: p.project, system: p.system, team: p.team, domain: p.domain, folder: p.folder, use_llm: p.use_llm, provider: p.provider,
+          crit_regress: p.crit_regress, project_id: p.project_id, jira_version: p.jira_version, author_name: p.author_name, author_tab_num: p.author_tab_num,
+        });
+        out.push({ job, ...r });
+      }
+      setTaskFiles(out);
+    } catch (e) {
+      setTaskExportErr((e as Error).message);
+    }
+    setTaskExporting(false);
+  };
+
+  /** Группа предпросмотра задачи: кейсы из её XML, тип сценария — из сессии (по нему папка в модели). */
+  const taskGroup = async (job: TaskJob, xml: string, root: string): Promise<ModelGroup> => {
+    const [parsed, session] = await Promise.all([parseZephyrXml(xml), getGenSession(job.sessionId!)]);
+    const types = new Map((session.cases as Case[] | undefined ?? []).map(c => [c.name, c.case_type]));
+    return {
+      id: job.key, task: { key: job.key, summary: job.summary }, reqNames: job.reqNames, run: true,
+      folder: modelFolder(root, job.dataPath.length ? job.dataPath : [job.feature]),
+      cases: parsed.cases.map((c, i) => ({ ...c, id: `${job.key}:${i}`, caseType: types.get(c.name), on: true })),
+    };
+  };
+
+  const openPreview = async (p: { project: string; folder: string }) => {
+    setPreviewBusy(true); setTaskExportErr("");
+    try {
+      const groups = taskExportMode
+        ? await Promise.all((taskFiles ?? []).map(f => taskGroup(f.job, f.xml, p.folder)))
+        : [{ id: "xml", reqNames: [], folder: "", run: false,
+             cases: (await parseZephyrXml(exportResult!.xml)).cases.map((c, i) => ({ ...c, id: `xml:${i}`, on: true })) }];
+      setPreview({ project: p.project.trim().toUpperCase(), groups });
+    } catch (e) {
+      setTaskExportErr((e as Error).message);
+    }
+    setPreviewBusy(false);
+  };
 
   // Когда экспорт завершён — обновляем has_export в локальном списке сессий
   useEffect(() => {
@@ -424,27 +501,41 @@ export default function GenerationSection() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, events]);
 
+  /** Схемы БД для тестовых данных — дополнение к источнику; не получилось — генерируем без них. */
+  const schemasBlock = async (): Promise<string> => {
+    if (!tdSearchEnabled || selectedTdConns.size === 0) return "";
+    try {
+      const schemasRes = await getTestDataSchemasText(Array.from(selectedTdConns));
+      if (!schemasRes.text) return "";
+      return "\n\n=== СХЕМЫ РЕАЛЬНЫХ БАЗ ДАННЫХ ДЛЯ ТЕСТОВЫХ ДАННЫХ ===\n"
+        + "Используй реальные таблицы и колонки из схем ниже для формирования тестовых данных в шагах кейсов. "
+        + "В поле test_data каждого шага указывай РЕАЛЬНЫЕ SQL-запросы для получения тестовых данных из этих таблиц.\n\n"
+        + schemasRes.text;
+    } catch {
+      return "";
+    }
+  };
+
   const handleGenerate = async () => {
+    if (taskDrafts.length) {
+      // По задачам: каждая — своя сессия. Задача без источника пропускается (она подсвечена в списке).
+      const schemas = await schemasBlock();
+      const jobs: TaskJob[] = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).map(t => ({
+        key: t.key, summary: t.summary, project: t.project, feature: t.feature.trim(),
+        requirement: buildLlmSourceText(t.text, fileAttachments) + schemas,
+        reqNames: t.docs.map(d => d.name), dataPath: t.dataPath, status: "wait",
+      }));
+      if (!jobs.length) return;
+      historySavedRef.current = false;
+      setTaskFiles(null); setTaskExportMode(false);
+      startTasks(jobs, provider);
+      return;
+    }
     if (!featureName.trim()) { setFeatureTouched(true); return; }
     const text = buildLlmSourceText(requirement, fileAttachments);
     if (!text) return;
 
-    let finalText = text;
-
-    // Если включён поиск тестовых данных — подгружаем схему БД и добавляем в промпт
-    if (tdSearchEnabled && selectedTdConns.size > 0) {
-      try {
-        const schemasRes = await getTestDataSchemasText(Array.from(selectedTdConns));
-        if (schemasRes.text) {
-          finalText += "\n\n=== СХЕМЫ РЕАЛЬНЫХ БАЗ ДАННЫХ ДЛЯ ТЕСТОВЫХ ДАННЫХ ===\n"
-            + "Используй реальные таблицы и колонки из схем ниже для формирования тестовых данных в шагах кейсов. "
-            + "В поле test_data каждого шага указывай РЕАЛЬНЫЕ SQL-запросы для получения тестовых данных из этих таблиц.\n\n"
-            + schemasRes.text;
-        }
-      } catch {
-        // Если не удалось получить схему — генерируем без неё
-      }
-    }
+    const finalText = text + await schemasBlock();
 
     genMetaRef.current = { feature: featureName.trim(), project: "", team: "", ke: "", depth: "max", platform: ["Web"], requirement: finalText };
     historySavedRef.current = false;
@@ -454,6 +545,8 @@ export default function GenerationSection() {
 
   const handleReset = () => {
     historySavedRef.current = false;
+    clearTasks();
+    setTaskDrafts([]); setTaskFiles(null); setTaskExportMode(false); setTaskExportErr("");
     reset();
     setStage("input");
     setRequirement("");
@@ -464,12 +557,21 @@ export default function GenerationSection() {
   };
 
   const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
-  const hasGenerationSource = Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
+  const readyTasks = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).length;
+  const hasGenerationSource = taskDrafts.length > 0
+    ? readyTasks > 0
+    : Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
 
   /* ─────────────── RENDER ─────────────── */
   return (
     <>
       {/* Modal рендерится на уровне компонента (вне stage-блоков) */}
+      <TaskPickerModal open={pickerOpen} picked={taskDrafts} onPick={pickTasks} onClose={() => setPickerOpen(false)} />
+      {preview && <ModelPreviewModal open project={preview.project} groups={preview.groups} onClose={() => setPreview(null)} />}
+      {taskJobs.length > 0 && (stage === "input" || stage === "generating" || stage === "review") && (
+        <TaskJobsBar jobs={taskJobs} current={sessionId} onOpen={j => void attachToSession(j.sessionId!)} onContinue={() => continueTasks(provider)}
+          onExport={() => { setExportSource(null); setTaskExportMode(true); setTaskFiles(null); setExportBackStage("review"); setStage("export"); }} />
+      )}
 
       {/* ── INPUT ── */}
       {stage === "input" && (
@@ -494,6 +596,24 @@ export default function GenerationSection() {
               ультрашироких мониторах или при drag-n-drop второй рабочей зоны (max-w
               сужается вместе с контейнером, а не только с w-1/2). */}
           <div className="w-1/2 max-w-3xl min-w-[420px] mx-auto">
+          {/* Задачи Jira tool: модель берёт их требования из «Данных», кейсы лягут в папки по дереву, на задачу — прогон */}
+          <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
+            <div className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <p className={LABEL_CLS}>Задачи из Jira tool</p>
+                <p className="text-xs text-text-muted">
+                  Требования возьмутся из «Данных», кейсы лягут в папки по их дереву, на каждую задачу создастся прогон.
+                </p>
+              </div>
+              <button type="button" onClick={() => setPickerOpen(true)}
+                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                <ListChecks className="w-4 h-4" /> {taskDrafts.length ? "Изменить" : "Выбрать задачи"}
+              </button>
+            </div>
+            {taskDrafts.length > 0 && <div className="mt-3"><TaskDrafts tasks={taskDrafts} onChange={setTaskDrafts} /></div>}
+          </div>
+
+          {taskDrafts.length === 0 && (<>
           {/* Название фичи — для имён кейсов: [Фича] Группа проверок. Наименование проверки */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
             <label className={LABEL_CLS}>
@@ -653,6 +773,8 @@ export default function GenerationSection() {
             </div>
           </div>
 
+          </>)}
+
           {/* Test data from DB */}
           <TestDataSettingsModal
             open={tdSettingsOpen}
@@ -763,7 +885,7 @@ export default function GenerationSection() {
                 ${!hasGenerationSource ? "opacity-40" : ""}`}
             >
               <Sparkles className="w-4 h-4" />
-              Генерировать тест-кейсы
+              {taskDrafts.length ? `Генерировать по задачам: ${readyTasks}` : "Генерировать тест-кейсы"}
             </button>
           </div>
           </div>
@@ -1568,10 +1690,16 @@ export default function GenerationSection() {
             <ExportPanel
               cases={exportSource?.cases ?? cases}
               qaDoc={exportSource?.qaDoc ?? qaDoc}
-              onExport={exportCases}
-              result={exportResult}
-              exporting={exporting}
-              onBack={() => { setExportSource(null); setStage(exportBackStage); }}
+              onExport={taskExportMode ? p => void exportTasks(p) : exportCases}
+              result={taskExportMode ? null : exportResult}
+              exporting={taskExportMode ? taskExporting : exporting}
+              initialProject={taskExportMode ? doneJobs[0]?.project : undefined}
+              taskFiles={taskExportMode ? taskFiles ?? [] : undefined}
+              taskTotal={taskExportMode ? { tasks: doneJobs.length, cases: doneJobs.reduce((n, j) => n + (j.caseCount ?? 0), 0) } : undefined}
+              onPreview={p => void openPreview(p)}
+              previewBusy={previewBusy}
+              error={taskExportErr}
+              onBack={() => { setExportSource(null); setTaskExportMode(false); setStage(exportBackStage); }}
             />
           </div>
         </div>

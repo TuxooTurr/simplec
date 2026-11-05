@@ -1150,3 +1150,48 @@ def test_массовая_правка_любых_полей(jira, monkeypatch):
     assert r["updated"] == ["T1"]
     assert puts["T1"] == {"owner": "petrov", "objective": "Цель", "estimatedTime": 600000, "customFields": {"КЭ": ["CI1", "CI2"]},
                           "labels": ["старая", "новая"], "issueLinks": ["SBER911-1", "SBER911-2"]}
+
+
+# ── Задача → кейсы → прогон ──────────────────────────────────────────────────
+
+def test_сверка_с_моделью_папки_кейсы_и_прогоны_задачи(jira, monkeypatch):
+    idx = {"loadedAt": 0, "folders": {"/Новая ТМ/Пустая"}, "cases": {
+        "T2": {"key": "T2", "folder": "/Новая ТМ/Инциденты/Фича", "issueLinks": ["SBER911-7"]},
+        "T10": {"key": "T10", "folder": "/Новая ТМ/Инциденты", "issueLinks": ["sber911-7", "SBER911-8"]},
+        "T3": {"key": "T3", "folder": "", "issueLinks": []}}}
+    runs = {"loadedAt": 0, "folders": set(), "cases": {"R1": {"key": "R1", "name": "НФ-SBER911-7", "issueKey": "SBER911-7"}, "R2": {"key": "R2", "name": "x", "issueKey": ""}}}
+    monkeypatch.setattr(z, "get_index", lambda cfg, project, refresh=False, kind="testcase": runs if kind == "testrun" else idx)
+    r = z.task_plan(z.TaskPlanBody(project="sber911", tasks=["sber911-7", "SBER911-9"]), db=None)
+    assert r["project"] == "SBER911"
+    assert r["folders"] == ["/Новая ТМ", "/Новая ТМ/Инциденты", "/Новая ТМ/Инциденты/Фича", "/Новая ТМ/Пустая"]
+    assert r["tasks"]["SBER911-7"] == {"cases": ["T2", "T10"], "runs": [{"key": "R1", "name": "НФ-SBER911-7"}]}
+    assert r["tasks"]["SBER911-9"] == {"cases": [], "runs": []}
+
+
+def test_прогоны_по_задачам_сбой_одного_не_мешает_остальным(jira, monkeypatch):
+    made = []
+
+    def run(body, db):
+        made.append(body)
+        if body.issueKey == "SBER911-2":
+            raise HTTPException(400, "нет такой задачи")
+        return {"key": "SBER911-C1", "url": "https://jira.example/run", "issueKey": body.issueKey, "warnings": ["w"]}
+    monkeypatch.setattr(z, "create_run", run)
+    monkeypatch.setattr(z, "nf_type_value", lambda cfg, project: "Новый функционал")
+    r = z.task_runs(z.TaskRunsBody(project="sber911", tasks=[
+        z.TaskRun(key="sber911-1", summary=" Вход ", caseKeys=["T1", "T2"]),
+        z.TaskRun(key="SBER911-2", caseKeys=["T3"]),
+        z.TaskRun(key="SBER911-3", caseKeys=[])]), db=None)
+    assert [x.name for x in made] == ["НФ-SBER911-1 · Вход", "НФ-SBER911-2"] and made[0].type == "Новый функционал" and made[0].project == "SBER911"
+    assert r["created"] == 1
+    assert r["results"][0] == {"task": "SBER911-1", "run": "SBER911-C1", "url": "https://jira.example/run", "name": "НФ-SBER911-1 · Вход", "cases": 2, "warnings": ["w"]}
+    assert r["results"][1] == {"task": "SBER911-2", "error": "нет такой задачи"} and "прогон не создан" in r["results"][2]["error"]
+
+
+def test_прогоны_по_задачам_истёкший_токен_прерывает(jira, monkeypatch):
+    def run(body, db):
+        raise HTTPException(401, "токен")
+    monkeypatch.setattr(z, "create_run", run)
+    monkeypatch.setattr(z, "nf_type_value", lambda cfg, project: "НФ")
+    with pytest.raises(HTTPException):
+        z.task_runs(z.TaskRunsBody(project="SBER911", tasks=[z.TaskRun(key="SBER911-1", caseKeys=["T1"])]), db=None)

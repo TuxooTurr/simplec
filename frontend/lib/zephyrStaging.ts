@@ -38,7 +38,7 @@ export interface StagedCase {
 
 export interface Staging { source: string; createdAt: string; folders: StagedFolder[]; cases: StagedCase[] }
 
-interface ParsedCase extends Omit<StagedCase, "target" | "error"> { folder: string }
+export interface ParsedCase extends Omit<StagedCase, "target" | "error"> { folder: string }
 
 const KEY = (project: string) => `st_zephyr_staging:${project}`;
 
@@ -54,11 +54,13 @@ export function saveStaging(project: string, s: Staging | null): void {
 let seq = 0;
 const nid = () => `nf${Date.now().toString(36)}${(seq++).toString(36)}`;
 
+export const parseZephyrXml = (xml: string) => fetchJson<{ folders: string[]; cases: ParsedCase[] }>("/api/zephyr/parse-xml", {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ xml }),
+});
+
 /** Разбор XML на бэкенде → черновик: каждая папка пути — новая, кейс — в своей новой папке. */
 export async function stagingFromXml(xml: string, source: string): Promise<Staging> {
-  const r = await fetchJson<{ folders: string[]; cases: ParsedCase[] }>("/api/zephyr/parse-xml", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ xml }),
-  });
+  const r = await parseZephyrXml(xml);
   const byPath = new Map<string, string>();
   const folders: StagedFolder[] = [];
   const ensure = (path: string): string | null => {
@@ -197,3 +199,19 @@ export function takeHandoff(): { xml: string; source: string } | null {
     return JSON.parse(raw);
   } catch { return null; }
 }
+
+/* ── Модель из генерации по задачам ──────────────────────────────────────── */
+
+export interface TaskPlan { project: string; folders: string[]; tasks: Record<string, { cases: string[]; runs: { key: string; name: string }[] }> }
+export interface TaskRunResult { task: string; run?: string; url?: string; name?: string; cases?: number; warnings?: string[]; error?: string }
+
+const sendJson = <T,>(path: string, body: unknown) => fetchJson<T>(path, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+});
+
+/** Что уже есть в модели: папки, кейсы и прогоны задач. */
+export const getTaskPlan = (project: string, tasks: string[]) => sendJson<TaskPlan>("/api/zephyr/task-plan", { project, tasks });
+
+/** НФ-прогон на каждую задачу с её новыми кейсами. */
+export const createTaskRuns = (project: string, tasks: { key: string; summary: string; caseKeys: string[] }[]) =>
+  sendJson<{ results: TaskRunResult[]; created: number }>("/api/zephyr/task-runs", { project, tasks });

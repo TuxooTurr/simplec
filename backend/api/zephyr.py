@@ -1472,6 +1472,10 @@ def nf_type_value(cfg: dict, project: str) -> str:
     return "Новый функционал"
 
 
+def _nf_run_name(key: str, summary: str) -> str:
+    return f"НФ-{key} · {summary.strip()}".strip(" ·")[:255]
+
+
 def story_cases(cfg: dict, project: str, story: str) -> list[str]:
     """Кейсы, привязанные к стори в Zephyr (связи кейса с задачами), — по индексу модели."""
     idx = get_index(cfg, project)["cases"]
@@ -1509,7 +1513,7 @@ def release_story_runs(key: str, body: StoryRunsCreate, db: Session = Depends(ge
         if not cases_:
             results.append({"story": story, "error": "к стори не привязано ни одного кейса — прикрепите имеющийся прогон"})
             continue
-        name = f"НФ-{story} · {str(st.get('summary') or '').strip()}".strip(" ·")[:255]
+        name = _nf_run_name(story, str(st.get("summary") or ""))
         try:
             r = create_run(RunCreate(project=project, name=name, issueKey=story, caseKeys=cases_, folder=body.folder, type=run_type), db)
         except HTTPException as e:
@@ -1528,6 +1532,77 @@ def release_story_runs(key: str, body: StoryRunsCreate, db: Session = Depends(ge
                 runs_.append(r["key"])
             _rel_save(data)
         results.append({"story": story, "run": r["key"], "cases": len(cases_), "warnings": r.get("warnings", [])})
+    return {"results": results, "created": sum(1 for x in results if x.get("run"))}
+
+
+# ── Задача → кейсы → прогон: тестовая модель из генерации ────────────────────
+#
+# Генерация по задачам Jira tool: кейсы задачи ложатся в папку по дереву «Данных», связываются с задачей, и на задачу
+# создаётся НФ-прогон. Предпросмотр сверяет раскладку с моделью (task-plan), запись кейсов — /api/zephyr/apply,
+# прогоны — task-runs.
+
+class TaskPlanBody(BaseModel):
+    project: str = Field(..., min_length=1)
+    tasks: list[str] = Field(default_factory=list, max_length=100)
+
+
+@router.post("/api/zephyr/task-plan")
+def task_plan(body: TaskPlanBody, db: Session = Depends(get_db)) -> dict:
+    """
+    Что уже есть в модели для предпросмотра: папки проекта и по каждой задаче — привязанные кейсы и прогоны в
+    отслеживании. Только чтение: по этому видно новые папки и что повторная отправка задвоит кейсы.
+    """
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    idx = get_index(cfg, project)
+    folders = {a for p in [*(c.get("folder") or "" for c in idx["cases"].values()), *idx.get("folders", set())] if p for a in _ancestors(p)}
+    try:
+        runs = list(get_index(cfg, project, kind="testrun")["cases"].values())
+    except HTTPException as e:
+        if e.status_code == 401:
+            raise
+        runs = []
+    tasks: dict[str, dict] = {}
+    for raw in body.tasks:
+        key = _issue_key(raw, "Номер задачи")
+        tasks[key] = {"cases": sorted((k for k, c in idx["cases"].items() if key in [str(x).upper() for x in c.get("issueLinks") or []]), key=_key_num),
+                      "runs": [{"key": r.get("key", ""), "name": r.get("name", "")} for r in runs if str(r.get("issueKey") or "").upper() == key]}
+    return {"project": project, "folders": sorted(folders), "tasks": tasks}
+
+
+class TaskRun(BaseModel):
+    key: str = Field(..., min_length=1)
+    summary: str = ""
+    caseKeys: list[str] = Field(default_factory=list)
+
+
+class TaskRunsBody(BaseModel):
+    project: str = Field(..., min_length=1)
+    tasks: list[TaskRun] = Field(..., min_length=1, max_length=100)
+    folder: str = ""
+
+
+@router.post("/api/zephyr/task-runs")
+def task_runs(body: TaskRunsBody, db: Session = Depends(get_db)) -> dict:
+    """НФ-прогон на каждую задачу: её новые кейсы, задача в отслеживании. Сбой одного прогона не мешает остальным."""
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    run_type = nf_type_value(cfg, project)
+    results = []
+    for t in body.tasks:
+        key = _issue_key(t.key, "Номер задачи")
+        name = _nf_run_name(key, t.summary)
+        if not t.caseKeys:
+            results.append({"task": key, "error": "у задачи нет созданных кейсов — прогон не создан"})
+            continue
+        try:
+            r = create_run(RunCreate(project=project, name=name, issueKey=key, caseKeys=t.caseKeys, folder=body.folder, type=run_type), db)
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            results.append({"task": key, "error": str(e.detail)[:300]})
+            continue
+        results.append({"task": key, "run": r["key"], "url": r["url"], "name": name, "cases": len(t.caseKeys), "warnings": r.get("warnings", [])})
     return {"results": results, "created": sum(1 for x in results if x.get("run"))}
 
 

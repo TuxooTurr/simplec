@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles, Copy, CheckCheck, X, ChevronDown, Plus, Trash2, FlaskConical } from "lucide-react";
+import { FileCode2, Table2, FileText, Download, ChevronLeft, Loader2, CheckCircle2, Sparkles, Copy, CheckCheck, X, ChevronDown, Plus, Trash2, FlaskConical, FolderTree } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { handoffXml } from "@/lib/zephyrStaging";
 import type { Case, ExportResult } from "@/lib/useGeneration";
+import type { TaskFile } from "@/lib/taskModel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 
 interface ExportPanelProps {
@@ -14,6 +15,15 @@ interface ExportPanelProps {
   result: ExportResult | null;
   exporting?: boolean;
   onBack: () => void;
+  /** Выгрузка по задачам: файлы каждой задачи и итог; нет — обычная выгрузка одной генерации. */
+  taskFiles?: TaskFile[];
+  taskTotal?: { tasks: number; cases: number };
+  /** Предпросмотр раскладки в модели и отправка; проект и корневая папка — из формы. */
+  onPreview?: (p: { project: string; folder: string }) => void;
+  previewBusy?: boolean;
+  error?: string;
+  /** Проект в форме по умолчанию (у задач — их проект). */
+  initialProject?: string;
 }
 
 export interface ExportPanelParams {
@@ -188,11 +198,11 @@ const loadAuthor = (): AuthorInfo => {
   return { name: DEFAULT_AUTHOR_NAME, tabNum: DEFAULT_AUTHOR_TABNUM };
 };
 
-export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack }: ExportPanelProps) {
+export default function ExportPanel({ cases, qaDoc, onExport, result, exporting, onBack, taskFiles, taskTotal, onPreview, previewBusy, error, initialProject }: ExportPanelProps) {
   const { provider } = useWorkspace();
   const router = useRouter();
   const [platform, setPlatform]     = useState<string[]>(["Web"]);
-  const [project, setProject]       = useState(DEFAULT_PROJECT_KEY);
+  const [project, setProject]       = useState(initialProject || DEFAULT_PROJECT_KEY);
   const [system, setSystem]         = useState(DEFAULT_SYSTEM);
   const [team, setTeam]             = useState(DEFAULT_TEAM);
   const [domain, setDomain]         = useState(DEFAULT_DOMAIN);
@@ -241,7 +251,9 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
           Назад
         </button>
         <span className="text-text-muted/40">·</span>
-        <h2 className="text-base font-semibold text-text-main">Экспорт {cases.length} кейсов</h2>
+        <h2 className="text-base font-semibold text-text-main">
+          {taskTotal ? `Экспорт: задач ${taskTotal.tasks}, кейсов ${taskTotal.cases}` : `Экспорт ${cases.length} кейсов`}
+        </h2>
       </div>
 
       {/* Settings */}
@@ -426,6 +438,40 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
           )}
         </button>
       </div>
+
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {/* Выгрузка по задачам: файлы каждой задачи */}
+      {!!taskFiles?.length && (
+        <div className="bg-bg-card border border-border-main rounded-xl p-5 animate-slide-up space-y-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+            <p className="text-sm font-semibold text-text-main">Файлы по задачам</p>
+          </div>
+          <ul className="divide-y divide-border-main">
+            {taskFiles.map(f => (
+              <li key={f.job.key} className="flex items-center gap-2 py-1.5 text-sm">
+                <span className="font-mono text-xs text-primary flex-shrink-0">{f.job.key}</span>
+                <span className="min-w-0 flex-1 truncate text-text-main">{f.job.summary}</span>
+                {DOWNLOAD_BUTTONS.map(({ key, ext, mime, Icon, label }) => (
+                  <button key={key} type="button" title={label} aria-label={`${label}: ${f.job.key}`}
+                    onClick={() => downloadBlob(f[key], `${f.job.key}_${ts}.${ext}`, mime)}
+                    className="p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Icon className="w-4 h-4" /></button>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Предпросмотр: как кейсы лягут в структуру модели, и отправка через API */}
+      {onPreview && (result || !!taskFiles?.length) && (
+        <button type="button" disabled={previewBusy || !project.trim()} onClick={() => onPreview({ project, folder })}
+          className="w-full flex items-center justify-center gap-2 rounded-lg border border-primary/40 py-2.5 text-sm font-semibold text-primary hover:bg-primary/5 disabled:opacity-50">
+          {previewBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderTree className="w-4 h-4" />}
+          Предпросмотр в структуре и отправка в модель
+        </button>
+      )}
 
       {/* Download buttons */}
       {result && (

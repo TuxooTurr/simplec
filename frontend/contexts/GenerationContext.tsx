@@ -10,6 +10,7 @@ import {
   ReactNode,
 } from "react";
 import { getGenSession, listGenSessions, type GenSession } from "@/lib/api";
+import type { TaskJob } from "@/lib/taskModel";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -96,7 +97,15 @@ interface GenerationCtx {
   cancel: () => void;
   reset: () => void;
   attachToSession: (sessionId: string) => Promise<void>;
+  /** Очередь генерации по задачам: каждая задача — своя сессия, по одной за раз. */
+  taskJobs: TaskJob[];
+  startTasks: (jobs: TaskJob[], provider: string) => void;
+  /** Дальше по очереди: ждущие задачи и те, что упали. */
+  continueTasks: (provider: string) => void;
+  clearTasks: () => void;
 }
+
+const JOBS_KEY = "st_gen_task_jobs";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -127,6 +136,10 @@ const GenerationContext = createContext<GenerationCtx>({
   cancel: () => {},
   reset: () => {},
   attachToSession: async () => {},
+  taskJobs: [],
+  startTasks: () => {},
+  continueTasks: () => {},
+  clearTasks: () => {},
 });
 
 // ── Provider ─────────────────────────────────────────────────────────────────
@@ -503,8 +516,90 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
     [getWs, sessionId],
   );
 
+  // ── Очередь по задачам ───────────────────────────────────────────
+  // Очередь живёт в провайдере: переход в другой раздел её не прерывает. Копия в sessionStorage — чтобы после
+  // перезагрузки вкладки было видно, что уже готово, и можно было продолжить.
+  const [taskJobs, setTaskJobsState] = useState<TaskJob[]>([]);
+  const jobsRef = useRef<TaskJob[]>([]);
+  const jobsProvider = useRef("");
+  const jobsStopped = useRef(false);
+  const casesRef = useRef<Case[]>([]);
+  casesRef.current = cases;
+  const eventsRef = useRef<GenEvent[]>([]);
+  eventsRef.current = events;
+
+  const setJobs = useCallback((next: TaskJob[]) => {
+    jobsRef.current = next;
+    setTaskJobsState(next);
+    try {
+      if (next.length) sessionStorage.setItem(JOBS_KEY, JSON.stringify(next)); else sessionStorage.removeItem(JOBS_KEY);
+    } catch {                                        // большие требования не влезли — очередь живёт до перезагрузки
+      try { sessionStorage.removeItem(JOBS_KEY); } catch { /* ignore */ }
+    }
+  }, []);
+
+  /** Следующая ждущая задача. */
+  const runNextJob = useCallback(() => {
+    const job = jobsRef.current.find(j => j.status === "wait");
+    if (!job || jobsStopped.current) return;
+    setJobs(jobsRef.current.map(j => (j.key === job.key ? { ...j, status: "run" as const, sessionId: undefined, error: undefined } : j)));
+    void start({ requirement: job.requirement, feature: job.feature, depth: "max", provider: jobsProvider.current, platform: "Web" });
+  }, [setJobs, start]);
+
+  const startTasks = useCallback((jobs: TaskJob[], provider: string) => {
+    jobsProvider.current = provider;
+    jobsStopped.current = false;
+    setJobs(jobs.map(j => ({ ...j, status: "wait" as const, sessionId: undefined, caseCount: undefined, error: undefined })));
+    runNextJob();
+  }, [setJobs, runNextJob]);
+
+  const continueTasks = useCallback((provider: string) => {
+    jobsProvider.current = provider;
+    jobsStopped.current = false;
+    setJobs(jobsRef.current.map(j => (j.status === "error" ? { ...j, status: "wait" as const } : j)));
+    runNextJob();
+  }, [setJobs, runNextJob]);
+
+  const clearTasks = useCallback(() => { jobsStopped.current = true; setJobs([]); }, [setJobs]);
+
+  // Номер сессии приходит после старта — запоминаем у идущей задачи (по нему потом выгрузка кейсов).
+  useEffect(() => {
+    if (sessionId && jobsRef.current.some(j => j.status === "run" && j.sessionId !== sessionId)) {
+      setJobs(jobsRef.current.map(j => (j.status === "run" ? { ...j, sessionId } : j)));
+    }
+  }, [sessionId, setJobs]);
+
+  // Задача закончилась — итог ей и дальше по очереди. Ошибка одной задачи не останавливает остальные.
+  useEffect(() => {
+    if (state !== "done" && state !== "error") return;
+    if (!jobsRef.current.some(j => j.status === "run")) return;
+    const error = state === "error" ? [...eventsRef.current].reverse().find(e => e.type === "error")?.message ?? "Генерация не удалась" : undefined;
+    setJobs(jobsRef.current.map(j => (j.status !== "run" ? j
+      : { ...j, status: state, sessionId: j.sessionId ?? sessionIdRef.current ?? undefined, caseCount: casesRef.current.length, error })));
+    runNextJob();
+  }, [state, setJobs, runNextJob]);
+
+  // После перезагрузки: очередь — из копии; задача, что шла, могла закончиться без нас — смотрим её сессию.
+  useEffect(() => {
+    let saved: TaskJob[] = [];
+    try { saved = JSON.parse(sessionStorage.getItem(JOBS_KEY) ?? "[]") as TaskJob[]; } catch { /* битая копия */ }
+    if (!saved.length) return;
+    jobsStopped.current = true;                      // дальше — только по кнопке «Продолжить»
+    setJobs(saved);
+    const run = saved.find(j => j.status === "run");
+    if (!run) return;
+    const lost = () => setJobs(jobsRef.current.map(j => (j.status === "run" ? { ...j, status: "error" as const, error: "Генерация прервана перезагрузкой" } : j)));
+    if (!run.sessionId) { lost(); return; }
+    getGenSession(run.sessionId).then(s => {
+      if (s.status === "generating") return;       // идёт — итог придёт обычным путём
+      if (s.status === "done") setJobs(jobsRef.current.map(j => (j.status === "run" ? { ...j, status: "done" as const, caseCount: s.cases?.length ?? 0 } : j)));
+      else lost();
+    }, lost);
+  }, [setJobs]);
+
   // ── Cancel ───────────────────────────────────────────────────────
   const cancel = useCallback(() => {
+    jobsStopped.current = true;                      // отмена останавливает и очередь: остальные ждут «Продолжить»
     stopPolling();
     if (reconnectRef.current) { clearTimeout(reconnectRef.current); reconnectRef.current = null; }
     if (wsRef.current) {
@@ -576,6 +671,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
       value={{
         state, events, progress, cases, qaDoc, qaDocTruncated, exportResult, exporting,
         sessionId, wsConnected, start, resume, exportCases, cancel, reset, attachToSession,
+        taskJobs, startTasks, continueTasks, clearTasks,
       }}
     >
       {children}

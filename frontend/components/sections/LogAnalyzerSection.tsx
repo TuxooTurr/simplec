@@ -84,7 +84,7 @@ export default function LogAnalyzerSection() {
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin h-full animate-slide-up">
-      <div className="max-w-5xl mx-auto space-y-5">
+      <div className="space-y-5">
         <div>
           <h1 className="text-xl font-bold text-text-main mb-1 flex items-center gap-2">
             <ScrollText className="w-5 h-5 text-primary" /> Анализатор логов

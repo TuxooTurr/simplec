@@ -338,7 +338,7 @@ function FileLogAnalysis({ provider, onOpenVps, vpsLabel }: {
       </div>
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <div className="p-6 space-y-6">
 
           {/* Выбор файла */}
           <div className="bg-bg-card border border-border-main rounded-xl p-5 space-y-4">
@@ -686,7 +686,7 @@ export default function LogsSection() {
 
   if (stage === "history") return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="w-full max-w-3xl mx-auto">
+      <div className="w-full max-w-3xl">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <button
@@ -859,7 +859,7 @@ export default function LogsSection() {
       />
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <div className="p-6 space-y-6">
 
           {/* ── Фильтры ───────────────────────────────────────────────── */}
           <div className="bg-bg-card border border-border-main rounded-xl p-5 space-y-4">

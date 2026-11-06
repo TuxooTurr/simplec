@@ -1676,7 +1676,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
       ) : (
         <div className="flex-1 overflow-y-auto">
           {/* Tab bar */}
-          <div className="flex items-center gap-0.5 px-4 pt-3 pb-0">
+          <div className="flex items-center gap-0.5 px-6 pt-3 pb-0">
             {BUILDER_TABS.map(t => (
               <button
                 key={t.key}
@@ -1693,7 +1693,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
           </div>
 
           {/* Tab content */}
-          <div className="border border-border-main rounded-b-xl rounded-tr-xl mx-4 p-4 bg-bg-card">
+          <div className="border border-border-main rounded-b-xl rounded-tr-xl mx-6 p-4 bg-bg-card">
             {tab === "values"     && <ValuesTab     metricId={metricId} initial={config.valuesConfig}     onSaved={onSaved} />}
             {tab === "baseline"   && <BaselineTab   metricId={metricId} initial={config.baselineConfig}   onSaved={onSaved} />}
             {tab === "thresholds" && <ThresholdsTab metricId={metricId} initial={config.thresholdsConfig} onSaved={onSaved} />}
@@ -1895,7 +1895,7 @@ export default function MetricsSection() {
     <div className="h-full flex flex-col overflow-hidden">
 
       {/* ── Stats bar ──────────────────────────────────────────────────────── */}
-      <div className="shrink-0 grid grid-cols-4 gap-3 p-4 border-b border-border-main">
+      <div className="shrink-0 grid grid-cols-4 gap-3 px-6 py-4 border-b border-border-main">
         {[
           { label: "Услуг всего",    value: stats.totalSystems  },
           { label: "Услуг активно",  value: stats.activeSystems,  accent: true },

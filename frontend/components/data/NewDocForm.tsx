@@ -55,7 +55,7 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
     </div>
   );
   if (source === "confluence") return (
-    <article className="max-w-4xl mx-auto px-2 pb-16">
+    <article className="pb-16">
       {modeSwitch}
       <p className="mb-2 text-xs text-text-muted">Новый документ из Confluence</p>
       <ConfluenceImport folders={folders} folderId={folderId} onImported={onImported} onCancel={onCancel} onSettings={onSettings} />
@@ -63,7 +63,7 @@ export default function NewDocForm({ folders, folderId, onSave, onCancel, onImpo
   );
 
   return (
-    <article className="max-w-4xl mx-auto px-2 pb-16">
+    <article className="pb-16">
       {modeSwitch}
       <p className="mb-2 text-xs text-text-muted">Новый документ</p>
       <input autoFocus value={name} onChange={e => setName(e.target.value)} placeholder="Без названия" aria-label="Заголовок документа"

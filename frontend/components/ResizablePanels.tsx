@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { X, PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { SectionId } from "@/contexts/WorkspaceContext";
-import BackupButton from "./BackupButton";
+import TopActions from "./TopActions";
 import { sectionOfPath } from "@/lib/backupApi";
 
 const SECTION_LABELS: Record<string, string> = {
@@ -23,7 +23,7 @@ const SECTION_LABELS: Record<string, string> = {
 // ─── Panel Chrome ─────────────────────────────────────────────────────────────
 function PanelChrome({
   title,
-  section,
+  actions,
   onClose,
   children,
   dropTarget,
@@ -32,8 +32,8 @@ function PanelChrome({
   onDrop,
 }: {
   title: string;
-  /** Раздел панели — для «Резервная копия → только этот раздел». */
-  section: string;
+  /** Верхний правый угол окна — только у крайней справа панели. */
+  actions?: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
   dropTarget?: boolean;
@@ -52,20 +52,21 @@ function PanelChrome({
       onDrop={onDrop}
     >
       {/* Sticky header */}
-      <div className="sticky top-0 z-20 flex items-center justify-between px-4 py-2 border-b border-border-main bg-bg-card/90 backdrop-blur-sm flex-shrink-0">
-        <span className="text-sm font-semibold text-text-main tracking-wide">
-          {title}
-        </span>
-        <div className="flex items-center gap-1">
-          <BackupButton section={section} />
+      <div className="sticky top-0 z-20 flex h-11 items-center justify-between gap-3 px-6 border-b border-border-main bg-bg-card/90 backdrop-blur-sm flex-shrink-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-sm font-semibold text-text-main tracking-wide">
+            {title}
+          </span>
           <button
             onClick={onClose}
-            className="rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
+            className="flex-shrink-0 rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
             title="Закрыть панель"
+            aria-label="Закрыть панель"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
+        {actions}
       </div>
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto scrollbar-thin">{children}</div>
@@ -167,6 +168,9 @@ export default function ResizablePanels({
     e.preventDefault();
   }, []);
 
+  const rightBackupSection = rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings";
+  const actions = <TopActions section={leftVisible ? sectionOfPath(pathname ?? "") : rightBackupSection} />;
+
   const closeRight = useCallback(() => {
     setRightOpen(false);
     setRightSection(null);
@@ -185,9 +189,10 @@ export default function ResizablePanels({
     return (
       <div
         ref={containerRef}
-        className="flex flex-1 min-h-0 h-full overflow-hidden"
+        className="relative flex flex-1 min-h-0 h-full overflow-hidden"
       >
         <RestoreStrip side="left" onClick={() => setLeftVisible(true)} />
+        <div className="absolute right-6 top-2 z-20">{actions}</div>
         <div
           className={`flex-1 flex items-center justify-center text-text-muted text-sm transition-all ${
             sectionDragging ? "ring-2 ring-inset ring-primary/40 bg-primary/5" : ""
@@ -214,7 +219,7 @@ export default function ResizablePanels({
         <div className="flex-1 h-full flex flex-col animate-panel-in-right">
           <PanelChrome
             title={rightTitle}
-            section={rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings"}
+            actions={actions}
             onClose={closeRight}
             dropTarget
             isDraggingSection={!!sectionDragging}
@@ -244,7 +249,7 @@ export default function ResizablePanels({
         >
           <PanelChrome
             title={leftTitle}
-            section={sectionOfPath(pathname ?? "")}
+            actions={actions}
             onClose={() => setLeftVisible(false)}
           >
             {left}
@@ -269,7 +274,6 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={leftTitle}
-          section={sectionOfPath(pathname ?? "")}
           onClose={() => setLeftVisible(false)}
         >
           {left}
@@ -293,7 +297,7 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={rightTitle}
-          section={rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings"}
+          actions={actions}
           onClose={closeRight}
           dropTarget
           isDraggingSection={!!sectionDragging}

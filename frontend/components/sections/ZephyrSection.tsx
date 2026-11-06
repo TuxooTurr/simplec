@@ -245,7 +245,7 @@ export default function ZephyrSection() {
         {tab === "release" ? <ReleasesView key={project} project={project} baseUrl={baseUrl} onOpenRun={k => { setOpenRun(k); setTab("runs"); }} />
           : tab === "runs" ? <RunsView project={project} baseUrl={baseUrl} reloadKey={reloadKey} openKey={openRun} /> : (
           <div className="flex h-full min-h-0">
-            <div style={{ width: treePane.size }} className="flex-shrink-0 p-3 min-h-0 flex flex-col gap-2">
+            <div style={{ width: treePane.size }} className="flex-shrink-0 py-3 pl-6 pr-3 min-h-0 flex flex-col gap-2">
               <input ref={xmlInput} type="file" accept=".xml,application/xml,text/xml" className="hidden"
                 onChange={async e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) await importXml(await f.text(), f.name); }} />
               {staging ? (

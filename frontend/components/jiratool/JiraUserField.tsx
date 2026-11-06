@@ -8,7 +8,9 @@ import { findJiraUsers, type JiraUser } from "@/lib/jiraToolApi";
  * «Имя в Jira» у человека справочника: поиск пользователя Jira по имени или логину, выбор — логин и имя из Jira.
  * Jira не подключена или поиск не нашёл — логин можно вписать руками (Enter или уход с поля).
  */
-export default function JiraUserField({ name, display, jiraOk, onChange }: {
+export default function JiraUserField({ name, display, jiraOk, onChange, label = "Имя в Jira" }: {
+  /** Подпись слева; пусто — без неё (подпись снаружи). */
+  label?: string;
   name: string;
   display: string;
   jiraOk: boolean;
@@ -48,14 +50,14 @@ export default function JiraUserField({ name, display, jiraOk, onChange }: {
   return (
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
-        <span className="text-[10px] text-text-muted whitespace-nowrap">Имя в Jira</span>
+        {label && <span className="text-[10px] text-text-muted whitespace-nowrap">{label}</span>}
         <input value={text} onChange={e => setText(e.target.value)} onBlur={commit}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commit(); } if (e.key === "Escape") setText(shown); }}
-          placeholder={jiraOk ? "поиск по имени или логину" : "логин в Jira"} aria-label="Имя в Jira"
+          placeholder={jiraOk ? "поиск по имени или логину" : "логин в Jira"} aria-label={label || "Пользователь Jira"}
           className="min-w-0 flex-1 text-xs border border-border-main rounded-md px-2 py-1 bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30" />
         {busy && <Loader2 className="w-3.5 h-3.5 animate-spin text-text-muted" />}
         {name && (
-          <button type="button" onClick={() => onChange({ jiraName: "", jiraDisplay: "" })} aria-label="Убрать имя в Jira"
+          <button type="button" onClick={() => onChange({ jiraName: "", jiraDisplay: "" })} aria-label={`Убрать: ${label || "пользователь Jira"}`}
             className="p-0.5 text-text-muted hover:text-red-500"><X className="w-3.5 h-3.5" /></button>
         )}
       </div>

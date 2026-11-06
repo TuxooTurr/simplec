@@ -3,6 +3,8 @@
 import Sidebar from "./Sidebar";
 import ResizablePanels from "./ResizablePanels";
 import SectionRenderer from "./SectionRenderer";
+import FormHost from "./FormHost";
+import { Toasts } from "./NotificationBell";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { GenerationProvider } from "@/contexts/GenerationContext";
 import { AlertsSchedulerProvider } from "@/contexts/AlertsSchedulerContext";
@@ -22,6 +24,8 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
                   left={children}
                   right={<SectionRenderer />}
                 />
+                <FormHost />
+                <Toasts />
               </div>
             </TestDataJobProvider>
           </MetricsUiProvider>

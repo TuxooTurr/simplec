@@ -27,6 +27,17 @@ API-токен TestOps вставляется в настройках (по па
   GET  /api/aqa/commit/{hash}                — коммит подробно: файлы, строки +/−, свод по типам и расширениям
   GET  /api/aqa/commit/{hash}/diff?path=     — файл коммита построчно: «было» слева, «стало» справа
   GET  /api/aqa/roadmap?refresh=             — эпики с задачами; Jira недоступна — последний снимок
+  GET  /api/aqa/jenkins/job                  — джоб автотестов: параметры запуска и последние сборки
+  POST /api/aqa/jenkins/run                  — запустить джоб с параметрами
+  GET  /api/aqa/jenkins/queue/{id}           — что с запуском в очереди: ждёт, начался (номер сборки) или отменён
+  GET  /api/aqa/issue/{key}                  — задача для окна правки: описание, что можно менять, приоритеты
+  PUT  /api/aqa/issue/{key}                  — записать изменения в Jira (название, описание, приоритет, исполнитель, плановые даты)
+
+Задачи эпика заводятся через POST /api/jira/create (та же форма, что в Jira tool), а статус меняется переходами
+/api/jira/tool/transitions и /transition. Здесь — только то, чего у них нет: правка полей и запись плановых дат.
+
+Запуск автотестов — джоб Jenkins по ссылке из настроек. Параметры не зашиты в коде: форма строится из описания джоба,
+новый параметр в Jenkinsfile появляется в ней сам. Вход — логин и API-токен Jenkins (Basic), запуск идёт от их имени.
 
 Снимок роадмапа (data/aqa_roadmap.json) обновляется при каждой удачной загрузке и входит в резервную копию
 (раздел «Трекинг AQA») вместе с эпиками из настроек: после восстановления роадмап виден и без Jira.
@@ -56,10 +67,12 @@ logger = logging.getLogger(__name__)
 
 K_BB_URL, K_BB_TOKEN = "aqa_bitbucket_url", "aqa_bitbucket_token"
 K_TO_URL, K_TO_TOKEN = "aqa_testops_url", "aqa_testops_token"
+K_JK_URL, K_JK_USER, K_JK_TOKEN = "aqa_jenkins_url", "aqa_jenkins_user", "aqa_jenkins_token"
 K_EPICS = "aqa_epics"
 # Ссылки по умолчанию — пока настройку не сохраняли. Стёртая в настройках ссылка хранится пустой строкой и остаётся пустой.
 DEFAULT_BB_URL = "https://stash.sigma.sbrf.ru/projects/SBER911/repos/sber911-aqa/browse"
 DEFAULT_TO_URL = "https://testops.sigma.sbrf.ru/project/2414/test-cases"
+DEFAULT_JK_URL = "https://sber911-ci.ci.jenkins.sberbank.ru/job/sber911-ci/job/sber911-backend/job/AQA/job/AQA_TEST/"
 MAX_EPICS = 5
 CACHE_TTL = 300                        # 5 минут: вкладку открывают часто, а полный счёт коммитов — сотни запросов
 TODAY_STATS_LIMIT = 30                 # запусков за сегодня, по которым суммируются кейсы
@@ -74,6 +87,7 @@ SNAPSHOT_FILE = Path(__file__).resolve().parents[2] / "data" / "aqa_roadmap.json
 
 _BB_RE = re.compile(r"^(https?://.+?)/projects/([^/]+)/repos/([^/?#]+)", re.I)
 _TO_RE = re.compile(r"^(https?://.+?)/project/(\d+)", re.I)
+_JK_RE = re.compile(r"^(https?://.+?)((?:/job/[^/?#]+)+)", re.I)
 _DEFECT_TYPES = {"дефект", "bug", "баг", "ошибка"}
 
 
@@ -89,6 +103,12 @@ def parse_testops(url: str) -> Optional[dict]:
     """Ссылка на проект в Allure TestOps → адрес сервера и id проекта; не похожа — None."""
     m = _TO_RE.match(url.strip())
     return {"base_url": m.group(1).rstrip("/"), "project_id": int(m.group(2))} if m else None
+
+
+def parse_jenkins(url: str) -> Optional[dict]:
+    """Ссылка на джоб Jenkins → адрес сервера, путь джоба и его имя; не похожа — None."""
+    m = _JK_RE.match(url.strip())
+    return {"base_url": m.group(1).rstrip("/"), "job_path": m.group(2), "job": m.group(2).rsplit("/", 1)[-1]} if m else None
 
 
 def _epics(db: Session) -> list[str]:
@@ -116,12 +136,19 @@ def to_cfg(db: Session) -> dict:
     return {**p, "url": url, "token": _get(db, K_TO_TOKEN), "ssl_verify": _ssl_verify(db)}
 
 
+def jk_cfg(db: Session) -> dict:
+    url = _get(db, K_JK_URL, DEFAULT_JK_URL)
+    p = parse_jenkins(url) or {"base_url": "", "job_path": "", "job": ""}
+    return {**p, "url": url, "user": _get(db, K_JK_USER), "token": _get(db, K_JK_TOKEN), "ssl_verify": _ssl_verify(db)}
+
+
 # ── HTTP ─────────────────────────────────────────────────────────────────────
 
 def _http(name: str, method: str, url: str, verify: Any, *, token: str = "", auth: Optional[tuple] = None,
           params: Optional[dict] = None, json_body: Any = None, data: Optional[dict] = None, timeout: int = 30,
-          text: bool = False) -> Any:
-    """Запрос к Bitbucket или TestOps; ошибки — понятным текстом с именем системы, как у Jira."""
+          text: bool = False, raw: bool = False) -> Any:
+    """Запрос к Bitbucket, TestOps или Jenkins; ошибки — понятным текстом с именем системы, как у Jira.
+    raw — вернуть сам ответ (нужны заголовки)."""
     import requests
     headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)"}
     if token:
@@ -141,6 +168,8 @@ def _http(name: str, method: str, url: str, verify: Any, *, token: str = "", aut
         raise HTTPException(404, f"{name}: не найдено (404) — проверьте ссылку в настройках вкладки")
     if resp.status_code >= 400:
         raise HTTPException(502, f"{name}: ошибка {resp.status_code}: {resp.text[:300]}")
+    if raw:
+        return resp
     if text:
         return resp.text
     try:
@@ -681,13 +710,255 @@ def _plan_report(plan: dict, used: dict, total: int) -> dict:
     return out
 
 
+# ── Запуск автотестов (Jenkins) ──────────────────────────────────────────────
+
+RECENT_BUILDS = 8
+_JK_PARAM = "_class,name,type,description,choices,defaultParameterValue[value],allValueItems[values[name,value]]"
+_JK_TREE = (f"_class,name,displayName,url,buildable,jobs[name],property[parameterDefinitions[{_JK_PARAM}]],"
+            f"actions[parameterDefinitions[{_JK_PARAM}]],"
+            f"builds[number,url,result,building,timestamp,duration,displayName]{{0,{RECENT_BUILDS}}}")
+# Типы параметров Jenkins → вид поля формы. Остальные (плагины) — строка, а есть варианты — список.
+_JK_KINDS = {"BooleanParameterDefinition": "boolean", "TextParameterDefinition": "multiline",
+             "PasswordParameterDefinition": "password", "FileParameterDefinition": "file"}
+
+
+def _jk_get(cfg: dict, path: str, tree: str) -> dict:
+    return _http("Jenkins", "GET", f"{cfg['base_url']}{path}/api/json", cfg["ssl_verify"], auth=(cfg["user"], cfg["token"]),
+                 params={"tree": tree})
+
+
+def jk_param(raw: dict) -> dict:
+    """Параметр джоба → поле формы. Значение пароля по умолчанию наружу не отдаём: Jenkins подставит его сам."""
+    kind = _JK_KINDS.get(str(raw.get("type") or ""), "string")
+    default = (raw.get("defaultParameterValue") or {}).get("value")
+    choices = [str(c) for c in raw.get("choices") or []] or \
+              [str(v.get("value") or v.get("name")) for v in (raw.get("allValueItems") or {}).get("values") or []]
+    if choices and kind == "string":
+        kind = "choice"
+    if kind == "boolean":
+        value: Any = bool(default)
+    else:
+        value = "" if kind in ("password", "file") or default is None else str(default)
+    if kind == "choice" and value not in choices:
+        value = choices[0]                   # у списка значение всегда из списка: первое — умолчание самого Jenkins
+    return {"name": str(raw.get("name") or ""), "kind": kind, "description": str(raw.get("description") or ""),
+            "default": value, "choices": choices}
+
+
+def jk_params(data: dict) -> list[dict]:
+    """Параметры из описания джоба. Одни версии Jenkins кладут их в property, другие — в actions."""
+    seen: dict[str, dict] = {}
+    for block in (data.get("property") or []) + (data.get("actions") or []):
+        for raw in (block or {}).get("parameterDefinitions") or []:
+            if raw.get("name"):
+                seen.setdefault(str(raw["name"]), jk_param(raw))
+    return list(seen.values())
+
+
+def _jk_build(b: dict) -> dict:
+    return {"number": b.get("number"), "url": str(b.get("url") or ""), "title": str(b.get("displayName") or ""),
+            "result": "RUNNING" if b.get("building") else str(b.get("result") or ""),
+            "started": _iso(b.get("timestamp")), "duration": int(b.get("duration") or 0)}
+
+
+def jenkins_job(cfg: dict) -> dict:
+    d = _jk_get(cfg, cfg["job_path"], _JK_TREE)
+    if d.get("jobs") and not d.get("builds"):         # папка или multibranch: запускать нечего
+        names = ", ".join(str(j.get("name")) for j in d["jobs"][:10])
+        raise HTTPException(422, f"Ссылка ведёт на папку, а не на джоб. Внутри: {names}. Укажите ссылку на нужный джоб в настройках вкладки")
+    return {"name": str(d.get("displayName") or d.get("name") or cfg["job"]), "url": str(d.get("url") or cfg["url"]),
+            "buildable": d.get("buildable") is not False, "params": jk_params(d),
+            "builds": [_jk_build(b) for b in d.get("builds") or []]}
+
+
+_QUEUE_RE = re.compile(r"/queue/item/(\d+)")
+
+
+def jenkins_run(cfg: dict, values: dict[str, Any]) -> dict:
+    """Запуск джоба. Описание читаем заново: уходят только параметры, которые есть в джобе сейчас, и форма, открытая
+    до правки Jenkinsfile, не отправит устаревшее. У джоба без параметров другой адрес: /build."""
+    params = {p["name"]: p for p in jk_params(_jk_get(cfg, cfg["job_path"], _JK_TREE))}
+    unknown = [k for k in values if k not in params]
+    if unknown:
+        raise HTTPException(422, f"В джобе больше нет параметров: {', '.join(unknown)}. Откройте окно запуска заново")
+    data: dict[str, str] = {}
+    for name, v in values.items():
+        kind = params[name]["kind"]
+        if kind == "file" or (kind == "password" and not v):
+            continue                                   # файл из формы не передать; пустой пароль — умолчание Jenkins
+        data[name] = ("true" if v else "false") if kind == "boolean" else str(v)
+    path = "buildWithParameters" if params else "build"
+    resp = _http("Jenkins", "POST", f"{cfg['base_url']}{cfg['job_path']}/{path}", cfg["ssl_verify"],
+                 auth=(cfg["user"], cfg["token"]), data=data, raw=True)
+    m = _QUEUE_RE.search(resp.headers.get("Location") or "")
+    return {"status": "queued", "queueId": int(m.group(1)) if m else None}
+
+
+def jenkins_queue(cfg: dict, queue_id: int) -> dict:
+    """Запуск в очереди: queued (why — чего ждёт), started (сборка), cancelled. Jenkins забывает запись через пять минут
+    после старта — тогда gone: сборку видно в списке последних."""
+    try:
+        q = _jk_get(cfg, f"/queue/item/{queue_id}", "cancelled,why,executable[number,url]")
+    except HTTPException as e:
+        if e.status_code == 404:
+            return {"state": "gone"}
+        raise
+    if q.get("cancelled"):
+        return {"state": "cancelled"}
+    ex = q.get("executable") or {}
+    if ex.get("number"):
+        return {"state": "started", "number": ex["number"], "url": str(ex.get("url") or "")}
+    return {"state": "queued", "why": str(q.get("why") or "")}
+
+
+# ── Управление задачами эпика ────────────────────────────────────────────────
+
+# Типы полей, в которые умеем писать дату. Поле другого типа (выпадающий список и т.п.) с похожим названием не трогаем.
+_PLAN_TYPES = ("date", "datetime", "string")
+_PLAN_LABEL = {"start": "Плановое начало", "end": "Плановое окончание"}
+
+
+def plan_target(cands: list[dict], meta: dict, current: Optional[dict] = None) -> Optional[dict]:
+    """В какое поле писать плановую дату: одноимённых полей бывает несколько, поэтому сначала то, где у задачи дата
+    уже стоит, иначе первое подошедшее с экрана редактирования (editmeta). Нет на экране — None."""
+    usable = [c for c in cands if ((meta.get(c["id"]) or {}).get("schema") or {}).get("type") in _PLAN_TYPES]
+    return next((c for c in usable if _plan_day((current or {}).get(c["id"]))), usable[0] if usable else None)
+
+
+def plan_payload(schema: dict, day: str) -> Optional[str]:
+    """Дата ГГГГ-ММ-ДД → значение поля Jira по его типу; пустая дата — очистить поле.
+    Для даты со временем — полдень UTC: в любом часовом поясе команды день остаётся тем же."""
+    if not day:
+        return None
+    t = schema.get("type")
+    if t == "date":
+        return day
+    if t == "datetime":
+        return f"{day}T12:00:00.000+0000"
+    return f"{day[8:10]}.{day[5:7]}.{day[:4]}"     # текстовое поле: «ДД.ММ.ГГГГ» понимает и _plan_day
+
+
+def _edit_meta(cfg: dict, key: str) -> dict:
+    """Поля с экрана редактирования задачи. Нет прав или сбой — пусто: задачу всё равно показываем, поля будут закрыты."""
+    try:
+        return (jira_defects._jira_request(cfg, "GET", f"/rest/api/2/issue/{key}/editmeta") or {}).get("fields") or {}
+    except HTTPException as e:
+        if e.status_code == 401:
+            raise
+        logger.warning("Трекинг AQA: editmeta %s недоступен: %s", key, e.detail)
+        return {}
+
+
+def _plan_context(db: Session, cfg: dict) -> dict:
+    from backend.api import jira_tool as JT
+    return plan_fields(JT.catalog(db=db).get("fields") or [])
+
+
+def _raw_issue(cfg: dict, key: str, plan: dict, extra: str = "") -> dict:
+    fields = _ROADMAP_FIELDS + extra + "".join(f",{c['id']}" for cands in plan.values() for c in cands)
+    return jira_defects._jira_request(cfg, "GET", f"/rest/api/2/issue/{key}", params={"fields": fields}) or {}
+
+
+def issue_details(db: Session, key: str) -> dict:
+    """Задача для окна правки. description — вики-разметка Jira как есть: правим и пишем её же, без преобразований."""
+    cfg = jira_defects._load_cfg(db)
+    plan = _plan_context(db, cfg)
+    raw = _raw_issue(cfg, key, plan, ",description")
+    meta = _edit_meta(cfg, key)
+    f = raw.get("fields") or {}
+
+    def target(k: str) -> Optional[str]:
+        c = plan_target(plan.get(k) or [], meta, f)
+        return c["name"] if c else None
+
+    prio = meta.get("priority") or {}
+    return {
+        **_item(raw, cfg["base_url"], "", plan),
+        "description": str(f.get("description") or ""),
+        "assigneeLogin": str((f.get("assignee") or {}).get("name") or ""),
+        "priorityId": str((f.get("priority") or {}).get("id") or ""),
+        "priorities": [{"id": str(p.get("id", "")), "name": str(p.get("name", ""))}
+                       for p in prio.get("allowedValues") or [] if p.get("id")],
+        # Что можно менять. Плановые даты — название поля Jira, куда уйдёт запись; None — поля нет на экране.
+        "editable": {"summary": "summary" in meta, "description": "description" in meta, "priority": "priority" in meta,
+                     "planStart": target("start"), "planEnd": target("end")},
+    }
+
+
+class IssueChange(BaseModel):
+    """Что поменять в задаче. None — не трогать, пустая строка — очистить (плановую дату, исполнителя)."""
+    summary: Optional[str] = Field(None, max_length=250)
+    description: Optional[str] = Field(None, max_length=32000)
+    priority: Optional[str] = Field(None, max_length=50)    # id приоритета из editmeta
+    assignee: Optional[str] = Field(None, max_length=200)   # логин Jira
+    planStart: Optional[str] = None
+    planEnd: Optional[str] = None
+
+
+def _valid_day(v: Optional[str], label: str) -> None:
+    if not v:
+        return
+    try:
+        datetime.strptime(v, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(422, f"{label}: нужна дата в формате ГГГГ-ММ-ДД")
+
+
+def update_issue(db: Session, key: str, c: IssueChange) -> dict:
+    """Изменения → Jira. Поля уходят одним запросом: Jira отвергла — не записано ничего. Исполнитель — отдельным запросом
+    /assignee: он работает, даже если поля нет на экране редактирования; его сбой — предупреждение, поля уже записаны.
+    Плановой даты некуда записать (поля нет на экране) — тоже предупреждение, а не молчание."""
+    if c.summary is not None and not c.summary.strip():
+        raise HTTPException(422, "Название не может быть пустым")
+    _valid_day(c.planStart, _PLAN_LABEL["start"])
+    _valid_day(c.planEnd, _PLAN_LABEL["end"])
+    cfg = jira_defects._load_cfg(db)
+    fields: dict[str, Any] = {}
+    warnings: list[str] = []
+    if c.summary is not None:
+        fields["summary"] = c.summary.strip()
+    if c.description is not None:
+        fields["description"] = c.description
+    if c.priority:
+        fields["priority"] = {"id": c.priority}
+    if c.planStart is not None or c.planEnd is not None:
+        plan = _plan_context(db, cfg)
+        cur = (_raw_issue(cfg, key, plan).get("fields") or {})
+        meta = _edit_meta(cfg, key)
+        start = c.planStart if c.planStart is not None else _plan_value(cur, plan.get("start") or [], None)
+        end = c.planEnd if c.planEnd is not None else _plan_value(cur, plan.get("end") or [], None)
+        if start and end and start > end:
+            raise HTTPException(422, "Плановое начало позже планового окончания")
+        for k, day in (("start", c.planStart), ("end", c.planEnd)):
+            if day is None:
+                continue
+            target = plan_target(plan.get(k) or [], meta, cur)
+            if target:
+                fields[target["id"]] = plan_payload(meta[target["id"]].get("schema") or {}, day)
+            else:
+                warnings.append(f"«{_PLAN_LABEL[k]}» не записано: поля нет на экране редактирования задачи в Jira")
+    if fields:
+        jira_defects._jira_request(cfg, "PUT", f"/rest/api/2/issue/{key}", json_body={"fields": fields})
+    if c.assignee is not None:
+        try:
+            jira_defects._jira_request(cfg, "PUT", f"/rest/api/2/issue/{key}/assignee",
+                                       json_body={"name": c.assignee.strip() or None})
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            warnings.append(f"Исполнитель не назначен: {e.detail}")
+    return {"status": "ok", "warnings": warnings}
+
+
 # ── API ──────────────────────────────────────────────────────────────────────
 
 def _settings_view(db: Session) -> dict:
-    bb, to = bb_cfg(db), to_cfg(db)
+    bb, to, jk = bb_cfg(db), to_cfg(db), jk_cfg(db)
     return {"bitbucketUrl": bb["url"], "bitbucketOk": bool(bb["base_url"]), "bitbucketToken": _MASK if bb["token"] else "",
             "testopsUrl": to["url"], "testopsOk": bool(to["base_url"]), "testopsToken": _MASK if to["token"] else "",
-            "epics": _epics(db), "defaults": {"bitbucketUrl": DEFAULT_BB_URL, "testopsUrl": DEFAULT_TO_URL}}
+            "jenkinsUrl": jk["url"], "jenkinsOk": bool(jk["base_url"]), "jenkinsUser": jk["user"],
+            "jenkinsToken": _MASK if jk["token"] else "", "epics": _epics(db),
+            "defaults": {"bitbucketUrl": DEFAULT_BB_URL, "testopsUrl": DEFAULT_TO_URL, "jenkinsUrl": DEFAULT_JK_URL}}
 
 
 @router.get("/api/aqa/settings")
@@ -700,6 +971,10 @@ class SettingsBody(BaseModel):
     bitbucketToken: str = ""          # маска — оставить прежний, пусто — убрать
     testopsUrl: str = ""
     testopsToken: str = ""
+    # None — не менять: настройки сохраняются и с графика роадмапа, там важны только эпики.
+    jenkinsUrl: Optional[str] = None
+    jenkinsUser: Optional[str] = None
+    jenkinsToken: Optional[str] = None
     epics: list[str] = Field(default_factory=list)
 
 
@@ -712,6 +987,8 @@ def put_settings(body: SettingsBody, db: Session = Depends(get_db)) -> dict:
         raise HTTPException(422, "Ссылка на Bitbucket не похожа на репозиторий: нужна вида …/projects/ПРОЕКТ/repos/РЕПОЗИТОРИЙ/…")
     if body.testopsUrl.strip() and not parse_testops(body.testopsUrl):
         raise HTTPException(422, "Ссылка на Allure TestOps не похожа на проект: нужна вида …/project/2414/…")
+    if (body.jenkinsUrl or "").strip() and not parse_jenkins(body.jenkinsUrl or ""):
+        raise HTTPException(422, "Ссылка на Jenkins не похожа на джоб: нужна вида …/job/ПАПКА/job/ДЖОБ/")
     epics = list(dict.fromkeys(re.sub(r"^.*/browse/", "", e.strip()).upper() for e in body.epics if e.strip()))
     bad = [e for e in epics if not _KEY_RE.match(e)]
     if bad:
@@ -721,6 +998,12 @@ def put_settings(body: SettingsBody, db: Session = Depends(get_db)) -> dict:
     _set(db, K_BB_URL, body.bitbucketUrl.strip(), "Трекинг AQA: репозиторий Bitbucket")
     _set(db, K_TO_URL, body.testopsUrl.strip(), "Трекинг AQA: проект Allure TestOps")
     _set(db, K_EPICS, json.dumps(epics, ensure_ascii=False), "Трекинг AQA: эпики роадмапа")
+    if body.jenkinsUrl is not None:
+        _set(db, K_JK_URL, body.jenkinsUrl.strip(), "Трекинг AQA: джоб автотестов в Jenkins")
+    if body.jenkinsUser is not None:
+        _set(db, K_JK_USER, body.jenkinsUser.strip(), "Трекинг AQA: логин Jenkins")
+    if body.jenkinsToken is not None and body.jenkinsToken != _MASK:
+        _set(db, K_JK_TOKEN, body.jenkinsToken.strip(), "Jenkins API token (секрет)")
     for key, value, desc in ((K_BB_TOKEN, body.bitbucketToken, "Bitbucket HTTP access token (секрет)"),
                              (K_TO_TOKEN, body.testopsToken, "Allure TestOps API token (секрет)")):
         if value != _MASK:
@@ -753,6 +1036,34 @@ def _to_ready(db: Session) -> dict:
     if not cfg["token"]:
         raise HTTPException(400, "Нет API-токена TestOps — создайте его в профиле TestOps (API tokens) и вставьте в настройках вкладки")
     return cfg
+
+
+def _jk_ready(db: Session) -> dict:
+    cfg = jk_cfg(db)
+    if not cfg["base_url"]:
+        raise HTTPException(400, "Jenkins не подключён — укажите ссылку на джоб в настройках вкладки")
+    if not cfg["user"] or not cfg["token"]:
+        raise HTTPException(400, "Нет доступа к Jenkins — укажите логин и API-токен в настройках вкладки")
+    return cfg
+
+
+class JenkinsRunBody(BaseModel):
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/api/aqa/jenkins/job")
+def jenkins_job_route(db: Session = Depends(get_db)) -> dict:
+    return jenkins_job(_jk_ready(db))
+
+
+@router.post("/api/aqa/jenkins/run")
+def jenkins_run_route(body: JenkinsRunBody, db: Session = Depends(get_db)) -> dict:
+    return jenkins_run(_jk_ready(db), body.params)
+
+
+@router.get("/api/aqa/jenkins/queue/{queue_id}")
+def jenkins_queue_route(queue_id: int, db: Session = Depends(get_db)) -> dict:
+    return jenkins_queue(_jk_ready(db), queue_id)
 
 
 @router.get("/api/aqa/branches")
@@ -798,6 +1109,23 @@ def commit_file_diff_route(commit_id: str, path: str, src: str = "", db: Session
         raise HTTPException(422, "Путь к файлу не указан")
     cfg = _bb_ready(db)
     return _cached(f"bbd:{cfg['url']}:{commit_id.lower()}:{path}:{src}", False, lambda: bb_file_diff(cfg, commit_id, path, src))
+
+
+def _issue_key(key: str) -> str:
+    k = key.strip().upper()
+    if not _KEY_RE.match(k):
+        raise HTTPException(422, f"Некорректный номер задачи: {key}")
+    return k
+
+
+@router.get("/api/aqa/issue/{key}")
+def issue_route(key: str, db: Session = Depends(get_db)) -> dict:
+    return issue_details(db, _issue_key(key))
+
+
+@router.put("/api/aqa/issue/{key}")
+def issue_update_route(key: str, body: IssueChange, db: Session = Depends(get_db)) -> dict:
+    return update_issue(db, _issue_key(key), body)
 
 
 def save_snapshot(epics: list[str], data: dict) -> None:

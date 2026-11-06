@@ -82,10 +82,12 @@ function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: n
  * Цвет открытой — по статусу или по исполнителю (colorBy); закрытая — зелёная с галочкой (в срок) или красная
  * с «!» (нарушение срока). Масштаб — кнопками снаружи
  * (dayW) или Ctrl (Cmd) + колесо, от дня до трёх кварталов вперёд от сегодня; календарь — на год вперёд; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
- * статус и даты; щелчок — задача в Jira.
+ * статус и даты; щелчок — окно задачи (правка и статус), Cmd/Ctrl + щелчок — задача в Jira. «+ Задача» у эпика — новая задача.
  */
-export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, onAddEpic, onRemoveEpic }: {
+export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, onAddEpic, onRemoveEpic, onOpenIssue, onNewIssue }: {
   epics: AqaEpic[]; dayW: number; onDayW: (w: number) => void; colorBy: ColorBy;
+  onOpenIssue: (key: string) => void;
+  onNewIssue: (epic: string) => void;
   /** Добавить эпик в роадмап (сохраняется в настройках вкладки); ошибка — текстом. */
   onAddEpic: (key: string) => Promise<void>;
   onRemoveEpic: (key: string) => Promise<void>;
@@ -215,6 +217,11 @@ export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, on
                 <Flag className="w-3.5 h-3.5 text-violet-500 flex-shrink-0" />
                 {e.url ? <a href={e.url} target="_blank" rel="noopener noreferrer" className="font-mono text-[11px] text-primary hover:underline flex-shrink-0">{e.key}</a>
                   : <span className="font-mono text-[11px] text-primary flex-shrink-0">{e.key}</span>}
+                {!e.missing && (
+                  <button type="button" onClick={() => onNewIssue(e.key)} aria-label={`Новая задача в эпике ${e.key}`} title="Завести задачу в этом эпике"
+                    className="ml-auto mr-5 inline-flex items-center gap-0.5 rounded px-1 text-[11px] text-primary hover:bg-primary/10">
+                    <Plus className="w-3 h-3" /> Задача</button>
+                )}
               </span>
               <span title={e.missing ? undefined : e.summary}
                 className={`line-clamp-2 break-words leading-snug ${e.missing ? "text-red-600 dark:text-red-400" : "font-semibold text-text-main"}`}>
@@ -303,7 +310,13 @@ export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, on
                 return (
                   <div key={i.key}>
                     <a href={i.url} target="_blank" rel="noopener noreferrer" draggable={false}
-                      onClick={ev => { if (drag.current?.moved) ev.preventDefault(); }}
+                      onClick={ev => {
+                        if (drag.current?.moved) { ev.preventDefault(); return; }
+                        if (ev.metaKey || ev.ctrlKey) return;        // Cmd/Ctrl + щелчок — задача в Jira
+                        ev.preventDefault();
+                        setHover(null);                              // подсказка выше окна — не оставляем её поверх
+                        onOpenIssue(i.key);
+                      }}
                       style={{ left, width, top: barTop, height: barH }}
                       className="absolute flex items-center overflow-hidden rounded-md px-1.5 text-[10px] font-medium text-white whitespace-nowrap"
                       onMouseEnter={ev => tip(i, ev)} onMouseMove={ev => tip(i, ev)} onMouseLeave={() => setHover(null)}>

@@ -106,3 +106,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 export function useWorkspace() {
   return useContext(WorkspaceContext);
 }
+
+/**
+ * Открыты две рабочие зоны. Правило раскладки разделов с результатом: зона одна — результат сбоку от формы,
+ * зон две — места по ширине мало, результат под формой.
+ */
+export function useSplitView(): boolean {
+  const { leftVisible, rightOpen } = useContext(WorkspaceContext);
+  return leftVisible && rightOpen;
+}

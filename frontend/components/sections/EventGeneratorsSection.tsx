@@ -301,7 +301,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
             <h2 id="gen-scenarios" className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-3">
               Сценарии
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {generators.map(({ id, title, subtitle, Icon, color }) => {
                 const st = tileOf(id);
                 return (
@@ -323,9 +323,9 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
             Генератор алертов
           </h2>
           {loadErr && (
-            <p className="mb-3 max-w-5xl text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">{loadErr}</p>
+            <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">{loadErr}</p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-5xl">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {alertTiles.map(t => {
               const running = runningIn(t.folderId);
               const key = ALERTS_PREFIX + t.key;

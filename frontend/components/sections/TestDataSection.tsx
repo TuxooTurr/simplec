@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { SectionSettingsButton } from "@/components/ui";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { useTestDataJob, type TdArchiveEntry } from "@/contexts/TestDataJobContext";
 import {
   listTestDataConnections,
@@ -187,6 +187,7 @@ export default function TestDataSection() {
   const executing = job.running;
   const generating = job.running && job.phase === "generating";
   const results = job.results;
+  const split = useSplitView();
   const queryError = job.error;
   const generatedSql = job.mode === "natural" ? job.sql : "";
 
@@ -252,7 +253,7 @@ export default function TestDataSection() {
   ═══════════════════════════════════════════════════════════════ */
 
   return (
-    <div className="max-w-5xl mx-auto py-8 px-6 space-y-6 animate-fade-in">
+    <div className="p-6 space-y-6 animate-fade-in">
       {/* Header — настройки раздела всегда вверху справа */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
@@ -272,6 +273,9 @@ export default function TestDataSection() {
         onChanged={loadConnections}
       />
 
+      {/* Зона одна — результат сбоку от запроса, зон две — под ним */}
+      <div className={split ? "space-y-6" : "grid grid-cols-[minmax(0,520px)_minmax(0,1fr)] items-start gap-6"}>
+      <div className="min-w-0 space-y-6">
       {/* Connection selector */}
       <div className="bg-bg-card rounded-xl border border-border-main p-4 space-y-3">
         <div className="flex items-center justify-between">
@@ -458,6 +462,52 @@ export default function TestDataSection() {
         )}
       </div>
 
+      {/* Архив запросов — время, БД, снимок результата */}
+      {archive.length > 0 && (
+        <div className="bg-bg-card rounded-xl border border-border-main p-4">
+          <div className="flex items-center justify-between mb-3">
+            <label className={LABEL_CLS + " flex items-center gap-1.5 mb-0"}>
+              <History className="w-3.5 h-3.5" /> Архив запросов ({archive.length})
+            </label>
+            <button onClick={clearArchive} className="text-xs text-text-muted hover:text-red-500">Очистить всё</button>
+          </div>
+          <div className="space-y-1">
+            {archive.map((e) => {
+              const totalRows = e.results ? Object.values(e.results).reduce((s, r) => s + (r.row_count ?? 0), 0) : 0;
+              return (
+                <div key={e.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-bg-subtle transition-colors group">
+                  <button onClick={() => setViewEntry(e)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                    {e.mode === "sql" ? <FileCode className="w-3.5 h-3.5 text-text-muted shrink-0" /> : <Sparkles className="w-3.5 h-3.5 text-text-muted shrink-0" />}
+                    <span className="text-[11px] text-text-muted shrink-0 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />{new Date(e.ts).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                    <span className="text-xs text-text-main truncate flex-1 group-hover:text-primary" title={e.connNames.join(", ")}>
+                      {e.connNames.join(", ") || "—"}
+                    </span>
+                    {e.error
+                      ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 shrink-0">ошибка</span>
+                      : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-muted text-text-muted shrink-0">{formatRowCount(totalRows)}</span>}
+                  </button>
+                  <button onClick={() => removeArchiveEntry(e.id)} title="Удалить из архива"
+                    className="p-1 text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      </div>
+
+      <div className="min-w-0 space-y-6">
+      {!results && !split && (
+        <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border-main p-12 text-center text-text-muted">
+          <Database className="h-8 w-8 opacity-30" />
+          <p className="text-sm">Здесь появится результат запроса</p>
+        </div>
+      )}
       {/* Results */}
       {results && (
         <div className="space-y-4">
@@ -520,42 +570,8 @@ export default function TestDataSection() {
         </div>
       )}
 
-      {/* Архив запросов — время, БД, снимок результата */}
-      {archive.length > 0 && (
-        <div className="bg-bg-card rounded-xl border border-border-main p-4">
-          <div className="flex items-center justify-between mb-3">
-            <label className={LABEL_CLS + " flex items-center gap-1.5 mb-0"}>
-              <History className="w-3.5 h-3.5" /> Архив запросов ({archive.length})
-            </label>
-            <button onClick={clearArchive} className="text-xs text-text-muted hover:text-red-500">Очистить всё</button>
-          </div>
-          <div className="space-y-1">
-            {archive.map((e) => {
-              const totalRows = e.results ? Object.values(e.results).reduce((s, r) => s + (r.row_count ?? 0), 0) : 0;
-              return (
-                <div key={e.id} className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-bg-subtle transition-colors group">
-                  <button onClick={() => setViewEntry(e)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
-                    {e.mode === "sql" ? <FileCode className="w-3.5 h-3.5 text-text-muted shrink-0" /> : <Sparkles className="w-3.5 h-3.5 text-text-muted shrink-0" />}
-                    <span className="text-[11px] text-text-muted shrink-0 flex items-center gap-1">
-                      <Clock className="w-3 h-3" />{new Date(e.ts).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                    <span className="text-xs text-text-main truncate flex-1 group-hover:text-primary" title={e.connNames.join(", ")}>
-                      {e.connNames.join(", ") || "—"}
-                    </span>
-                    {e.error
-                      ? <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 shrink-0">ошибка</span>
-                      : <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-bg-muted text-text-muted shrink-0">{formatRowCount(totalRows)}</span>}
-                  </button>
-                  <button onClick={() => removeArchiveEntry(e.id)} title="Удалить из архива"
-                    className="p-1 text-text-muted hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      </div>
+      </div>
 
       {/* Просмотр снимка запроса из архива — та самая «страница», что была получена тогда */}
       {viewEntry && (

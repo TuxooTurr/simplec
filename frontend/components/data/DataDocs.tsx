@@ -1,5 +1,6 @@
 "use client";
 
+import { notify, onPage } from "@/lib/notifications";
 import { useEffect, useState } from "react";
 import { FilePlus2, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import DocTree from "@/components/data/DocTree";
@@ -61,7 +62,7 @@ export default function DataDocs() {
   const treePane = usePaneSize("tree", 288, 220, 720, "st_data_panes");
 
   return (
-    <div className="flex gap-0 h-[calc(100vh-170px)] min-h-[480px] rounded-xl border border-border-main bg-bg-card overflow-hidden">
+    <div className="flex gap-0 h-full min-h-[480px] bg-bg-card overflow-hidden">
       <aside style={{ width: treePane.size }} className="flex-shrink-0 bg-bg-subtle/40 flex flex-col p-2 min-h-0">
         {loading ? (
           <p className="flex items-center gap-2 px-2 py-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загрузка…</p>
@@ -92,8 +93,8 @@ export default function DataDocs() {
       </aside>
       <Resizer pane={treePane} label="Ширина дерева документов" />
 
-      <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin px-8 py-6">
-        {err && <p className="max-w-4xl mx-auto mb-3 text-sm text-red-600 dark:text-red-400">{err}</p>}
+      <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-6">
+        {err && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{err}</p>}
         {creating !== null ? (
           <NewDocForm key={creating} folders={folders} folderId={creating} onCancel={() => setCreating(null)}
             onSettings={() => setSettingsOpen(true)}
@@ -106,7 +107,16 @@ export default function DataDocs() {
         ) : doc ? (
           <DocPage doc={doc} folders={folders} provider={provider}
             onPatch={async patch => replace(await updateRequirement(doc.id, patch))}
-            onGenerate={async (links, focus) => replace(await generateRequirementDoc(doc.id, provider, links, focus))}
+            onGenerate={async (links, focus) => {
+              const name = doc.name;
+              try {
+                replace(await generateRequirementDoc(doc.id, provider, links, focus));
+                notify({ kind: "success", title: "Документ QA готов", text: name, links: [{ label: "Открыть Данные", href: "/etalons" }], silent: onPage("/etalons") });
+              } catch (e) {
+                notify({ kind: "error", title: "Документ QA не сгенерирован", text: `${name} · ${(e as Error).message}`, silent: onPage("/etalons") });
+                throw e;
+              }
+            }}
             onReplace={replace}
             onSettings={() => setSettingsOpen(true)}
             onDelete={() => {

@@ -24,9 +24,12 @@ import {
   listRequirements, addRequirement,
   type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement,
 } from "@/lib/api";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { featureOf, modelFolder, taskSource, type ModelGroup, type TaskDraft, type TaskFile, type TaskJob, type TaskPick } from "@/lib/taskModel";
 import { parseZephyrXml } from "@/lib/zephyrStaging";
+
+/** Ширина формы, когда результат сбоку: остальное место — кейсам. */
+const FORM_W = "w-[520px]";
 
 type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
 
@@ -191,6 +194,7 @@ export default function GenerationSection() {
   const [previewBusy, setPreviewBusy] = useState(false);
 
   const [stage, setStage]             = useState<Stage>("input");
+  const split = useSplitView();
   const [elapsedFinal, setElapsedFinal] = useState(0);
   const [qaExpanded, setQaExpanded]   = useState(false);
   const [qaCopied, setQaCopied]       = useState(false);
@@ -563,6 +567,7 @@ export default function GenerationSection() {
     : Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
 
   /* ─────────────── RENDER ─────────────── */
+  const withForm = stage === "input" || stage === "generating" || stage === "review";
   return (
     <>
       {/* Modal рендерится на уровне компонента (вне stage-блоков) */}
@@ -573,9 +578,11 @@ export default function GenerationSection() {
           onExport={() => { setExportSource(null); setTaskExportMode(true); setTaskFiles(null); setExportBackStage("review"); setStage("export"); }} />
       )}
 
+      {/* Форма и результат: зона одна — рядом (у каждого своя прокрутка), зон две — результат под формой */}
+      {withForm && (
+      <div className={split ? "" : "flex h-full min-h-0"}>
       {/* ── INPUT ── */}
-      {stage === "input" && (
-        <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
+        <div className={`p-6 animate-slide-up ${split ? "" : `${FORM_W} flex-shrink-0 overflow-y-auto scrollbar-thin border-r border-border-main`}`}>
           <div className="flex items-start justify-between mb-1 gap-4">
             <h1 className="text-xl font-bold text-text-main">Генерация тест-кейсов</h1>
             <button
@@ -590,12 +597,7 @@ export default function GenerationSection() {
             Вставьте требование или загрузите файлы — AI изучит все источники и создаст тест-кейсы для Zephyr Scale.
           </p>
 
-          {/* Форма ввода — примерно половина ширины рабочей зоны (без учёта бокового меню),
-              по центру и с потолком ширины: достаточно места для комфортного чтения/
-              редактирования, не растянуто на весь широкий экран, и не расползается на
-              ультрашироких мониторах или при drag-n-drop второй рабочей зоны (max-w
-              сужается вместе с контейнером, а не только с w-1/2). */}
-          <div className="w-1/2 max-w-3xl min-w-[420px] mx-auto">
+          <div>
           {/* Задачи Jira tool: модель берёт их требования из «Данных», кейсы лягут в папки по дереву, на задачу — прогон */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
             <div className="flex items-center gap-3">
@@ -879,10 +881,10 @@ export default function GenerationSection() {
           <div className="flex justify-end">
             <button
               onClick={handleGenerate}
-              disabled={!hasGenerationSource}
+              disabled={!hasGenerationSource || stage === "generating"}
               className={`flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold
                 hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md
-                ${!hasGenerationSource ? "opacity-40" : ""}`}
+                ${!hasGenerationSource || stage === "generating" ? "opacity-40" : ""}`}
             >
               <Sparkles className="w-4 h-4" />
               {taskDrafts.length ? `Генерировать по задачам: ${readyTasks}` : "Генерировать тест-кейсы"}
@@ -890,15 +892,21 @@ export default function GenerationSection() {
           </div>
           </div>
         </div>
+
+      <div className={split ? "" : "min-w-0 flex-1 overflow-y-auto scrollbar-thin"}>
+      {stage === "input" && !split && (
+        <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center text-text-muted">
+          <Sparkles className="h-8 w-8 opacity-30" />
+          <p className="text-sm">Здесь появятся тест-кейсы</p>
+        </div>
       )}
 
       {/* ── GENERATING ── */}
       {stage === "generating" && (
         <div className="p-6 animate-fade-in">
-          {/* Пока идёт генерация, показывать нечего, кроме прогресса — узкая колонка
-              (1/4 ширины). QA-документация и кейсы ниже, по мере готовности, наоборот
-              разворачиваются на всю ширину — там уже есть что читать. */}
-          <div className="w-1/4 min-w-[320px]">
+          {/* Пока идёт генерация, показывать нечего, кроме прогресса — узкая колонка.
+              QA-документация и кейсы ниже, по мере готовности, разворачиваются на всю ширину. */}
+          <div className="max-w-md">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <h1 className="text-xl font-bold text-text-main">Генерация...</h1>
@@ -1268,6 +1276,10 @@ export default function GenerationSection() {
             )}
           </div>
         </div>
+      )}
+
+      </div>
+      </div>
       )}
 
       {/* ── HISTORY LIST ── */}

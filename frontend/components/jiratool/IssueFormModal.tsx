@@ -1,10 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
-  BookOpen, Bug, CheckCircle2, CheckSquare, ExternalLink, Loader2, RefreshCw, Search, Send, Settings2, Sparkles, X,
+  AlertTriangle, BookOpen, Bug, CheckCircle2, CheckSquare, ChevronUp, ExternalLink, Loader2, Minus, RefreshCw, Search, Send, Settings2, Sparkles, X,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
+import { FORM_DOCK_ID } from "@/components/FormHost";
+import type { FormControl } from "@/lib/backgroundForms";
+import { notify } from "@/lib/notifications";
 import EpicPicker from "./EpicPicker";
 import AttachmentsField from "./AttachmentsField";
 import { PARSEABLE_RE, withUniqueNames } from "@/lib/attachments";
@@ -49,9 +53,22 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
  * Источник для ИИ — документы из раздела «Данные» (требования): контент подстраивается под них.
  * Дальше выбор: «Создать в SimpleTest» (черновик в списке) или сразу «Создать в Jira».
  * С initial — это уже черновик из списка: его можно поправить и сохранить или отправить в Jira.
+ *
+ * Форму открывают через openForm (lib/backgroundForms.ts), и она живёт выше раздела. «Свернуть» убирает её на полку внизу
+ * справа: генерация и отправка идут дальше, можно работать и в других разделах. Итог приходит уведомлением, а не
+ * ушедшая в Jira форма остаётся на полке — с данными и причиной. Крестик во время работы тоже сворачивает: отправку
+ * нельзя отменить, а молча потерять её результат нельзя.
  */
-export default function IssueFormModal({ open, project, participants, listName, initial, prefill, linkTo, jiraOnly, files: initialFiles, onSave, onClose }: {
-  open: boolean;
+export default function IssueFormModal({ control, project, participants, listName, initial, prefill, linkTo, jiraOnly, files: initialFiles, extraFields, afterCreate, createBlocked, epicNote, onSave }: {
+  control: FormControl;
+  /** Свои поля вместо «Тестировщик (st)» — в сетке из двух колонок (плановые даты и исполнитель в «Трекинге AQA»). */
+  extraFields?: ReactNode;
+  /** Выполнить сразу после создания в Jira, до onSave; вернуть предупреждения. Сбой — предупреждением: задача уже создана. */
+  afterCreate?: (key: string) => Promise<string[]>;
+  /** Создание пока нельзя: свои поля заполнены неверно. */
+  createBlocked?: boolean;
+  /** Своя подсказка о подставленном эпике. */
+  epicNote?: ReactNode;
   /** Новая задача с заранее заполненными полями (например, дефект из упавшего шага в Zephyr Tool или к эпику). */
   prefill?: Partial<Pick<IssueDraft, "type" | "summary" | "description" | "priority" | "labels" | "epicKey">>;
   /** Связать созданную в Jira задачу с этой (дефект к стори из окна «Дефекты»). */
@@ -67,9 +84,13 @@ export default function IssueFormModal({ open, project, participants, listName, 
   project: string;
   participants: Participant[];
   onSave: (d: IssueDraft) => void;
-  onClose: () => void;
 }) {
   const { provider } = useWorkspace();
+  const { minimized, minimize, restore, close: onClose } = control;
+  const open = !minimized;
+  // Читается после долгих запросов: важно, свёрнута ли форма сейчас, а не в момент нажатия.
+  const minimizedRef = useRef(minimized);
+  minimizedRef.current = minimized;
   const [type, setType] = useState<string>((initial?.type ?? prefill?.type) === "Задача" ? "Задача" : "Дефект");
   const isDefect = type === "Дефект";
   /**
@@ -183,9 +204,11 @@ export default function IssueFormModal({ open, project, participants, listName, 
       const shots = readable.filter(f => GEN_IMAGE_RE.test(f.name));
       setShotNames(new Map(shots.map((f, i) => [f, res.screenshots?.[i] ?? f.name])));
       setGenNote(`Сгенерировано${reqIds.length ? ` с учётом требований: ${reqIds.length}` : ""}. Проверьте название и описание.`);
+      if (minimizedRef.current) notify({ kind: "success", title: "Название и описание готовы", text: "Разверните форму внизу справа, проверьте и отправьте." });
     } catch (e) {
       // Без подстановки шаблона: выдуманный текст легко отправить в Jira, не заметив.
       setGenNote(`Генерация не удалась: ${(e as Error).message.slice(0, 200)}. Заполните поля руками или повторите.`);
+      if (minimizedRef.current) notify({ kind: "error", title: "Генерация описания не удалась", text: (e as Error).message.slice(0, 200) });
     }
     setGenerating(false);
   };
@@ -213,11 +236,43 @@ export default function IssueFormModal({ open, project, participants, listName, 
           warnings.push(`${res.key} создана, но вложения не приложились: ${(e as Error).message}. Приложите их в Jira вручную.`);
         }
       }
+      if (afterCreate) {
+        try { warnings.push(...await afterCreate(res.key)); }
+        catch (e) { warnings.push(`${res.key} создана, но поля не записались: ${(e as Error).message}. Заполните их в окне задачи.`); }
+      }
       setCreated({ key: res.key, url: res.url, warnings });
       onSave({ ...draft(), jira: { key: res.key, url: res.url }, addToList: jiraOnly ? false : initial ? true : addToList });
-    } catch (e) { setSendErr((e as Error).message); }
+      notify({
+        kind: warnings.length ? "info" : "success", title: `${type} ${res.key} создан${isDefect ? "" : "а"} в Jira`,
+        text: [summary.trim(), ...warnings].join(" · "), links: [{ label: `${res.key} в Jira`, href: res.url }],
+        silent: !minimizedRef.current,                    // форма открыта — итог и так на экране
+      });
+      if (minimizedRef.current) { onClose(); return; }
+    } catch (e) {
+      setSendErr((e as Error).message);
+      notify({ kind: "error", title: `${type} не создан${isDefect ? "" : "а"} в Jira`, text: `${summary.trim()} · ${(e as Error).message}`, silent: !minimizedRef.current });
+    }
     setSending(false);
   };
+
+  /** Закрыть нельзя, пока идёт работа: результат потерялся бы. Сворачиваем. */
+  const requestClose = () => { if (sending || generating) minimize(); else onClose(); };
+  const dock = typeof document !== "undefined" ? document.getElementById(FORM_DOCK_ID) : null;
+  const chip = minimized && dock && createPortal(
+    <button type="button" onClick={restore} title="Развернуть форму"
+      className="flex w-72 items-center gap-2 rounded-xl border border-border-main bg-[var(--color-modal-bg)] px-3 py-2 text-left text-sm shadow-lg hover:border-primary/50">
+      {sending || generating ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
+        : sendErr ? <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-500" />
+        : isDefect ? <Bug className="h-4 w-4 flex-shrink-0 text-red-500" /> : <CheckSquare className="h-4 w-4 flex-shrink-0 text-primary" />}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-medium text-text-main">{summary.trim() || (isDefect ? "Новый дефект" : "Новая задача")}</span>
+        <span className={`block truncate text-[11px] ${sendErr && !sending ? "text-red-600 dark:text-red-400" : "text-text-muted"}`}>
+          {sending ? "Отправляю в Jira…" : generating ? "Генерирую…" : sendErr ? "Не отправлено — откройте форму" : "Свёрнута"}</span>
+      </span>
+      <ChevronUp className="h-4 w-4 flex-shrink-0 text-text-muted" />
+    </button>,
+    dock,
+  );
 
   const loadEpics = async () => {
     setEpicsLoading(true);
@@ -247,8 +302,14 @@ export default function IssueFormModal({ open, project, participants, listName, 
   }
 
   return (
-    <Modal open={open} onClose={onClose} size="max-w-6xl"
-      title={initial ? `Черновик ${initial.key}` : `Создать задачу · ${project}`}>
+    <>
+    {chip}
+    <Modal open={open} onClose={requestClose} size="max-w-6xl"
+      title={initial ? `Черновик ${initial.key}` : `Создать задачу · ${project}`}
+      headerExtra={(
+        <button type="button" onClick={minimize} title="Свернуть: работа продолжится, итог придёт уведомлением" aria-label="Свернуть форму"
+          className="rounded-lg p-1 text-text-muted transition-colors hover:bg-bg-subtle hover:text-text-main"><Minus className="h-4 w-4" /></button>
+      )}>
       {/* ⌘V / Ctrl+V со скриншотом или файлом — в любом месте формы; обычный текст вставляется как всегда. */}
       <div className="space-y-4" onPaste={e => {
         const pasted = Array.from(e.clipboardData.files);
@@ -258,7 +319,7 @@ export default function IssueFormModal({ open, project, participants, listName, 
       }}>
         {(linkTo || prefill?.epicKey) && (
           <p className="text-xs rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-text-main">
-            {linkTo
+            {epicNote && !linkTo ? epicNote : linkTo
               ? <>После создания в Jira {type.toLowerCase()} свяжется с <b>{linkTo.key}</b> {linkTo.summary && <>«{linkTo.summary}»</>} — и появится в её «Дефектах (st)».</>
               : <>Эпик подставлен: <b>{prefill?.epicKey}</b> — {type.toLowerCase()} попадёт в «Дефекты (st)» эпика.</>}
           </p>
@@ -430,13 +491,15 @@ export default function IssueFormModal({ open, project, participants, listName, 
                     className="w-24 border border-dashed border-border-main rounded-full px-2.5 py-1 text-xs bg-transparent text-text-main focus:outline-none focus:border-primary/50" />
                 </div>
               </div>
-              <div className="col-span-2">
-                <label htmlFor="if-ptc" className={LBL}>Тестировщик (st)</label>
-                <select id="if-ptc" value={participantId} onChange={e => setParticipantId(e.target.value)} className={INPUT}>
-                  <option value="">— не назначен</option>
-                  {participants.filter(p => inDirection(p, TESTING) || p.id === participantId).map(p => <option key={p.id} value={p.id}>{p.role ? `${p.name} · ${p.role}` : p.name}</option>)}
-                </select>
-              </div>
+              {extraFields ?? (
+                <div className="col-span-2">
+                  <label htmlFor="if-ptc" className={LBL}>Тестировщик (st)</label>
+                  <select id="if-ptc" value={participantId} onChange={e => setParticipantId(e.target.value)} className={INPUT}>
+                    <option value="">— не назначен</option>
+                    {participants.filter(p => inDirection(p, TESTING) || p.id === participantId).map(p => <option key={p.id} value={p.id}>{p.role ? `${p.name} · ${p.role}` : p.name}</option>)}
+                  </select>
+                </div>
+              )}
             </div>
           </section>
         </div>
@@ -459,12 +522,13 @@ export default function IssueFormModal({ open, project, participants, listName, 
             )}
           </p>
           <div className="ml-auto flex gap-2 flex-shrink-0">
-            <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">Отмена</button>
+            <button type="button" onClick={requestClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">
+              {sending || generating ? "Свернуть" : "Отмена"}</button>
             {!jiraOnly && <button type="button" disabled={!summary.trim() || sending || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
               title={!initial && !addToList ? "Черновик живёт только в списке — включите «Добавить в список»" : "Черновик в списке — в Jira не уходит"}
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
               {initial ? "Сохранить черновик" : "Создать в SimpleTest"}</button>}
-            <button type="button" disabled={!summary.trim() || !jiraReady || sending} onClick={sendToJira}
+            <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked} onClick={sendToJira}
               title={jiraReady ? `Создать ${type.toLowerCase()} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {initial ? "Отправить в Jira" : "Создать в Jira"}
@@ -474,5 +538,6 @@ export default function IssueFormModal({ open, project, participants, listName, 
       </div>
       <JiraSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); reloadSettings(); }} />
     </Modal>
+    </>
   );
 }

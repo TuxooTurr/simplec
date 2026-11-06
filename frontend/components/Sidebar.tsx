@@ -1,20 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
-  LogOut, User, GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays, Activity,
+  Zap, BookOpen, LayoutList, BarChart2, Database, ScrollText,
+  GripVertical, Eye, EyeOff,
+  SlidersHorizontal, Check, Network, SplitSquareHorizontal, FlaskConical, CalendarDays, Activity,
   PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
-import { ThemeToggle } from "./ui";
-import WhatsNewModal from "./WhatsNewModal";
-import { CURRENT_VERSION, LATEST_RELEASE, isReleaseSeen, markReleaseSeen } from "@/lib/releaseNotes";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
@@ -74,9 +71,8 @@ function AiBadge() {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { setDragging } = useWorkspace();
-  const { user, logout, isSuperuser } = useAuth();
+  const { isSuperuser } = useAuth();
 
   const [order, setOrder] = useState<string[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
@@ -84,8 +80,6 @@ export default function Sidebar() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
-  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
-  const [releaseUnseen, setReleaseUnseen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   /** Плавно — только по щелчку: при загрузке страницы меню сразу в запомненной ширине. */
   const [animate, setAnimate] = useState(false);
@@ -95,14 +89,6 @@ export default function Sidebar() {
     setHidden(loadList(HIDDEN_KEY));
     try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1"); } catch { /* развёрнуто по умолчанию */ }
     setMounted(true);
-
-    // Окно релиза открывается само один раз — после этого остаётся кнопка.
-    // Читаем localStorage только здесь: на сервере его нет, а разметка первого
-    // рендера должна совпасть с серверной, иначе React ругается на гидрацию.
-    if (!isReleaseSeen(LATEST_RELEASE.id)) {
-      setReleaseUnseen(true);
-      setWhatsNewOpen(true);
-    }
   }, []);
 
   const persist = (nextOrder: string[], nextHidden: string[]) => {
@@ -132,11 +118,6 @@ export default function Sidebar() {
     setCollapsed(next);
     if (next) setEditMode(false);
     try { localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0"); } catch { /* только до перезагрузки */ }
-  };
-
-  const handleLogout = async () => {
-    await logout();
-    router.replace("/login");
   };
 
   const reorder = (drag: string, target: string) => {
@@ -282,82 +263,13 @@ export default function Sidebar() {
         </button>
       </nav>
 
-      {/* LLM status + User + Settings at bottom */}
+      {/* Активные алерты и статус LLM; пользователь, тема и настройки — вверху справа (TopActions) */}
       <div className="border-t border-border-main flex-shrink-0">
         <RunningAlertsIndicator compact={collapsed} />
         <div className={`max-h-[38vh] overflow-y-auto ${collapsed ? "py-2" : "px-4 py-3"}`}>
           <LLMStatusBar compact={collapsed} />
         </div>
-        {user && collapsed && (
-          <div className="flex flex-col items-center gap-1 pb-1">
-            <span title={user.display_name} aria-label={user.display_name} className="p-1.5 text-text-muted"><User className="h-4 w-4" /></span>
-            <button onClick={handleLogout} title="Выйти" aria-label="Выйти из аккаунта"
-              className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30">
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-        {user && !collapsed && (
-          <div className="px-4 pb-2 flex items-center gap-2">
-            <div className="flex items-center gap-1.5 flex-1 min-w-0">
-              <User className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
-              <span className="text-xs text-text-main font-medium truncate">{user.display_name}</span>
-              <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                isSuperuser
-                  ? "bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-500/30"
-                  : "bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-500/15 dark:text-blue-300 dark:border-blue-500/30"
-              }`}>
-                {isSuperuser ? "SU" : "MON"}
-              </span>
-            </div>
-            <button
-              onClick={handleLogout}
-              title="Выйти"
-              aria-label="Выйти из аккаунта"
-              className="p-1 rounded hover:bg-red-50 dark:hover:bg-red-900/30 text-text-muted hover:text-red-500 transition-colors flex-shrink-0"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-        <div className={`pb-3 flex items-center gap-1 ${collapsed ? "flex-col" : "px-4 justify-end"}`}>
-          {/* Что нового — точка гаснет, как только релиз просмотрен */}
-          <button
-            type="button"
-            onClick={() => setWhatsNewOpen(true)}
-            title={`Что нового · версия ${CURRENT_VERSION}`}
-            aria-label={`Что нового в версии ${CURRENT_VERSION}`}
-            className="relative p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors"
-          >
-            <Sparkles className="w-4 h-4" />
-            {releaseUnseen && (
-              <span
-                aria-hidden="true"
-                className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-primary ring-2 ring-bg-card"
-              />
-            )}
-          </button>
-          <ThemeToggle />
-          {isSuperuser && (
-            <Link
-              href="/settings"
-              title="Настройки"
-              className="p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-primary transition-colors"
-            >
-              <Settings className="w-4 h-4" />
-            </Link>
-          )}
-        </div>
       </div>
-
-      <WhatsNewModal
-        open={whatsNewOpen}
-        onClose={() => {
-          setWhatsNewOpen(false);
-          markReleaseSeen(LATEST_RELEASE.id);
-          setReleaseUnseen(false);
-        }}
-      />
     </aside>
   );
 }

@@ -309,7 +309,7 @@ export default function BugsSection() {
 
   if (stage === "history") return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="max-w-5xl mx-auto">
+      <div>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
             <button
@@ -429,7 +429,7 @@ export default function BugsSection() {
 
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className="max-w-5xl mx-auto">
+      <div>
 
         {/* Header */}
         <div className="flex items-start justify-between mb-5 gap-4">

@@ -1,11 +1,14 @@
 "use client";
 
-import { Bug, Flag, SquareCheck } from "lucide-react";
+import { Bug, Flag, Plus, SquareCheck } from "lucide-react";
 import { closedOf, daysBetween, fmtDay, isLate, isOverdue, planEndOf, planStartOf, todayIso, type AqaEpic } from "@/lib/aqaApi";
 
 /** Роадмап классическим списком: эпик — заголовком группы, под ним задачи и дефекты с плановыми датами, закрытием
- *  и исполнителем. Плановое окончание прошло без закрытия — красным; закрыта позже — красным с днями опоздания. */
-export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
+ *  и исполнителем. Плановое окончание прошло без закрытия — красным; закрыта позже — красным с днями опоздания.
+ *  Щелчок по названию — окно задачи (правка и статус), номер — задача в Jira; «+ Задача» — новая задача эпика. */
+export default function RoadmapList({ epics, onOpenIssue, onNewIssue }: {
+  epics: AqaEpic[]; onOpenIssue: (key: string) => void; onNewIssue: (epic: string) => void;
+}) {
   const TH = "px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap";
   return (
     <div className="border border-border-main rounded-xl overflow-auto scrollbar-thin bg-bg-card">
@@ -27,6 +30,11 @@ export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
                   <span className="font-semibold text-text-main">{e.missing ? "не найден в Jira" : e.summary}</span>
                   {e.status && <span className="text-xs text-text-muted">· {e.status}</span>}
                   <span className="ml-auto text-xs text-text-muted">задач и дефектов: {e.issues.length}</span>
+                  {!e.missing && (
+                    <button type="button" onClick={() => onNewIssue(e.key)} aria-label={`Новая задача в эпике ${e.key}`} title="Завести задачу в этом эпике"
+                      className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs text-primary hover:bg-primary/10">
+                      <Plus className="w-3.5 h-3.5" /> Задача</button>
+                  )}
                 </span>
               </td>
             </tr>
@@ -35,7 +43,10 @@ export default function RoadmapList({ epics }: { epics: AqaEpic[] }) {
                 <td className="px-3 py-1.5 whitespace-nowrap">
                   <a href={i.url} target="_blank" rel="noopener noreferrer" className="font-mono text-xs text-primary hover:underline">{i.key} ↗</a>
                 </td>
-                <td className="px-3 py-1.5 text-text-main min-w-[280px]">{i.summary}</td>
+                <td className="px-3 py-1.5 min-w-[280px]">
+                  <button type="button" onClick={() => onOpenIssue(i.key)} title="Открыть задачу: статус, исполнитель, даты"
+                    className="text-left text-text-main hover:text-primary hover:underline">{i.summary}</button>
+                </td>
                 <td className="px-3 py-1.5 whitespace-nowrap">
                   <span className={`inline-flex items-center gap-1 text-xs ${i.defect ? "text-red-600 dark:text-red-400" : "text-text-main"}`}>
                     {i.defect ? <Bug className="w-3.5 h-3.5" /> : <SquareCheck className="w-3.5 h-3.5 text-blue-500" />}{i.type}</span>

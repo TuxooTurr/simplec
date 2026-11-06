@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Ban, Bug, Check, CheckCheck, ChevronRight, Loader2, Timer, X, XCircle } from "lucide-react";
 import IssueFormModal from "@/components/jiratool/IssueFormModal";
+import { anyFormOnScreen, openForm } from "@/lib/backgroundForms";
 import { getCase, saveResults, zText, type ZCaseFull, type ZStatus } from "@/lib/zephyrApi";
 import { IssueLinks, ResultPill } from "./parts";
 
@@ -109,7 +110,7 @@ export default function Player({ runKey, items, project, baseUrl, onClose }: {
     const onKey = (e: KeyboardEvent) => {
       const typing = e.target instanceof HTMLElement && /input|textarea|select/i.test(e.target.tagName);
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void save(true); return; }
-      if (typing || defectFor !== null || !w || nextUnset < 0) return;
+      if (typing || defectFor !== null || anyFormOnScreen() || !w || nextUnset < 0) return;
       const m = e.key === "1" ? "Pass" : e.key === "2" ? "Fail" : e.key === "3" ? "Blocked" : null;
       if (m) { e.preventDefault(); mark(nextUnset, m); }
     };
@@ -132,6 +133,17 @@ export default function Player({ runKey, items, project, baseUrl, onClose }: {
     ].filter(Boolean);
     return { type: "Дефект", summary: `[Регресс] ${c.name}`, description: lines.join("\n") };
   }, [defectFor, c, w, runKey]);
+
+  // Форма живёт выше раздела: её можно свернуть и работать дальше. Дефект привязываем к кейсу, на котором его завели.
+  useEffect(() => {
+    if (defectFor === null || !defectPrefill) return;
+    const caseKey = key;
+    setDefectFor(null);
+    openForm(control => (
+      <IssueFormModal control={control} project={project} participants={[]} jiraOnly prefill={defectPrefill}
+        onSave={d => { const k = d.jira?.key; if (k) setWork(m => ({ ...m, [caseKey]: { ...m[caseKey], defects: [...(m[caseKey]?.defects ?? []), k] } })); }} />
+    ));
+  }, [defectFor, defectPrefill, key, project]);
 
   const done = items.filter(i => /pass|fail|block/i.test(statusOf(i.testCaseKey))).length;
 
@@ -252,11 +264,6 @@ export default function Player({ runKey, items, project, baseUrl, onClose }: {
         </div>
       </main>
 
-      {defectFor !== null && defectPrefill && (
-        <IssueFormModal open project={project} participants={[]} jiraOnly prefill={defectPrefill}
-          onClose={() => setDefectFor(null)}
-          onSave={d => { if (d.jira) patch({ defects: [...(w?.defects ?? []), d.jira.key] }); }} />
-      )}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle, Archive, ArchiveRestore, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
   ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
@@ -21,6 +21,7 @@ import AddIssuesModal, { type PickedSource } from "@/components/jiratool/AddIssu
 import OwnFieldModal from "@/components/jiratool/OwnFieldModal";
 import ParticipantsModal, { initials } from "@/components/jiratool/ParticipantsModal";
 import IssueFormModal, { type IssueDraft } from "@/components/jiratool/IssueFormModal";
+import { openForm } from "@/lib/backgroundForms";
 import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
@@ -66,7 +67,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
 const STRUCTURE_ENABLED = false;
 
 type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "load" | "loadDetails" | { stageFor: Issue }
-  | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue } | { draft: Issue };
+  | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue };
 type Panel = "columns" | "group" | null;
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
@@ -84,6 +85,14 @@ function shortName(name: string): string {
 const nowStamp = () => new Date().toISOString().slice(0, 16).replace("T", " ");
 
 type JiraConn = { state: "loading" } | { state: "ok"; baseUrl: string } | { state: "error"; message: string };
+
+type StateChange = (s: ToolState) => ToolState;
+/**
+ * Изменение списков, откуда бы оно ни пришло. Свёрнутая форма может закончить работу, когда раздел уже закрыт или открыт
+ * заново: тогда её замыкание принадлежит прежнему экземпляру, и правка должна попасть в тот, что на экране, а иначе — в сохранение.
+ */
+let liveUpdate: ((fn: StateChange) => void) | null = null;
+const updateAnywhere = (fn: StateChange) => { if (liveUpdate) liveUpdate(fn); else saveState(fn(loadState())); };
 
 export default function JiraToolSection() {
   const [state, setState] = useState<ToolState | null>(null);
@@ -120,7 +129,6 @@ export default function JiraToolSection() {
   /** Формат трудозатрат («ч · мин» / «д · ч · мин»): сам формат — в lib/jiraTool, состояние — чтобы перерисовать таблицу. */
   const [timeFmt, setTimeFmtState] = useState<TimeFmt>(getTimeFmt);
   /** Создание дефекта из окна «Дефекты» задачи: эпику — Epic Link, стори и прочим — связь после создания. */
-  const [defectFor, setDefectFor] = useState<Issue | null>(null);
 
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
   const [newTpl, setNewTpl] = useState("");
@@ -316,12 +324,17 @@ export default function JiraToolSection() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const update = (fn: (s: ToolState) => ToolState) => setState(prev => {
+  const updateHere = useCallback((fn: StateChange) => setState(prev => {
     if (!prev) return prev;
     const next = fn(prev);
     saveState(next);
     return next;
-  });
+  }), []);
+  useLayoutEffect(() => {
+    liveUpdate = updateHere;
+    return () => { if (liveUpdate === updateHere) liveUpdate = null; };
+  }, [updateHere]);
+  const update = updateAnywhere;
   const updateList = (fn: (l: TaskList) => TaskList) =>
     update(s => ({ ...s, lists: s.lists.map(l => (l.id === activeId ? fn(l) : l)) }));
   /**
@@ -613,7 +626,8 @@ export default function JiraToolSection() {
     // Создали в Jira без галочки «Добавить в список» — в списке ничего не меняем.
     if (d.jira && d.addToList === false) return;
     const now = nowStamp();
-    const key = d.jira?.key ?? draftKey(list.project, state.nextKey);
+    // Форма могла быть свёрнута, а состояние — уже другим: номер черновика — из свежего сохранения.
+    const key = d.jira?.key ?? draftKey(list.project, loadState().nextKey);
     if (d.jira) addJiraIssue(key, { key, url: d.jira.url, fields: { ...formFields(d), created: now, updated: now } });
     update(s => ({
       ...s,
@@ -658,6 +672,27 @@ export default function JiraToolSection() {
         }),
       };
     });
+  };
+
+  /* Формы регистрации живут выше раздела: их можно свернуть и уйти на другую вкладку (lib/backgroundForms.ts). */
+  const openCreate = () => {
+    if (!list || !state) return;
+    openForm(control => <IssueFormModal control={control} project={list.project} participants={state.participants} listName={list.name} onSave={saveIssue} />);
+  };
+  const openDraft = (issue: Issue) => {
+    if (!state) return;
+    openForm(control => <IssueFormModal control={control} project={projectKeyOfIssue(issue.key)} participants={state.participants}
+      initial={draftOf(issue)} onSave={d => saveDraft(issue, d)} />);
+  };
+  const openDefect = (issue: Issue) => {
+    if (!state) return;
+    openForm(control => (
+      <IssueFormModal control={control} jiraOnly project={projectKeyOfIssue(issue.key)} participants={state.participants}
+        prefill={categoryOf(issue) === "epic" ? { type: "Дефект", epicKey: issue.key } : { type: "Дефект" }}
+        linkTo={categoryOf(issue) === "epic" ? undefined : { key: issue.key, summary: String(issue.fields.summary ?? "") }}
+        // Новый дефект — сразу в кэш (с Epic Link и связями), чтобы окно «Дефекты» и маркер в списке его показали.
+        onSave={d => { if (d.jira) void sync([d.jira.key], []); }} />
+    ));
   };
 
   const importStructure = ({ structure, items, target }: StructureImport) => {
@@ -1405,7 +1440,7 @@ export default function JiraToolSection() {
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
                     <Plus className="w-4 h-4" /> Добавить задачи
                   </button>
-                  <button type="button" onClick={() => setModal("create")}
+                  <button type="button" onClick={openCreate}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 whitespace-nowrap">
                     <FilePlus2 className="w-4 h-4" /> Создать задачу
                   </button>
@@ -1540,7 +1575,7 @@ export default function JiraToolSection() {
                     onRenameFolder={renameFolder}
                     onDeleteFolder={deleteFolder}
                     onMoveFolder={(name, target, place) => updateList(l => ({ ...l, folderList: moveItem(l.folderList ?? [], name, target, place) }))}
-                    onOpenDraft={issue => setModal({ draft: issue })}
+                    onOpenDraft={openDraft}
                     onSpend={(key, patch) => updateList(l => {
                       const cur = { ...l.spend?.[key] };
                       if ("plan" in patch) { if (patch.plan == null) delete cur.plan; else cur.plan = patch.plan; }
@@ -1618,14 +1653,6 @@ export default function JiraToolSection() {
             ));
           }} />
       )}
-      {modal === "create" && list && (
-        <IssueFormModal open project={list.project} participants={state.participants} listName={list.name}
-          onSave={saveIssue} onClose={() => setModal(null)} />
-      )}
-      {modal && typeof modal === "object" && "draft" in modal && list && (
-        <IssueFormModal open project={projectKeyOfIssue(modal.draft.key)} participants={state.participants}
-          initial={draftOf(modal.draft)} onSave={d => saveDraft(modal.draft, d)} onClose={() => setModal(null)} />
-      )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
         <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf} chat={chat}
           ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onTransitions={afterTransitions} onClose={() => setModal(null)} />
@@ -1688,16 +1715,7 @@ export default function JiraToolSection() {
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} chat={chat}
-          onCreate={modal.defectsFor.local ? undefined : () => setDefectFor(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />
-      )}
-      {/* Поверх окна «Дефекты» — поэтому ниже него */}
-      {defectFor && (
-        <IssueFormModal open jiraOnly project={projectKeyOfIssue(defectFor.key)} participants={state.participants}
-          prefill={categoryOf(defectFor) === "epic" ? { type: "Дефект", epicKey: defectFor.key } : { type: "Дефект" }}
-          linkTo={categoryOf(defectFor) === "epic" ? undefined : { key: defectFor.key, summary: String(defectFor.fields.summary ?? "") }}
-          // Новый дефект — сразу в кэш (с Epic Link и связями), чтобы окно «Дефекты» и маркер в списке его показали.
-          onSave={d => { if (d.jira) void sync([d.jira.key], []); }}
-          onClose={() => setDefectFor(null)} />
+          onCreate={modal.defectsFor.local ? undefined : () => openDefect(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />
       )}
       {modal && typeof modal === "object" && "own" in modal && (
         <OwnFieldModal open initial={modal.own} typeLocked={!!modal.own && ownUsed(modal.own.id)} onClose={() => setModal(null)}

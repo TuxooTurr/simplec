@@ -1155,9 +1155,12 @@ export default function EtalonsSection() {
     { id: "requirements", label: "Требования",   icon: <ClipboardList className="w-4 h-4" /> },
   ];
 
+  // «Данные» занимают всё окно: дерево от меню до низа, название раздела — в шапке панели.
+  if (tab === "requirements") return <DataDocs />;
+
   return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
-      <div className={tab === "requirements" ? "max-w-[1500px] mx-auto" : "max-w-5xl mx-auto"}>
+      <div>
         {/* Заголовок */}
         <div className="mb-4">
           <h1 className="text-xl font-bold text-text-main mb-1">Данные</h1>
@@ -1190,7 +1193,6 @@ export default function EtalonsSection() {
         {tab === "autotests"    && <AutotestsTab />}
         {tab === "defects"      && <DefectsTab />}
         {tab === "docs"         && <ContextDocsTab />}
-        {tab === "requirements" && <DataDocs />}
       </div>
     </div>
   );

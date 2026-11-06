@@ -167,7 +167,7 @@ export default function TcsGeneratorSection() {
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
-      <div className="max-w-3xl mx-auto space-y-4">
+      <div className="space-y-4">
 
         {/* Шапка раздела: настройки сценария всегда вверху справа */}
         <div className="flex items-center gap-3">

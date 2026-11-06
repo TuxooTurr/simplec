@@ -1,5 +1,6 @@
 "use client";
 
+import { notify, onPage } from "@/lib/notifications";
 import {
   createContext,
   useContext,
@@ -153,6 +154,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
   const [qaDocTruncated, setQaDocTruncated] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
   const [exporting, setExporting] = useState(false);
+  const featureRef = useRef("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -329,6 +331,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
           md: msg.md as string,
         });
         setExporting(false);
+        notify({ kind: "success", title: "Экспорт тест-кейсов готов", links: [{ label: "Открыть", href: "/generation" }], silent: onPage("/generation") });
         break;
 
       case "error":
@@ -416,6 +419,7 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
       provider: string;
       platform: string;
     }) => {
+      featureRef.current = params.feature;
       setState("generating");
       setEvents([]);
       setProgress(null);
@@ -569,6 +573,20 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
     }
   }, [sessionId, setJobs]);
 
+  // Одиночная генерация закончилась — уведомление. Смотрим только на переход из «идёт»: открытие готовой сессии из
+  // истории — не событие. Очередь по задачам сообщает итогом всей очереди (ниже).
+  const prevState = useRef(state);
+  useEffect(() => {
+    const was = prevState.current;
+    prevState.current = state;
+    if (was !== "generating" || (state !== "done" && state !== "error") || jobsRef.current.length) return;
+    const links = [{ label: "Открыть результат", href: "/generation" }];
+    const silent = onPage("/generation");
+    if (state === "done") notify({ kind: "success", title: `Тестовая модель готова: кейсов ${casesRef.current.length}`, text: featureRef.current, links, silent });
+    else notify({ kind: "error", title: "Генерация модели не удалась",
+      text: [...eventsRef.current].reverse().find(e => e.type === "error")?.message, links, silent });
+  }, [state]);
+
   // Задача закончилась — итог ей и дальше по очереди. Ошибка одной задачи не останавливает остальные.
   useEffect(() => {
     if (state !== "done" && state !== "error") return;
@@ -576,6 +594,15 @@ export function GenerationProvider({ children }: { children: ReactNode }) {
     const error = state === "error" ? [...eventsRef.current].reverse().find(e => e.type === "error")?.message ?? "Генерация не удалась" : undefined;
     setJobs(jobsRef.current.map(j => (j.status !== "run" ? j
       : { ...j, status: state, sessionId: j.sessionId ?? sessionIdRef.current ?? undefined, caseCount: casesRef.current.length, error })));
+    const all = jobsRef.current;
+    if (!all.some(j => j.status === "wait")) {
+      const ok = all.filter(j => j.status === "done"), failed = all.filter(j => j.status === "error");
+      notify({
+        kind: failed.length ? "error" : "success", title: `Генерация по задачам: готово ${ok.length} из ${all.length}`,
+        text: failed.length ? `Не вышло: ${failed.map(j => j.key).join(", ")}` : `Кейсов: ${ok.reduce((n, j) => n + (j.caseCount ?? 0), 0)}`,
+        links: [{ label: "Открыть результат", href: "/generation" }], silent: onPage("/generation"),
+      });
+    }
     runNextJob();
   }, [state, setJobs, runNextJob]);
 

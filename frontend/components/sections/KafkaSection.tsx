@@ -345,7 +345,7 @@ export default function KafkaSection() {
   };
 
   return (
-    <div className="flex h-full flex-col p-4">
+    <div className="flex h-full flex-col p-6">
       {/* Header */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2">

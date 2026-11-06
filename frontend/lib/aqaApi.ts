@@ -14,9 +14,14 @@ export interface AqaSettings {
   testopsUrl: string;
   testopsOk: boolean;
   testopsToken: string;
+  /** Джоб автотестов в Jenkins: ссылка, логин и API-токен (маска, если есть). */
+  jenkinsUrl: string;
+  jenkinsOk: boolean;
+  jenkinsUser: string;
+  jenkinsToken: string;
   epics: string[];
   /** Ссылки по умолчанию: действуют, пока настройку не сохраняли; стёртая ссылка остаётся пустой. */
-  defaults?: { bitbucketUrl: string; testopsUrl: string };
+  defaults?: { bitbucketUrl: string; testopsUrl: string; jenkinsUrl: string };
 }
 
 export interface AqaCommit { id: string; hash: string; message: string; author: string; date: string; url: string }
@@ -153,7 +158,9 @@ export interface AqaEpic extends Partial<AqaIssue> {
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export const getAqaSettings = () => fetchJson<AqaSettings>("/api/aqa/settings");
-export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk" | "defaults">) =>
+/** Поля Jenkins необязательны: с графика роадмапа сохраняются только эпики, Jenkins при этом не меняется. */
+export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk" | "jenkinsOk" | "defaults" | "jenkinsUrl" | "jenkinsUser" | "jenkinsToken">
+  & Partial<Pick<AqaSettings, "jenkinsUrl" | "jenkinsUser" | "jenkinsToken">>) =>
   fetchJson<AqaSettings>("/api/aqa/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(s) });
 export const bitbucketTokenFromLogin = (login: string, password: string) =>
   fetchJson<{ status: string }>("/api/aqa/bitbucket/token-from-login", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ login, password }) });
@@ -176,6 +183,39 @@ export const getAqaCommitDiff = (hash: string, path: string, src = "") =>
   fetchJson<AqaFileDiff>(`/api/aqa/commit/${encodeURIComponent(hash)}/diff${qs({ path, src: src || undefined })}`);
 export const getAqaCommit = (hash: string) => fetchJson<AqaCommitDetails>(`/api/aqa/commit/${encodeURIComponent(hash)}`);
 export const getAqaRoadmap = (refresh = false) => fetchJson<AqaRoadmap>(`/api/aqa/roadmap${qs({ refresh })}`);
+
+/** Задача для окна правки. editable.planStart/planEnd — название поля Jira, куда уйдёт дата; null — поля нет на экране. */
+export interface AqaIssueDetails extends AqaIssue {
+  description: string;
+  assigneeLogin: string;
+  priorityId: string;
+  priorities: { id: string; name: string }[];
+  editable: { summary: boolean; description: boolean; priority: boolean; planStart: string | null; planEnd: string | null };
+}
+/** Что поменять. Нет поля — не трогать; пустая строка — очистить (дату, исполнителя). priority — id. */
+export type AqaIssueChange = Partial<Record<"summary" | "description" | "priority" | "assignee" | "planStart" | "planEnd", string>>;
+
+export const getAqaIssue = (key: string) => fetchJson<AqaIssueDetails>(`/api/aqa/issue/${encodeURIComponent(key)}`);
+export const updateAqaIssue = (key: string, change: AqaIssueChange) =>
+  fetchJson<{ status: string; warnings: string[] }>(`/api/aqa/issue/${encodeURIComponent(key)}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(change) });
+
+/* ── Запуск автотестов (Jenkins) ──────────────────────────────────────────── */
+
+/** Параметр джоба: вид поля строится по нему. password и file — без значения по умолчанию. */
+export interface JenkinsParam {
+  name: string; kind: "string" | "multiline" | "boolean" | "choice" | "password" | "file";
+  description: string; default: string | boolean; choices: string[];
+}
+/** result: RUNNING, SUCCESS, FAILURE, UNSTABLE, ABORTED. */
+export interface JenkinsBuild { number: number; url: string; title: string; result: string; started: string; duration: number }
+export interface JenkinsJob { name: string; url: string; buildable: boolean; params: JenkinsParam[]; builds: JenkinsBuild[] }
+/** Запуск в очереди. slow — окно перестало ждать; gone — Jenkins уже забыл запись или не дал её номер. */
+export interface JenkinsQueue { state: "queued" | "started" | "cancelled" | "gone" | "slow"; why?: string; number?: number; url?: string }
+
+export const getJenkinsJob = () => fetchJson<JenkinsJob>("/api/aqa/jenkins/job");
+export const runJenkins = (params: Record<string, string | boolean>) =>
+  fetchJson<{ status: string; queueId: number | null }>("/api/aqa/jenkins/run", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ params }) });
+export const getJenkinsQueue = (id: number) => fetchJson<JenkinsQueue>(`/api/aqa/jenkins/queue/${id}`);
 
 /* ── Даты задачи на таймлайне ─────────────────────────────────────────────
    Полоса — от планового начала до планового окончания (нет полей — создание и срок). Не закрыта к плановому

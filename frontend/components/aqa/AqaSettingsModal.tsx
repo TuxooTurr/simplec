@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Plus, Rocket, RotateCcw, X } from "lucide-react";
+import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Play, Plus, Rocket, RotateCcw, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { bitbucketTokenFromLogin, getAqaSettings, saveAqaSettings, type AqaSettings } from "@/lib/aqaApi";
 
@@ -20,9 +20,9 @@ function ResetLink({ value, def, onReset }: { value: string; def?: string; onRes
 }
 
 /**
- * Настройки «Трекинга AQA»: ссылки на репозиторий Bitbucket и проект Allure TestOps (как в браузере), маркеры
- * и эпики роадмапа. Маркер Bitbucket выпускается сам при входе логином Jira, здесь — получить по логину Сигмы
- * или вставить вручную; API-токен TestOps — из профиля TestOps. Ссылки стоят по умолчанию (SBER911): стереть поле —
+ * Настройки «Трекинга AQA»: ссылки на репозиторий Bitbucket, проект Allure TestOps и джоб Jenkins (как в браузере),
+ * маркеры и эпики роадмапа. Маркер Bitbucket выпускается сам при входе логином Jira, здесь — получить по логину Сигмы
+ * или вставить вручную; API-токен TestOps и Jenkins — из профиля там же. Ссылки стоят по умолчанию (SBER911): стереть поле —
  * отключить источник, «По умолчанию» — вернуть.
  */
 export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
@@ -44,7 +44,7 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
     setBusy(true); setErr("");
     try {
       const r = await saveAqaSettings({ bitbucketUrl: s.bitbucketUrl, bitbucketToken: s.bitbucketToken, testopsUrl: s.testopsUrl,
-        testopsToken: s.testopsToken, epics: epics.map(e => e.trim()).filter(Boolean) });
+        testopsToken: s.testopsToken, jenkinsUrl: s.jenkinsUrl, jenkinsUser: s.jenkinsUser, jenkinsToken: s.jenkinsToken, epics: epics.map(e => e.trim()).filter(Boolean) });
       setS(r); setBusy(false); return true;
     } catch (e) { setErr((e as Error).message); setBusy(false); return false; }
   };
@@ -111,6 +111,30 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
                 onFocus={() => s.testopsToken === MASK && setS({ ...s, testopsToken: "" })}
                 placeholder="Профиль TestOps → API tokens → Create" autoComplete="off" className={`${INPUT} font-mono text-xs`} />
             </label>
+          </section>
+
+          <section className="space-y-2">
+            <div>
+              <div className={LABEL}>
+                <label htmlFor="aqa-jk-url" className="inline-flex items-center gap-1.5"><Play className="w-3.5 h-3.5" /> Джоб автотестов в Jenkins</label>
+                <ResetLink value={s.jenkinsUrl} def={s.defaults?.jenkinsUrl} onReset={() => setS({ ...s, jenkinsUrl: s.defaults?.jenkinsUrl ?? "" })} />
+              </div>
+              <input id="aqa-jk-url" value={s.jenkinsUrl} onChange={e => setS({ ...s, jenkinsUrl: e.target.value })} className={`${INPUT} font-mono text-xs`}
+                placeholder="Пусто — Jenkins не подключён" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className={LABEL}><KeyRound className="w-3.5 h-3.5" /> Логин Jenkins</span>
+                <input value={s.jenkinsUser} onChange={e => setS({ ...s, jenkinsUser: e.target.value })} autoComplete="off" className={`${INPUT} font-mono text-xs`} />
+              </label>
+              <label className="block">
+                <span className={LABEL}><KeyRound className="w-3.5 h-3.5" /> API-токен Jenkins</span>
+                <input type="password" value={s.jenkinsToken} onChange={e => setS({ ...s, jenkinsToken: e.target.value })}
+                  onFocus={() => s.jenkinsToken === MASK && setS({ ...s, jenkinsToken: "" })}
+                  placeholder="Профиль Jenkins → Security → API Token" autoComplete="off" className={`${INPUT} font-mono text-xs`} />
+              </label>
+            </div>
+            <p className="text-[11px] text-text-muted">Запуски идут от имени этого пользователя. Нужен API-токен, а не пароль.</p>
           </section>
 
           <section className="space-y-2">

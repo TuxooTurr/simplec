@@ -403,3 +403,206 @@ def test_файл_коммита_было_стало_рядом(monkeypatch):
     assert not r["binary"] and not r["truncated"]
     monkeypatch.setattr(Q, "MAX_DIFF_ROWS", 2)
     assert Q.bb_file_diff(BB, "abcdef1", "A.java")["truncated"]
+
+
+# ── Управление задачами эпика ────────────────────────────────────────────────
+
+PLAN = {"start": [{"id": "cf_a", "name": "Плановое начало"}, {"id": "cf_b", "name": "Плановое начало"}],
+        "end": [{"id": "cf_e", "name": "Плановое окончание"}]}
+META = {"summary": {"schema": {"type": "string"}}, "description": {"schema": {"type": "string"}},
+        "priority": {"schema": {"type": "priority"}, "allowedValues": [{"id": "3", "name": "Высокий"}]},
+        "cf_b": {"schema": {"type": "date"}}, "cf_e": {"schema": {"type": "datetime"}}}
+
+
+def test_плановая_дата_пишется_в_поле_с_экрана_редактирования():
+    # cf_a подошло по названию, но его нет на экране — значит, пишем в cf_b.
+    assert Q.plan_target(PLAN["start"], META)["id"] == "cf_b"
+    # Дата уже стоит в одном из одноимённых полей — обновляем именно его.
+    both = {**META, "cf_a": {"schema": {"type": "date"}}}
+    assert Q.plan_target(PLAN["start"], both, {"cf_b": "2026-11-01"})["id"] == "cf_b"
+    assert Q.plan_target(PLAN["start"], both)["id"] == "cf_a"
+    # Нет на экране или тип не дата — писать некуда.
+    assert Q.plan_target(PLAN["start"], {}) is None
+    assert Q.plan_target(PLAN["start"], {"cf_a": {"schema": {"type": "option"}}}) is None
+
+
+def test_значение_плановой_даты_по_типу_поля():
+    assert Q.plan_payload({"type": "date"}, "2026-11-20") == "2026-11-20"
+    assert Q.plan_payload({"type": "datetime"}, "2026-11-20") == "2026-11-20T12:00:00.000+0000"
+    assert Q.plan_payload({"type": "string"}, "2026-11-20") == "20.11.2026"
+    assert Q._plan_day(Q.plan_payload({"type": "string"}, "2026-11-20")) == "2026-11-20"
+    assert Q.plan_payload({"type": "date"}, "") is None
+
+
+def _jira(monkeypatch, cur=None, fail_assignee=False):
+    """Подмена Jira: чтение задачи и editmeta, запись — в calls."""
+    calls = []
+
+    def req(cfg, method, path, json_body=None, params=None, **kw):
+        if method == "GET":
+            return {"fields": META} if path.endswith("/editmeta") else {"key": "SBER911-1", "fields": cur or {}}
+        calls.append((path, json_body))
+        if fail_assignee and path.endswith("/assignee"):
+            raise HTTPException(400, "Jira: нельзя назначить")
+        return {}
+    monkeypatch.setattr(Q.jira_defects, "_jira_request", req)
+    monkeypatch.setattr(Q.jira_defects, "_load_cfg", lambda db: {"base_url": "https://jira.test"})
+    monkeypatch.setattr(JT, "catalog", lambda **kw: {"fields": [
+        {"id": "cf_a", "name": "Плановое начало", "kind": "date"}, {"id": "cf_b", "name": "Плановое начало", "kind": "date"},
+        {"id": "cf_e", "name": "Плановое окончание", "kind": "datetime"}]})
+    return calls
+
+
+def test_в_jira_уходит_только_изменённое(monkeypatch):
+    calls = _jira(monkeypatch)
+    r = Q.update_issue(None, "SBER911-1", Q.IssueChange(summary=" Новое ", planEnd="2026-12-01", assignee="ivanov"))
+    assert r == {"status": "ok", "warnings": []}
+    assert calls == [("/rest/api/2/issue/SBER911-1", {"fields": {"summary": "Новое", "cf_e": "2026-12-01T12:00:00.000+0000"}}),
+                     ("/rest/api/2/issue/SBER911-1/assignee", {"name": "ivanov"})]
+
+
+def test_очистка_исполнителя_и_даты(monkeypatch):
+    calls = _jira(monkeypatch, {"cf_b": "2026-11-01"})
+    Q.update_issue(None, "SBER911-1", Q.IssueChange(planStart="", assignee=""))
+    assert calls == [("/rest/api/2/issue/SBER911-1", {"fields": {"cf_b": None}}),
+                     ("/rest/api/2/issue/SBER911-1/assignee", {"name": None})]
+
+
+def test_начало_позже_окончания_не_уходит_в_jira(monkeypatch):
+    calls = _jira(monkeypatch, {"cf_e": "2026-11-10"})
+    with pytest.raises(HTTPException) as e:                    # сравниваем и с уже стоящей в задаче датой
+        Q.update_issue(None, "SBER911-1", Q.IssueChange(planStart="2026-11-20"))
+    assert e.value.status_code == 422 and calls == []
+    with pytest.raises(HTTPException):
+        Q.update_issue(None, "SBER911-1", Q.IssueChange(planStart="20.11.2026"))
+    with pytest.raises(HTTPException):
+        Q.update_issue(None, "SBER911-1", Q.IssueChange(summary="   "))
+    assert calls == []
+
+
+def test_незаписанное_не_теряется_молча(monkeypatch):
+    calls = _jira(monkeypatch, fail_assignee=True)
+    monkeypatch.setattr(JT, "catalog", lambda **kw: {"fields": [{"id": "cf_x", "name": "Плановое начало", "kind": "date"}]})
+    r = Q.update_issue(None, "SBER911-1", Q.IssueChange(summary="Т", planStart="2026-11-20", assignee="ivanov"))
+    assert calls[0] == ("/rest/api/2/issue/SBER911-1", {"fields": {"summary": "Т"}})   # поля записаны
+    assert len(r["warnings"]) == 2 and "Плановое начало" in r["warnings"][0] and "нельзя назначить" in r["warnings"][1]
+
+
+def test_задача_для_окна_правки(monkeypatch):
+    _jira(monkeypatch, {"summary": "С", "description": "h1. Текст", "assignee": {"name": "ivanov", "displayName": "Иванов"},
+                        "priority": {"id": "3", "name": "Высокий"}, "cf_b": "2026-11-01"})
+    d = Q.issue_details(None, "SBER911-1")
+    assert d["description"] == "h1. Текст" and d["assigneeLogin"] == "ivanov" and d["priorityId"] == "3"
+    assert d["priorities"] == [{"id": "3", "name": "Высокий"}] and d["planStart"] == "2026-11-01"
+    assert d["editable"] == {"summary": True, "description": True, "priority": True,
+                             "planStart": "Плановое начало", "planEnd": "Плановое окончание"}
+
+
+def test_номер_задачи_проверяется():
+    assert Q._issue_key(" sber911-12 ") == "SBER911-12"
+    with pytest.raises(HTTPException):
+        Q._issue_key("SBER911-1/../../admin")
+
+
+# ── Запуск автотестов (Jenkins) ──────────────────────────────────────────────
+
+JK = {"base_url": "https://ci.test", "job_path": "/job/AQA/job/AQA_TEST", "job": "AQA_TEST", "url": "u", "user": "qa", "token": "T", "ssl_verify": True}
+JOB = {"name": "AQA_TEST", "displayName": "AQA_TEST", "url": "https://ci.test/job/AQA/job/AQA_TEST/", "buildable": True,
+       "property": [{}, {"parameterDefinitions": [
+           {"name": "STAND", "type": "ChoiceParameterDefinition", "choices": ["IFT", "PSI"], "defaultParameterValue": {"value": "PSI"}, "description": "Стенд"},
+           {"name": "SMOKE", "type": "BooleanParameterDefinition", "defaultParameterValue": {"value": True}},
+           {"name": "TAGS", "type": "StringParameterDefinition", "defaultParameterValue": {"value": "@regress"}},
+           {"name": "NOTE", "type": "TextParameterDefinition"},
+           {"name": "PASS", "type": "PasswordParameterDefinition", "defaultParameterValue": {"value": "{зашифровано}"}},
+           {"name": "BRANCH", "type": "PT_BRANCH", "allValueItems": {"values": [{"name": "main", "value": "main"}, {"name": "dev", "value": "dev"}]}},
+       ]}],
+       "builds": [{"number": 7, "url": "https://ci.test/7/", "building": True, "timestamp": 0, "duration": 0},
+                  {"number": 6, "url": "https://ci.test/6/", "result": "FAILURE", "building": False, "timestamp": 0, "duration": 1000}]}
+
+
+def test_ссылка_на_джоб_разбирается():
+    url = "https://sber911-ci.ci.jenkins.sberbank.ru/job/sber911-ci/job/sber911-backend/job/AQA/job/AQA_TEST/"
+    assert Q.parse_jenkins(url) == {"base_url": "https://sber911-ci.ci.jenkins.sberbank.ru",
+                                    "job_path": "/job/sber911-ci/job/sber911-backend/job/AQA/job/AQA_TEST", "job": "AQA_TEST"}
+    assert Q.parse_jenkins("https://ci.test/view/all/") is None
+
+
+def test_форма_строится_из_описания_джоба(monkeypatch):
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: JOB)
+    r = Q.jenkins_job(JK)
+    p = {x["name"]: x for x in r["params"]}
+    assert (p["STAND"]["kind"], p["STAND"]["default"], p["STAND"]["choices"]) == ("choice", "PSI", ["IFT", "PSI"])
+    assert (p["SMOKE"]["kind"], p["SMOKE"]["default"]) == ("boolean", True)
+    assert (p["TAGS"]["kind"], p["TAGS"]["default"]) == ("string", "@regress")
+    assert p["NOTE"]["kind"] == "multiline" and p["BRANCH"]["choices"] == ["main", "dev"]
+    assert (p["PASS"]["kind"], p["PASS"]["default"]) == ("password", "")      # пароль наружу не отдаём
+    assert [b["result"] for b in r["builds"]] == ["RUNNING", "FAILURE"]
+
+
+def test_параметры_из_actions_и_без_дублей():
+    d = {"actions": [{"parameterDefinitions": [{"name": "A", "type": "StringParameterDefinition"}]}],
+         "property": [{"parameterDefinitions": [{"name": "A", "type": "StringParameterDefinition"}]}]}
+    assert [p["name"] for p in Q.jk_params(d)] == ["A"]
+
+
+def test_запуск_уходит_с_параметрами_и_даёт_номер_в_очереди(monkeypatch):
+    sent = {}
+
+    def http(name, method, url, verify, **kw):
+        if method == "GET":
+            return JOB
+        sent.update(url=url, data=kw["data"], auth=kw["auth"])
+        return type("R", (), {"headers": {"Location": "https://ci.test/queue/item/4242/"}})()
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.jenkins_run(JK, {"STAND": "IFT", "SMOKE": False, "PASS": ""})
+    assert r == {"status": "queued", "queueId": 4242}
+    assert sent["url"] == "https://ci.test/job/AQA/job/AQA_TEST/buildWithParameters" and sent["auth"] == ("qa", "T")
+    assert sent["data"] == {"STAND": "IFT", "SMOKE": "false"}                 # пустой пароль не перетирает умолчание
+
+
+def test_джоб_без_параметров_запускается_через_build(monkeypatch):
+    urls = []
+
+    def http(name, method, url, verify, **kw):
+        if method == "GET":
+            return {"builds": []}
+        urls.append(url)
+        return type("R", (), {"headers": {}})()
+    monkeypatch.setattr(Q, "_http", http)
+    assert Q.jenkins_run(JK, {})["queueId"] is None and urls == ["https://ci.test/job/AQA/job/AQA_TEST/build"]
+
+
+def test_устаревший_параметр_не_уходит(monkeypatch):
+    calls = []
+
+    def http(name, method, url, verify, **kw):
+        calls.append(method)
+        return JOB
+    monkeypatch.setattr(Q, "_http", http)
+    with pytest.raises(HTTPException) as e:
+        Q.jenkins_run(JK, {"OLD": "1"})
+    assert e.value.status_code == 422 and "OLD" in e.value.detail and calls == ["GET"]
+
+
+def test_ссылка_на_папку_объясняется(monkeypatch):
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: {"jobs": [{"name": "main"}, {"name": "dev"}]})
+    with pytest.raises(HTTPException) as e:
+        Q.jenkins_job(JK)
+    assert "папку" in e.value.detail and "main, dev" in e.value.detail
+
+
+@pytest.mark.parametrize("answer,want", [
+    ({"why": "Ждёт агента"}, {"state": "queued", "why": "Ждёт агента"}),
+    ({"executable": {"number": 8, "url": "https://ci.test/8/"}}, {"state": "started", "number": 8, "url": "https://ci.test/8/"}),
+    ({"cancelled": True}, {"state": "cancelled"}),
+])
+def test_что_с_запуском_в_очереди(monkeypatch, answer, want):
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: answer)
+    assert Q.jenkins_queue(JK, 1) == want
+
+
+def test_очередь_забыла_запуск(monkeypatch):
+    def gone(*a, **k):
+        raise HTTPException(404, "нет")
+    monkeypatch.setattr(Q, "_http", gone)
+    assert Q.jenkins_queue(JK, 1) == {"state": "gone"}

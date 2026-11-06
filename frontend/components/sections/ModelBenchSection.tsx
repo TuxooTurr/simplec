@@ -7,7 +7,7 @@ import {
   Save, FileDown, BarChart3, SlidersHorizontal, X,
 } from "lucide-react";
 import NotionRenderer from "@/components/NotionRenderer";
-import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { getCustomLlmProviders, type CustomLlmProvider } from "@/lib/settingsApi";
 import {
   getProviders, getGigachatModels, parseFile, type ProviderStatus,
@@ -368,12 +368,13 @@ export default function ModelBenchSection() {
     } catch { /* игнорируем — просто не обновится список */ }
   }, [refreshHistory, session, handleReset]);
 
+  const split = useSplitView();
   const locked = !!session; // промпт/транскрибация фиксируются на первом запуске
   const judgeName = providers.find((p) => p.id === judgeProvider)?.name ?? judgeProvider;
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border-main">
         <div className="flex items-center gap-2">
           <SplitSquareHorizontal className="w-5 h-5 text-primary" />
           <h2 className="text-base font-semibold text-text-main">Тестирование моделей LLM</h2>
@@ -390,8 +391,10 @@ export default function ModelBenchSection() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-5">
-      <div className="max-w-5xl mx-auto space-y-4">
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-6">
+      {/* Зона одна — результаты сбоку от настроек, зон две — под ними */}
+      <div className={session?.targets.length && !split ? "grid grid-cols-2 items-start gap-6" : "space-y-4"}>
+      <div className="min-w-0 space-y-4">
         {showHistory && (
           <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-1.5 animate-fade-in max-w-3xl">
             {history.length === 0 && <p className="text-xs text-text-muted px-2 py-1">Пока пусто</p>}
@@ -690,6 +693,8 @@ export default function ModelBenchSection() {
           </p>
         </div>
 
+      </div>
+      <div className="min-w-0 space-y-4">
         {session && session.targets.length > 0 && (
           <div className="space-y-3 max-w-3xl">
             <p className={LABEL_CLS}>Результаты ({session.targets.length} моделей)</p>
@@ -762,6 +767,7 @@ export default function ModelBenchSection() {
             )}
           </div>
         )}
+      </div>
       </div>
       </div>
     </div>

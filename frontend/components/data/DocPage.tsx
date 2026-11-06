@@ -229,7 +229,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
   const ROW_LABEL = "flex items-center gap-1.5 pt-0.5 text-text-muted";
 
   return (
-    <article className="max-w-4xl mx-auto px-2 pb-16">
+    <article className="pb-16">
       <p className="mb-2 flex items-center gap-1.5 text-xs text-text-muted">
         <Folder className="w-3.5 h-3.5" /> {where || "Корень"}
       </p>

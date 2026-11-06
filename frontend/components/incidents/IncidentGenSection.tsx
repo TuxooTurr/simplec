@@ -1,5 +1,6 @@
 "use client";
 
+import { useSplitView } from "@/contexts/WorkspaceContext";
 import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, Copy, Eye, History, Loader2, Plus, Send, Settings2, Trash2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
@@ -87,6 +88,7 @@ function PreviewList({ items }: { items: IncPreviewItem[] }) {
  * Рефлекса — около 20) выбирается случайно, время — момент отправки. Подключение и SQL инструкций — «Настройки».
  */
 export default function IncidentGenSection() {
+  const split = useSplitView();
   const [cat, setCat] = useState<IncCatalog | null>(null);
   const [st, setSt] = useState<IncState | null>(null);
   const [rows, setRowsState] = useState<IncRow[]>([]);
@@ -143,7 +145,7 @@ export default function IncidentGenSection() {
 
   return (
     <div className="h-full overflow-y-auto scrollbar-thin">
-      <div className="max-w-4xl mx-auto p-6 space-y-4">
+      <div className="p-6 space-y-4">
         <div className="flex items-center gap-2">
           <p className="text-sm text-text-muted">Каждый инцидент — со случайным сценарием из {cat.scenarios} и временем отправки. Регистрируются по-настоящему
             (топик <code className="font-mono">{st.settings.topic}</code>).</p>
@@ -153,6 +155,8 @@ export default function IncidentGenSection() {
         </div>
         {err && <p className="flex items-start gap-2 text-sm text-red-600 dark:text-red-400"><AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> {err}</p>}
 
+        {/* Зона одна — результат отправки сбоку, зон две — под таблицей */}
+        <div className={run && !split ? "grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] items-start gap-4" : "space-y-4"}>
         <section className="rounded-xl border border-border-main bg-bg-card">
           <div className={`${GRID} border-b border-border-main px-3 py-2 text-[11px] uppercase tracking-wide text-text-muted`}>
             <span>#</span><span>КЭ</span><span>Приоритет</span><span>Инструкция</span><span />
@@ -198,6 +202,7 @@ export default function IncidentGenSection() {
             <ResultTable results={run.results} />
           </section>
         )}
+        </div>
       </div>
 
       <Modal open={!!preview} onClose={() => setPreview(null)} title={`Пример · ${preview?.length ?? 0}`} size="max-w-4xl">

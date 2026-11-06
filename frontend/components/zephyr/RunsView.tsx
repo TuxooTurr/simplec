@@ -102,7 +102,7 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
 
   return (
     <div className="flex h-full min-h-0">
-      <div style={{ width: listPane.size }} className="flex-shrink-0 flex flex-col min-h-0 p-3">
+      <div style={{ width: listPane.size }} className="flex-shrink-0 flex flex-col min-h-0 py-3 pl-6 pr-3">
         <div className="flex items-center gap-1.5 mb-2">
           <label className="min-w-0 flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
             <Search className="w-3.5 h-3.5 text-text-muted" />

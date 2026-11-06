@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, CalendarRange, List, Loader2, RefreshCw, Settings2 } from "lucide-react";
+import { Activity, CalendarRange, List, Loader2, Play, RefreshCw, Settings2 } from "lucide-react";
+import AqaIssueModal from "@/components/aqa/AqaIssueModal";
+import AqaNewIssue from "@/components/aqa/AqaNewIssue";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
 import CommitModal from "@/components/aqa/CommitModal";
 import CommitsCard from "@/components/aqa/CommitsCard";
+import JenkinsRunModal from "@/components/aqa/JenkinsRunModal";
 import LaunchesCard from "@/components/aqa/LaunchesCard";
 import LaunchModal from "@/components/aqa/LaunchModal";
 import RoadmapList from "@/components/aqa/RoadmapList";
@@ -14,6 +17,7 @@ import {
   getAqaCommits, getAqaRoadmap, getAqaSettings, getAqaTestops, saveAqaSettings,
   type AqaCommits, type AqaRoadmap, type AqaSettings, type AqaTestops, type PlanFields,
 } from "@/lib/aqaApi";
+import { openForm } from "@/lib/backgroundForms";
 import { AQA_REFRESH_MS, aqaCache, isFresh, persistAqaCache, putCommits, sameSource, type Entry } from "@/lib/aqaCache";
 
 const VIEW_KEY = "st_aqa_view";
@@ -34,7 +38,7 @@ function writeLs(key: string, v: string) {
 /**
  * «Трекинг AQA» — развитие автотестов: коммиты выбранной ветки репозитория (Bitbucket), запуски Allure TestOps
  * (щелчок по запуску — окно с подробностями) и роадмап эпиков AQA из Jira таймлайном (масштаб от дня до года)
- * или списком. Источники — в «Подключениях» (ссылками, как в браузере).
+ * или списком. Задачи эпика заводятся и правятся прямо здесь — запись идёт в Jira. Источники — в «Подключениях» (ссылками, как в браузере).
  * Данные — из кэша сессии (lib/aqaCache.ts, как у Jira tool): видны сразу, фоном обновляются раз в 30 минут;
  * сервер дополнительно держит ответы 5 минут. «Обновить» — заново, мимо кэшей.
  */
@@ -47,6 +51,8 @@ export default function AqaTrackingSection() {
   const [branch, setBranch] = useState<string | null>(null);
   const [launch, setLaunch] = useState<{ open: boolean; id: number | null }>({ open: false, id: null });
   const [commit, setCommit] = useState<string | null>(null);
+  const [issueKey, setIssueKey] = useState<string | null>(null);
+  const [runOpen, setRunOpen] = useState(false);
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [dayW, setDayW] = useState<number>(ZOOMS[1].w);
   const [colorBy, setColorBy] = useState<ColorBy>("status");
@@ -151,6 +157,8 @@ export default function AqaTrackingSection() {
     setSettings(saved);
     if (saved.epics.length) loadRoad(true); else setRoad(EMPTY);
   };
+  /** Форма живёт выше раздела: её можно свернуть и уйти, роадмап обновится и в кэше сессии. */
+  const newIssue = (epic: string) => openForm(control => <AqaNewIssue epic={epic} control={control} onCreated={() => loadRoad(true)} />);
   const addEpic = (key: string) => setEpics([...(settings?.epics ?? []), key]);
   const removeEpic = (key: string) => setEpics((settings?.epics ?? []).filter(k => k !== key));
   const people = peopleColors(road.data?.epics ?? []);
@@ -160,17 +168,19 @@ export default function AqaTrackingSection() {
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex flex-shrink-0 items-center gap-3 border-b border-border-main bg-bg-card px-6 py-3">
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-main bg-bg-card px-6 py-3">
         <Activity className="h-5 w-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Трекинг AQA</h1>
-        <span className="text-xs text-text-muted">коммиты, запуски автотестов и роадмап</span>
+        <h1 className="whitespace-nowrap text-lg font-bold text-text-main">Трекинг AQA</h1>
+        <span className="min-w-0 truncate text-xs text-text-muted">коммиты, запуски автотестов и роадмап</span>
         {Object.keys(stale).length > 0 && (
           <span className="truncate text-xs text-amber-700 dark:text-amber-400" title={Object.values(stale).join("\n")}>
             Не обновилось — показано из кэша: {Object.values(stale).map(m => m.split(":")[0]).join(", ")}</span>
         )}
-        <button type="button" onClick={() => loadAll(true)} className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
+        <button type="button" onClick={() => setRunOpen(true)} className="ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90">
+          <Play className="h-4 w-4" /> Запустить автотесты</button>
+        <button type="button" onClick={() => loadAll(true)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
           <RefreshCw className="h-4 w-4" /> Обновить всё</button>
-        <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
+        <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
           <Settings2 className="h-4 w-4" /> Подключения</button>
       </div>
 
@@ -226,12 +236,12 @@ export default function AqaTrackingSection() {
           {road.data?.planFields && <PlanFieldsNote pf={road.data.planFields} />}
           {settings && !settings.epics.length
             ? (view === "timeline"
-              ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
+              ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
               : <Problem err="Эпики роадмапа не заданы — добавьте их на таймлайне или в «Подключениях»." onSettings={() => setOpen(true)} />)
             : road.err ? <Problem err={road.err} onSettings={() => setOpen(true)} />
             : !road.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю эпики из Jira…</p>
-            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} />
-            : <RoadmapList epics={epics} />}
+            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
+            : <RoadmapList epics={epics} onOpenIssue={setIssueKey} onNewIssue={newIssue} />}
           {/* Легенда — под графиком */}
           {view === "timeline" && (road.data || (settings && !settings.epics.length)) && (
             <p className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1 text-[11px] text-text-muted">
@@ -250,7 +260,7 @@ export default function AqaTrackingSection() {
                   <span className="absolute inset-y-0 left-0 w-3 bg-blue-500/85" />
                   <span className="absolute inset-y-0 left-3 right-0" style={{ background: "repeating-linear-gradient(135deg, rgb(220 38 38 / .85) 0 3px, rgb(220 38 38 / .45) 3px 6px)" }} />
                 </span> после точки — сверх планового окончания</span>
-              <span>Полоса — от планового начала до планового окончания; календарь — на год вперёд; Ctrl (Cmd) + колесо — масштаб, дальше всего — три квартала от сегодня; перетаскивание — прокрутка</span>
+              <span>Полоса — от планового начала до планового окончания; календарь — на год вперёд; Ctrl (Cmd) + колесо — масштаб, дальше всего — три квартала от сегодня; перетаскивание — прокрутка; щелчок по полосе — окно задачи, Cmd (Ctrl) + щелчок — задача в Jira</span>
             </p>
           )}
         </section>
@@ -258,6 +268,8 @@ export default function AqaTrackingSection() {
 
       <AqaSettingsModal open={open} onClose={() => setOpen(false)} onSaved={() => loadAll(true)} />
       <CommitModal hash={commit} onClose={() => setCommit(null)} />
+      {runOpen && <JenkinsRunModal onClose={() => setRunOpen(false)} onSettings={() => { setRunOpen(false); setOpen(true); }} />}
+      {issueKey && <AqaIssueModal key={issueKey} issueKey={issueKey} onChanged={() => loadRoad(true)} onClose={() => setIssueKey(null)} />}
       <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))} />
     </div>
   );

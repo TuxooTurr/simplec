@@ -14,6 +14,7 @@
 import {
   createContext, useContext, useState, useRef, useCallback, useEffect, ReactNode,
 } from "react";
+import { notify, onPage } from "@/lib/notifications";
 import {
   executeTestDataQuery, generateTestDataQuery, type TestDataQueryResult,
 } from "@/lib/api";
@@ -134,6 +135,10 @@ export function TestDataJobProvider({ children }: { children: ReactNode }) {
       results: snapshotResults(results),
       error: error || undefined,
     });
+    const rows = Object.values(results ?? {}).reduce((n, r) => n + (r.row_count ?? 0), 0);
+    notify(error
+      ? { kind: "error", title: "Запрос тестовых данных не выполнен", text: error, links: [{ label: "Открыть", href: "/test-data" }], silent: onPage("/test-data") }
+      : { kind: "success", title: `Тестовые данные готовы: строк ${rows}`, text: requirement, links: [{ label: "Открыть", href: "/test-data" }], silent: onPage("/test-data") });
   }, [pushArchive]);
 
   const runSql = useCallback((p: RunSqlParams) => {

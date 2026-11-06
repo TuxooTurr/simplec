@@ -148,7 +148,7 @@ export default function Sidebar() {
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
-              <span className="text-[15px] font-bold text-text-main tracking-tight">SimpleTest</span>
+              <span className="text-[15px] font-bold text-text-main tracking-tight">Loom</span>
               <p className="text-[11px] text-text-muted leading-none mt-0.5 truncate">AI-генератор тест-кейсов</p>
             </div>
           )}

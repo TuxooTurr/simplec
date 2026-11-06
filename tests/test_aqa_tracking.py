@@ -137,7 +137,7 @@ def test_настройки_проверяют_ссылки_и_эпики(monkey
     r = Q.put_settings(Q.SettingsBody(
         bitbucketUrl="https://stash.x/projects/P/repos/r/browse", testopsUrl="https://to.x/project/7/test-cases",
         testopsToken="secret", epics=["sber911-1", "https://jira.x/browse/SBER911-2", "SBER911-1"]), db=db)
-    assert r["epics"] == ["SBER911-1", "SBER911-2"] and r["testopsToken"] == Q._MASK and r["bitbucketOk"] and r["testopsOk"]
+    assert r["epics"] == Q.PINNED_EPICS + ["SBER911-1", "SBER911-2"] and r["testopsToken"] == Q._MASK and r["bitbucketOk"] and r["testopsOk"]
     Q.put_settings(Q.SettingsBody(bitbucketUrl="https://stash.x/projects/P/repos/r/browse", testopsToken=Q._MASK, epics=[]), db=db)
     assert db.kv[Q.K_TO_TOKEN] == "secret"                       # маска — прежний токен остался
 
@@ -606,3 +606,129 @@ def test_очередь_забыла_запуск(monkeypatch):
         raise HTTPException(404, "нет")
     monkeypatch.setattr(Q, "_http", gone)
     assert Q.jenkins_queue(JK, 1) == {"state": "gone"}
+
+
+# ── Закреплённые эпики ───────────────────────────────────────────────────────
+
+def _settings_db(monkeypatch):
+    db = FakeDb()
+    monkeypatch.setattr(Q, "_get", lambda d, k, default="": d.kv.get(k, default))
+    monkeypatch.setattr(Q, "_set", lambda d, k, v, desc="": d.kv.__setitem__(k, v))
+    monkeypatch.setattr(Q, "_ssl_verify", lambda d: True)
+    return db
+
+
+def test_закреплённые_эпики_есть_всегда_и_первыми(monkeypatch):
+    db = _settings_db(monkeypatch)
+    want = ["SBER911-29998", "SBER911-30133", "SBER911-30135"]
+    assert Q.get_settings(db=db)["epics"] == want and Q.get_settings(db=db)["pinnedEpics"] == want
+    assert Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl="", epics=[]), db=db)["epics"] == want      # убрать нельзя
+    r = Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl="", epics=["SBER911-1", want[1]]), db=db)
+    assert r["epics"] == want + ["SBER911-1"]                                       # без дублей, порядок прежний
+
+
+def test_закреплённые_не_отнимают_места_у_своих_эпиков(monkeypatch):
+    db = _settings_db(monkeypatch)
+    own = [f"SBER911-{i}" for i in range(1, 6)]
+    assert Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl="", epics=own + Q.PINNED_EPICS), db=db)["epics"] == Q.PINNED_EPICS + own
+    with pytest.raises(HTTPException):
+        Q.put_settings(Q.SettingsBody(bitbucketUrl="", testopsUrl="", epics=own + ["SBER911-6"]), db=db)
+
+
+# ── Результат кейса TestOps ──────────────────────────────────────────────────
+
+NESTED = {"attachments": [{"id": 9, "name": "лог", "contentType": "text/plain"}], "steps": [
+    {"name": "Вход", "status": "passed", "start": 1000, "stop": 3000},
+    {"name": "POST /incident", "status": "failed", "steps": [
+        {"name": "Запрос", "status": "passed", "attachments": [{"id": 1, "name": "Request", "contentType": "application/json"}]},
+        {"name": "Проверка кода", "status": "failed", "message": "ожидали 200, получили 500"},
+    ]},
+    {"name": "Выход", "status": "skipped"},
+]}
+FLAT = {"root": {"children": [1]}, "scenarioSteps": {"1": {"body": "Шаг", "status": "broken", "children": [2]},
+                                                     "2": {"body": "Вложение", "attachmentId": 5}},
+        "attachments": {"5": {"id": 5, "name": "Response", "contentType": "text/html"}}}
+
+
+def test_шаги_вложенным_деревом_и_упавший_шаг():
+    steps, top = Q.parse_steps(NESTED)
+    assert [a["name"] for a in top] == ["лог"] and steps[0]["duration"] == 2000
+    assert Q.mark_failed(steps)["name"] == "Проверка кода"                # самый глубокий, а не родитель
+    assert steps[1]["steps"][1]["failed"] and not steps[1]["failed"] and not steps[2]["failed"]
+    assert steps[1]["steps"][0]["attachments"][0] == {"id": 1, "name": "Request", "type": "application/json", "size": 0}
+
+
+def test_шаги_плоским_словарём():
+    steps, _ = Q.parse_steps(FLAT)
+    assert steps[0]["name"] == "Шаг" and steps[0]["steps"][0]["attachments"][0]["name"] == "Response"
+    assert Q.mark_failed(steps)["name"] == "Шаг"                          # детей с ошибкой нет — упал сам шаг
+
+
+def test_шаги_без_ошибки_и_мусор_в_ответе():
+    assert Q.mark_failed(Q.parse_steps([{"name": "А", "status": "passed"}])[0]) is None
+    assert Q.parse_steps("не то")[0] == [] and Q.parse_steps({"steps": ["не шаг"]})[0] == []
+
+
+def test_результат_кейса_и_запасной_адрес_шагов(monkeypatch):
+    monkeypatch.setattr(Q, "_testops_jwt", lambda cfg: "J")
+    seen = []
+
+    def http(name, method, url, verify, **kw):
+        seen.append(url.rsplit("/", 1)[-1])
+        if url.endswith("/execution"):
+            raise HTTPException(404, "нет")
+        if url.endswith("/scenario"):
+            return NESTED
+        if url.endswith("/attachment"):
+            return {"content": []}
+        return {"id": 7, "name": "Кейс", "status": "failed", "description": "Описание", "message": "упал", "trace": "at x",
+                "testCaseId": 3, "labels": [{"name": "epic", "value": "Инциденты"}, {"name": "story", "value": "Создание"}, {"name": "host", "value": "h"}]}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.testops_result(TO, 7)
+    assert r["description"] == "Описание" and r["failedStep"] == "Проверка кода" and r["stepsSource"] == "scenario" and r["stepsNote"] == ""
+    assert r["behavior"] == {"epic": "Инциденты", "story": "Создание"} and r["url"].endswith("/project/2414/test-cases/3")
+    assert [a["name"] for a in r["attachments"]] == ["лог"]               # вложения из шагов наверху не дублируются
+
+
+def test_шаги_не_получены_это_видно(monkeypatch):
+    monkeypatch.setattr(Q, "_testops_jwt", lambda cfg: "J")
+
+    def http(name, method, url, verify, **kw):
+        if url.endswith(("/execution", "/scenario", "/attachment")):
+            raise HTTPException(404, "Allure TestOps: не найдено")
+        return {"id": 7, "status": "failed"}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.testops_result(TO, 7)
+    assert r["steps"] == [] and "не отдал шаги" in r["stepsNote"] and r["stepsSource"] == ""
+
+
+def test_вложение_текстом_и_файлом(monkeypatch):
+    monkeypatch.setattr(Q, "_testops_jwt", lambda cfg: "J")
+    resp = lambda t, c: type("R", (), {"headers": {"Content-Type": c}, "text": t})()
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: resp('{"a":1}', "application/json; charset=utf-8"))
+    assert Q.testops_attachment(TO, 1) == {"contentType": "application/json", "binary": False, "text": '{"a":1}', "truncated": False}
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: resp("x" * (Q.MAX_ATTACHMENT + 1), "text/plain"))
+    r = Q.testops_attachment(TO, 1)
+    assert r["truncated"] and len(r["text"]) == Q.MAX_ATTACHMENT
+    monkeypatch.setattr(Q, "_http", lambda *a, **k: resp("png", "image/png"))
+    assert Q.testops_attachment(TO, 1)["binary"]
+
+
+def test_поведение_из_меток_и_полей_testops():
+    assert Q.behavior_of({"labels": [{"name": "Epic", "value": "Э"}, {"name": "feature", "value": "Ф"}]}) == {"epic": "Э", "feature": "Ф"}
+    assert Q.behavior_of({"customFields": [{"customField": {"name": "Story"}, "name": "С"}]}) == {"story": "С"}
+    assert Q.behavior_of({}) == {}
+
+
+def test_поведения_поштучно_сбой_одного_не_мешает(monkeypatch):
+    monkeypatch.setattr(Q, "_testops_jwt", lambda cfg: "J")
+    Q._cache.clear()
+
+    def http(name, method, url, verify, **kw):
+        if url.endswith("/2"):
+            raise HTTPException(500, "сбой")
+        return {"labels": [{"name": "epic", "value": "Э"}]}
+    monkeypatch.setattr(Q, "_http", http)
+    r = Q.testops_behaviors(TO, [1, 2])
+    assert r == {"behaviors": {"1": {"epic": "Э"}, "2": {}}, "partial": False}
+    Q._cache.clear()

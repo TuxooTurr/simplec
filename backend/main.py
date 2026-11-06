@@ -110,7 +110,7 @@ async def lifespan(app_: FastAPI):
 
 
 app = FastAPI(
-    title="SimpleTest API",
+    title="Loom API",
     description="AI-генератор тест-кейсов для Jira Zephyr Scale",
     version="3.1.0",
     lifespan=lifespan,

@@ -136,7 +136,7 @@ def _prepared_attach_request(names_and_files):
     headers = {
         "Authorization": "Bearer TOKEN",
         "X-Atlassian-Token": "no-check",
-        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)",
     }
     payload = [("file", (n, data, ct)) for n, data, ct in names_and_files]
     return requests.Request(

@@ -93,7 +93,7 @@ export default function BackupModal({ open, onClose, section, file: file0 }: {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white font-semibold disabled:opacity-50">
             {busy && !loaded ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Скачать .json</button>
           <p className="text-xs text-text-muted">Токены, пароли и ключи API в файл не попадают — после восстановления на новой установке их вводят заново.
-            Перед удалением папки SimpleTest выгрузите «Все разделы».</p>
+            Перед удалением папки Loom выгрузите «Все разделы».</p>
         </section>
 
         <section className="space-y-2 border-t border-border-main pt-4">

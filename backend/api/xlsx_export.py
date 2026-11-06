@@ -29,7 +29,7 @@ class XlsxSheet(BaseModel):
 
 
 class XlsxBody(BaseModel):
-    filename: str = "SimpleTest.xlsx"
+    filename: str = "Loom.xlsx"
     sheets: list[XlsxSheet] = Field(default_factory=list, max_length=20)
     # один лист — без sheets
     sheet: str = "Лист1"
@@ -43,7 +43,7 @@ def export_xlsx(body: XlsxBody) -> Response:
     if not sheets:
         raise HTTPException(422, "Нет колонок")
     data = build_xlsx([sheet_from_payload(s.name, s.columns, s.rows) for s in sheets])
-    name = re.sub(r'[\\/:*?"<>|]+', "_", body.filename).strip() or "SimpleTest.xlsx"
+    name = re.sub(r'[\\/:*?"<>|]+', "_", body.filename).strip() or "Loom.xlsx"
     if not name.lower().endswith(".xlsx"):
         name += ".xlsx"
     return Response(content=data, media_type=XLSX_TYPE,

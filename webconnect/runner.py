@@ -117,7 +117,7 @@ async def _k8s_lines(window: ConnectorWindow, base: str, op: dict, service: str,
         url = f"{base}{K8S}/api/v1/namespaces/{ns}/pods/{quote(pod['name'], safe='')}/log?{urlencode(params)}"
         status, ctype, text, _ = await window.fetch("GET", url, None, {})
         if status >= 400:
-            lines.append((pod["name"], f"ERROR [simpletest] логи пода недоступны: HTTP {status}"))
+            lines.append((pod["name"], f"ERROR [loom] логи пода недоступны: HTTP {status}"))
             continue
         lines += [(pod["name"], l) for l in text.splitlines()]
     return lines

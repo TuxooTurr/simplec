@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SimpleTest — полный деплой на VPS (FastAPI :8000 + Next.js :3000 за nginx)
+# Loom — полный деплой на VPS (FastAPI :8000 + Next.js :3000 за nginx)
 # Поддерживает: Ubuntu 22.04/24.04, Debian 12, AlmaLinux 8/9, CentOS Stream 8/9
 # Использование: sudo bash deploy.sh
 #
@@ -34,7 +34,7 @@ err()  { echo -e "${RED}[✗] $1${NC}"; exit 1; }
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║         SimpleTest — деплой на $DOMAIN          ║"
+echo "║         Loom — деплой на $DOMAIN          ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -197,7 +197,7 @@ log "Рабочие директории созданы"
 info "Создаю systemd-сервис simpletest-api..."
 cat > "/etc/systemd/system/simpletest-api.service" <<EOF
 [Unit]
-Description=SimpleTest API (FastAPI/uvicorn)
+Description=Loom API (FastAPI/uvicorn)
 Documentation=https://github.com/TuxooTurr/simplec
 After=network.target
 
@@ -220,7 +220,7 @@ EOF
 info "Создаю systemd-сервис simpletest-next..."
 cat > "/etc/systemd/system/simpletest-next.service" <<EOF
 [Unit]
-Description=SimpleTest Frontend (Next.js standalone)
+Description=Loom Frontend (Next.js standalone)
 Documentation=https://github.com/TuxooTurr/simplec
 After=network.target simpletest-api.service
 
@@ -333,7 +333,7 @@ fi
 # ── Итог ──────────────────────────────────────────────────────
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║            SimpleTest успешно задеплоен!                ║"
+echo "║            Loom успешно задеплоен!                ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 echo "║  URL:        http://$DOMAIN                     ║"
 echo "║  Приложение: $APP_DIR                       ║"

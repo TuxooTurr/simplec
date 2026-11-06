@@ -1,4 +1,4 @@
-# SimpleTest
+# Loom
 
 **AI-платформа для генерации тест-кейсов, автотестов и мониторинга**
 
@@ -49,7 +49,7 @@
 ## Архитектура
 
 ```
-SimpleTest/
+Loom/
 ├── backend/                  # FastAPI-приложение
 │   ├── main.py               # Инициализация, роутинг, middleware
 │   ├── schemas.py            # Pydantic-модели
@@ -151,7 +151,7 @@ SimpleTest/
 
 ```bash
 git clone https://github.com/TuxooTurr/simplec.git
-cd SimpleTest
+cd Loom
 
 python3.12 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
@@ -172,7 +172,7 @@ python3.12 -m uvicorn backend.main:app --reload --port 8000
 
 ```bash
 git clone https://github.com/TuxooTurr/simplec.git
-cd SimpleTest
+cd Loom
 
 python3.12 -m venv .venv
 source .venv/bin/activate

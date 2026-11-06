@@ -1,11 +1,11 @@
 """
-MCP-сервер SimpleTest — два набора инструментов в одном процессе:
+MCP-сервер Loom — два набора инструментов в одном процессе:
 
-- simpletest_* — функции SimpleTest для GigaCode: требования, оформление
-  баг-репорта, представления Jira-аналитики (нужен запущенный SimpleTest);
+- loom_* — функции Loom для GigaCode: требования, оформление
+  баг-репорта, представления Jira-аналитики (нужен запущенный Loom);
 - dropup_*     — web-коннектор к консоли OpenShift (dropup) через браузер с
   сессией пользователя: проекты, сервисы, поды, логи, разбор ошибок. Это основа
-  нового анализатора логов SimpleTest.
+  нового анализатора логов Loom.
 
 Все инструменты только читают. Создание дефекта в Jira — через MCP `jira`
 после явного подтверждения пользователя (см. GIGACODE.md).
@@ -23,23 +23,23 @@ from mcp.types import ToolAnnotations
 
 from .dropup import ConsoleClient, ConsoleError
 from .log_triage import render_markdown, triage
-from .simpletest_api import SimpleTestClient, SimpleTestError
+from .loom_api import LoomClient, LoomError
 
 INSTRUCTIONS = """\
-Инструменты SimpleTest и логов dropup (OpenShift) для QA-команды.
+Инструменты Loom и логов dropup (OpenShift) для QA-команды.
 
-Логи сервиса: logs_analyze(service, minutes) — источник настроен в SimpleTest (веб-коннектор).
+Логи сервиса: logs_analyze(service, minutes) — источник настроен в Loom (веб-коннектор).
 Прямой доступ к консоли OpenShift: сначала dropup_status. Если сессии нет — dropup_login (откроется окно браузера,
 пользователь входит сам). Дальше dropup_projects → dropup_services → dropup_triage
 (сгруппированные ошибки) или dropup_check (сводка по нескольким сервисам стенда).
-Сырые строки — dropup_logs. Черновик дефекта по найденной ошибке — simpletest_format_bug;
+Сырые строки — dropup_logs. Черновик дефекта по найденной ошибке — loom_format_bug;
 создавать дефект в Jira только после явного подтверждения пользователя.
 """
 
-mcp = MCPServer(name="simpletest", instructions=INSTRUCTIONS, version="1.0.0")
+mcp = MCPServer(name="loom", instructions=INSTRUCTIONS, version="1.0.0")
 
 _console = ConsoleClient()
-_simpletest = SimpleTestClient()
+_loom = LoomClient()
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=True)
 
@@ -48,17 +48,17 @@ def _fail(e: Exception) -> ToolError:
     return ToolError(str(e))
 
 
-# ══ SimpleTest ═══════════════════════════════════════════════════════════════
+# ══ Loom ═══════════════════════════════════════════════════════════════
 
 @mcp.tool(annotations=READ)
-async def simpletest_requirements(query: str = "") -> str:
-    """Список требований из библиотеки SimpleTest (раздел «Данные → Требования»).
+async def loom_requirements(query: str = "") -> str:
+    """Список требований из библиотеки Loom (раздел «Данные → Требования»).
 
     query — фильтр по названию или фиче (без учёта регистра); пусто — все.
     """
     try:
-        items = await _simpletest.request("GET", "/api/requirements")
-    except SimpleTestError as e:
+        items = await _loom.request("GET", "/api/requirements")
+    except LoomError as e:
         raise _fail(e)
     q = query.strip().lower()
     if q:
@@ -73,18 +73,18 @@ async def simpletest_requirements(query: str = "") -> str:
 
 
 @mcp.tool(annotations=READ)
-async def simpletest_requirement(requirement_id: str, part: str = "both") -> str:
-    """Текст требования по id из simpletest_requirements.
+async def loom_requirement(requirement_id: str, part: str = "both") -> str:
+    """Текст требования по id из loom_requirements.
 
     part: "text" — исходник, "qa_doc" — QA-документация, "both" — оба.
     """
     try:
-        items = await _simpletest.request("GET", "/api/requirements")
-    except SimpleTestError as e:
+        items = await _loom.request("GET", "/api/requirements")
+    except LoomError as e:
         raise _fail(e)
     item = next((i for i in items if i.get("id") == requirement_id), None)
     if not item:
-        raise ToolError(f"Требование {requirement_id} не найдено — список: simpletest_requirements.")
+        raise ToolError(f"Требование {requirement_id} не найдено — список: loom_requirements.")
     out = [f"# {item.get('name', '')}" + (f" [{item['feature']}]" if item.get("feature") else "")]
     if part in ("text", "both"):
         out += ["", "## Исходник", item.get("text", "")[:20000]]
@@ -94,9 +94,9 @@ async def simpletest_requirement(requirement_id: str, part: str = "both") -> str
 
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
-async def simpletest_format_bug(description: str, platform: str = "Back", feature: str = "",
+async def loom_format_bug(description: str, platform: str = "Back", feature: str = "",
                                 provider: str = "gigachat") -> str:
-    """Оформить баг-репорт по шаблону SimpleTest (название, описание, шаги, ФР/ОР, приоритет).
+    """Оформить баг-репорт по шаблону Loom (название, описание, шаги, ФР/ОР, приоритет).
 
     description — описание проблемы своими словами, можно с фрагментом лога.
     platform — Back / Front / Mobile и т.п.; feature — модуль или фича.
@@ -105,22 +105,22 @@ async def simpletest_format_bug(description: str, platform: str = "Back", featur
     form = [("platform", (None, platform)), ("feature", (None, feature)),
             ("description", (None, description)), ("provider", (None, provider))]
     try:
-        res = await _simpletest.request("POST", "/api/bugs/format", files=form)
-    except SimpleTestError as e:
+        res = await _loom.request("POST", "/api/bugs/format", files=form)
+    except LoomError as e:
         raise _fail(e)
     return res.get("report", "") + (f"\n\n(Приоритет для Jira: {res['priority']})" if res.get("priority") else "")
 
 
 @mcp.tool(annotations=READ)
-async def simpletest_jira_views() -> str:
-    """Сохранённые представления Jira-аналитики SimpleTest (выборка + группировка + колонки)."""
+async def loom_jira_views() -> str:
+    """Сохранённые представления Jira-аналитики Loom (выборка + группировка + колонки)."""
     try:
-        res = await _simpletest.request("GET", "/api/jira/views")
-    except SimpleTestError as e:
+        res = await _loom.request("GET", "/api/jira/views")
+    except LoomError as e:
         raise _fail(e)
     views = res.get("views", [])
     if not views:
-        return "Представлений пока нет — их создают в SimpleTest."
+        return "Представлений пока нет — их создают в Loom."
     return "\n".join(f"- `{v['id']}` — {v['name']}: JQL `{v['jql']}`, группировка {v.get('group_by') or '—'}"
                      for v in views)
 
@@ -139,19 +139,19 @@ def _render_groups(groups: list[dict], depth: int = 0, limit: int = 20) -> list[
 
 
 @mcp.tool(annotations=READ)
-async def simpletest_jira_view_run(view_id: str, refresh: bool = False) -> str:
+async def loom_jira_view_run(view_id: str, refresh: bool = False) -> str:
     """Выполнить представление Jira-аналитики: задачи, сгруппированные по полям.
 
-    refresh=True — мимо 3-минутного кэша SimpleTest.
+    refresh=True — мимо 3-минутного кэша Loom.
     """
     try:
-        views = (await _simpletest.request("GET", "/api/jira/views")).get("views", [])
+        views = (await _loom.request("GET", "/api/jira/views")).get("views", [])
         view = next((v for v in views if v.get("id") == view_id), None)
         if not view:
-            raise ToolError(f"Представление {view_id} не найдено — список: simpletest_jira_views.")
-        res = await _simpletest.request("POST", "/api/jira/views/query", json={
+            raise ToolError(f"Представление {view_id} не найдено — список: loom_jira_views.")
+        res = await _loom.request("POST", "/api/jira/views/query", json={
             "jql": view["jql"], "columns": view["columns"], "group_by": view["group_by"], "refresh": refresh})
-    except SimpleTestError as e:
+    except LoomError as e:
         raise _fail(e)
     head = f"# {view['name']}\nЗадач: {res['total']}" + (" (показаны первые 1000)" if res.get("truncated") else "")
     if res.get("groups"):
@@ -161,7 +161,7 @@ async def simpletest_jira_view_run(view_id: str, refresh: bool = False) -> str:
         f"- {i['key']}: " + " · ".join(v for k, v in i["values"].items() if k != "key" and v)[:200] for i in issues)
 
 
-# ══ Анализатор логов и веб-коннекторы SimpleTest ═════════════════════════════
+# ══ Анализатор логов и веб-коннекторы Loom ═════════════════════════════
 
 def _render_run(res: dict) -> str:
     name = res.get("scenario", {}).get("name", res.get("source", ""))
@@ -181,23 +181,23 @@ def _render_run(res: dict) -> str:
 async def logs_analyze(service: str, minutes: int = 10) -> str:
     """Ошибки микросервиса за последние N минут — главный инструмент для логов.
 
-    Логи выгружает сценарий веб-коннектора SimpleTest, отмеченный «Источник для
-    анализатора» (записан человеком в SimpleTest: Генераторы событий → Веб-коннекторы),
+    Логи выгружает сценарий веб-коннектора Loom, отмеченный «Источник для
+    анализатора» (записан человеком в Loom: Генераторы событий → Веб-коннекторы),
     под сессией пользователя. Ошибки сгруппированы по причине, с важностью и стеком.
     """
     try:
-        res = await _simpletest.request("POST", "/api/log-analyzer/run", json={"service": service, "minutes": minutes})
-    except SimpleTestError as e:
+        res = await _loom.request("POST", "/api/log-analyzer/run", json={"service": service, "minutes": minutes})
+    except LoomError as e:
         raise _fail(e)
     return _render_run(res)
 
 
 @mcp.tool(annotations=READ)
 async def logs_saved_services() -> str:
-    """Сохранённые в SimpleTest имена микросервисов и текущий источник логов."""
+    """Сохранённые в Loom имена микросервисов и текущий источник логов."""
     try:
-        st = await _simpletest.request("GET", "/api/log-analyzer")
-    except SimpleTestError as e:
+        st = await _loom.request("GET", "/api/log-analyzer")
+    except LoomError as e:
         raise _fail(e)
     src = st.get("source")
     lines = [f"Источник логов: {src['name']} · {src['connector']}" if src else "Источник логов не настроен."]
@@ -207,14 +207,14 @@ async def logs_saved_services() -> str:
 
 @mcp.tool(annotations=READ)
 async def web_scenarios() -> str:
-    """Веб-коннекторы и записанные операции SimpleTest: id и параметры для web_run."""
+    """Веб-коннекторы и записанные операции Loom: id и параметры для web_run."""
     try:
-        d = await _simpletest.request("GET", "/api/webconnect")
-    except SimpleTestError as e:
+        d = await _loom.request("GET", "/api/webconnect")
+    except LoomError as e:
         raise _fail(e)
     names = {c["id"]: c["name"] for c in d.get("connectors", [])}
     if not d.get("scenarios"):
-        return "Сценариев нет — их записывают в SimpleTest: Генераторы событий → Веб-коннекторы."
+        return "Сценариев нет — их записывают в Loom: Генераторы событий → Веб-коннекторы."
     def params(s: dict) -> str:
         ps = s.get("params") or []
         return ", ".join(f"{p['name']} ({p.get('label') or p['name']})" for p in ps) or "без параметров"
@@ -225,16 +225,16 @@ async def web_scenarios() -> str:
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
 async def web_run(scenario_id: str, params: Optional[dict[str, str]] = None, minutes: int = 10) -> str:
-    """Запустить операцию веб-коннектора SimpleTest с параметрами (имена — из web_scenarios).
+    """Запустить операцию веб-коннектора Loom с параметрами (имена — из web_scenarios).
 
     Незаполненный параметр берётся из записи. minutes — окно «последние N минут», если оно есть
     в операции. Операция может что-то менять на ресурсе (повтор действий человека) — запускайте
     только то, о чём просил пользователь.
     """
     try:
-        res = await _simpletest.request("POST", f"/api/webconnect/scenarios/{scenario_id}/run",
+        res = await _loom.request("POST", f"/api/webconnect/scenarios/{scenario_id}/run",
                                         json={"values": params or {}, "minutes": minutes})
-    except SimpleTestError as e:
+    except LoomError as e:
         raise _fail(e)
     return _render_run(res)
 

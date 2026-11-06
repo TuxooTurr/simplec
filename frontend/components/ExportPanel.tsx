@@ -503,7 +503,7 @@ export default function ExportPanel({ cases, qaDoc, onExport, result, exporting,
             <p className="text-xs font-semibold text-text-muted uppercase tracking-wide">XML для Zephyr</p>
             <div className="flex items-center gap-2">
             {/* Новая модель — в Zephyr Tool: там её раскладывают по дереву проекта и применяют в Jira */}
-            <button type="button" onClick={() => { handoffXml(result.xml, "Генерация SimpleTest"); router.push("/zephyr"); }}
+            <button type="button" onClick={() => { handoffXml(result.xml, "Генерация Loom"); router.push("/zephyr"); }}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-primary/40 rounded-lg text-primary hover:bg-primary/5">
               <FlaskConical className="w-3.5 h-3.5" /> Открыть в Zephyr Tool
             </button>

@@ -330,5 +330,5 @@ class ConsoleClient:
             except NotLoggedIn:
                 raise
             except ConsoleError as e:
-                lines.append((pod["name"], f"ERROR [simpletest-mcp] логи пода недоступны: {e}"))
+                lines.append((pod["name"], f"ERROR [loom-mcp] логи пода недоступны: {e}"))
         return pods, lines

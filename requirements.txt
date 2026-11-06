@@ -100,7 +100,7 @@ jaydebeapi>=1.2.3
 # ── Временно отключено (13.10.2026): веб-коннекторы, анализатор логов и MCP-сервер ──
 # Код сохранён (webconnect/, mcp_server/). Чтобы вернуть — раскомментировать строки ниже
 # и включить WEB_CONNECTORS_ENABLED в backend/main.py и frontend/lib/features.ts.
-# MCP-сервер SimpleTest (mcp_server/): инструменты для GigaCode и web-коннектор к dropup.
+# MCP-сервер Loom (mcp_server/): инструменты для GigaCode и web-коннектор к dropup.
 # Playwright управляет установленным Google Chrome — скачивать браузеры не нужно.
 # mcp>=2.3,<3
 # playwright>=1.45

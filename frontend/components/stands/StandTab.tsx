@@ -274,7 +274,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
                   <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}
                     <span className="text-xs text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
-                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "SimpleTest"}</span>
+                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "Loom"}</span>
                   <button type="button" onClick={() => setEditing(it.id)} disabled={busy} aria-label={`Изменить ${it.task || "бронь"}`}
                     title="Изменить: дни, время, команду, микросервис, фичу" className="p-1 text-text-muted hover:text-primary disabled:opacity-50"><Pencil className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
@@ -623,7 +623,7 @@ function BindPage({ stand, onBound, defaultUrl }: { stand: string; onBound: () =
             По умолчанию</button>
         )}
       </div>
-      <p className="text-xs text-text-muted">Страница создаётся в пространстве из настроек Confluence (шестерёнка вверху). Коллегам, у которых свой SimpleTest, достаточно привязать ту же ссылку.</p>
+      <p className="text-xs text-text-muted">Страница создаётся в пространстве из настроек Confluence (шестерёнка вверху). Коллегам, у которых свой Loom, достаточно привязать ту же ссылку.</p>
       {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
     </div>
   );

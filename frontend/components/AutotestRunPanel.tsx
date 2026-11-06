@@ -348,7 +348,7 @@ export default function AutotestRunPanel() {
         }
       >
         <p className="mb-2 text-xs text-text-muted">
-          Папка с Java/Kotlin-проектом автотестов. SimpleTest прочитает тест-классы и покажет их деревом ниже.
+          Папка с Java/Kotlin-проектом автотестов. Loom прочитает тест-классы и покажет их деревом ниже.
         </p>
         <div className="flex gap-2">
           <input value={frameworkDraft} onChange={(e) => setFrameworkDraft(e.target.value)}
@@ -500,7 +500,7 @@ export default function AutotestRunPanel() {
         }
       >
         <p className="mb-3 text-xs text-text-muted">
-          SimpleTest следит за версиями сборок и сам запускает нужный сценарий, когда выходит новая сборка сервиса.
+          Loom следит за версиями сборок и сам запускает нужный сценарий, когда выходит новая сборка сервиса.
         </p>
 
         <div className="mb-3 flex items-center justify-between">

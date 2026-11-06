@@ -57,7 +57,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
   onRunCreated?: (key: string, warnings: string[]) => void;
   /** Прогоны регресса, уже привязанные к релизу, — ревизия вместо сборки с нуля. */
   existingRuns?: { key: string; name: string }[];
-  /** Открепить прогон регресса от релиза (в SimpleTest) — чтобы собрать новый. */
+  /** Открепить прогон регресса от релиза (в Loom) — чтобы собрать новый. */
   onDetach?: (run: string) => Promise<void>;
 }) {
   const embedded = !!releaseKey;
@@ -255,7 +255,7 @@ export default function CritRegressView({ project, baseUrl, releaseKey, modal, o
                   <span className="min-w-0 flex-1 truncate text-text-main">{r.name}</span>
                   {onDetach && (
                     <button type="button" onClick={() => detach(r.key)} disabled={!!detaching}
-                      title="Открепить от релиза в SimpleTest — строка релиза перестанет его учитывать; в Zephyr отслеживание не меняется"
+                      title="Открепить от релиза в Loom — строка релиза перестанет его учитывать; в Zephyr отслеживание не меняется"
                       className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border-main bg-bg-card text-xs text-text-main hover:bg-bg-subtle disabled:opacity-40">
                       {detaching === r.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Unlink className="w-3.5 h-3.5" />} Открепить</button>
                   )}

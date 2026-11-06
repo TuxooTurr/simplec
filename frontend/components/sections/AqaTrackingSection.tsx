@@ -236,11 +236,11 @@ export default function AqaTrackingSection() {
           {road.data?.planFields && <PlanFieldsNote pf={road.data.planFields} />}
           {settings && !settings.epics.length
             ? (view === "timeline"
-              ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
+              ? <RoadmapTimeline epics={[]} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} pinned={settings?.pinnedEpics ?? []} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
               : <Problem err="Эпики роадмапа не заданы — добавьте их на таймлайне или в «Подключениях»." onSettings={() => setOpen(true)} />)
             : road.err ? <Problem err={road.err} onSettings={() => setOpen(true)} />
             : !road.data ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="h-4 w-4 animate-spin" /> Загружаю эпики из Jira…</p>
-            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
+            : view === "timeline" ? <RoadmapTimeline epics={epics} dayW={dayW} onDayW={pickZoom} colorBy={colorBy} pinned={settings?.pinnedEpics ?? []} onAddEpic={addEpic} onRemoveEpic={removeEpic} onOpenIssue={setIssueKey} onNewIssue={newIssue} />
             : <RoadmapList epics={epics} onOpenIssue={setIssueKey} onNewIssue={newIssue} />}
           {/* Легенда — под графиком */}
           {view === "timeline" && (road.data || (settings && !settings.epics.length)) && (
@@ -270,7 +270,8 @@ export default function AqaTrackingSection() {
       <CommitModal hash={commit} onClose={() => setCommit(null)} />
       {runOpen && <JenkinsRunModal onClose={() => setRunOpen(false)} onSettings={() => { setRunOpen(false); setOpen(true); }} />}
       {issueKey && <AqaIssueModal key={issueKey} issueKey={issueKey} onChanged={() => loadRoad(true)} onClose={() => setIssueKey(null)} />}
-      <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))} />
+      <LaunchModal open={launch.open} launchId={launch.id} launches={testops.data?.recent ?? []} onClose={() => setLaunch(l => ({ ...l, open: false }))}
+        epics={(settings?.epics ?? []).map(key => ({ key, summary: epics.find(e => e.key === key)?.summary ?? "" }))} onDefect={() => loadRoad(true)} />
     </div>
   );
 }

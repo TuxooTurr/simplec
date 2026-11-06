@@ -55,7 +55,7 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
    структуры — из настоящей Jira (подключение и токен — Настройки → Jira, те же,
    что у регистрации дефектов). Списки, участники, свои поля, трудозатраты и
-   черновики — у SimpleTest, в этом браузере.
+   черновики — у Loom, в этом браузере.
    Шапка списка — проект и действия с задачами; всё, что настраивает вид списка
    (колонки, группировка, папки, свои поля, поиск), — в левой колонке. */
 
@@ -514,10 +514,10 @@ export default function JiraToolSection() {
   const fieldOptions: PickOption[] = list ? [
     ...listFields(list, projectFieldIds[list.project] ?? null).map(f => ({ value: `jira:${f.id}`, label: f.name, group: f.custom ? `Пользовательские поля ${list.project}` : "Поля Jira",
                                      hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
-    // Поля, которые считает SimpleTest, — с пометкой (st): рядом с настоящим «Статусом» из Jira
+    // Поля, которые считает Loom, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
     ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, LOAD_COL, REQ_COL, MS_COL, ...(hasFolders ? [FOLDER_COL] : [])]
-      .map(c => ({ value: c, label: colLabel(c, list), group: "Поля SimpleTest", hint: "st" })),
+      .map(c => ({ value: c, label: colLabel(c, list), group: "Поля Loom", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
   ] : [];
   // Папка — не группировка, а уровень над ней (разделы таблицы), поэтому в группировке её нет.
@@ -620,7 +620,7 @@ export default function JiraToolSection() {
     setTimeout(() => void sync([key], []), 2000);
   };
 
-  /** Задача из формы «Создать задачу»: созданная в Jira — с настоящим ключом, иначе — черновик SimpleTest. */
+  /** Задача из формы «Создать задачу»: созданная в Jira — с настоящим ключом, иначе — черновик Loom. */
   const saveIssue = (d: IssueDraft) => {
     if (!list) return;
     // Создали в Jira без галочки «Добавить в список» — в списке ничего не меняем.
@@ -659,7 +659,7 @@ export default function JiraToolSection() {
     const fields = { ...old.fields, ...formFields(d), updated: nowStamp() };
     if (d.jira) addJiraIssue(d.jira.key, { key: d.jira.key, url: d.jira.url, fields });
     update(s => {
-      // Отправленный черновик становится задачей Jira: из черновиков уходит, всё SimpleTest-овое по ключу переезжает.
+      // Отправленный черновик становится задачей Jira: из черновиков уходит, всё Loom-овое по ключу переезжает.
       const next = d.jira
         ? (r => ({ ...r, created: r.created.filter(i => i.key !== d.jira!.key) }))(replaceDraft(s, old.key, { key: d.jira.key, url: d.jira.url, fields }))
         : { ...s, created: s.created.map(i => (i.key === old.key ? { ...i, fields } : i)) };
@@ -788,7 +788,7 @@ export default function JiraToolSection() {
     folderList: (l.folderList ?? []).filter(f => f !== name),
     folders: Object.fromEntries(Object.entries(l.folders ?? {}).filter(([, f]) => f !== name)),
   }));
-  /** Требования по задачам: на уровне SimpleTest (общие на все списки). */
+  /** Требования по задачам: на уровне Loom (общие на все списки). */
   /** Микросервисы задач: «set» — значение ячейки; add / replace / remove — массово для выбранных (как требования). */
   const setMs = (keys: string[], names: string[], mode: ReqAssignMode | "set") => update(s => {
     const links = { ...s.msLinks };
@@ -1321,7 +1321,7 @@ export default function JiraToolSection() {
               ) : (
                 <p>Подключение к Jira…</p>
               )}
-              <p>Списки, свои поля и черновики хранятся в этом браузере, справочник людей — на сервере SimpleTest.</p>
+              <p>Списки, свои поля и черновики хранятся в этом браузере, справочник людей — на сервере Loom.</p>
               <button type="button" onClick={() => setSettingsOpen(true)} className="hover:text-text-main underline-offset-2 hover:underline">
                 Настройки Jira
               </button>
@@ -1363,7 +1363,7 @@ export default function JiraToolSection() {
           {jiraPeopleErr && jira.state === "ok" && (
             <div role="alert" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-sm">
               <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
-              <span className="min-w-0 flex-1 text-text-main">Jira не приняла людей (в SimpleTest они сохранены): {jiraPeopleErr}</span>
+              <span className="min-w-0 flex-1 text-text-main">Jira не приняла людей (в Loom они сохранены): {jiraPeopleErr}</span>
               <button type="button" onClick={() => setJiraPeopleErr("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
             </div>
           )}

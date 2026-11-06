@@ -315,7 +315,7 @@ def test_заявка_с_периодом_и_временем(conf):
 
 def test_график_за_период_последние_3_месяца(conf):
     _settings()
-    conf["prop"]["bookings"].append(st._new_booking(date(2026, 8, 3), "SC", "notify", "SBER911-7", "SimpleTest", "simpletest"))
+    conf["prop"]["bookings"].append(st._new_booking(date(2026, 8, 3), "SC", "notify", "SBER911-7", "Loom", "simpletest"))
     v = st.get_stand("Major-Check", start="2026-07-21", end="2026-11-13", db=None)
     # Календарь — на год вперёд от сегодня: конец периода дотянут до TODAY + 365.
     end = (TODAY + timedelta(days=st.YEAR_AHEAD)).isoformat()

@@ -1,4 +1,4 @@
-# MIGRATION.md — перенос SimpleTest на другую машину / сервер
+# MIGRATION.md — перенос Loom на другую машину / сервер
 
 > Проверено: 2026-07-02. Репозиторий приватный — `.env` и `frontend/.env.local`
 > закоммичены намеренно, поэтому LLM-ключи переезжают вместе с `git clone`.
@@ -24,8 +24,8 @@
 ## 2. Вариант А — новая рабочая машина (dev)
 
 ```bash
-git clone https://github.com/TuxooTurr/simplec.git SimpleTest
-cd SimpleTest
+git clone https://github.com/TuxooTurr/simplec.git Loom
+cd Loom
 bash install.sh      # venv + pip install + .env (уже в репо — шаг пропустится)
 bash start.sh        # backend :8000 + frontend :3000, откроет браузер
 ```
@@ -91,7 +91,7 @@ rsync -av \
   simpletest.db db/chroma_db db/chroma_data \
   data/testdata_connections.json data/jdbc_drivers.json data/jdbc_drivers \
   data/kafka_explorer_connections.json data/gen_sessions.json \
-  user@новая-машина:/путь/до/SimpleTest/
+  user@новая-машина:/путь/до/Loom/
 ```
 
 Чего-то из списка может не быть — это нормально (создастся при первом использовании).

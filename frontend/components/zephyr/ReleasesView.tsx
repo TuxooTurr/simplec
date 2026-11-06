@@ -12,7 +12,7 @@ import CritRegressView from "./CritRegressView";
 import KeAlignModal from "./KeAlignModal";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
-/** Кнопки как во всём SimpleTest: основная — заливка, второстепенная — рамка; одна высота и отступы. */
+/** Кнопки как во всём Loom: основная — заливка, второстепенная — рамка; одна высота и отступы. */
 const BTN_PRIMARY = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40 whitespace-nowrap";
 const BTN = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40 whitespace-nowrap";
 
@@ -23,10 +23,10 @@ type BoardState = { data?: ReleaseBoard; err?: string; busy?: boolean };
 /** Стори релиза — связанные задачи с типом «История» / Story (дефекты, эпики и прочее в расчёт не идут). */
 const isStory = (i: ZLinked) => /истори|стори|story/i.test(i.issuetype);
 const storiesOf = (b: ReleaseBoard) => b.release.stories.filter(isStory);
-/** Прогоны стори: из Zephyr (стори в отслеживании) и прикреплённые в SimpleTest. */
+/** Прогоны стори: из Zephyr (стори в отслеживании) и прикреплённые в Loom. */
 const storyRunsOf = (b: ReleaseBoard, key: string) => b.storyRuns[key] ?? [];
 const regressRuns = (b: ReleaseBoard) => b.runs.filter(r => runKind(r.type) === "regress");
-/** НФ-прогоны релиза — сохранённый список SimpleTest (сверка по issueKey + добавленные руками). */
+/** НФ-прогоны релиза — сохранённый список Loom (сверка по issueKey + добавленные руками). */
 const nfRuns = (b: ReleaseBoard) => b.nfRuns ?? b.runs.filter(r => runKind(r.type) === "nf");
 const storiesWithoutRun = (b: ReleaseBoard) => storiesOf(b).filter(s => !storyRunsOf(b, s.key).length);
 /** НФ релиза: стори есть, и каждая — в отслеживании прогона релиза. */
@@ -65,7 +65,7 @@ function NfRunsModal({ board, project, baseUrl, onOpenRun, onChanged, onClose }:
     <Modal open onClose={onClose} title={`Прогоны НФ · ${board.release.key}`} size="max-w-6xl">
       <div className="space-y-3 text-sm">
         <p className="text-text-muted">
-          НФ-прогонов релиза: <b className="text-text-main">{runs.length}</b>. Список хранится в SimpleTest: сверка добавляет прогоны,
+          НФ-прогонов релиза: <b className="text-text-main">{runs.length}</b>. Список хранится в Loom: сверка добавляет прогоны,
           где релиз — основная задача отслеживания; остальные добавьте по номеру.
         </p>
         <div className="flex items-center gap-2">
@@ -101,7 +101,7 @@ const runFolders = (runs: ZRun[]) => [...new Set(runs.map(r => r.folder).filter(
  * Прогон для выбранных стори. API Zephyr не дописывает отслеживание в готовый прогон, поэтому два пути:
  *  • «Создать НФ-прогоны» — на каждую стори свой прогон: стори в отслеживании (ставится при создании), кейсы —
  *    привязанные к стори, вид — НФ, папка — на выбор; прогон сразу в НФ релиза и у стори;
- *  • «Прикрепить имеющийся» — выбрать прогон из списка (по папкам); связь хранится в SimpleTest, красит маркеры.
+ *  • «Прикрепить имеющийся» — выбрать прогон из списка (по папкам); связь хранится в Loom, красит маркеры.
  */
 function StoryRunsModal({ board, project, stories: picked, onChanged, onClose }: {
   board: ReleaseBoard; project: string; stories: ZLinked[]; onChanged: () => void; onClose: () => void;
@@ -149,7 +149,7 @@ function StoryRunsModal({ board, project, stories: picked, onChanged, onClose }:
       const bad = Object.entries(r.jira).filter(([, v]) => v !== "ok");
       setDone([
         { ok: true, text: `Прогон ${pick} прикреплён к стори: ${stories.map(s => s.key).join(", ")}.${bad.length < stories.length ? " Ссылка на прогон поставлена на стори в Jira." : ""}` },
-        ...bad.map(([st, err]) => ({ ok: false, text: `${st}: в Jira ссылка не встала — ${err}. Привязка в SimpleTest есть, ссылку можно дописать кнопкой «Записать привязки в Jira».` })),
+        ...bad.map(([st, err]) => ({ ok: false, text: `${st}: в Jira ссылка не встала — ${err}. Привязка в Loom есть, ссылку можно дописать кнопкой «Записать привязки в Jira».` })),
       ]);
       onChanged();
     } catch (e) { setErr((e as Error).message); }
@@ -345,7 +345,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
         <button type="button" onClick={onReload} disabled={st.busy} title="Обновить строку" aria-label={`Обновить ${relKey}`}
           className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-40"><RefreshCw className="w-3.5 h-3.5" /></button>
         {!askRemove ? (
-          <button type="button" onClick={() => setAskRemove(true)} title="Убрать строку из SimpleTest (в Jira ничего не меняется)" aria-label={`Убрать ${relKey}`}
+          <button type="button" onClick={() => setAskRemove(true)} title="Убрать строку из Loom (в Jira ничего не меняется)" aria-label={`Убрать ${relKey}`}
             className="p-1.5 rounded-lg text-text-muted hover:text-red-500 hover:bg-bg-subtle"><Trash2 className="w-3.5 h-3.5" /></button>
         ) : (
           <span className="flex items-center gap-1 text-xs">
@@ -394,19 +394,19 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
                       {runs.map(r => (
                         <span key={r.key} className="flex items-center gap-0.5">
                           <button type="button" onClick={() => onOpenRun(r.key)}
-                            title={`${r.name} — открыть на вкладке «Прогоны»${r.attached ? " · прикреплён в SimpleTest" : " · стори в отслеживании прогона"}`}
+                            title={`${r.name} — открыть на вкладке «Прогоны»${r.attached ? " · прикреплён в Loom" : " · стори в отслеживании прогона"}`}
                             className="flex items-center gap-1 font-mono text-[11px] text-primary hover:underline">{r.key}{r.attached && <Link2 className="w-3 h-3" />}<RunTypeChip type={r.type} /></button>
                           {r.attached && (b.jiraLinked?.[s.key] ?? []).includes(r.key) && (
                             <span className="rounded bg-green-100 dark:bg-green-950/50 px-1 text-[10px] text-green-800 dark:text-green-300" title="Ссылка на прогон стоит на стори в Jira">Jira</span>
                           )}
                           {r.attached && !(b.jiraLinked?.[s.key] ?? []).includes(r.key) && (
-                            <span className="rounded bg-amber-100 dark:bg-amber-950/50 px-1 text-[10px] text-amber-800 dark:text-amber-300" title="Привязка только в SimpleTest — в Jira ссылки нет. «Записать привязки в Jira» допишет её">не в Jira</span>
+                            <span className="rounded bg-amber-100 dark:bg-amber-950/50 px-1 text-[10px] text-amber-800 dark:text-amber-300" title="Привязка только в Loom — в Jira ссылки нет. «Записать привязки в Jira» допишет её">не в Jira</span>
                           )}
                           {r.attached && (
-                            <button type="button" aria-label={`Открепить ${r.key} от ${s.key}`} title="Открепить: в SimpleTest и ссылку на стори в Jira"
+                            <button type="button" aria-label={`Открепить ${r.key} от ${s.key}`} title="Открепить: в Loom и ссылку на стори в Jira"
                               onClick={() => void detachRun(relKey, project, s.key, r.key).then(res => {
                                 onReload();
-                                if (res.jira !== "ok") setNote([{ ok: false, text: `${s.key}: откреплено в SimpleTest, но ссылку в Jira убрать не вышло — ${res.jira}` }]);
+                                if (res.jira !== "ok") setNote([{ ok: false, text: `${s.key}: откреплено в Loom, но ссылку в Jira убрать не вышло — ${res.jira}` }]);
                               }, e => setNote([{ ok: false, text: (e as Error).message }]))}
                               className="p-0.5 rounded text-text-muted hover:text-red-500"><X className="w-3 h-3" /></button>
                           )}
@@ -431,7 +431,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
                 <button type="button" className={BTN} disabled={syncing}
                   title={b.jiraLinksStale
                     ? "Ссылки на прогоны на стори в Jira ведут в плеер — переписать их на страницу прогона (и дописать недостающие)"
-                    : "Привязки стори к прогонам, сделанные только в SimpleTest (раньше или когда Jira не ответила), — ссылками на стори в Jira"}
+                    : "Привязки стори к прогонам, сделанные только в Loom (раньше или когда Jira не ответила), — ссылками на стори в Jira"}
                   onClick={async () => {
                     setSyncing(true);
                     try {
@@ -482,7 +482,7 @@ function ReleaseRow({ project, baseUrl, relKey, st, open, onToggle, onReload, on
  * «Регресс покрыт» — оба. «Собрать регресс» —
  * окно: КЭ релиза → кейсы по полю «АС» → прогон в Zephyr с релизом в отслеживании. Раскрытая строка — стори
  * с маркером «Прогон есть», галочками и «Прогон для выбранных» (создать НФ-прогоны или прикрепить имеющийся),
- * «Собрать список прогона» — JQL стори без прогона. Список релизов общий — хранится в SimpleTest.
+ * «Собрать список прогона» — JQL стори без прогона. Список релизов общий — хранится в Loom.
  */
 export default function ReleasesView({ project, baseUrl, onOpenRun }: { project: string; baseUrl: string; onOpenRun: (key: string) => void }) {
   const [keys, setKeys] = useState<string[] | null>(null);

@@ -3,7 +3,7 @@
 
 Устройство (решения Стефана):
   • у каждого стенда своя страница Confluence; оригинал графика — свойство страницы (content property `simpletest-stand`,
-    JSON с версией: одновременная запись двух SimpleTest не затирает друг друга — вторая получит 409 и повторит);
+    JSON с версией: одновременная запись двух Loom не затирает друг друга — вторая получит 409 и повторит);
   • окно планирования — даты, которые выбирают сами (к спринтам не привязано), плюс отметки дат релизов;
     посмотреть можно и другой период — например, последние 3 месяца (GET ?start=&end=, до 200 дней);
   • строка графика — команда; бронь — микросервис (с 22.10.2026 вместо КЭ), день или период «с — по» (одна запись,
@@ -17,7 +17,7 @@
     «Забрать заявки» разбирает новые комментарии, проверяет правила — прошла: бронь, нет или не разобралась:
     «На рассмотрении»; на комментарий уходит ответ с итогом (и предупреждением о конфликте, если он есть).
 
-Локально (metrics_settings, ключ stands_config) хранится привязка стенд → страница: она у каждого SimpleTest своя.
+Локально (metrics_settings, ключ stands_config) хранится привязка стенд → страница: она у каждого Loom своя.
 Пока привязку не меняли — страница по умолчанию (DEFAULT_PAGES: Major-Check → pageId 25529949354); её можно
 заменить или стереть, «По умолчанию» возвращает.
 Справочник микросервисов для выпадающего списка — файл на сервере (db/ms_store.py → data/ms_catalog.json), один на оба
@@ -470,7 +470,7 @@ def parse_request(text: str, now: Optional[date] = None) -> dict:
 
 
 def _comments(cfg: dict, pid: str) -> list[dict]:
-    """Комментарии верхнего уровня (ответы SimpleTest — вложенные, их не берём)."""
+    """Комментарии верхнего уровня (ответы Loom — вложенные, их не берём)."""
     out, start = [], 0
     while True:
         page = _request(cfg, "GET", f"/rest/api/content/{pid}/child/comment",
@@ -595,7 +595,7 @@ _GREY, _FREEZE, _RELEASE, _CONFLICT = "#f4f5f7", "#fff4cc", "#deebff", "#ffbdad"
 
 def render_chart(data: dict, now: date) -> str:
     """
-    График стенда таблицей — как в SimpleTest: строки — команда и микросервис, столбцы — дни окна, занятый день
+    График стенда таблицей — как в Loom: строки — команда и микросервис, столбцы — дни окна, занятый день
     закрашен цветом группы микросервиса (backend/ms_color.py = lib/msColor.ts), конфликт — красный «!».
     Бронь стоит непрерывно, в том числе в выходные; в первый день — время начала, в последний — конца.
     В шапке: выходные — серые, заморозка — жёлтая, релиз — синий, сегодня — жирным.
@@ -625,7 +625,7 @@ def render_chart(data: dict, now: date) -> str:
         attr = f' data-highlight-colour="{colour}"' if colour else ""
         head.append(f"<th{attr}>{label}</th>")
     out = ["<h2>График</h2>", "<p>Строка — установка: команда и микросервис; закрашены дни, когда сборка стоит "
-           "(цвет — группа микросервиса, как в SimpleTest), «!» — конфликт с другой командой.</p>",
+           "(цвет — группа микросервиса, как в Loom), «!» — конфликт с другой командой.</p>",
            "<table><tbody><tr>" + "".join(head) + "</tr>"]
     keys = sorted(rows, key=lambda k: (team_order.get(k[0], 99), k[0], rows[k][0]["service"].lower()))
     for n, key in enumerate(keys):
@@ -660,7 +660,7 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
     title, colour = day_status(data, now, now)
     rels = sorted(data["releases"], key=lambda r: r["date"])
     parts = [
-        '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Страница собирается из SimpleTest — таблицу руками '
+        '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Страница собирается из Loom — таблицу руками '
         f'не правьте. Обновлено {datetime.now().strftime("%d.%m.%Y %H:%M")}.</p></ac:rich-text-body></ac:structured-macro>',
         f"<h2>Сегодня, {now.strftime('%d.%m')}</h2><p>{e(data['stand'])}: {_status_macro(title, colour)} "
         f"установок {installs_on(data, now)}</p>",
@@ -939,7 +939,7 @@ def add_booking(stand: str, body: BookingBody, db: Session = Depends(get_db)) ->
         if why:
             free = nearest_free(data, d)
             raise HTTPException(409, f"Нельзя: {why}" + (f". Ближайший свободный день — {free.strftime('%d.%m')}" if free else ""))
-        data["bookings"].append(_new_booking(d, team, body.service, body.task, "SimpleTest", "simpletest", features=body.features,
+        data["bookings"].append(_new_booking(d, team, body.service, body.task, "Loom", "simpletest", features=body.features,
                                              t_from=body.timeFrom, t_to=body.timeTo))
     data, _ = mutate(cfg, pid, stand, fn)
     return _done(cfg, pid, data)
@@ -978,7 +978,7 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
             if why:
                 rejected.append({"service": it.service, "task": it.task, "reason": why})
                 continue
-            data["bookings"].append(_new_booking(d, team, it.service, it.task, "SimpleTest", "simpletest", features=it.features, to=to,
+            data["bookings"].append(_new_booking(d, team, it.service, it.task, "Loom", "simpletest", features=it.features, to=to,
                                                  t_from=it.timeFrom, t_to=it.timeTo))
         return rejected
     data, rejected = mutate(cfg, pid, stand, fn)

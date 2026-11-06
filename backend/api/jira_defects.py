@@ -158,7 +158,7 @@ def _jira_request(cfg: dict, method: str, path: str,
     # при этом curl с тем же токеном проходит.
     headers = {
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)",
     }
     if auth is None:
         headers["Authorization"] = "Bearer " + _resolve_token(cfg)
@@ -484,7 +484,7 @@ def token_from_login(body: TokenFromLoginBody, db: Session = Depends(get_db)) ->
 
     result = _jira_request(
         cfg, "POST", "/rest/pat/latest/tokens",
-        json_body={"name": f"SimpleTest {time.strftime('%Y-%m-%d %H:%M')}",
+        json_body={"name": f"Loom {time.strftime('%Y-%m-%d %H:%M')}",
                    "expirationDuration": 180},
         auth=(body.login.strip(), body.password),
     )
@@ -913,7 +913,7 @@ async def attach_files(
         "Authorization": "Bearer " + _resolve_token(cfg),
         # Обязателен для загрузки вложений в Jira — без него 403 XSRF check failed.
         "X-Atlassian-Token": "no-check",
-        "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)",
     }
 
     payload = []

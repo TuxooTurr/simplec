@@ -212,7 +212,7 @@ export const getFieldValues = (project: string) => fetchJson<ZFieldValues>(`/api
 
 /* ── Релизы: строки с маркерами ───────────────────────────────────────────── */
 
-/** Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»). */
+/** Релизы, которые ведём в Loom (строки вкладки «Релиз»). */
 export interface ReleaseList { releases: string[] }
 
 /**
@@ -222,12 +222,12 @@ export interface ReleaseList { releases: string[] }
 export interface ReleaseBoard {
   release: ZRelease;
   runs: ZRun[];
-  /** Прогоны стори: из Zephyr (стори в отслеживании) и прикреплённые в SimpleTest (attached: true). */
+  /** Прогоны стори: из Zephyr (стори в отслеживании) и прикреплённые в Loom (attached: true). */
   storyRuns: Record<string, (ZRun & { attached?: boolean })[]>;
   traceSource: "tql" | "issueKey";
-  /** Сохранённый в SimpleTest список НФ-прогонов релиза: сверка по issueKey + добавленные руками. */
+  /** Сохранённый в Loom список НФ-прогонов релиза: сверка по issueKey + добавленные руками. */
   nfRuns: ZRun[];
-  /** Стори → прогоны, прикреплённые в SimpleTest (API отслеживание готового прогона не пишет). */
+  /** Стори → прогоны, прикреплённые в Loom (API отслеживание готового прогона не пишет). */
   attached?: Record<string, string[]>;
   /** Стори → прикреплённые прогоны, ссылка на которые уже стоит на стори в Jira. */
   jiraLinked?: Record<string, string[]>;
@@ -255,16 +255,16 @@ const postJson = <T,>(path: string, method: string, body: unknown) =>
 export const editNfRuns = (key: string, project: string, edit: { add?: string; remove?: string }) =>
   postJson<{ runs: string[]; removed: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/nf-runs`, "POST", { project, ...edit });
 
-/** Открепить прогон регресса от релиза в SimpleTest — чтобы собрать новый (в Zephyr отслеживание не меняется). */
+/** Открепить прогон регресса от релиза в Loom — чтобы собрать новый (в Zephyr отслеживание не меняется). */
 export const detachRegress = (key: string, project: string, run: string) =>
   postJson<{ detached: string[] }>(`/api/zephyr/release/${encodeURIComponent(key)}/regress-detach`, "POST", { project, run });
 
-/** Прикрепить имеющийся прогон к стори: связь в SimpleTest и ссылка на прогон на стори в Jira (jira — итог по стори). */
+/** Прикрепить имеющийся прогон к стори: связь в Loom и ссылка на прогон на стори в Jira (jira — итог по стори). */
 export const attachRun = (key: string, project: string, stories: string[], run: string) =>
   postJson<{ attached: Record<string, string[]>; jiraLinked: Record<string, string[]>; jira: JiraLinkResult }>(
     `/api/zephyr/release/${encodeURIComponent(key)}/attach`, "POST", { project, stories, run });
 
-/** Открепить прогон от стори: в SimpleTest и ссылку на стори в Jira (jira — "ok" или ошибка). */
+/** Открепить прогон от стори: в Loom и ссылку на стори в Jira (jira — "ok" или ошибка). */
 export const detachRun = (key: string, project: string, story: string, run: string) =>
   postJson<{ attached: Record<string, string[]>; jiraLinked: Record<string, string[]>; jira: string }>(
     `/api/zephyr/release/${encodeURIComponent(key)}/detach`, "POST", { project, story, run });
@@ -413,7 +413,7 @@ export async function deleteCasesChunked(project: string, keys: string[], onProg
 export const folderKeys = (project: string, folder: string) =>
   post<{ folder: string; keys: string[]; folders: string[] }>("/api/zephyr/folder/keys", { project, folder });
 
-/** После удаления кейсов папки — убрать её (и вложенные) из дерева SimpleTest. */
+/** После удаления кейсов папки — убрать её (и вложенные) из дерева Loom. */
 export const forgetFolder = (project: string, folder: string) =>
   post<{ folder: string; casesLeft: number }>("/api/zephyr/folder/forget", { project, folder });
 

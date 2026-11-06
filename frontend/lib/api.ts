@@ -1277,7 +1277,7 @@ export const getCorpAuthStatus = () => fetchJson<CorpAuthStatus>("/api/corp-auth
 export const corpLogin = (login: string, password: string) =>
   postJson<CorpAuthStatus & { results: Record<"jira" | "confluence", { ok: boolean; text: string }> }>("/api/corp-auth/login", { login, password });
 
-/** Картинка из редактора → адрес для Markdown (хранится в SimpleTest). */
+/** Картинка из редактора → адрес для Markdown (хранится в Loom). */
 export async function uploadReqAsset(file: File): Promise<{ url: string }> {
   const body = new FormData();
   body.append("file", file);

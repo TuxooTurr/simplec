@@ -41,7 +41,7 @@ export default function LoginPage() {
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-lg mb-4">
             <Zap className="w-7 h-7 text-white" strokeWidth={2.5} />
           </div>
-          <h1 className="text-2xl font-bold text-text-main">SimpleTest</h1>
+          <h1 className="text-2xl font-bold text-text-main">Loom</h1>
           <p className="text-sm text-text-muted mt-1">AI-платформа для QA-инженеров</p>
         </div>
 

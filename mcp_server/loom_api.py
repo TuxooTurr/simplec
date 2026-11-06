@@ -1,7 +1,7 @@
 """
-Клиент API SimpleTest для MCP-инструментов.
+Клиент API Loom для MCP-инструментов.
 
-SimpleTest должен быть запущен (bash start.sh). Вход — учётка SimpleTest из env
+Loom должен быть запущен (bash start.sh). Вход — учётка Loom из env
 MCP-сервера (SIMPLETEST_LOGIN / SIMPLETEST_PASSWORD), токен кешируется и
 обновляется сам, когда бэкенд перезапустился и забыл сессии (они в памяти).
 """
@@ -14,11 +14,11 @@ from typing import Any, Optional
 import httpx
 
 
-class SimpleTestError(Exception):
+class LoomError(Exception):
     pass
 
 
-class SimpleTestClient:
+class LoomClient:
     def __init__(self, base_url: Optional[str] = None, login: Optional[str] = None,
                  password: Optional[str] = None, timeout: float = 180.0):
         self.base_url = (base_url or os.environ.get("SIMPLETEST_URL", "http://127.0.0.1:8000")).rstrip("/")
@@ -29,12 +29,12 @@ class SimpleTestClient:
 
     async def _auth(self, client: httpx.AsyncClient) -> str:
         if not self.login or not self.password:
-            raise SimpleTestError(
+            raise LoomError(
                 "Не заданы SIMPLETEST_LOGIN и SIMPLETEST_PASSWORD в env MCP-сервера — "
-                "без них инструменты SimpleTest не могут войти.")
+                "без них инструменты Loom не могут войти.")
         r = await client.post("/api/auth/login", json={"login": self.login, "password": self.password})
         if r.status_code != 200:
-            raise SimpleTestError(f"Вход в SimpleTest не удался ({r.status_code}): {r.text[:200]}")
+            raise LoomError(f"Вход в Loom не удался ({r.status_code}): {r.text[:200]}")
         self._token = r.json().get("token")
         return self._token
 
@@ -49,7 +49,7 @@ class SimpleTestClient:
                         continue
                     break
         except httpx.ConnectError as e:
-            raise SimpleTestError(f"SimpleTest недоступен по {self.base_url} — запущен ли он (bash start.sh)?") from e
+            raise LoomError(f"Loom недоступен по {self.base_url} — запущен ли он (bash start.sh)?") from e
         if r.status_code >= 400:
             detail = r.text[:400]
             try:
@@ -57,5 +57,5 @@ class SimpleTestClient:
                 detail = d.get("message") if isinstance(d, dict) else (d or detail)
             except ValueError:
                 pass
-            raise SimpleTestError(f"SimpleTest {method} {path} → {r.status_code}: {detail}")
+            raise LoomError(f"Loom {method} {path} → {r.status_code}: {detail}")
         return r.json()

@@ -19,7 +19,10 @@ export interface AqaSettings {
   jenkinsOk: boolean;
   jenkinsUser: string;
   jenkinsToken: string;
+  /** Все эпики роадмапа: закреплённые первыми, дальше свои. */
   epics: string[];
+  /** Эпики, которые на роадмапе всегда: убрать их нельзя. */
+  pinnedEpics?: string[];
   /** Ссылки по умолчанию: действуют, пока настройку не сохраняли; стёртая ссылка остаётся пустой. */
   defaults?: { bitbucketUrl: string; testopsUrl: string; jenkinsUrl: string };
 }
@@ -94,7 +97,27 @@ export interface AqaResult {
   testCaseId: number | null;
   /** Тест-кейс в TestOps; пусто — нет. */
   url: string;
+  /** Эпик, фича и стори; null — в списке их нет, спросить через getAqaBehaviors. */
+  behavior: AqaBehavior | null;
 }
+
+export interface AqaBehavior { epic?: string; feature?: string; story?: string }
+export interface AqaAttachment { id: number; name: string; type: string; size: number }
+export interface AqaStep {
+  name: string; status: string; duration: number; message: string; trace: string; parameters: string[];
+  attachments: AqaAttachment[]; steps: AqaStep[];
+  /** На этом шаге упало. */
+  failed: boolean;
+}
+export interface AqaResultDetails {
+  id: number; name: string; fullName: string; status: string; description: string; descriptionHtml: string;
+  message: string; trace: string; parameters: string[]; behavior: AqaBehavior;
+  steps: AqaStep[]; failedStep: string; attachments: AqaAttachment[];
+  /** Почему шагов нет: сервер не отдал или их и не было. */
+  stepsNote: string;
+  url: string;
+}
+export interface AqaAttachmentContent { contentType: string; binary: boolean; text: string; truncated: boolean }
 
 export interface AqaLaunchDetails extends AqaLaunch {
   createdBy: string;
@@ -159,7 +182,7 @@ const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export const getAqaSettings = () => fetchJson<AqaSettings>("/api/aqa/settings");
 /** Поля Jenkins необязательны: с графика роадмапа сохраняются только эпики, Jenkins при этом не меняется. */
-export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk" | "jenkinsOk" | "defaults" | "jenkinsUrl" | "jenkinsUser" | "jenkinsToken">
+export const saveAqaSettings = (s: Omit<AqaSettings, "bitbucketOk" | "testopsOk" | "jenkinsOk" | "defaults" | "pinnedEpics" | "jenkinsUrl" | "jenkinsUser" | "jenkinsToken">
   & Partial<Pick<AqaSettings, "jenkinsUrl" | "jenkinsUser" | "jenkinsToken">>) =>
   fetchJson<AqaSettings>("/api/aqa/settings", { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(s) });
 export const bitbucketTokenFromLogin = (login: string, password: string) =>
@@ -174,6 +197,10 @@ const qs = (p: Record<string, string | boolean | undefined>) => {
 export const getAqaBranches = (filter = "", refresh = false) => fetchJson<AqaBranches>(`/api/aqa/branches${qs({ filter, refresh })}`);
 export const getAqaCommits = (branch = "", refresh = false) => fetchJson<AqaCommits>(`/api/aqa/commits${qs({ branch, refresh })}`);
 export const getAqaTestops = (refresh = false) => fetchJson<AqaTestops>(`/api/aqa/testops${qs({ refresh })}`);
+export const getAqaResult = (id: number) => fetchJson<AqaResultDetails>(`/api/aqa/testops/result/${id}`);
+export const getAqaAttachment = (id: number) => fetchJson<AqaAttachmentContent>(`/api/aqa/testops/attachment/${id}`);
+export const getAqaBehaviors = (ids: number[]) =>
+  fetchJson<{ behaviors: Record<string, AqaBehavior>; partial: boolean }>("/api/aqa/testops/behaviors", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ ids }) });
 export const getAqaLaunch = (id: number, refresh = false) => fetchJson<AqaLaunchDetails>(`/api/aqa/testops/launch/${id}${qs({ refresh })}`);
 /** Строка diff с одной стороны: номер строки, текст, что с ней (удалена слева, добавлена справа, без изменений). */
 export interface DiffLine { n: number | null; text: string; type: "removed" | "added" | "context" }

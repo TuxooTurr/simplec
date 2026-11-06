@@ -88,14 +88,14 @@ export default function ParticipantsModal({ open, participants, usage, onChange,
               className="w-full flex items-center gap-2 px-3 py-2 text-left">
               <span className="text-sm font-semibold text-text-main">Поля Jira направлений</span>
               <span className="text-[11px] text-text-muted truncate">
-                {Object.keys(jiraFields).length ? `заданы: ${Object.keys(jiraFields).length} из ${DIRECTIONS.length}` : "не заданы — люди хранятся только в SimpleTest"}</span>
+                {Object.keys(jiraFields).length ? `заданы: ${Object.keys(jiraFields).length} из ${DIRECTIONS.length}` : "не заданы — люди хранятся только в Loom"}</span>
               <ChevronDown className={`w-4 h-4 ml-auto text-text-muted transition-transform ${fieldsOpen ? "rotate-180" : ""}`} />
             </button>
             {fieldsOpen && (
               <div className="px-3 pb-3 space-y-1.5">
                 <p className="text-[11px] text-text-muted">
                   Назначили человека в списке — его имя в Jira уходит в выбранное поле задачи. У задачи такого поля нет
-                  (например, «Аналитик» у дефекта) — ничего не отправляем, человек остаётся только в SimpleTest.
+                  (например, «Аналитик» у дефекта) — ничего не отправляем, человек остаётся только в Loom.
                   {!jiraOk && " Jira не подключена — список полей неполный."}
                 </p>
                 {onPushAll && jiraOk && Object.keys(jiraFields).length > 0 && (

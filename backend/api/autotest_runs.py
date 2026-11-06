@@ -494,7 +494,7 @@ def _gradle_selector(sel: str) -> str:
 def _build_scenario_script(name: str, build_tool: str, tests: list[str]) -> str:
     head = (
         "#!/usr/bin/env bash\n"
-        f"# Сгенерировано SimpleTest — сценарий: {name}\n"
+        f"# Сгенерировано Loom — сценарий: {name}\n"
         "# Запускает фиксированный набор тест-кейсов. Список можно отредактировать вручную.\n"
         "set -euo pipefail\n"
         'cd "$(dirname "$0")/.."\n\n'
@@ -691,7 +691,7 @@ def _fetch_build_source(config: dict) -> str:
 
     url = str(autorun.get("source_url", "")).strip()
     if not url:
-        raise ValueError("Укажите URL, где SimpleTest должен проверять версии сборок")
+        raise ValueError("Укажите URL, где Loom должен проверять версии сборок")
     with httpx.Client(timeout=20.0, verify=False) as client:
         response = client.get(url)
         response.raise_for_status()

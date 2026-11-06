@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title SimpleTest — Запуск
+title Loom — Запуск
 
 echo.
 echo  ╔══════════════════════════════════════╗
-echo  ║        SimpleTest — Запуск           ║
+echo  ║        Loom — Запуск           ║
 echo  ╚══════════════════════════════════════╝
 echo.
 
@@ -88,14 +88,14 @@ if not exist ".env" (
 :: ── Запуск бэкенда ───────────────────────────────────────────
 echo.
 echo [→] Запускаю бэкенд (порт 8000)...
-start "SimpleTest Backend" cmd /k "title SimpleTest Backend && call .venv\Scripts\activate.bat && python -m uvicorn backend.main:app --port 8000"
+start "Loom Backend" cmd /k "title Loom Backend && call .venv\Scripts\activate.bat && python -m uvicorn backend.main:app --port 8000"
 
 :: Ждём пока бэкенд стартует
 timeout /t 4 /nobreak >nul
 
 :: ── Запуск фронтенда ─────────────────────────────────────────
 echo [→] Запускаю фронтенд (порт 3000)...
-start "SimpleTest Frontend" cmd /k "title SimpleTest Frontend && cd frontend && npm run dev"
+start "Loom Frontend" cmd /k "title Loom Frontend && cd frontend && npm run dev"
 
 :: Ждём и открываем браузер
 timeout /t 6 /nobreak >nul
@@ -105,7 +105,7 @@ start http://localhost:3000
 
 echo.
 echo  ╔══════════════════════════════════════════════════════╗
-echo  ║  SimpleTest запущен!                                 ║
+echo  ║  Loom запущен!                                 ║
 echo  ║  Фронтенд:  http://localhost:3000                    ║
 echo  ║  API:       http://localhost:8000                    ║
 echo  ║                                                      ║

@@ -1,12 +1,12 @@
 """
-Запуск MCP-сервера SimpleTest.
+Запуск MCP-сервера Loom.
 
   python -m mcp_server                 # stdio — так его запускает GigaCode
   python -m mcp_server --http          # streamable HTTP на 127.0.0.1:8765/mcp
   python -m mcp_server --http --port 9000
 
 В HTTP-режиме один процесс держит браузер, а подключаться могут несколько клиентов
-(GigaCode, сам SimpleTest). Два stdio-процесса одновременно не уживутся: профиль
+(GigaCode, сам Loom). Два stdio-процесса одновременно не уживутся: профиль
 браузера можно открыть только одним процессом.
 """
 
@@ -16,7 +16,7 @@ from .server import mcp
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="python -m mcp_server", description="MCP-сервер SimpleTest")
+    parser = argparse.ArgumentParser(prog="python -m mcp_server", description="MCP-сервер Loom")
     parser.add_argument("--http", action="store_true", help="streamable HTTP вместо stdio")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)

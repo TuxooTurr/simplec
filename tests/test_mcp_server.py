@@ -1,6 +1,6 @@
-"""MCP-сервер SimpleTest: разбор ответов Kubernetes и инструменты через MCP-клиент.
+"""MCP-сервер Loom: разбор ответов Kubernetes и инструменты через MCP-клиент.
 
-Сеть и браузер подменены: консоль dropup и API SimpleTest — заглушки. Проверяется,
+Сеть и браузер подменены: консоль dropup и API Loom — заглушки. Проверяется,
 что инструменты зарегистрированы, вызываются по протоколу MCP и честно сообщают
 об ошибках (без сессии, без учётки).
 """
@@ -16,7 +16,7 @@ from mcp import Client  # noqa: E402
 
 import mcp_server.server as S  # noqa: E402
 from mcp_server.dropup import ConsoleError, NotLoggedIn, parse_pods, parse_workloads, selector_to_query
-from mcp_server.simpletest_api import SimpleTestError
+from mcp_server.loom_api import LoomError
 
 # ── Разбор ответов Kubernetes ────────────────────────────────────────────────
 
@@ -86,13 +86,13 @@ class FakeConsole:
         return parse_pods(PODS), lines
 
 
-class FakeSimpleTest:
+class FakeLoom:
     def __init__(self, fail=False):
         self.fail = fail
 
     async def request(self, method, path, **kw):
         if self.fail:
-            raise SimpleTestError("Не заданы SIMPLETEST_LOGIN и SIMPLETEST_PASSWORD")
+            raise LoomError("Не заданы SIMPLETEST_LOGIN и SIMPLETEST_PASSWORD")
         if path == "/api/requirements":
             return [{"id": "r1", "name": "Оплата СБП", "feature": "Платежи", "text": "Текст", "qa_doc": "Док"},
                     {"id": "r2", "name": "Вход", "feature": "Auth", "text": "Т2", "qa_doc": ""}]
@@ -108,9 +108,9 @@ class FakeSimpleTest:
         raise AssertionError(path)
 
 
-def call(tool, args=None, console=None, simpletest=None, monkeypatch=None):
+def call(tool, args=None, console=None, loom=None, monkeypatch=None):
     monkeypatch.setattr(S, "_console", console or FakeConsole())
-    monkeypatch.setattr(S, "_simpletest", simpletest or FakeSimpleTest())
+    monkeypatch.setattr(S, "_loom", loom or FakeLoom())
 
     async def run():
         async with Client(S.mcp) as client:
@@ -124,26 +124,26 @@ def test_все_инструменты_зарегистрированы():
         async with Client(S.mcp) as client:
             return [t.name for t in (await client.list_tools()).tools]
     names = set(asyncio.run(run()))
-    assert {"simpletest_requirements", "simpletest_requirement", "simpletest_format_bug",
-            "simpletest_jira_views", "simpletest_jira_view_run",
+    assert {"loom_requirements", "loom_requirement", "loom_format_bug",
+            "loom_jira_views", "loom_jira_view_run",
             "dropup_status", "dropup_login", "dropup_projects", "dropup_services",
             "dropup_pods", "dropup_logs", "dropup_triage", "dropup_check",
             "logs_analyze", "logs_saved_services", "web_scenarios", "web_run"} <= names
 
 
 def test_требования_с_фильтром(monkeypatch):
-    err, text = call("simpletest_requirements", {"query": "сбп"}, monkeypatch=monkeypatch)
+    err, text = call("loom_requirements", {"query": "сбп"}, monkeypatch=monkeypatch)
     assert not err and "r1" in text and "r2" not in text and "QA-документация" in text
 
 
 def test_баг_репорт_передаёт_поля_формы(monkeypatch):
-    err, text = call("simpletest_format_bug", {"description": "Падает оплата по СБП", "platform": "Front"},
+    err, text = call("loom_format_bug", {"description": "Падает оплата по СБП", "platform": "Front"},
                      monkeypatch=monkeypatch)
     assert not err and text.startswith("# [Front][Pay]") and "Высокий" in text
 
 
-def test_без_учётки_simpletest_ошибка_с_подсказкой(monkeypatch):
-    err, text = call("simpletest_requirements", simpletest=FakeSimpleTest(fail=True), monkeypatch=monkeypatch)
+def test_без_учётки_loom_ошибка_с_подсказкой(monkeypatch):
+    err, text = call("loom_requirements", loom=FakeLoom(fail=True), monkeypatch=monkeypatch)
     assert err and "SIMPLETEST_LOGIN" in text
 
 
@@ -170,6 +170,6 @@ def test_нет_сессии_это_ошибка_инструмента(monkeypa
     assert err and "dropup_login" in text
 
 
-def test_анализ_логов_через_simpletest(monkeypatch):
+def test_анализ_логов_через_loom(monkeypatch):
     err, text = call("logs_analyze", {"service": "pay-api", "minutes": 5}, monkeypatch=monkeypatch)
     assert not err and "pay-api · последние 5 мин" in text and "Логи · Kibana" in text and "timeout" in text

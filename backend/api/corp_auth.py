@@ -8,7 +8,7 @@
   GET  /api/corp-auth/status — у каких систем есть маркер и адреса
   POST /api/corp-auth/login  — логин + пароль → маркеры Jira и Confluence
 
-Вход в SimpleTest по логину Jira — sign_in (зовёт /api/auth/login): пароль проверяет сама Jira, затем маркеры —
+Вход в Loom по логину Jira — sign_in (зовёт /api/auth/login): пароль проверяет сама Jira, затем маркеры —
 свои рабочие остаются (повторный вход), чужие, истёкшие или отсутствующие выпускаются заново (первый вход).
 """
 
@@ -76,7 +76,7 @@ def login(body: CorpLogin, db: Session = Depends(get_db)) -> dict:
     return {"results": results, **_status(db)}
 
 
-# ── Вход в SimpleTest по логину Jira ─────────────────────────────────────────
+# ── Вход в Loom по логину Jira ─────────────────────────────────────────
 
 def _same_user(name: str, login: str) -> bool:
     return bool(name) and name.strip().lower() == login.strip().lower()
@@ -85,8 +85,8 @@ def _same_user(name: str, login: str) -> bool:
 def _ensure_token(system: str, login: str, password: str, db: Session) -> dict:
     """
     Маркер системы для этого пользователя: есть и принадлежит ему — оставляем («reused»); нет, истёк или чужой
-    (на этом SimpleTest раньше входил другой) — выпускаем новый по паролю («new»). Сбой — «error» с причиной:
-    вход в SimpleTest он не отменяет, маркер можно получить позже в настройках.
+    (на этом Loom раньше входил другой) — выпускаем новый по паролю («new»). Сбой — «error» с причиной:
+    вход в Loom он не отменяет, маркер можно получить позже в настройках.
     """
     if system == "bitbucket":
         mod: Any = aqa_tracking

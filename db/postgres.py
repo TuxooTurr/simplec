@@ -1,5 +1,5 @@
 """
-Соединение с БД для SimpleTest.
+Соединение с БД для Loom.
 
 DATABASE_URL задаётся через .env:
   PostgreSQL:  postgresql+psycopg2://user:pass@localhost:5432/metrics

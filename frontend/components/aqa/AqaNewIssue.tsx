@@ -15,7 +15,16 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
  * создания: при создании их не передать (поля плановых дат у каждого сервера свои, а createmeta корп. Jira закрыт).
  * Что не записалось — предупреждением в окне «Создано в Jira».
  */
-export default function AqaNewIssue({ epic, control, onCreated }: { epic: string; control: FormControl; onCreated: () => void }) {
+export default function AqaNewIssue({ epic, control, onCreated, defect, epicChoices }: {
+  /** Подставленный эпик; пусто — выбрать из epicChoices. */
+  epic: string; control: FormControl;
+  /** Создана задача: номер в Jira (пусто — форма закрыта без создания). */
+  onCreated: (key?: string) => void;
+  /** Дефект из упавшего автотеста: заполненные название и описание. */
+  defect?: { summary: string; description: string };
+  /** Эпики на выбор: дефект из запуска вяжется только к эпикам роадмапа. */
+  epicChoices?: { key: string; summary: string }[];
+}) {
   const [person, setPerson] = useState({ jiraName: "", jiraDisplay: "" });
   const [planStart, setPlanStart] = useState("");
   const [planEnd, setPlanEnd] = useState("");
@@ -31,9 +40,11 @@ export default function AqaNewIssue({ epic, control, onCreated }: { epic: string
   };
 
   return (
-    <IssueFormModal control={control} jiraOnly project={epic.replace(/-\d+$/, "")} participants={[]} prefill={{ type: "Задача", epicKey: epic }}
-      epicNote={<>Эпик подставлен: <b>{epic}</b> — задача появится на роадмапе.</>}
-      afterCreate={afterCreate} createBlocked={badDates} onSave={onCreated}
+    <IssueFormModal control={control} jiraOnly project={(epic || epicChoices?.[0]?.key || "").replace(/-\d+$/, "")} participants={[]}
+      prefill={defect ? { type: "Дефект", epicKey: epic, ...defect } : { type: "Задача", epicKey: epic }}
+      epicChoices={epicChoices}
+      epicNote={defect ? <>Дефект привяжется к выбранному эпику AQA и появится на роадмапе.</> : <>Эпик подставлен: <b>{epic}</b> — задача появится на роадмапе.</>}
+      afterCreate={afterCreate} createBlocked={badDates} onSave={d => onCreated(d.jira?.key)}
       extraFields={<>
         <div>
           <label htmlFor="aqa-new-start" className={LBL}>Плановое начало</label>

@@ -102,7 +102,7 @@ def test_восстановление_после_переустановки_и_�
     assert db.query(Systems).one().started_at == datetime(2026, 10, 1, 9, 30)   # таблица и даты восстановлены
     assert restored == [{"ids": ["t1"], "documents": ["кейс"]}]                       # пустые метаданные в Chroma не передаём
 
-    # Тот же SimpleTest, секреты введены заново, восстановили ещё раз — секреты на месте.
+    # Тот же Loom, секреты введены заново, восстановили ещё раз — секреты на месте.
     conns[0]["password"] = "new"
     (data / "testdata_connections.json").write_text(json.dumps(conns), "utf-8")
     db.query(MetricsSettings).filter_by(key="jira_token").update({"value": "PAT-NEW"}); db.commit()

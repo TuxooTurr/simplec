@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Play, Plus, Rocket, RotateCcw, X } from "lucide-react";
+import { Check, GitCommitHorizontal, KeyRound, ListChecks, Loader2, Lock, Play, Plus, Rocket, RotateCcw, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { bitbucketTokenFromLogin, getAqaSettings, saveAqaSettings, type AqaSettings } from "@/lib/aqaApi";
 
@@ -36,7 +36,11 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
   useEffect(() => {
     if (!open) return;
     setErr(""); setBbLogin(null); setBbNote("");
-    getAqaSettings().then(r => { setS(r); setEpics(r.epics.length ? r.epics : ["", "", ""]); }, e => setErr((e as Error).message));
+    getAqaSettings().then(r => {
+      setS(r);
+      const own = r.epics.filter(k => !r.pinnedEpics?.includes(k));
+      setEpics(own.length ? own : [""]);
+    }, e => setErr((e as Error).message));
   }, [open]);
 
   const save = async (): Promise<boolean> => {
@@ -139,10 +143,16 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
 
           <section className="space-y-2">
             <span className={LABEL}><ListChecks className="w-3.5 h-3.5" /> Эпики роадмапа — номер или ссылка на эпик в Jira</span>
+            {!!s.pinnedEpics?.length && (
+              <p className="flex flex-wrap items-center gap-1.5 text-xs text-text-muted">
+                <Lock className="w-3 h-3" /> Всегда на роадмапе:
+                {s.pinnedEpics.map(k => <span key={k} className="rounded bg-bg-subtle px-1.5 py-0.5 font-mono text-text-main">{k}</span>)}
+              </p>
+            )}
             {epics.map((e, n) => (
               <div key={n} className="flex items-center gap-2">
                 <input value={e} onChange={ev => setEpics(p => p.map((x, i) => (i === n ? ev.target.value : x)))}
-                  placeholder={`SBER911-… (эпик ${n + 1})`} aria-label={`Эпик ${n + 1}`} className={`${INPUT} font-mono text-xs`} />
+                  placeholder="SBER911-… (свой эпик)" aria-label={`Эпик ${n + 1}`} className={`${INPUT} font-mono text-xs`} />
                 <button type="button" onClick={() => setEpics(p => (p.length > 1 ? p.filter((_, i) => i !== n) : [""]))}
                   aria-label={`Убрать эпик ${n + 1}`} className="text-text-muted hover:text-red-500"><X className="w-4 h-4" /></button>
               </div>

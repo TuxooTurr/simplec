@@ -1,7 +1,7 @@
 /**
  * Новая модель для Zephyr — черновик раскладки до «Применить».
  *
- * Из XML (выгрузка Zephyr или генерация SimpleTest) все папки становятся НОВЫМИ — даже если в дереве уже есть
+ * Из XML (выгрузка Zephyr или генерация Loom) все папки становятся НОВЫМИ — даже если в дереве уже есть
  * папка с тем же именем: человек сам решает, переложить кейсы в старые папки или поставить новую папку внутрь
  * папки дерева. «Применить» создаёт в Zephyr только папки, в которых остались кейсы, и сами кейсы.
  *
@@ -184,7 +184,7 @@ export function stagedFolderSize(s: Staging, id: string): { cases: number; folde
   return { cases: s.cases.filter(c => c.target.kind === "new" && gone.has(c.target.id)).length, folders: gone.size - 1 };
 }
 
-/** Передача XML из генерации SimpleTest в Zephyr Tool (между разделами — через sessionStorage). */
+/** Передача XML из генерации Loom в Zephyr Tool (между разделами — через sessionStorage). */
 export const HANDOFF_KEY = "st_zephyr_import";
 
 export function handoffXml(xml: string, source: string): void {

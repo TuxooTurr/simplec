@@ -90,7 +90,7 @@ export default function LogAnalyzerSection() {
             <ScrollText className="w-5 h-5 text-primary" /> Анализатор логов
           </h1>
           <p className="text-sm text-text-muted">
-            Введите микросервис — SimpleTest выгрузит его логи за выбранный период и сгруппирует ошибки по причине.
+            Введите микросервис — Loom выгрузит его логи за выбранный период и сгруппирует ошибки по причине.
           </p>
         </div>
 

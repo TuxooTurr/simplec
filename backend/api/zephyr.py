@@ -214,7 +214,7 @@ def norm_result(x: dict) -> dict:
 
 def tree_from_paths(paths: list[str], extra: Optional[list[str]] = None) -> list[dict]:
     """Пути кейсов «/A/B» → дерево [{name, path, count, children}] (count — кейсы в папке и вложенных).
-    extra — пустые папки (созданы в SimpleTest, кейсов ещё нет): узлы есть, счётчик не растёт."""
+    extra — пустые папки (созданы в Loom, кейсов ещё нет): узлы есть, счётчик не растёт."""
     root: dict[str, Any] = {"children": {}}
     for p in extra or []:
         node, acc = root, ""
@@ -402,7 +402,7 @@ def get_index(cfg: dict, project: str, refresh: bool = False, kind: str = "testc
                          project, time.time() - t0, e.detail)
             raise
         _failed.pop(key, None)
-        # Пустые папки, созданные в SimpleTest, в кейсах не видны — переносим их из прежнего индекса.
+        # Пустые папки, созданные в Loom, в кейсах не видны — переносим их из прежнего индекса.
         keep = (_index.get(key) or {}).get("folders", set())
         slim = _slim if kind == "testcase" else _slim_run
         idx = {"loadedAt": time.time(), "cases": {c["key"]: slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
@@ -1030,7 +1030,7 @@ def field_values(project: str = Query(..., min_length=1), db: Session = Depends(
 
 # ── Релизы: строки с маркерами, стори и их прогоны ───────────────────────────
 #
-# Прогоны к релизу прикрепляют руками в Zephyr: в отслеживании прогона — номер релиза (и стори). SimpleTest берёт
+# Прогоны к релизу прикрепляют руками в Zephyr: в отслеживании прогона — номер релиза (и стори). Loom берёт
 # прогоны, у которых в отслеживании релиз, и для каждой стори релиза смотрит, есть ли она в отслеживании этих прогонов.
 #
 # Всё отслеживание прогона публичный API отдаёт только поиском (TQL `issueKeys IN (…)`), если стенд его понимает;
@@ -1074,7 +1074,7 @@ def _issue_key(k: str, what: str = "Номер задачи") -> str:
 
 @router.get("/api/zephyr/releases")
 def releases_list(project: str = Query(..., min_length=1)) -> dict:
-    """Релизы, которые ведём в SimpleTest (строки вкладки «Релиз»)."""
+    """Релизы, которые ведём в Loom (строки вкладки «Релиз»)."""
     with _releases_lock:
         p = _rel_load().get(project.strip().upper()) or {}
     return {"releases": list(p.get("releases", []))}
@@ -1099,7 +1099,7 @@ def releases_add(body: ReleaseAdd) -> dict:
 
 @router.delete("/api/zephyr/releases/{key}")
 def releases_remove(key: str, project: str = Query(..., min_length=1)) -> dict:
-    """Убрать строку релиза из SimpleTest (в Jira ничего не меняется)."""
+    """Убрать строку релиза из Loom (в Jira ничего не меняется)."""
     key = key.strip().upper()
     with _releases_lock:
         data = _rel_load()
@@ -1164,7 +1164,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
     # которые API не показывает с релизом (релиз — не основная задача), добавляют руками — они остаются.
     with _releases_lock:
         data = _rel_load()
-        # Прогоны регресса, откреплённые от релиза в SimpleTest (собирают новый): в строке релиза их больше нет.
+        # Прогоны регресса, откреплённые от релиза в Loom (собирают новый): в строке релиза их больше нет.
         detached = set(_rel_project(data, project).get("regressDetached", {}).get(rel["key"], []))
         rel_runs = [r for r in rel_runs if r["key"] not in detached]
         nf = _rel_nf(_rel_project(data, project), rel["key"])
@@ -1177,7 +1177,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
         _rel_save(data)
         stored = dict(nf)
     nf_runs = [_nf_run_view(cfg, project, k, stored) for k in stored["runs"]]
-    # Прогоны, прикреплённые к стори в SimpleTest (API отслеживание готового прогона не пишет), — к найденным в Zephyr.
+    # Прогоны, прикреплённые к стори в Loom (API отслеживание готового прогона не пишет), — к найденным в Zephyr.
     attached = {s_: list(v) for s_, v in (stored.get("attached") or {}).items()}
     for s_, runs_ in attached.items():
         have = {r["key"] for r in story_runs.get(s_, [])}
@@ -1194,7 +1194,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
 #
 # Полное отслеживание прогона API не отдаёт и не пишет (внутренний /rest/tests — 403), поэтому:
 #   • список НФ-прогонов релиза хранится в data/zephyr_releases.json (сверка по issueKey + ручное добавление);
-#   • прогоны стори: найденные в Zephyr (стори в issueKey прогона) + прикреплённые в SimpleTest (attached:
+#   • прогоны стори: найденные в Zephyr (стори в issueKey прогона) + прикреплённые в Loom (attached:
 #     стори → прогоны) — «Прикрепить имеющийся» или «Создать НФ-прогон» на стори (стори в отслеживании при создании).
 
 def is_nf_type(t: str) -> bool:
@@ -1277,7 +1277,7 @@ class RegressDetach(BaseModel):
 
 @router.post("/api/zephyr/release/{key}/regress-detach")
 def release_regress_detach(key: str, body: RegressDetach) -> dict:
-    """Открепить прогон регресса от релиза — чтобы собрать новый. Только в SimpleTest: API отслеживание прогона
+    """Открепить прогон регресса от релиза — чтобы собрать новый. Только в Loom: API отслеживание прогона
     не меняет, поэтому в Zephyr релиз у прогона остаётся (уберите вручную, если нужно)."""
     rel, run = _issue_key(key, "Номер релиза"), body.run.strip().upper()
     if not _RUN_RE.match(run):
@@ -1302,7 +1302,7 @@ class StoriesAttach(BaseModel):
 # Отслеживание готового прогона Zephyr не меняется через API (публичный пишет одну задачу и только при создании,
 # внутренний — 403). Поэтому привязка ставится и в Jira: на стори — ссылка (remote link) на прогон Zephyr,
 # видна в разделе «Ссылки» задачи. globalId у ссылки свой на каждый прогон — повторная привязка не плодит дублей,
-# открепление удаляет именно её. Связь в SimpleTest (attached) остаётся основной для доски релиза; где ссылка
+# открепление удаляет именно её. Связь в Loom (attached) остаётся основной для доски релиза; где ссылка
 # в Jira уже стоит — в jiraLinks.
 
 def _link_id(run: str) -> str:
@@ -1356,8 +1356,8 @@ def _mark_jira(nf: dict, story: str, run: str, on: bool) -> None:
 @router.post("/api/zephyr/release/{key}/attach")
 def release_attach(key: str, body: StoriesAttach, db: Session = Depends(get_db)) -> dict:
     """
-    Прикрепить имеющийся прогон к стори релиза: связь в SimpleTest (стори красится «Прогон есть», прогон встаёт в НФ
-    релиза) и ссылка на прогон на самой стори в Jira. Ошибка Jira не отменяет привязку в SimpleTest — она в ответе
+    Прикрепить имеющийся прогон к стори релиза: связь в Loom (стори красится «Прогон есть», прогон встаёт в НФ
+    релиза) и ссылка на прогон на самой стори в Jira. Ошибка Jira не отменяет привязку в Loom — она в ответе
     (jira: {стори: "ok" | текст ошибки}), и ссылку можно дописать позже кнопкой «Записать привязки в Jira».
     """
     rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
@@ -1398,8 +1398,8 @@ class StoryDetach(BaseModel):
 
 @router.post("/api/zephyr/release/{key}/detach")
 def release_detach(key: str, body: StoryDetach, db: Session = Depends(get_db)) -> dict:
-    """Открепить прогон от стори: в SimpleTest и ссылку на стори в Jira. Ошибка Jira — в ответе (jira), связь в
-    SimpleTest всё равно снимается."""
+    """Открепить прогон от стори: в Loom и ссылку на стори в Jira. Ошибка Jira — в ответе (jira), связь в
+    Loom всё равно снимается."""
     rel, story, run = _issue_key(key, "Номер релиза"), _issue_key(body.story, "Номер стори"), body.run.strip().upper()
     jira = "ok"
     try:
@@ -1902,7 +1902,7 @@ def save_results(key: str, body: ResultsBody, db: Session = Depends(get_db)) -> 
     return {"saved": saved, "errors": errors}
 
 
-# ── Новая модель: XML (выгрузка Zephyr или генерация SimpleTest) → раскладка → «Применить» ──
+# ── Новая модель: XML (выгрузка Zephyr или генерация Loom) → раскладка → «Применить» ──
 #
 # Разбор XML даёт папки и кейсы; раскладку (что в какую папку дерева) человек делает в интерфейсе, а «Применить»
 # создаёт в Zephyr недостающие папки (родители — раньше детей) и кейсы. Папка, которая уже есть, не ошибка.
@@ -2106,7 +2106,7 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
 # Публичный API v1: папку можно создать (POST /folder), кейс — создать, изменить (PUT /testcase/{key}), удалить.
 # id существующих папок v1 не отдаёт (внутренний foldertree на стенде закрыт, 403), поэтому «переименовать» и
 # «переместить» папку = перенести все её кейсы (с вложенными) в новый путь. Старая папка в Zephyr остаётся пустой —
-# удалить её можно только в интерфейсе Zephyr; в дереве SimpleTest (оно строится по кейсам) её не будет.
+# удалить её можно только в интерфейсе Zephyr; в дереве Loom (оно строится по кейсам) её не будет.
 
 def _create_folders(cfg: dict, project: str, paths: list[str]) -> dict[str, str]:
     """Папки и их родители (родители раньше). «Уже есть» — не ошибка. Возвращает ошибки по путям."""
@@ -2384,7 +2384,7 @@ def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
 # не хранит — кейсы читаются из Jira пачками (export/cases, xml=true — сразу кусок XML), фронт показывает прогресс
 # и склеивает файл: начало и конец — export/frame, кейсы — куски пачек. Обратно на сервер ничего большого не уходит.
 # Удаление папки: публичный API папки не удаляет (id папок не отдаёт) — удаляются все её кейсы (с вложенными),
-# пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева SimpleTest уходит (folder/forget).
+# пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева Loom уходит (folder/forget).
 
 class FolderKeys(BaseModel):
     project: str = Field(..., min_length=1)
@@ -2516,7 +2516,7 @@ class FolderForget(BaseModel):
 
 @router.post("/api/zephyr/folder/forget")
 def forget_folder(body: FolderForget, db: Session = Depends(get_db)) -> dict:
-    """Убрать папку и вложенные из дерева SimpleTest после удаления их кейсов. Кейсы, что не удалились, держат папку."""
+    """Убрать папку и вложенные из дерева Loom после удаления их кейсов. Кейсы, что не удалились, держат папку."""
     cfg = _load_cfg(db)
     project, folder = body.project.strip().upper(), _clean_path(body.folder)
     idx = get_index(cfg, project)

@@ -24,6 +24,9 @@ API-токен TestOps вставляется в настройках (по па
   GET  /api/aqa/commits?branch=&refresh=     — коммиты ветки (пусто — ветка по умолчанию)
   GET  /api/aqa/testops?refresh=             — запуски
   GET  /api/aqa/testops/launch/{id}          — запуск подробно: кейсы с результатами
+  GET  /api/aqa/testops/result/{id}          — результат кейса: описание, ошибка, шаги (какой упал), вложения
+  GET  /api/aqa/testops/attachment/{id}      — вложение текстом: тело запроса и ответа, логи
+  POST /api/aqa/testops/behaviors            — эпик, фича и стори результатов: группировка как Behaviors в Allure
   GET  /api/aqa/commit/{hash}                — коммит подробно: файлы, строки +/−, свод по типам и расширениям
   GET  /api/aqa/commit/{hash}/diff?path=     — файл коммита построчно: «было» слева, «стало» справа
   GET  /api/aqa/roadmap?refresh=             — эпики с задачами; Jira недоступна — последний снимок
@@ -73,7 +76,9 @@ K_EPICS = "aqa_epics"
 DEFAULT_BB_URL = "https://stash.sigma.sbrf.ru/projects/SBER911/repos/sber911-aqa/browse"
 DEFAULT_TO_URL = "https://testops.sigma.sbrf.ru/project/2414/test-cases"
 DEFAULT_JK_URL = "https://sber911-ci.ci.jenkins.sberbank.ru/job/sber911-ci/job/sber911-backend/job/AQA/job/AQA_TEST/"
-MAX_EPICS = 5
+# Эпики AQA, которые на роадмапе всегда: стоят первыми, убрать их нельзя ни с графика, ни в настройках.
+PINNED_EPICS = ["SBER911-29998", "SBER911-30133", "SBER911-30135"]
+MAX_EPICS = 5                          # своих эпиков, сверх закреплённых
 CACHE_TTL = 300                        # 5 минут: вкладку открывают часто, а полный счёт коммитов — сотни запросов
 TODAY_STATS_LIMIT = 30                 # запусков за сегодня, по которым суммируются кейсы
 RECENT_LAUNCHES = 12                   # последних запусков в виджете (у каждого — кейсы по статусам)
@@ -111,12 +116,18 @@ def parse_jenkins(url: str) -> Optional[dict]:
     return {"base_url": m.group(1).rstrip("/"), "job_path": m.group(2), "job": m.group(2).rsplit("/", 1)[-1]} if m else None
 
 
-def _epics(db: Session) -> list[str]:
+def _own_epics(db: Session) -> list[str]:
+    """Эпики из настроек, без закреплённых."""
     try:
         v = json.loads(_get(db, K_EPICS, "[]"))
-        return [str(x).strip().upper() for x in v if str(x).strip()][:MAX_EPICS] if isinstance(v, list) else []
     except ValueError:
         return []
+    keys = [str(x).strip().upper() for x in v if str(x).strip()] if isinstance(v, list) else []
+    return [k for k in keys if k not in PINNED_EPICS][:MAX_EPICS]
+
+
+def _epics(db: Session) -> list[str]:
+    return PINNED_EPICS + _own_epics(db)
 
 
 def _ssl_verify(db: Session) -> Any:
@@ -146,11 +157,11 @@ def jk_cfg(db: Session) -> dict:
 
 def _http(name: str, method: str, url: str, verify: Any, *, token: str = "", auth: Optional[tuple] = None,
           params: Optional[dict] = None, json_body: Any = None, data: Optional[dict] = None, timeout: int = 30,
-          text: bool = False, raw: bool = False) -> Any:
+          text: bool = False, raw: bool = False, accept: str = "application/json") -> Any:
     """Запрос к Bitbucket, TestOps или Jenkins; ошибки — понятным текстом с именем системы, как у Jira.
     raw — вернуть сам ответ (нужны заголовки)."""
     import requests
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; SimpleTest-QA/1.0)"}
+    headers = {"Accept": accept, "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)"}
     if token:
         headers["Authorization"] = "Bearer " + token
     try:
@@ -228,7 +239,7 @@ def token_from_login(body: TokenFromLoginBody, db: Session) -> dict:
     try:
         r = _http("Bitbucket", "PUT", f"{cfg['base_url']}/rest/access-tokens/1.0/users/{login.lower()}", cfg["ssl_verify"],
                   auth=(login, body.password),
-                  json_body={"name": f"SimpleTest {time.strftime('%Y-%m-%d %H:%M')}",
+                  json_body={"name": f"Loom {time.strftime('%Y-%m-%d %H:%M')}",
                              "permissions": ["PROJECT_READ", "REPO_READ"], "expiryDays": 180})
     except HTTPException as e:
         if e.status_code in (401, 403):
@@ -565,6 +576,8 @@ def testops_launch(cfg: dict, launch_id: int) -> dict:
                 "assignee": str(t.get("assignee") or t.get("createdBy") or ""),
                 "testCaseId": tc,
                 "url": f"{base}/project/{cfg['project_id']}/test-cases/{tc}" if tc else "",
+                # Эпик, фича и стори, если сервер отдал их в списке; None — спросить по результату (/behaviors).
+                "behavior": behavior_of(t) if t.get("labels") or t.get("customFields") else None,
             })
         page += 1
         if not content or page >= int((r or {}).get("totalPages") or 0):
@@ -579,6 +592,192 @@ def testops_launch(cfg: dict, launch_id: int) -> dict:
         "duration": (max(stops) - min(starts)) if starts and stops else 0,
         "results": results[:MAX_RESULTS], "resultsTotal": total, "resultsPartial": total > len(results),
     }
+
+
+# ── Результат кейса: шаги, вложения, поведения ───────────────────────────────
+
+MAX_STEPS = 2000                       # шагов в ответе: защита от зацикленного отчёта
+MAX_ATTACHMENT = 1_000_000             # символов вложения в окне
+MAX_BEHAVIOR_FETCH = 600               # результатов, которые спрашиваем поштучно ради группировки
+_BEHAVIOR_WORKERS = 8
+_FAILED = ("failed", "broken")
+_TEXT_TYPES = ("text/", "json", "xml", "yaml", "csv", "html", "javascript")
+_BEHAVIOR_KEYS = ("epic", "feature", "story")
+# Адреса шагов отличаются по версиям TestOps: берём первый ответивший.
+_STEP_PATHS = ("execution", "scenario")
+
+
+def behavior_of(raw: dict) -> dict:
+    """Эпик, фича и стори результата: метки Allure {name, value} или поля TestOps {customField: {name}, name}."""
+    out: dict[str, str] = {}
+    for lb in raw.get("labels") or []:
+        if isinstance(lb, dict) and str(lb.get("name") or "").lower() in _BEHAVIOR_KEYS and lb.get("value"):
+            out.setdefault(str(lb["name"]).lower(), str(lb["value"]))
+    for cf in raw.get("customFields") or []:
+        name = str(((cf or {}).get("customField") or {}).get("name") or "").lower() if isinstance(cf, dict) else ""
+        if name in _BEHAVIOR_KEYS and cf.get("name"):
+            out.setdefault(name, str(cf["name"]))
+    return out
+
+
+def _attachment(raw: Any) -> Optional[dict]:
+    if not isinstance(raw, dict) or not raw.get("id"):
+        return None
+    return {"id": raw["id"], "name": str(raw.get("name") or raw.get("originalFileName") or f"Вложение {raw['id']}"),
+            "type": str(raw.get("contentType") or raw.get("type") or ""), "size": int(raw.get("contentLength") or raw.get("size") or 0)}
+
+
+def _attachments(raw: Any) -> list[dict]:
+    items = raw.values() if isinstance(raw, dict) else raw if isinstance(raw, list) else []
+    return [a for a in map(_attachment, items) if a]
+
+
+def _unflatten(data: dict) -> list[dict]:
+    """Шаги плоским словарём {root: {children: [id]}, scenarioSteps: {id: шаг}, attachments: {id: вложение}} → дерево."""
+    steps = data.get("scenarioSteps") or {}
+    atts = data.get("attachments") or {}
+
+    def node(i: Any, depth: int) -> Optional[dict]:
+        s = steps.get(str(i)) or steps.get(i)
+        if not isinstance(s, dict) or depth > 30:
+            return None
+        a = atts.get(str(s.get("attachmentId"))) or atts.get(s.get("attachmentId")) if s.get("attachmentId") else None
+        kids = [k for k in (node(c, depth + 1) for c in s.get("children") or []) if k]
+        return {**s, "steps": kids, "attachments": [a] if a else []}
+    return [n for n in (node(i, 0) for i in ((data.get("root") or {}).get("children") or [])) if n]
+
+
+def _step(raw: dict, budget: list[int], depth: int = 0) -> Optional[dict]:
+    if budget[0] <= 0 or depth > 30:
+        return None
+    budget[0] -= 1
+    kids = [k for k in (_step(c, budget, depth + 1) for c in (raw.get("steps") or raw.get("children") or []) if isinstance(c, dict)) if k]
+    single = raw.get("attachment")
+    st, sp = int(raw.get("start") or 0), int(raw.get("stop") or 0)
+    params = raw.get("parameters")
+    return {
+        "name": str(raw.get("name") or raw.get("keyword") or raw.get("body") or ""),
+        "status": str(raw.get("status") or "").lower(),
+        "duration": int(raw.get("duration") or (sp - st if st and sp else 0)),
+        "message": str(raw.get("message") or raw.get("statusMessage") or ""),
+        "trace": str(raw.get("trace") or raw.get("statusTrace") or ""),
+        "parameters": _names(params) if isinstance(params, list) else [],
+        "attachments": _attachments(raw.get("attachments")) + ([a] if (a := _attachment(single)) else []),
+        "steps": kids, "failed": False,
+    }
+
+
+def mark_failed(steps: list[dict]) -> Optional[dict]:
+    """Шаг, на котором упало: первый неуспешный, а внутри него — самый глубокий неуспешный. Отмечает его и возвращает."""
+    for s in steps:
+        if s["status"] in _FAILED:
+            inner = mark_failed(s["steps"])
+            if inner:
+                return inner
+            s["failed"] = True
+            return s
+    return None
+
+
+def parse_steps(data: Any) -> tuple[list[dict], list[dict]]:
+    """Ответ TestOps со шагами → (дерево шагов, вложения вне шагов). Понимает список, {steps}, {children} и плоский вид."""
+    budget = [MAX_STEPS]
+    if isinstance(data, dict) and "scenarioSteps" in data:
+        raw, top = _unflatten(data), []
+    elif isinstance(data, dict):
+        raw = data.get("steps") or data.get("children") or []
+        top = _attachments(data.get("attachments"))
+    else:
+        raw, top = data if isinstance(data, list) else [], []
+    return [x for x in (_step(s, budget) for s in raw if isinstance(s, dict)) if x], top
+
+
+def testops_result(cfg: dict, result_id: int) -> dict:
+    """Результат кейса подробно. Сам результат обязателен; шаги — первым ответившим адресом. Адрес не ответил или шагов
+    нет — stepsNote говорит об этом прямо: пустой список не должен выглядеть как «шагов не было»."""
+    jwt = _testops_jwt(cfg)
+    base, verify = cfg["base_url"], cfg["ssl_verify"]
+    url = f"{base}/api/rs/testresult/{result_id}"
+    raw = _http("Allure TestOps", "GET", url, verify, token=jwt) or {}
+    steps: list[dict] = []
+    top: list[dict] = []
+    source, note = "", ""
+    for tail in _STEP_PATHS:
+        try:
+            data = _http("Allure TestOps", "GET", f"{url}/{tail}", verify, token=jwt)
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            note = str(e.detail)
+            continue
+        steps, top = parse_steps(data)
+        source, note = tail, ""
+        if steps:
+            break
+    if not source:
+        note = f"TestOps не отдал шаги ({', '.join(_STEP_PATHS)}): {note}"
+    elif not steps:
+        note = "TestOps вернул результат без шагов"
+    if not top:
+        try:
+            r = _http("Allure TestOps", "GET", f"{base}/api/rs/testresult/attachment", verify, token=jwt,
+                      params={"testResultId": result_id, "page": 0, "size": 100})
+            top = _attachments(r.get("content") if isinstance(r, dict) else r)
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+    used = {a["id"] for a in _walk_attachments(steps)}
+    failed = mark_failed(steps)
+    tc = raw.get("testCaseId")
+    return {
+        "id": raw.get("id", result_id), "name": str(raw.get("name") or raw.get("fullName") or ""),
+        "fullName": str(raw.get("fullName") or ""), "status": str(raw.get("status") or "unknown").lower(),
+        "description": str(raw.get("description") or ""), "descriptionHtml": str(raw.get("descriptionHtml") or ""),
+        "message": str(raw.get("message") or raw.get("statusMessage") or ""),
+        "trace": str(raw.get("trace") or raw.get("statusTrace") or ""),
+        "parameters": _names(raw.get("parameters")), "behavior": behavior_of(raw),
+        "steps": steps, "failedStep": failed["name"] if failed else "", "attachments": [a for a in top if a["id"] not in used],
+        "stepsSource": source, "stepsNote": note,
+        "url": f"{base}/project/{cfg['project_id']}/test-cases/{tc}" if tc else "",
+    }
+
+
+def _walk_attachments(steps: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for s in steps:
+        out += s["attachments"] + _walk_attachments(s["steps"])
+    return out
+
+
+def testops_attachment(cfg: dict, attachment_id: int) -> dict:
+    """Вложение текстом (тело запроса и ответа, лог). Картинки и прочие файлы — только ссылкой из TestOps."""
+    resp = _http("Allure TestOps", "GET", f"{cfg['base_url']}/api/rs/testresult/attachment/{attachment_id}/content", cfg["ssl_verify"],
+                 token=_testops_jwt(cfg), raw=True, accept="*/*")
+    ctype = str(resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+    if not any(t in ctype for t in _TEXT_TYPES):
+        return {"contentType": ctype, "binary": True, "text": "", "truncated": False}
+    text = resp.text
+    return {"contentType": ctype, "binary": False, "text": text[:MAX_ATTACHMENT], "truncated": len(text) > MAX_ATTACHMENT}
+
+
+def testops_behaviors(cfg: dict, ids: list[int]) -> dict:
+    """Эпик, фича и стори результатов, поштучно и параллельно: в списке запуска TestOps их может не быть."""
+    from concurrent.futures import ThreadPoolExecutor
+    jwt = _testops_jwt(cfg)
+    base, verify = cfg["base_url"], cfg["ssl_verify"]
+    picked = ids[:MAX_BEHAVIOR_FETCH]
+
+    def one(i: int) -> tuple[int, dict]:
+        def load() -> dict:
+            return behavior_of(_http("Allure TestOps", "GET", f"{base}/api/rs/testresult/{i}", verify, token=jwt) or {})
+        try:
+            return i, _cached(f"tob:{base}:{i}", False, load)
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            return i, {}
+    with ThreadPoolExecutor(max_workers=_BEHAVIOR_WORKERS) as pool:
+        return {"behaviors": {str(i): b for i, b in pool.map(one, picked)}, "partial": len(ids) > len(picked)}
 
 
 # ── Роадмап ──────────────────────────────────────────────────────────────────
@@ -957,7 +1156,7 @@ def _settings_view(db: Session) -> dict:
     return {"bitbucketUrl": bb["url"], "bitbucketOk": bool(bb["base_url"]), "bitbucketToken": _MASK if bb["token"] else "",
             "testopsUrl": to["url"], "testopsOk": bool(to["base_url"]), "testopsToken": _MASK if to["token"] else "",
             "jenkinsUrl": jk["url"], "jenkinsOk": bool(jk["base_url"]), "jenkinsUser": jk["user"],
-            "jenkinsToken": _MASK if jk["token"] else "", "epics": _epics(db),
+            "jenkinsToken": _MASK if jk["token"] else "", "epics": _epics(db), "pinnedEpics": PINNED_EPICS,
             "defaults": {"bitbucketUrl": DEFAULT_BB_URL, "testopsUrl": DEFAULT_TO_URL, "jenkinsUrl": DEFAULT_JK_URL}}
 
 
@@ -993,8 +1192,9 @@ def put_settings(body: SettingsBody, db: Session = Depends(get_db)) -> dict:
     bad = [e for e in epics if not _KEY_RE.match(e)]
     if bad:
         raise HTTPException(422, f"Не номер задачи Jira: {', '.join(bad)}")
+    epics = [e for e in epics if e not in PINNED_EPICS]    # закреплённые всегда на месте, в настройках хранятся только свои
     if len(epics) > MAX_EPICS:
-        raise HTTPException(422, f"Эпиков не больше {MAX_EPICS}")
+        raise HTTPException(422, f"Своих эпиков не больше {MAX_EPICS}")
     _set(db, K_BB_URL, body.bitbucketUrl.strip(), "Трекинг AQA: репозиторий Bitbucket")
     _set(db, K_TO_URL, body.testopsUrl.strip(), "Трекинг AQA: проект Allure TestOps")
     _set(db, K_EPICS, json.dumps(epics, ensure_ascii=False), "Трекинг AQA: эпики роадмапа")
@@ -1025,7 +1225,7 @@ def _bb_ready(db: Session) -> dict:
     if not cfg["base_url"]:
         raise HTTPException(400, "Bitbucket не подключён — укажите ссылку на репозиторий в настройках вкладки")
     if not cfg["token"]:
-        raise HTTPException(400, "Нет маркера Bitbucket — войдите в SimpleTest логином Jira или получите маркер в настройках вкладки")
+        raise HTTPException(400, "Нет маркера Bitbucket — войдите в Loom логином Jira или получите маркер в настройках вкладки")
     return cfg
 
 
@@ -1090,6 +1290,25 @@ def testops_launch_route(launch_id: int, refresh: bool = False, db: Session = De
     cfg = _to_ready(db)
     return {**_cached(f"tol:{cfg['url']}:{launch_id}", refresh, lambda: testops_launch(cfg, launch_id)),
             "loadedAt": datetime.now().isoformat(timespec="seconds")}
+
+
+@router.get("/api/aqa/testops/result/{result_id}")
+def testops_result_route(result_id: int, db: Session = Depends(get_db)) -> dict:
+    return testops_result(_to_ready(db), result_id)
+
+
+@router.get("/api/aqa/testops/attachment/{attachment_id}")
+def testops_attachment_route(attachment_id: int, db: Session = Depends(get_db)) -> dict:
+    return testops_attachment(_to_ready(db), attachment_id)
+
+
+class BehaviorsBody(BaseModel):
+    ids: list[int] = Field(default_factory=list)
+
+
+@router.post("/api/aqa/testops/behaviors")
+def testops_behaviors_route(body: BehaviorsBody, db: Session = Depends(get_db)) -> dict:
+    return testops_behaviors(_to_ready(db), body.ids)
 
 
 @router.get("/api/aqa/commit/{commit_id}")

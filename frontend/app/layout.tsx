@@ -5,7 +5,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 export const metadata: Metadata = {
   // Страницы задают только своё имя, шаблон дописывает продукт:
   // во вкладке браузера видно, в каком разделе пользователь.
-  title: { default: "SimpleTest", template: "%s — SimpleTest" },
+  title: { default: "Loom", template: "%s — Loom" },
   description: "Превращает требования в тест-кейсы для Jira Zephyr Scale",
 };
 

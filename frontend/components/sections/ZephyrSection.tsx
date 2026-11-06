@@ -37,7 +37,7 @@ function readProject(): string {
 }
 
 /**
- * Zephyr Tool — проект тестирования Zephyr Scale в SimpleTest: дерево папок с кейсами, карточка кейса
+ * Zephyr Tool — проект тестирования Zephyr Scale в Loom: дерево папок с кейсами, карточка кейса
  * со шагами и связями с Jira, прогоны с прогрессом и статусами.
  *
  * Этап 1 — чтение. Запись (создание, правка, удаление кейсов, папок, прогонов, добавление кейсов в прогон,
@@ -114,7 +114,7 @@ export default function ZephyrSection() {
     try { setStaging(await stagingFromXml(xml, source)); setStagedPick(null); } catch (e) { setImportErr((e as Error).message); }
     setImportBusy(false);
   };
-  // XML из генерации SimpleTest («Открыть в Zephyr Tool») — забираем при открытии раздела.
+  // XML из генерации Loom («Открыть в Zephyr Tool») — забираем при открытии раздела.
   useEffect(() => {
     const h = takeHandoff();
     if (h) void importXml(h.xml, h.source);
@@ -381,7 +381,7 @@ export default function ZephyrSection() {
             <p className="text-text-muted">
               Будет перенесено кейсов (с вложенными папками): <b className="text-text-main">{folderMove.count}</b> — по запросу в Jira на каждый.
               Публичный API Zephyr не даёт переименовать папку напрямую, поэтому старая папка в Zephyr останется пустой —
-              её можно удалить в интерфейсе Zephyr. В дереве SimpleTest её не будет.
+              её можно удалить в интерфейсе Zephyr. В дереве Loom её не будет.
             </p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setFolderMove(null)} disabled={moveBusy} className="px-3 py-2 rounded-lg border border-border-main text-text-muted">Отмена</button>

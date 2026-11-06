@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# SimpleTest — быстрая установка на новый компьютер
+# Loom — быстрая установка на новый компьютер
 # Использование: bash install.sh
 #
 # Поддерживает: venv (macOS/Linux) и Conda (активируй env перед запуском)
 
 set -e
 
-echo "=== SimpleTest installer ==="
+echo "=== Loom installer ==="
 echo ""
 
 # 1. Python — определяем исполняемый файл

@@ -125,7 +125,7 @@ export default function LandingPage() {
 
       <footer className="border-t border-border-main">
         <div className="max-w-5xl mx-auto px-6 py-6 text-center text-xs text-text-muted/60">
-          SimpleTest
+          Loom
         </div>
       </footer>
     </div>

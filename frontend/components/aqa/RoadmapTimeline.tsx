@@ -84,8 +84,10 @@ function lanesOf(issues: AqaIssue[], dayW: number): { placed: Placed[]; lanes: n
  * (dayW) или Ctrl (Cmd) + колесо, от дня до трёх кварталов вперёд от сегодня; календарь — на год вперёд; перетаскивание — прокрутка. Наведение — суть задачи, исполнитель,
  * статус и даты; щелчок — окно задачи (правка и статус), Cmd/Ctrl + щелчок — задача в Jira. «+ Задача» у эпика — новая задача.
  */
-export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, onAddEpic, onRemoveEpic, onOpenIssue, onNewIssue }: {
+export default function RoadmapTimeline({ epics, pinned: pinnedKeys, dayW: zoom, onDayW, colorBy, onAddEpic, onRemoveEpic, onOpenIssue, onNewIssue }: {
   epics: AqaEpic[]; dayW: number; onDayW: (w: number) => void; colorBy: ColorBy;
+  /** Закреплённые эпики: их не убрать, и они не считаются в лимите своих. */
+  pinned: string[];
   onOpenIssue: (key: string) => void;
   onNewIssue: (epic: string) => void;
   /** Добавить эпик в роадмап (сохраняется в настройках вкладки); ошибка — текстом. */
@@ -93,6 +95,7 @@ export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, on
   onRemoveEpic: (key: string) => Promise<void>;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const ownCount = epics.filter(e => !pinnedKeys.includes(e.key)).length;
   // Ширина видимой части — от неё самый мелкий масштаб (три квартала на экран).
   const [viewW, setViewW] = useState(0);
   useEffect(() => {
@@ -235,17 +238,19 @@ export default function RoadmapTimeline({ epics, dayW: zoom, onDayW, colorBy, on
                   {late > 0 && <span className="font-semibold text-red-600 dark:text-red-400" title="Закрыты позже планового окончания или просрочены">· срок нарушен: {late}</span>}
                 </span>
               )}
-              <button type="button" onClick={() => void onRemoveEpic(e.key)} aria-label={`Убрать эпик ${e.key} из роадмапа`}
-                title="Убрать эпик из роадмапа (в Jira ничего не меняется)"
-                className="absolute top-1.5 right-1.5 p-0.5 rounded text-text-muted opacity-0 group-hover/ep:opacity-100 focus-visible:opacity-100 hover:text-red-500">
-                <X className="w-3.5 h-3.5" /></button>
+              {!pinnedKeys.includes(e.key) && (
+                <button type="button" onClick={() => void onRemoveEpic(e.key)} aria-label={`Убрать эпик ${e.key} из роадмапа`}
+                  title="Убрать эпик из роадмапа (в Jira ничего не меняется)"
+                  className="absolute top-1.5 right-1.5 p-0.5 rounded text-text-muted opacity-0 group-hover/ep:opacity-100 focus-visible:opacity-100 hover:text-red-500">
+                  <X className="w-3.5 h-3.5" /></button>
+              )}
             </div>
           );
         })}
         <div className="px-3 py-2.5">
           {adding === null ? (
-            <button type="button" onClick={() => { setAdding(""); setAddErr(""); }} disabled={epics.length >= 5}
-              title={epics.length >= 5 ? "Эпиков не больше пяти" : "Добавить эпик в роадмап"}
+            <button type="button" onClick={() => { setAdding(""); setAddErr(""); }} disabled={ownCount >= 5}
+              title={ownCount >= 5 ? "Своих эпиков не больше пяти" : "Добавить эпик в роадмап"}
               className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline disabled:opacity-40 disabled:no-underline">
               <Plus className="w-4 h-4" /> Добавить эпик</button>
           ) : (

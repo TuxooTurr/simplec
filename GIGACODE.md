@@ -1,4 +1,4 @@
-# GIGACODE.md — SimpleTest для GigaCode CLI
+# GIGACODE.md — Loom для GigaCode CLI
 
 Карта проекта и правила работы для агента GigaCode. Подробный контекст проекта —
 `ForChat.md`, правила разработки — `CLAUDE.md`. MCP-серверы настраиваются глобально
@@ -8,18 +8,18 @@
 
 | MCP | Для чего | Для чего НЕ подходит |
 |---|---|---|
-| `simpletest` (свой, `mcp_server/` этого репозитория) | Логи dropup: проекты, сервисы, поды, разбор ошибок, сводка по стенду. Требования, оформление баг-репорта, представления Jira-аналитики SimpleTest | Запись в Jira — сервер только читает |
-| `jira` (mcp-atlassian, Jira DC по PAT) | JQL, чтение задач и требований, создание дефекта в SBER911 | Zephyr Scale: в mcp-atlassian инструментов Zephyr нет (проверь `tools/list`). Тест-кейсы выгружаются XML из SimpleTest |
-| `playwright` (@playwright/mcp) | E2E интерфейса SimpleTest (`localhost:3000`), ручное исследование страниц | Логи dropup — для них `simpletest` (готовые инструменты вместо кликов) |
-| `web-fetch` (mcp-server-fetch) | Открытые адреса без входа: `/healthz`, публичные JSON | Kibana, Grafana, консоль dropup — за SSO, сессии у fetch нет. API SimpleTest — нужен Bearer-токен, а fetch не передаёт заголовки |
+| `simpletest` (свой, `mcp_server/` этого репозитория) | Логи dropup: проекты, сервисы, поды, разбор ошибок, сводка по стенду. Требования, оформление баг-репорта, представления Jira-аналитики Loom | Запись в Jira — сервер только читает |
+| `jira` (mcp-atlassian, Jira DC по PAT) | JQL, чтение задач и требований, создание дефекта в SBER911 | Zephyr Scale: в mcp-atlassian инструментов Zephyr нет (проверь `tools/list`). Тест-кейсы выгружаются XML из Loom |
+| `playwright` (@playwright/mcp) | E2E интерфейса Loom (`localhost:3000`), ручное исследование страниц | Логи dropup — для них `simpletest` (готовые инструменты вместо кликов) |
+| `web-fetch` (mcp-server-fetch) | Открытые адреса без входа: `/healthz`, публичные JSON | Kibana, Grafana, консоль dropup — за SSO, сессии у fetch нет. API Loom — нужен Bearer-токен, а fetch не передаёт заголовки |
 
 ### Подключение `simpletest` к GigaCode
 
 ```bash
-gigacode mcp add simpletest \
+gigacode mcp add loom \
   -e DROPUP_CONSOLE_URL=https://console-openshift-console.apps.<кластер> \
-  -e SIMPLETEST_LOGIN=<логин SimpleTest> -e SIMPLETEST_PASSWORD=<пароль SimpleTest> \
-  /полный/путь/к/simplec-main/scripts/simpletest-mcp.sh
+  -e SIMPLETEST_LOGIN=<логин Loom> -e SIMPLETEST_PASSWORD=<пароль Loom> \
+  /полный/путь/к/simplec-main/scripts/loom-mcp.sh
 ```
 
 - Зависимости — из `requirements.txt` (`mcp`, `playwright`); браузер — установленный Google Chrome,
@@ -27,22 +27,22 @@ gigacode mcp add simpletest \
 - Первый вызов `dropup_login` откроет окно консоли — входит человек. Сессия хранится в
   `~/.simpletest/mcp-web/` (профиль браузера и `session-cookies.json` с правами 0600); истечёт —
   инструменты попросят войти снова.
-- Один процесс на профиль браузера. Если нужен доступ и из GigaCode, и из SimpleTest — запускать
-  `scripts/simpletest-mcp.sh --http` (http://127.0.0.1:8765/mcp) и подключаться к нему по HTTP.
+- Один процесс на профиль браузера. Если нужен доступ и из GigaCode, и из Loom — запускать
+  `scripts/loom-mcp.sh --http` (http://127.0.0.1:8765/mcp) и подключаться к нему по HTTP.
 
 | Инструмент | Что делает |
 |---|---|
-| `logs_analyze` | **Главный для логов**: имя сервиса → ошибки за N минут через источник, записанный в SimpleTest |
+| `logs_analyze` | **Главный для логов**: имя сервиса → ошибки за N минут через источник, записанный в Loom |
 | `logs_saved_services` | Сохранённые имена микросервисов анализатора |
-| `web_scenarios`, `web_run` | Операции веб-коннекторов (записаны человеком в SimpleTest) и их запуск с параметрами: `web_run(id, params={"incident": "INC…"})`. Операция может что-то менять на ресурсе — запускать только по просьбе пользователя |
+| `web_scenarios`, `web_run` | Операции веб-коннекторов (записаны человеком в Loom) и их запуск с параметрами: `web_run(id, params={"incident": "INC…"})`. Операция может что-то менять на ресурсе — запускать только по просьбе пользователя |
 | `dropup_status`, `dropup_login` | Прямой доступ к консоли OpenShift: есть ли сессия; открыть окно входа |
 | `dropup_projects`, `dropup_services`, `dropup_pods` | Проекты (стенды), сервисы с версиями образов, поды с рестартами и CrashLoop |
 | `dropup_triage` | Логи сервиса за N минут → группы ошибок по причине, важность, стеки |
 | `dropup_check` | Сводка по стенду: 🟢/🟡/🔴, поды, рестарты, главная ошибка каждого сервиса |
 | `dropup_logs` | Сырые строки с фильтром grep |
-| `simpletest_requirements`, `simpletest_requirement` | Библиотека требований SimpleTest |
-| `simpletest_format_bug` | Черновик баг-репорта по шаблону SimpleTest (в Jira не создаёт) |
-| `simpletest_jira_views`, `simpletest_jira_view_run` | Представления Jira-аналитики SimpleTest |
+| `loom_requirements`, `loom_requirement` | Библиотека требований Loom |
+| `loom_format_bug` | Черновик баг-репорта по шаблону Loom (в Jira не создаёт) |
+| `loom_jira_views`, `loom_jira_view_run` | Представления Jira-аналитики Loom |
 
 Рекомендации к настройке:
 - Закрепить версию Playwright MCP: `npx @playwright/mcp@0.0.83` вместо `@latest` — в
@@ -50,7 +50,7 @@ gigacode mcp add simpletest \
 - Требования из Confluence: у того же `mcp-atlassian` есть Confluence — добавить
   `CONFLUENCE_URL` и `CONFLUENCE_PERSONAL_TOKEN` в env сервера `jira`.
 
-## Карта SimpleTest (после реструктуризации 10.10.2026)
+## Карта Loom (после реструктуризации 10.10.2026)
 
 Сайдбар: **Тестовая модель** (генерация кейсов, бывшее «Ручное тестирование») ·
 Тестовые данные · Дефекты · Просмотр Kafka · **Генераторы событий** · Данные (только
@@ -93,6 +93,6 @@ print("@@ST_MSG " + json.dumps({"topic": TOPIC, "body": payload,
 - Секреты (PAT, пароли, ключи подписи) не писать в файлы репозитория. Исключение,
   о котором нужно помнить: в скриптах алертов «МПР» и «Alert Reflex» уже лежит ключ
   подписи JWT тестового контура — не копировать его в новые места.
-- SSL: SimpleTest по умолчанию ходит в Jira без проверки сертификата (BIG IP).
+- SSL: Loom по умолчанию ходит в Jira без проверки сертификата (BIG IP).
   Для MCP проверку не отключать, пока нет реальной SSL-ошибки.
-- Запуск SimpleTest: `bash start.sh`; тесты: `python -m pytest tests -q`.
+- Запуск Loom: `bash start.sh`; тесты: `python -m pytest tests -q`.

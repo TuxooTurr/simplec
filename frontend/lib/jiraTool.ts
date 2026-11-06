@@ -192,7 +192,7 @@ export const DEFECTS_COL: ColRef = "defects";
 /** Есть ли среди неустранённых дефектов задачи блокирующие. */
 export const BLOCK_COL: ColRef = "block";
 
-/** Поля, которые считает SimpleTest: в списке полей у них пометка «st». */
+/** Поля, которые считает Loom: в списке полей у них пометка «st». */
 /**
  * Колонки трудозатрат «Траты план», «Начало теста», «Конец теста», «Траты факт» убраны 23.10.2026 (решение Стефана):
  * план вводится в ячейке «Тестировщик», начало/конец/факт не нужны. Из сохранённых списков и шаблонов их колонки
@@ -263,9 +263,9 @@ export interface RoleValue { name?: string; pid?: string; state?: RoleState; pla
 
 /** Учитывать ли задачу в нагрузке участника (галочка в строке; авто — по статусу (st)). */
 export const LOAD_COL: ColRef = "load";
-/** Требования из раздела «Данные», привязанные к задаче (хранятся у SimpleTest, общие на все списки). */
+/** Требования из раздела «Данные», привязанные к задаче (хранятся у Loom, общие на все списки). */
 export const REQ_COL: ColRef = "reqs";
-/** Микросервисы задачи (справочник микросервисов SimpleTest — тот же, что на графике стендов); общие на все списки. */
+/** Микросервисы задачи (справочник микросервисов Loom — тот же, что на графике стендов); общие на все списки. */
 export const MS_COL: ColRef = "ms";
 
 export const ST_COLS: ColRef[] = [STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, LOAD_COL, REQ_COL, MS_COL, FOLDER_COL];
@@ -585,7 +585,7 @@ export interface ToolState {
   version: 3;
   lists: TaskList[];
   participants: Participant[];
-  /** Черновики задач SimpleTest: ещё не отправлены в Jira. */
+  /** Черновики задач Loom: ещё не отправлены в Jira. */
   created: Issue[];
   /** Счётчик номеров черновиков («SBER911-ЧЕРНОВИК-3»). */
   nextKey: number;
@@ -600,20 +600,20 @@ export interface ToolState {
   /** Шаблоны списков: только структура — порядок колонок, свои поля и папки. */
   templates: ListTemplate[];
   /**
-   * Требования (раздел «Данные») по задачам: ключ Jira → id документов. На уровне SimpleTest, а не списка:
+   * Требования (раздел «Данные») по задачам: ключ Jira → id документов. На уровне Loom, а не списка:
    * одна фича бывает в нескольких списках, требования у неё одни.
    */
   reqLinks: Record<string, string[]>;
   /** Исходник требований по задаче (Confluence, Figma, Google Docs…): ключ → ссылка. Рядом с документами из «Данных». */
   reqUrls: Record<string, string>;
   /**
-   * Микросервисы по задачам: ключ → имена из справочника микросервисов. На уровне SimpleTest, как требования:
+   * Микросервисы по задачам: ключ → имена из справочника микросервисов. На уровне Loom, как требования:
    * задача в нескольких списках трогает одни и те же сервисы. Из них подставляются микросервисы в бронь стенда.
    */
   msLinks: Record<string, string[]>;
   /**
    * Статус (st), выставленный руками: ключ → этап. Нижняя планка — действует, пока Jira не покажет
-   * этап выше (см. makeStageResolver). На уровне SimpleTest: реальность у задачи одна во всех списках.
+   * этап выше (см. makeStageResolver). На уровне Loom: реальность у задачи одна во всех списках.
    */
   stageManual: Record<string, Stage>;
   /** Норма дня и резервы для нагрузки — общие для всех списков. */
@@ -816,7 +816,7 @@ export function saveState(s: ToolState): void {
 
 /**
  * Черновик ушёл в Jira: заменяем его на настоящую задачу и переносим всё, что
- * SimpleTest хранит по ключу, — участника, значения своих полей, папку, — во всех списках.
+ * Loom хранит по ключу, — участника, значения своих полей, папку, — во всех списках.
  */
 export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): ToolState {
   const remap = <T,>(m: Record<string, T> | undefined): Record<string, T> | undefined => {
@@ -1018,7 +1018,7 @@ export function withoutMark(marks: TaskList["marks"], key: string): TaskList["ma
 /* ── Перенос задач между списками ──────────────────────────────────────── */
 
 /** Тип данных при перетаскивании строк таблицы на список в колонке «Списки»: JSON-массив ключей. */
-export const DRAG_ISSUES = "application/x-simpletest-issues";
+export const DRAG_ISSUES = "application/x-loom-issues";
 
 /**
  * Перенести задачи из списка в список. Вместе с задачей едет то, что имеет смысл в другом списке: участник,
@@ -1125,7 +1125,7 @@ export const EMPTY_GROUP = "— не задано";
 export interface GroupLevel { ref: ColRef; label: string }
 
 /**
- * Можно ли менять значение поля переносом задачи между группами: только поля SimpleTest,
+ * Можно ли менять значение поля переносом задачи между группами: только поля Loom,
  * которые хранятся у нас, — участник, папка и свои поля списка. Вычисляемые (статус, дефекты,
  * блок) и поля Jira так не меняются.
  */
@@ -1247,7 +1247,7 @@ export const CHAT_FIXED_COLS: ColRef[] = [STAGE_COL, "jira:summary"];
 
 /**
  * Выбранные поля задачи для чата — по строке «Поле: значение» в порядке выбора. Пустое поле пропускается
- * целиком, вместе с названием. Пометка «(st)» у полей SimpleTest в чат не идёт.
+ * целиком, вместе с названием. Пометка «(st)» у полей Loom в чат не идёт.
  */
 export function chatFieldLines(refs: ColRef[], issue: Issue, ctx: ColCtx): string[] {
   const out: string[] = [];

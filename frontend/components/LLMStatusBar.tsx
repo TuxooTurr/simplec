@@ -11,7 +11,8 @@ const STATUS_CONFIG: Record<string, { dot: string; ring: string; label: string }
   red:    { dot: "bg-red-500",    ring: "bg-red-400/30",    label: "Недоступен" },
 };
 
-export default function LLMStatusBar() {
+/** compact — для свёрнутого меню: только точки, имя и состояние — в подсказке. */
+export default function LLMStatusBar({ compact = false }: { compact?: boolean }) {
   const { provider, setProvider, providersRefreshKey, setProviderStatuses } = useWorkspace();
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [hasLoaded, setHasLoaded] = useState(false);
@@ -47,6 +48,25 @@ export default function LLMStatusBar() {
       cancelled = true;
     };
   }, [providersRefreshKey, setProvider, setProviderStatuses]);
+
+  if (compact) {
+    return (
+      <div role="group" aria-label="Статус LLM" className="flex flex-col items-center gap-1">
+        {providers.map((p) => {
+          const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-bg-muted/30", label: "—" };
+          const isActive = provider === p.id;
+          return (
+            <button key={p.id} type="button" onClick={() => { userPicked.current = true; setProvider(p.id); }}
+              title={`${p.name}: ${p.message}`} aria-label={`${p.name}: ${cfg.label}`} aria-pressed={isActive}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg border transition-colors
+                ${isActive ? "border-primary bg-[var(--color-active-bg)]" : "border-transparent hover:bg-[var(--color-sidebar-hover)]"}`}>
+              <span className={`block h-2.5 w-2.5 rounded-full ${cfg.dot}`} />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div>

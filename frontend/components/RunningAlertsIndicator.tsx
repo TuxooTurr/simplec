@@ -22,7 +22,8 @@ function formatElapsed(ms: number): string {
   return `${s}с`;
 }
 
-export default function RunningAlertsIndicator() {
+/** compact — для свёрнутого меню: колокольчик со счётчиком, щелчок открывает первый активный алерт. */
+export default function RunningAlertsIndicator({ compact = false }: { compact?: boolean }) {
   const { scripts, sessions, setSelectedId } = useAlertsScheduler();
   const router = useRouter();
   const [now, setNow] = useState(() => Date.now());
@@ -52,6 +53,19 @@ export default function RunningAlertsIndicator() {
     const folder = scripts.find((sc) => sc.id === id)?.folder_id;
     router.push(`/event-generators?open=alerts:${folder ?? "none"}`);
   };
+
+  if (compact) {
+    return (
+      <div className="flex justify-center border-b border-border-main py-2">
+        <button type="button" onClick={() => openAlert(active[0].id)} title={`Активные алерты: ${active.map(a => a.name).join(", ")}`}
+          aria-label={`Активные алерты: ${active.length}`}
+          className="relative rounded-lg p-1.5 text-text-muted hover:bg-[var(--color-sidebar-hover)] hover:text-primary">
+          <Bell className="h-4 w-4" />
+          <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-primary px-0.5 text-center text-[9px] font-bold leading-[14px] text-white">{active.length}</span>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="border-b border-border-main px-3 py-2.5">

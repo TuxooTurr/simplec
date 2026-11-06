@@ -7,6 +7,7 @@ import {
   Zap, BookOpen, LayoutList, BarChart2, Database, Settings, ScrollText,
   LogOut, User, GripVertical, Eye, EyeOff,
   SlidersHorizontal, Check, Network, SplitSquareHorizontal, Sparkles, FlaskConical, CalendarDays, Activity,
+  PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
@@ -52,6 +53,8 @@ const NAV_VISIBLE = NAV.filter(n => n.id !== "logs" || WEB_CONNECTORS_ENABLED);
 
 const ORDER_KEY = "st_nav_order";
 const HIDDEN_KEY = "st_nav_hidden";
+/** Меню свёрнуто в полосу с иконками: рабочие зоны шире на освободившееся место. */
+const COLLAPSED_KEY = "st_nav_collapsed";
 
 function loadList(key: string): string[] {
   if (typeof window === "undefined") return [];
@@ -83,10 +86,14 @@ export default function Sidebar() {
   const [mounted, setMounted] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
   const [releaseUnseen, setReleaseUnseen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  /** Плавно — только по щелчку: при загрузке страницы меню сразу в запомненной ширине. */
+  const [animate, setAnimate] = useState(false);
 
   useEffect(() => {
     setOrder(loadList(ORDER_KEY));
     setHidden(loadList(HIDDEN_KEY));
+    try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1"); } catch { /* развёрнуто по умолчанию */ }
     setMounted(true);
 
     // Окно релиза открывается само один раз — после этого остаётся кнопка.
@@ -120,6 +127,13 @@ export default function Sidebar() {
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const visibleNav = mounted && !editMode ? orderedNav.filter((n) => !hiddenSet.has(n.id)) : orderedNav;
 
+  const setNavCollapsed = (next: boolean) => {
+    setAnimate(true);
+    setCollapsed(next);
+    if (next) setEditMode(false);
+    try { localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0"); } catch { /* только до перезагрузки */ }
+  };
+
   const handleLogout = async () => {
     await logout();
     router.replace("/login");
@@ -143,22 +157,30 @@ export default function Sidebar() {
   };
 
   return (
-    <aside className="w-64 h-screen bg-[var(--color-sidebar-bg)] border-r border-border-main flex flex-col flex-shrink-0">
+    <aside className={`${collapsed ? "w-16" : "w-64"} h-screen bg-[var(--color-sidebar-bg)] border-r border-border-main flex flex-col flex-shrink-0
+      ${animate ? "transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}>
       {/* Logo */}
-      <div className="px-5 py-4 border-b border-border-main">
-        <div className="flex items-center gap-2.5">
+      <div className={`border-b border-border-main ${collapsed ? "px-2 py-3" : "pl-5 pr-2 py-4"}`}>
+        <div className={`flex items-center gap-2.5 ${collapsed ? "flex-col" : ""}`}>
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-sm flex-shrink-0">
             <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
           </div>
-          <div>
-            <span className="text-[15px] font-bold text-text-main tracking-tight">SimpleTest</span>
-            <p className="text-[11px] text-text-muted leading-none mt-0.5">AI-генератор тест-кейсов</p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <span className="text-[15px] font-bold text-text-main tracking-tight">SimpleTest</span>
+              <p className="text-[11px] text-text-muted leading-none mt-0.5 truncate">AI-генератор тест-кейсов</p>
+            </div>
+          )}
+          <button type="button" onClick={() => setNavCollapsed(!collapsed)} aria-expanded={!collapsed}
+            aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"} title={collapsed ? "Развернуть меню" : "Свернуть меню — рабочие зоны станут шире"}
+            className="flex-shrink-0 rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-subtle hover:text-primary">
+            {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+          </button>
         </div>
       </div>
 
       {/* Navigation */}
-      <nav className="px-3 py-3 border-b border-border-main flex-1 overflow-y-auto min-h-0">
+      <nav className={`border-b border-border-main flex-1 overflow-y-auto min-h-0 py-3 ${collapsed ? "px-2" : "px-3"}`}>
         {editMode && (
           <p className="px-2 pb-2 text-[11px] text-text-muted">
             Перетащите за <GripVertical className="inline h-3 w-3 align-text-bottom" />, чтобы изменить порядок.
@@ -210,8 +232,11 @@ export default function Sidebar() {
                 setDragging(id);
               }}
               onDragEnd={() => setDragging(null)}
+              title={collapsed ? label : undefined}
+              aria-label={collapsed ? label : undefined}
               className={`
-                relative flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-0.5 text-sm font-medium
+                relative flex items-center rounded-lg mb-0.5 text-sm font-medium py-2.5
+                ${collapsed ? "justify-center" : "gap-2.5 px-3"}
                 transition-all duration-200 group cursor-grab active:cursor-grabbing
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset
                 ${active
@@ -228,35 +253,51 @@ export default function Sidebar() {
                 }`}
                 strokeWidth={active ? 2.5 : 2}
               />
-              <span className="flex-1 min-w-0">{label}</span>
-              {ai && <AiBadge />}
-              <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
-                ⠿
-              </span>
+              {!collapsed && (
+                <>
+                  <span className="flex-1 min-w-0">{label}</span>
+                  {ai && <AiBadge />}
+                  <span className="opacity-0 group-hover:opacity-40 transition-opacity text-[10px] text-text-muted select-none">
+                    ⠿
+                  </span>
+                </>
+              )}
             </Link>
           );
         })}
 
         <button
           type="button"
-          onClick={() => setEditMode((v) => !v)}
-          className={`mt-1 flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors
+          onClick={() => { if (collapsed) setNavCollapsed(false); setEditMode((v) => !v); }}
+          title={collapsed ? "Настроить разделы" : undefined}
+          aria-label={collapsed ? "Настроить разделы" : undefined}
+          className={`mt-1 flex w-full items-center rounded-lg py-2 text-sm font-medium transition-colors
+            ${collapsed ? "justify-center" : "gap-2.5 px-3"}
             ${editMode
               ? "bg-primary/10 text-primary"
               : "text-text-muted hover:bg-[var(--color-sidebar-hover)] hover:text-text-main"}`}
         >
           {editMode ? <Check className="w-4 h-4" /> : <SlidersHorizontal className="w-4 h-4" />}
-          <span className="flex-1 text-left">{editMode ? "Готово" : "Настроить разделы"}</span>
+          {!collapsed && <span className="flex-1 text-left">{editMode ? "Готово" : "Настроить разделы"}</span>}
         </button>
       </nav>
 
       {/* LLM status + User + Settings at bottom */}
       <div className="border-t border-border-main flex-shrink-0">
-        <RunningAlertsIndicator />
-        <div className="px-4 py-3 max-h-[38vh] overflow-y-auto">
-          <LLMStatusBar />
+        <RunningAlertsIndicator compact={collapsed} />
+        <div className={`max-h-[38vh] overflow-y-auto ${collapsed ? "py-2" : "px-4 py-3"}`}>
+          <LLMStatusBar compact={collapsed} />
         </div>
-        {user && (
+        {user && collapsed && (
+          <div className="flex flex-col items-center gap-1 pb-1">
+            <span title={user.display_name} aria-label={user.display_name} className="p-1.5 text-text-muted"><User className="h-4 w-4" /></span>
+            <button onClick={handleLogout} title="Выйти" aria-label="Выйти из аккаунта"
+              className="rounded-lg p-1.5 text-text-muted transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/30">
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+        {user && !collapsed && (
           <div className="px-4 pb-2 flex items-center gap-2">
             <div className="flex items-center gap-1.5 flex-1 min-w-0">
               <User className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
@@ -279,7 +320,7 @@ export default function Sidebar() {
             </button>
           </div>
         )}
-        <div className="px-4 pb-3 flex items-center justify-end gap-1">
+        <div className={`pb-3 flex items-center gap-1 ${collapsed ? "flex-col" : "px-4 justify-end"}`}>
           {/* Что нового — точка гаснет, как только релиз просмотрен */}
           <button
             type="button"

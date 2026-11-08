@@ -674,32 +674,52 @@ export default function GenerationSection() {
           </p>
 
           <div>
-          {reqSource !== "tasks" && (<>
-          {/* Название фичи — для имён кейсов: [Фича] Группа проверок. Наименование проверки */}
+          {/* Фича и платформы — вводные методики: вместе дают имя кейса [W][Фича] Группа проверок. Описание.
+              По задачам название фичи у каждой своё (в списке задач), здесь остаются только платформы. */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
-            <label className={LABEL_CLS}>
-              Название фичи <span className="text-red-400">*</span>
-            </label>
-            <input
-              value={featureName}
-              onChange={(e) => setFeatureName(e.target.value)}
-              onBlur={() => setFeatureTouched(true)}
-              placeholder="Например: Оплата картой"
-              className={`w-full border rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 transition-shadow duration-150
-                focus:outline-none focus:ring-2
-                ${featureTouched && !featureName.trim()
-                  ? "border-red-300 focus:ring-red-100 focus:border-red-400"
-                  : "border-border-main focus:ring-primary/30 focus:border-primary/40"}`}
-            />
-            <p className="text-xs text-text-muted mt-1.5">
-              Пойдёт в имена кейсов: <code className="bg-bg-subtle px-1 py-0.5 rounded text-[11px]">[{featureName.trim() || "Фича"}] Группа проверок. Наименование проверки</code>
-            </p>
-            {featureTouched && !featureName.trim() && (
-              <p className="text-xs text-red-500 mt-1">Укажите название фичи — оно нужно для имён кейсов</p>
+            <div className="flex items-end gap-3">
+              {reqSource !== "tasks" && (
+                <div className="min-w-0 flex-1">
+                  <label htmlFor="tm-feature" className={LABEL_CLS}>
+                    Название фичи <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    id="tm-feature"
+                    value={featureName}
+                    onChange={(e) => setFeatureName(e.target.value)}
+                    onBlur={() => setFeatureTouched(true)}
+                    placeholder="Например: Оплата картой"
+                    className={`w-full border rounded-lg px-3 py-2 text-sm bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 transition-shadow duration-150
+                      focus:outline-none focus:ring-2
+                      ${featureTouched && !featureName.trim()
+                        ? "border-red-300 focus:ring-red-100 focus:border-red-400"
+                        : "border-border-main focus:ring-primary/30 focus:border-primary/40"}`}
+                  />
+                </div>
+              )}
+              <div className={reqSource === "tasks" ? "flex flex-1 flex-wrap items-center gap-3" : "flex-shrink-0"}>
+                <p className={reqSource === "tasks" ? "text-xs font-semibold uppercase tracking-wide text-text-muted" : LABEL_CLS}>Платформы</p>
+                <div className="flex items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5" role="group" aria-label="Платформы">
+                  {(["W", "M", "W и M"] as const).map(p => (
+                    <button key={p} type="button" onClick={() => setPlatforms(p)} aria-pressed={platforms === p}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium ${platforms === p ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"}`}>{p}</button>
+                  ))}
+                </div>
+                {reqSource === "tasks" && <span className="text-[11px] text-text-muted">название фичи — у каждой задачи в списке ниже</span>}
+              </div>
+            </div>
+            {reqSource !== "tasks" && (
+              <>
+                <p className="text-xs text-text-muted mt-1.5">
+                  Имя кейса: <code className="bg-bg-subtle px-1 py-0.5 rounded text-[11px]">[{platforms === "W и M" ? "W/M" : platforms}][{featureName.trim() || "Фича"}] Группа проверок. Описание</code>
+                </p>
+                {featureTouched && !featureName.trim() && (
+                  <p className="text-xs text-red-500 mt-1">Укажите название фичи — оно нужно для имён кейсов</p>
+                )}
+              </>
             )}
+            <p className="text-[11px] text-text-muted mt-1">W — веб и бэкенд, M — мобильное приложение</p>
           </div>
-
-          </>)}
 
           {/* Требование: свободный ввод, документы «Данных» или задачи списка Jira tool */}
           <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
@@ -840,18 +860,6 @@ export default function GenerationSection() {
             {reqSource === "free" && (
               <p className="mt-1 text-[11px] text-text-muted">Место в дереве предложит планирование — его можно поправить перед генерацией.</p>
             )}
-          </div>
-
-          {/* Платформы из вводных: в имени кейса [W] или [M] */}
-          <div className="bg-bg-card border border-border-main rounded-xl px-4 py-3 mb-4 flex flex-wrap items-center gap-3">
-            <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Платформы</span>
-            <div className="flex items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5">
-              {(["W", "M", "W и M"] as const).map(p => (
-                <button key={p} type="button" onClick={() => setPlatforms(p)} aria-pressed={platforms === p}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium ${platforms === p ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"}`}>{p}</button>
-              ))}
-            </div>
-            <span className="text-[11px] text-text-muted">W — веб и бэкенд, M — мобильное приложение</span>
           </div>
 
           {/* Test data from DB */}

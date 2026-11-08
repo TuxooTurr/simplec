@@ -11,9 +11,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "kafka_explorer_connections.json"
+_FILE = DATA_DIR / "kafka_explorer_connections.json"
 
 _MASK = "••••••••"
 _FIELDS = (

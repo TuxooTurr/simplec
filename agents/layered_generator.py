@@ -18,6 +18,14 @@ class TestCaseMarkdown:
     priority: str = "Normal"
     case_type: str = "positive"
     estimated_minutes: int = 5
+    # Тестовая модель по этапам (agents/tm_pipeline.py): у кейса свои папка, АС, метки, цель и предусловия.
+    folder: str = ""
+    system: str = ""
+    labels: Optional[List[str]] = None
+    domain: str = ""
+    critical: Optional[bool] = None
+    objective: str = ""
+    precondition: str = ""
 
     def to_markdown(self) -> str:
         lines = [
@@ -566,9 +574,17 @@ class LayeredGenerator:
     def _fallback_script_xml(self, case) -> str:
         """Шаги без LLM — из уже распарсенных полей кейса (ui/api/db/test_data)."""
         steps_xml = []
+        tm = bool(getattr(case, "folder", ""))
         for i, s in enumerate(case.steps):
-            exp = "UI: " + s.get("ui", "-") + "<br/>API: " + s.get("api", "-") + "<br/>БД: " + s.get("db", "-")
-            data = "Что нужно: " + s.get("test_data", "-") + "<br/>SQL: не требуется"
+            if tm:
+                # тестовая модель по этапам: только проверки по слоям UI → API → БД, неприменимый слой пропущен
+                exp = "<br/>".join(f"{k}: {self._html(s.get(f, ''))}" for k, f in (("UI", "ui"), ("API", "api"), ("БД", "db"))
+                                   if (s.get(f) or "").strip()) or "-"
+                data = self._html(s.get("test_data", ""))
+                s = {**s, "action": self._html(s.get("action", ""))}
+            else:
+                exp = "UI: " + s.get("ui", "-") + "<br/>API: " + s.get("api", "-") + "<br/>БД: " + s.get("db", "-")
+                data = "Что нужно: " + s.get("test_data", "-") + "<br/>SQL: не требуется"
             steps_xml.append(
                 '        <step index="' + str(i) + '">\n'
                 '            <customFields/>\n'
@@ -578,6 +594,19 @@ class LayeredGenerator:
                 '        </step>\n'
             )
         return '<testScript type="steps">\n    <steps>\n' + "".join(steps_xml) + '    </steps>\n</testScript>'
+
+    @staticmethod
+    def _html(text: str) -> str:
+        """Текст кейса → HTML в CDATA: переносы — <br/>, спецсимволы экранированы, «]]>» не ломает CDATA."""
+        t = (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return t.replace("]]>", "]] >").replace("\n", "<br/>")
+
+    @staticmethod
+    def _labels_xml(case) -> str:
+        labels = [l for l in (getattr(case, "labels", None) or []) if l]
+        if not labels:
+            return '    <labels/>\n'
+        return '    <labels>' + "".join('<label><![CDATA[' + l.replace("]]>", "") + ']]></label>' for l in labels) + '</labels>\n'
 
     def _assemble_testcase_xml(self, case, case_id, case_key, project, system, team, domain,
                                 case_folder, critical, priority, objective_xml, precondition_xml,
@@ -605,7 +634,7 @@ class LayeredGenerator:
             + custom_fields
             + '    <folder><![CDATA[' + case_folder + ']]></folder>\n'
             '    <issues/>\n'
-            '    <labels/>\n'
+            + self._labels_xml(case) +
             '    <name><![CDATA[' + case.name + ']]></name>\n'
             '    ' + objective_xml + '\n'
             '    <owner>' + author_tab_num + '</owner>\n'
@@ -812,17 +841,28 @@ class LayeredGenerator:
             priority = case.priority if case.priority in ("High", "Normal") else "Normal"
             critical = "true" if (crit_regress and case.priority == "High") else "false"
             case_key = project + "-T" + str(case_id)
-            group = self._case_group(case.name)
-            case_folder = folder + "/" + group if group else folder
+            if case.folder:
+                # путь из тестовой модели по этапам: Блок/Раздел/Фича/Сценарий/Тип — родители в <folders> раньше детей
+                case_folder = folder.rstrip("/") + "/" + case.folder.strip("/")
+                parts = case_folder.split("/")
+                for k in range(1, len(parts) + 1):
+                    folders_seen.setdefault("/".join(parts[:k]), len(folders_seen))
+            else:
+                group = self._case_group(case.name)
+                case_folder = folder + "/" + group if group else folder
             if case_folder not in folders_seen:
                 folders_seen[case_folder] = len(folders_seen)
+            if case.critical is not None:
+                critical = "true" if case.critical else "false"
             dt = (base_dt + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
             objective_xml = (
+                "<objective><![CDATA[" + self._html(case.objective) + "]]></objective>" if case.objective else
                 "<objective><![CDATA[" + case.name + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
                 + str(case.estimated_minutes) + " мин]]></objective>"
             )
             precondition_xml = (
+                "<precondition><![CDATA[" + self._html(case.precondition) + "]]></precondition>" if case.precondition else
                 "<precondition><![CDATA[1. Тестовые данные подготовлены<br/>2. Пользователь имеет необходимые "
                 "права доступа]]></precondition>"
             )
@@ -830,7 +870,7 @@ class LayeredGenerator:
 
             xml_parts.append(self._assemble_testcase_xml(
                 case=case, case_id=case_id, case_key=case_key,
-                project=project, system=system, team=team, domain=domain,
+                project=project, system=case.system or system, team=team, domain=case.domain or domain,
                 case_folder=case_folder, critical=critical, priority=priority,
                 objective_xml=objective_xml, precondition_xml=precondition_xml, script_xml=script_xml,
                 dt=dt, author_name=author_name, author_tab_num=author_tab_num,

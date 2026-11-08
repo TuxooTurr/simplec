@@ -2,7 +2,7 @@
 Справочник людей Jira tool: тестировщики и люди направлений (аналитика, бэкенд, DevOps…).
 
 Раньше жил только в браузере (localStorage) и пропадал вместе с ним. Теперь — на бэкенде, файл data/people.json:
-переживает и перезапуск, и очистку браузера, один на всех, кто работает с этим Loom.
+переживает и перезапуск, и очистку браузера, один на всех, кто работает с этим Shark.
 
 Запись — целиком (справочник маленький), через временный файл: оборванная запись не оставит битый JSON.
 
@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-PEOPLE_FILE = _ROOT / "data" / "people.json"
+PEOPLE_FILE = DATA_DIR / "people.json"
 _lock = threading.Lock()
 
 

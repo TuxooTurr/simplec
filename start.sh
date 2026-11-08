@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Loom — запуск локально (macOS / Linux)
+# Shark — запуск локально (macOS / Linux)
 set -euo pipefail
 
 GREEN='\033[0;32m'; BLUE='\033[0;36m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
@@ -13,7 +13,7 @@ cd "$SCRIPT_DIR"
 
 echo ""
 echo "  ╔══════════════════════════════════════╗"
-echo "  ║        Loom — Запуск           ║"
+echo "  ║        Shark — Запуск           ║"
 echo "  ╚══════════════════════════════════════╝"
 echo ""
 
@@ -123,7 +123,7 @@ fi
 
 echo ""
 echo "  ╔══════════════════════════════════════════════════════╗"
-echo "  ║  Loom запущен!                                 ║"
+echo "  ║  Shark запущен!                                 ║"
 echo "  ║  Фронтенд:  http://localhost:3000                    ║"
 echo "  ║  API:       http://localhost:8000                    ║"
 echo "  ║                                                      ║"

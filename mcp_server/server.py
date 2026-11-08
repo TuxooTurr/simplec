@@ -1,11 +1,11 @@
 """
-MCP-сервер Loom — два набора инструментов в одном процессе:
+MCP-сервер Shark — два набора инструментов в одном процессе:
 
-- loom_* — функции Loom для GigaCode: требования, оформление
-  баг-репорта, представления Jira-аналитики (нужен запущенный Loom);
+- loom_* — функции Shark для GigaCode: требования, оформление
+  баг-репорта, представления Jira-аналитики (нужен запущенный Shark);
 - dropup_*     — web-коннектор к консоли OpenShift (dropup) через браузер с
   сессией пользователя: проекты, сервисы, поды, логи, разбор ошибок. Это основа
-  нового анализатора логов Loom.
+  нового анализатора логов Shark.
 
 Все инструменты только читают. Создание дефекта в Jira — через MCP `jira`
 после явного подтверждения пользователя (см. GIGACODE.md).
@@ -26,9 +26,9 @@ from .log_triage import render_markdown, triage
 from .loom_api import LoomClient, LoomError
 
 INSTRUCTIONS = """\
-Инструменты Loom и логов dropup (OpenShift) для QA-команды.
+Инструменты Shark и логов dropup (OpenShift) для QA-команды.
 
-Логи сервиса: logs_analyze(service, minutes) — источник настроен в Loom (веб-коннектор).
+Логи сервиса: logs_analyze(service, minutes) — источник настроен в Shark (веб-коннектор).
 Прямой доступ к консоли OpenShift: сначала dropup_status. Если сессии нет — dropup_login (откроется окно браузера,
 пользователь входит сам). Дальше dropup_projects → dropup_services → dropup_triage
 (сгруппированные ошибки) или dropup_check (сводка по нескольким сервисам стенда).
@@ -48,11 +48,11 @@ def _fail(e: Exception) -> ToolError:
     return ToolError(str(e))
 
 
-# ══ Loom ═══════════════════════════════════════════════════════════════
+# ══ Shark ═══════════════════════════════════════════════════════════════
 
 @mcp.tool(annotations=READ)
 async def loom_requirements(query: str = "") -> str:
-    """Список требований из библиотеки Loom (раздел «Данные → Требования»).
+    """Список требований из библиотеки Shark (раздел «Данные → Требования»).
 
     query — фильтр по названию или фиче (без учёта регистра); пусто — все.
     """
@@ -96,7 +96,7 @@ async def loom_requirement(requirement_id: str, part: str = "both") -> str:
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
 async def loom_format_bug(description: str, platform: str = "Back", feature: str = "",
                                 provider: str = "gigachat") -> str:
-    """Оформить баг-репорт по шаблону Loom (название, описание, шаги, ФР/ОР, приоритет).
+    """Оформить баг-репорт по шаблону Shark (название, описание, шаги, ФР/ОР, приоритет).
 
     description — описание проблемы своими словами, можно с фрагментом лога.
     platform — Back / Front / Mobile и т.п.; feature — модуль или фича.
@@ -113,14 +113,14 @@ async def loom_format_bug(description: str, platform: str = "Back", feature: str
 
 @mcp.tool(annotations=READ)
 async def loom_jira_views() -> str:
-    """Сохранённые представления Jira-аналитики Loom (выборка + группировка + колонки)."""
+    """Сохранённые представления Jira-аналитики Shark (выборка + группировка + колонки)."""
     try:
         res = await _loom.request("GET", "/api/jira/views")
     except LoomError as e:
         raise _fail(e)
     views = res.get("views", [])
     if not views:
-        return "Представлений пока нет — их создают в Loom."
+        return "Представлений пока нет — их создают в Shark."
     return "\n".join(f"- `{v['id']}` — {v['name']}: JQL `{v['jql']}`, группировка {v.get('group_by') or '—'}"
                      for v in views)
 
@@ -142,7 +142,7 @@ def _render_groups(groups: list[dict], depth: int = 0, limit: int = 20) -> list[
 async def loom_jira_view_run(view_id: str, refresh: bool = False) -> str:
     """Выполнить представление Jira-аналитики: задачи, сгруппированные по полям.
 
-    refresh=True — мимо 3-минутного кэша Loom.
+    refresh=True — мимо 3-минутного кэша Shark.
     """
     try:
         views = (await _loom.request("GET", "/api/jira/views")).get("views", [])
@@ -161,7 +161,7 @@ async def loom_jira_view_run(view_id: str, refresh: bool = False) -> str:
         f"- {i['key']}: " + " · ".join(v for k, v in i["values"].items() if k != "key" and v)[:200] for i in issues)
 
 
-# ══ Анализатор логов и веб-коннекторы Loom ═════════════════════════════
+# ══ Анализатор логов и веб-коннекторы Shark ═════════════════════════════
 
 def _render_run(res: dict) -> str:
     name = res.get("scenario", {}).get("name", res.get("source", ""))
@@ -181,8 +181,8 @@ def _render_run(res: dict) -> str:
 async def logs_analyze(service: str, minutes: int = 10) -> str:
     """Ошибки микросервиса за последние N минут — главный инструмент для логов.
 
-    Логи выгружает сценарий веб-коннектора Loom, отмеченный «Источник для
-    анализатора» (записан человеком в Loom: Генераторы событий → Веб-коннекторы),
+    Логи выгружает сценарий веб-коннектора Shark, отмеченный «Источник для
+    анализатора» (записан человеком в Shark: Генераторы событий → Веб-коннекторы),
     под сессией пользователя. Ошибки сгруппированы по причине, с важностью и стеком.
     """
     try:
@@ -194,7 +194,7 @@ async def logs_analyze(service: str, minutes: int = 10) -> str:
 
 @mcp.tool(annotations=READ)
 async def logs_saved_services() -> str:
-    """Сохранённые в Loom имена микросервисов и текущий источник логов."""
+    """Сохранённые в Shark имена микросервисов и текущий источник логов."""
     try:
         st = await _loom.request("GET", "/api/log-analyzer")
     except LoomError as e:
@@ -207,14 +207,14 @@ async def logs_saved_services() -> str:
 
 @mcp.tool(annotations=READ)
 async def web_scenarios() -> str:
-    """Веб-коннекторы и записанные операции Loom: id и параметры для web_run."""
+    """Веб-коннекторы и записанные операции Shark: id и параметры для web_run."""
     try:
         d = await _loom.request("GET", "/api/webconnect")
     except LoomError as e:
         raise _fail(e)
     names = {c["id"]: c["name"] for c in d.get("connectors", [])}
     if not d.get("scenarios"):
-        return "Сценариев нет — их записывают в Loom: Генераторы событий → Веб-коннекторы."
+        return "Сценариев нет — их записывают в Shark: Генераторы событий → Веб-коннекторы."
     def params(s: dict) -> str:
         ps = s.get("params") or []
         return ", ".join(f"{p['name']} ({p.get('label') or p['name']})" for p in ps) or "без параметров"
@@ -225,7 +225,7 @@ async def web_scenarios() -> str:
 
 @mcp.tool(annotations=ToolAnnotations(read_only_hint=False, open_world_hint=True))
 async def web_run(scenario_id: str, params: Optional[dict[str, str]] = None, minutes: int = 10) -> str:
-    """Запустить операцию веб-коннектора Loom с параметрами (имена — из web_scenarios).
+    """Запустить операцию веб-коннектора Shark с параметрами (имена — из web_scenarios).
 
     Незаполненный параметр берётся из записи. minutes — окно «последние N минут», если оно есть
     в операции. Операция может что-то менять на ресурсе (повтор действий человека) — запускайте

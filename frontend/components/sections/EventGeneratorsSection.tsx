@@ -2,9 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Siren, Trash2, Users, X, Zap,
-} from "lucide-react";
+import { BarChart2, Bell, ChevronLeft, CircleCheck, FolderPlus, Globe, Pencil, Play, Siren, Trash2, Users, X } from "lucide-react";
 import type { ComponentType } from "react";
 
 import MetricsSection from "./MetricsSection";
@@ -261,7 +259,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
     const Icon = openGenerator?.Icon ?? Bell;
     return (
       <div className="flex flex-col h-full overflow-hidden">
-        <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
           <button
             type="button"
             onClick={() => setOpenId(null)}
@@ -290,11 +288,6 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <Zap className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Генераторы событий</h1>
-      </div>
-
       <div className="flex-1 overflow-y-auto scrollbar-thin p-6 space-y-8">
         {generators.length > 0 && (
           <section aria-labelledby="gen-scenarios">

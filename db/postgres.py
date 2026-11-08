@@ -1,5 +1,5 @@
 """
-Соединение с БД для Loom.
+Соединение с БД для Shark.
 
 DATABASE_URL задаётся через .env:
   PostgreSQL:  postgresql+psycopg2://user:pass@localhost:5432/metrics
@@ -18,6 +18,10 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics",
 )
+from db.paths import MOCK, MOCK_DB_FILE
+if MOCK:
+    # Мок-режим — своя SQLite-база в data_mock/: настройки-заглушки (адреса, маркеры) не попадают в настоящую.
+    DATABASE_URL = f"sqlite:///{MOCK_DB_FILE}"
 if DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
 

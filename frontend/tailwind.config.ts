@@ -50,6 +50,14 @@ const config: Config = {
         "text-muted":  themeColor("--color-text-muted"),
         "border-main": themeColor("--color-border-main"),
       },
+      // Окна и карточки — вдвое скромнее прежних скруглений (было xl 12px, 2xl 16px). lg — не круглее окна,
+      // чтобы кнопка внутри карточки не была «мягче» самой карточки.
+      borderRadius: {
+        lg: "0.375rem",
+        xl: "0.375rem",
+        "2xl": "0.5rem",
+        "3xl": "0.75rem",
+      },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
       },

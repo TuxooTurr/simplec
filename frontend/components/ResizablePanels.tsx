@@ -6,18 +6,29 @@ import { X, PanelLeftOpen, PanelRightOpen } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { SectionId } from "@/contexts/WorkspaceContext";
 import TopActions from "./TopActions";
+import { usePanelRefreshSlot } from "./ui/RefreshButton";
 import { sectionOfPath } from "@/lib/backupApi";
 
+/** Название раздела в шапке панели — единственный заголовок раздела (внутри раздела его не повторяем).
+ *  Ключи — путь страницы (test-data) и id раздела правой панели (test_data). */
 const SECTION_LABELS: Record<string, string> = {
-  generation: "Генерация",
+  generation: "Тестовая модель",
+  "test-data": "Тестовые данные", test_data: "Тестовые данные",
   etalons: "Данные",
   bugs: "Jira tool",
   zephyr: "Zephyr Tool",
   stands: "График стендов",
   aqa: "Трекинг AQA",
+  logs: "Логи",
+  kafka: "Просмотр Kafka",
+  "event-generators": "Генераторы событий", event_generators: "Генераторы событий",
+  "model-bench": "Тестирование моделей LLM", model_bench: "Тестирование моделей LLM",
+  settings: "Настройки",
   alerts: "Алерты",
   metrics: "Метрики",
+  jobs: "Jobs",
   revisor: "Ревизор",
+  "auto-model": "Автотестирование", auto_model: "Автотестирование",
 };
 
 // ─── Panel Chrome ─────────────────────────────────────────────────────────────
@@ -41,6 +52,8 @@ function PanelChrome({
   onDragOver?: React.DragEventHandler;
   onDrop?: React.DragEventHandler;
 }) {
+  // «Обновить» раздела — всегда здесь, справа от названия панели (раздел передаёт его через usePanelRefresh).
+  const [refreshButton, provideRefresh] = usePanelRefreshSlot();
   return (
     <div
       className={`flex flex-col h-full transition-all duration-150 ${
@@ -52,11 +65,12 @@ function PanelChrome({
       onDrop={onDrop}
     >
       {/* Sticky header */}
-      <div className="sticky top-0 z-20 flex h-11 items-center justify-between gap-3 px-6 border-b border-border-main bg-bg-card/90 backdrop-blur-sm flex-shrink-0">
+      <div className="sticky top-0 z-20 flex h-11 items-center justify-between gap-3 px-6 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="truncate text-sm font-semibold text-text-main tracking-wide">
             {title}
           </span>
+          {refreshButton}
           <button
             onClick={onClose}
             className="flex-shrink-0 rounded-md p-1 hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors"
@@ -69,7 +83,7 @@ function PanelChrome({
         {actions}
       </div>
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin">{children}</div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin">{provideRefresh(children)}</div>
     </div>
   );
 }

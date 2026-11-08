@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, RefreshCw, RotateCcw, Save } from "lucide-react";
+import { CheckCircle2, Loader2, RotateCcw, Save } from "lucide-react";
 
 import { Select } from "@/components/ui";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 import {
   getDatagenSchema, getTcsConfig, listTestDataConnections, resetTcsConfig, saveTcsConfig,
   type DbSchemaTable, type TcsConfig, type TestDataConnection,
@@ -142,7 +143,7 @@ export default function TcsConfigPanel() {
               disabled={!cfg.connection_id || loadingSchema}
               title="Перечитать схему из базы"
               className="p-1 rounded text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
-              <RefreshCw className={`w-3.5 h-3.5 ${loadingSchema ? "animate-spin" : ""}`} />
+              <RefreshIcon busy={loadingSchema} className="w-3.5 h-3.5" />
             </button>
           </div>
           <Select value={schema} onChange={setSchema} disabled={!schemas.length}>

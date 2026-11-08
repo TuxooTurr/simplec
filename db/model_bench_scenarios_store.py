@@ -25,11 +25,12 @@ import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from db.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "model_bench_scenarios.json"
+_FILE = DATA_DIR / "model_bench_scenarios.json"
 _MAX_ITEMS = 100
 
 _BUILTIN_TRANSCRIPT_PROMPT = """Ты агент, позволяющий получить саммаризацию транскрибации аудиоконференции в виде основных итогов по встрече. На встрече обсуждается возникший инцидент в Банке.

@@ -80,7 +80,7 @@ def _request(cfg: dict, method: str, path: str, params: Optional[dict] = None, j
     import requests
 
     url = cfg["base_url"] + path
-    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)"}
+    headers = {"Accept": "application/json", "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)"}
     if auth is None:
         headers["Authorization"] = "Bearer " + _resolve_token(cfg)
     if files:
@@ -130,7 +130,7 @@ def download_attachment(cfg: dict, page_id: str, filename: str) -> tuple[bytes, 
     url = path if path.startswith("http") else cfg["base_url"] + path
     try:
         resp = requests.get(url, headers={"Authorization": "Bearer " + _resolve_token(cfg),
-                                          "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)"},
+                                          "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)"},
                             verify=cfg["ssl_verify"], timeout=60, stream=True)
     except requests.exceptions.RequestException as e:
         raise HTTPException(502, f"Confluence недоступен: {str(e)[:200]}")
@@ -188,7 +188,7 @@ def token_from_login(body: TokenFromLoginBody, db: Session = Depends(get_db)) ->
     cfg = _load_cfg(db)
     try:
         result = _request(cfg, "POST", "/rest/pat/latest/tokens",
-                          json_body={"name": f"Loom {time.strftime('%Y-%m-%d %H:%M')}", "expirationDuration": 180},
+                          json_body={"name": f"Shark {time.strftime('%Y-%m-%d %H:%M')}", "expirationDuration": 180},
                           auth=(body.login.strip(), body.password))
     except HTTPException as e:
         if e.status_code in (401, 403):
@@ -338,8 +338,8 @@ def probe_write(body: ProbeWriteBody, db: Session = Depends(get_db)) -> dict:
     space = body.space.strip()
     rep = _Report()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    new: dict[str, Any] = {"type": "page", "title": f"Loom — проверка API {stamp}", "space": {"key": space},
-                           "body": _storage("<p>Тестовая страница Loom: проверка API для графика стендов. Можно удалить.</p>")}
+    new: dict[str, Any] = {"type": "page", "title": f"Shark — проверка API {stamp}", "space": {"key": space},
+                           "body": _storage("<p>Тестовая страница Shark: проверка API для графика стендов. Можно удалить.</p>")}
     if body.parent.strip():
         kind, ref = page_ref(body.parent)
         if kind == "id":
@@ -374,14 +374,14 @@ def probe_write(body: ProbeWriteBody, db: Session = Depends(get_db)) -> dict:
     rep.step("body-update", "Обновить тело страницы таблицей", "PUT", f"/rest/api/content/{pid}" if pver else None,
              lambda: _request(cfg, "PUT", f"/rest/api/content/{pid}", json_body={
                  "id": pid, "type": "page", "title": new["title"], "version": {"number": pver + 1},
-                 "body": _storage("<p>График стендов (проверка Loom). Правки — через Loom.</p>" + table)}),
+                 "body": _storage("<p>График стендов (проверка Shark). Правки — через Shark.</p>" + table)}),
              lambda d: f"версия страницы {_ver(d)}")
     rep.step("attach", "Приложить JSON-файл (запасной вариант хранения)", "POST",
              f"/rest/api/content/{pid}/child/attachment" if pid else None,
              lambda: _request(cfg, "POST", f"/rest/api/content/{pid}/child/attachment", files={
                  "file": ("stand-schedule.json", json.dumps(value, ensure_ascii=False).encode("utf-8"), "application/json")}),
              lambda d: f"вложений: {_count(d)}")
-    # Заявки на установку коллеги оставляют комментариями к странице стенда, Loom их читает и отвечает итогом.
+    # Заявки на установку коллеги оставляют комментариями к странице стенда, Shark их читает и отвечает итогом.
     comment = rep.step("comment-create", "Комментарий-заявка: оставить на странице", "POST", "/rest/api/content" if pid else None,
                        lambda: _request(cfg, "POST", "/rest/api/content", json_body={
                            "type": "comment", "container": {"id": pid, "type": "page"},
@@ -397,7 +397,7 @@ def probe_write(body: ProbeWriteBody, db: Session = Depends(get_db)) -> dict:
     rep.step("comment-reply", "Ответ на комментарий (итог заявки)", "POST", "/rest/api/content" if cid else None,
              lambda: _request(cfg, "POST", "/rest/api/content", json_body={
                  "type": "comment", "container": {"id": pid, "type": "page"}, "ancestors": [{"id": cid}],
-                 "body": _storage("<p>Принято: notify, 23.10, B2C (проверка Loom)</p>")}),
+                 "body": _storage("<p>Принято: notify, 23.10, B2C (проверка Shark)</p>")}),
              lambda d: f"ответ id {d.get('id')}")
     url = f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}" if pid else ""
     return rep.out(cfg, space=space, page=url)

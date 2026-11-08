@@ -12,11 +12,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
-_SESSIONS_FILE = _ROOT / "data" / "model_bench_sessions.json"
+_SESSIONS_FILE = DATA_DIR / "model_bench_sessions.json"
 _MAX_SESSIONS = 50
 
 

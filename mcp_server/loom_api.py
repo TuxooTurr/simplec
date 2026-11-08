@@ -1,7 +1,7 @@
 """
-Клиент API Loom для MCP-инструментов.
+Клиент API Shark для MCP-инструментов.
 
-Loom должен быть запущен (bash start.sh). Вход — учётка Loom из env
+Shark должен быть запущен (bash start.sh). Вход — учётка Shark из env
 MCP-сервера (SIMPLETEST_LOGIN / SIMPLETEST_PASSWORD), токен кешируется и
 обновляется сам, когда бэкенд перезапустился и забыл сессии (они в памяти).
 """
@@ -31,10 +31,10 @@ class LoomClient:
         if not self.login or not self.password:
             raise LoomError(
                 "Не заданы SIMPLETEST_LOGIN и SIMPLETEST_PASSWORD в env MCP-сервера — "
-                "без них инструменты Loom не могут войти.")
+                "без них инструменты Shark не могут войти.")
         r = await client.post("/api/auth/login", json={"login": self.login, "password": self.password})
         if r.status_code != 200:
-            raise LoomError(f"Вход в Loom не удался ({r.status_code}): {r.text[:200]}")
+            raise LoomError(f"Вход в Shark не удался ({r.status_code}): {r.text[:200]}")
         self._token = r.json().get("token")
         return self._token
 
@@ -49,7 +49,7 @@ class LoomClient:
                         continue
                     break
         except httpx.ConnectError as e:
-            raise LoomError(f"Loom недоступен по {self.base_url} — запущен ли он (bash start.sh)?") from e
+            raise LoomError(f"Shark недоступен по {self.base_url} — запущен ли он (bash start.sh)?") from e
         if r.status_code >= 400:
             detail = r.text[:400]
             try:
@@ -57,5 +57,5 @@ class LoomClient:
                 detail = d.get("message") if isinstance(d, dict) else (d or detail)
             except ValueError:
                 pass
-            raise LoomError(f"Loom {method} {path} → {r.status_code}: {detail}")
+            raise LoomError(f"Shark {method} {path} → {r.status_code}: {detail}")
         return r.json()

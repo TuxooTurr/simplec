@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { ExternalLink, Loader2, Plus, X } from "lucide-react";
 import { addReqSource, syncReqSources, type Requirement } from "@/lib/api";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 const INPUT = "w-full border border-border-main rounded-lg px-3 py-1.5 text-sm bg-[var(--color-input-bg)] text-text-main " +
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -53,7 +54,7 @@ export default function SourcesBar({ doc, onChanged, onError, onSettings }: {
         <button type="button" className={BTN} onClick={() => setAdding(a => !a)} disabled={!!busy}><Plus className="w-3.5 h-3.5" /> Добавить СТ</button>
         {sources.length > 0 && (
           <button type="button" className={BTN} onClick={() => void sync()} disabled={!!busy} title="Перечитать страницы: если их изменили — новая версия документа">
-            {busy === "sync" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Обновить из Confluence
+            <RefreshIcon busy={busy === "sync"} className="w-3.5 h-3.5" /> Обновить из Confluence
           </button>
         )}
       </div>

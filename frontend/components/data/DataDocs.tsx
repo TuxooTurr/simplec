@@ -2,13 +2,14 @@
 
 import { notify, onPage } from "@/lib/notifications";
 import { useEffect, useState } from "react";
-import { FilePlus2, KeyRound, Loader2, RefreshCw } from "lucide-react";
+import { FilePlus2, KeyRound, Loader2 } from "lucide-react";
 import DocTree from "@/components/data/DocTree";
 import { Resizer, usePaneSize } from "@/components/zephyr/Resizer";
 import DocPage from "@/components/data/DocPage";
 import NewDocForm from "@/components/data/NewDocForm";
 import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import {
   addReqFolder, addRequirement, deleteReqFolder, deleteRequirement, generateRequirementDoc, listReqFolders,
   listRequirements, updateReqFolder, updateRequirement, type ReqFolder, type Requirement,
@@ -61,6 +62,9 @@ export default function DataDocs() {
   // Дерево — шириной, которую тянут мышью (длинные названия папок видны целиком); запоминается в браузере.
   const treePane = usePaneSize("tree", 288, 220, 720, "st_data_panes");
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(() => void load(), { title: "Перечитать дерево" });
+
   return (
     <div className="flex gap-0 h-full min-h-[480px] bg-bg-card overflow-hidden">
       <aside style={{ width: treePane.size }} className="flex-shrink-0 bg-bg-subtle/40 flex flex-col p-2 min-h-0">
@@ -80,10 +84,6 @@ export default function DataDocs() {
             }} />
         )}
         <div className="mt-auto flex items-center gap-1">
-          <button type="button" onClick={() => void load()} title="Перечитать дерево"
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-text-muted hover:text-text-main rounded-md hover:bg-bg-subtle">
-            <RefreshCw className="w-3.5 h-3.5" /> Обновить
-          </button>
           <span className="flex-1" />
           <button type="button" onClick={() => setSettingsOpen(true)} title="Единый вход в Jira и Confluence, подключение к Confluence"
             className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-text-muted hover:text-text-main rounded-md hover:bg-bg-subtle">

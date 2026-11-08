@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.jira_defects import _jira_request, _load_cfg
 from db.postgres import get_db
+from db.paths import DATA_DIR
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -214,7 +215,7 @@ def norm_result(x: dict) -> dict:
 
 def tree_from_paths(paths: list[str], extra: Optional[list[str]] = None) -> list[dict]:
     """Пути кейсов «/A/B» → дерево [{name, path, count, children}] (count — кейсы в папке и вложенных).
-    extra — пустые папки (созданы в Loom, кейсов ещё нет): узлы есть, счётчик не растёт."""
+    extra — пустые папки (созданы в Shark, кейсов ещё нет): узлы есть, счётчик не растёт."""
     root: dict[str, Any] = {"children": {}}
     for p in extra or []:
         node, acc = root, ""
@@ -266,7 +267,7 @@ def tree_from_foldertree(data: Any, parent: str = "") -> list[dict]:
 # («Обновить папку») или по одному кейсу (открыли карточку); созданное через «Применить» дописывается сразу.
 
 _ROOT = Path(__file__).resolve().parents[2]
-_INDEX_DIR = _ROOT / "data" / "zephyr_index"
+_INDEX_DIR = DATA_DIR / "zephyr_index"
 INDEX_FIELDS = "key,name,folder,status,priority,owner,updatedOn,issueLinks,labels,customFields,estimatedTime"
 FIRST_PAGE = 200           # 1000 за раз стенд не успевал отдать за таймаут; реальный предел — по ответу
 WAVE = 6                   # страниц параллельно — не больше, чтобы не нагружать Jira
@@ -402,7 +403,7 @@ def get_index(cfg: dict, project: str, refresh: bool = False, kind: str = "testc
                          project, time.time() - t0, e.detail)
             raise
         _failed.pop(key, None)
-        # Пустые папки, созданные в Loom, в кейсах не видны — переносим их из прежнего индекса.
+        # Пустые папки, созданные в Shark, в кейсах не видны — переносим их из прежнего индекса.
         keep = (_index.get(key) or {}).get("folders", set())
         slim = _slim if kind == "testcase" else _slim_run
         idx = {"loadedAt": time.time(), "cases": {c["key"]: slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
@@ -1030,14 +1031,14 @@ def field_values(project: str = Query(..., min_length=1), db: Session = Depends(
 
 # ── Релизы: строки с маркерами, стори и их прогоны ───────────────────────────
 #
-# Прогоны к релизу прикрепляют руками в Zephyr: в отслеживании прогона — номер релиза (и стори). Loom берёт
+# Прогоны к релизу прикрепляют руками в Zephyr: в отслеживании прогона — номер релиза (и стори). Shark берёт
 # прогоны, у которых в отслеживании релиз, и для каждой стори релиза смотрит, есть ли она в отслеживании этих прогонов.
 #
 # Всё отслеживание прогона публичный API отдаёт только поиском (TQL `issueKeys IN (…)`), если стенд его понимает;
 # в самом прогоне видна одна задача — issueKey. Не понимает — считаем по issueKey и честно помечаем (traceSource).
 # Список релизов — data/zephyr_releases.json, общий для всех.
 
-_RELEASES_FILE = _ROOT / "data" / "zephyr_releases.json"
+_RELEASES_FILE = DATA_DIR / "zephyr_releases.json"
 _releases_lock = threading.Lock()
 
 
@@ -1074,7 +1075,7 @@ def _issue_key(k: str, what: str = "Номер задачи") -> str:
 
 @router.get("/api/zephyr/releases")
 def releases_list(project: str = Query(..., min_length=1)) -> dict:
-    """Релизы, которые ведём в Loom (строки вкладки «Релиз»)."""
+    """Релизы, которые ведём в Shark (строки вкладки «Релиз»)."""
     with _releases_lock:
         p = _rel_load().get(project.strip().upper()) or {}
     return {"releases": list(p.get("releases", []))}
@@ -1099,7 +1100,7 @@ def releases_add(body: ReleaseAdd) -> dict:
 
 @router.delete("/api/zephyr/releases/{key}")
 def releases_remove(key: str, project: str = Query(..., min_length=1)) -> dict:
-    """Убрать строку релиза из Loom (в Jira ничего не меняется)."""
+    """Убрать строку релиза из Shark (в Jira ничего не меняется)."""
     key = key.strip().upper()
     with _releases_lock:
         data = _rel_load()
@@ -1164,7 +1165,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
     # которые API не показывает с релизом (релиз — не основная задача), добавляют руками — они остаются.
     with _releases_lock:
         data = _rel_load()
-        # Прогоны регресса, откреплённые от релиза в Loom (собирают новый): в строке релиза их больше нет.
+        # Прогоны регресса, откреплённые от релиза в Shark (собирают новый): в строке релиза их больше нет.
         detached = set(_rel_project(data, project).get("regressDetached", {}).get(rel["key"], []))
         rel_runs = [r for r in rel_runs if r["key"] not in detached]
         nf = _rel_nf(_rel_project(data, project), rel["key"])
@@ -1177,7 +1178,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
         _rel_save(data)
         stored = dict(nf)
     nf_runs = [_nf_run_view(cfg, project, k, stored) for k in stored["runs"]]
-    # Прогоны, прикреплённые к стори в Loom (API отслеживание готового прогона не пишет), — к найденным в Zephyr.
+    # Прогоны, прикреплённые к стори в Shark (API отслеживание готового прогона не пишет), — к найденным в Zephyr.
     attached = {s_: list(v) for s_, v in (stored.get("attached") or {}).items()}
     for s_, runs_ in attached.items():
         have = {r["key"] for r in story_runs.get(s_, [])}
@@ -1194,7 +1195,7 @@ def release_board(key: str, project: str = Query(..., min_length=1), db: Session
 #
 # Полное отслеживание прогона API не отдаёт и не пишет (внутренний /rest/tests — 403), поэтому:
 #   • список НФ-прогонов релиза хранится в data/zephyr_releases.json (сверка по issueKey + ручное добавление);
-#   • прогоны стори: найденные в Zephyr (стори в issueKey прогона) + прикреплённые в Loom (attached:
+#   • прогоны стори: найденные в Zephyr (стори в issueKey прогона) + прикреплённые в Shark (attached:
 #     стори → прогоны) — «Прикрепить имеющийся» или «Создать НФ-прогон» на стори (стори в отслеживании при создании).
 
 def is_nf_type(t: str) -> bool:
@@ -1277,7 +1278,7 @@ class RegressDetach(BaseModel):
 
 @router.post("/api/zephyr/release/{key}/regress-detach")
 def release_regress_detach(key: str, body: RegressDetach) -> dict:
-    """Открепить прогон регресса от релиза — чтобы собрать новый. Только в Loom: API отслеживание прогона
+    """Открепить прогон регресса от релиза — чтобы собрать новый. Только в Shark: API отслеживание прогона
     не меняет, поэтому в Zephyr релиз у прогона остаётся (уберите вручную, если нужно)."""
     rel, run = _issue_key(key, "Номер релиза"), body.run.strip().upper()
     if not _RUN_RE.match(run):
@@ -1302,7 +1303,7 @@ class StoriesAttach(BaseModel):
 # Отслеживание готового прогона Zephyr не меняется через API (публичный пишет одну задачу и только при создании,
 # внутренний — 403). Поэтому привязка ставится и в Jira: на стори — ссылка (remote link) на прогон Zephyr,
 # видна в разделе «Ссылки» задачи. globalId у ссылки свой на каждый прогон — повторная привязка не плодит дублей,
-# открепление удаляет именно её. Связь в Loom (attached) остаётся основной для доски релиза; где ссылка
+# открепление удаляет именно её. Связь в Shark (attached) остаётся основной для доски релиза; где ссылка
 # в Jira уже стоит — в jiraLinks.
 
 def _link_id(run: str) -> str:
@@ -1356,8 +1357,8 @@ def _mark_jira(nf: dict, story: str, run: str, on: bool) -> None:
 @router.post("/api/zephyr/release/{key}/attach")
 def release_attach(key: str, body: StoriesAttach, db: Session = Depends(get_db)) -> dict:
     """
-    Прикрепить имеющийся прогон к стори релиза: связь в Loom (стори красится «Прогон есть», прогон встаёт в НФ
-    релиза) и ссылка на прогон на самой стори в Jira. Ошибка Jira не отменяет привязку в Loom — она в ответе
+    Прикрепить имеющийся прогон к стори релиза: связь в Shark (стори красится «Прогон есть», прогон встаёт в НФ
+    релиза) и ссылка на прогон на самой стори в Jira. Ошибка Jira не отменяет привязку в Shark — она в ответе
     (jira: {стори: "ok" | текст ошибки}), и ссылку можно дописать позже кнопкой «Записать привязки в Jira».
     """
     rel, project = _issue_key(key, "Номер релиза"), body.project.strip().upper()
@@ -1398,8 +1399,8 @@ class StoryDetach(BaseModel):
 
 @router.post("/api/zephyr/release/{key}/detach")
 def release_detach(key: str, body: StoryDetach, db: Session = Depends(get_db)) -> dict:
-    """Открепить прогон от стори: в Loom и ссылку на стори в Jira. Ошибка Jira — в ответе (jira), связь в
-    Loom всё равно снимается."""
+    """Открепить прогон от стори: в Shark и ссылку на стори в Jira. Ошибка Jira — в ответе (jira), связь в
+    Shark всё равно снимается."""
     rel, story, run = _issue_key(key, "Номер релиза"), _issue_key(body.story, "Номер стори"), body.run.strip().upper()
     jira = "ok"
     try:
@@ -1763,7 +1764,7 @@ def release_ke_apply(key: str, body: KeApplyBody, db: Session = Depends(get_db))
 
 
 
-def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str, Any]]) -> Any:
+def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str, Any]], timeout: int = 30) -> Any:
     """Запись по вариантам: следующий — только если запроса нет (404/405), иначе ошибка как есть."""
     key = (cfg["base_url"], kind)
     order = list(range(len(variants)))
@@ -1773,7 +1774,7 @@ def _write_variants(cfg: dict, kind: str, method: str, variants: list[tuple[str,
     for i in order:
         path, body = variants[i]
         try:
-            data = _jira_request(cfg, method, path, json_body=body)
+            data = _jira_request(cfg, method, path, json_body=body, timeout=timeout)
             _working[key] = i
             return data
         except HTTPException as e:
@@ -1878,31 +1879,78 @@ def _result_payload(r: CaseResult, with_key: bool) -> dict:
 @router.post("/api/zephyr/run/{key}/results")
 def save_results(key: str, body: ResultsBody, db: Session = Depends(get_db)) -> dict:
     """Результаты прохождения: пачкой (v1 testrun/{key}/testresults), иначе по кейсу (…/testcase/{case}/testresult).
-    Сбой одного кейса не роняет остальные — в ответе список ошибок."""
+    Сбой одного кейса не роняет остальные — в ответе список ошибок.
+
+    Большой прогон («Пройти» на сотни кейсов) уходит пачками по RESULTS_CHUNK: одним запросом Jira не успевала
+    ответить за таймаут, хотя запись доводила до конца, — и человек видел ошибку при записанном результате.
+    Если пачка всё же не дождалась ответа, результат не считается ни записанным, ни упавшим: прогон перечитывается,
+    и записанным считается то, что в нём уже стоит."""
     cfg = _load_cfg(db)
     key = key.strip().upper()
     if not body.results:
         return {"saved": 0, "errors": []}
-    try:
-        _write_variants(cfg, "testresults-bulk", "POST",
-                        [(f"{ATM}/testrun/{key}/testresults", [_result_payload(r, True) for r in body.results])])
-        return {"saved": len(body.results), "errors": []}
-    except HTTPException as e:
-        if e.status_code not in (404, 405):
-            raise
-    saved, errors = 0, []
-    for r in body.results:
+    saved, errors, unconfirmed = 0, [], []
+    rest = list(body.results)
+    bulk_path = f"{ATM}/testrun/{key}/testresults"
+    while rest:
+        chunk = rest[:RESULTS_CHUNK]
         try:
-            _jira_request(cfg, "POST", f"{ATM}/testrun/{key}/testcase/{r.testCaseKey}/testresult", json_body=_result_payload(r, False))
+            _write_variants(cfg, "testresults-bulk", "POST", [(bulk_path, [_result_payload(r, True) for r in chunk])],
+                            timeout=WRITE_TIMEOUT)
+            saved += len(chunk)
+        except HTTPException as e:
+            if e.status_code in (404, 405):
+                break                                        # пачкой стенд не умеет — остальное по одному кейсу
+            if _timed_out(e):
+                unconfirmed += chunk
+            elif saved or unconfirmed:                       # часть уже записана — не теряем её из-за одной пачки
+                errors += [{"testCaseKey": r.testCaseKey, "error": str(e.detail)[:300]} for r in chunk]
+            else:
+                raise
+        rest = rest[RESULTS_CHUNK:]
+    for r in rest:
+        try:
+            _jira_request(cfg, "POST", f"{ATM}/testrun/{key}/testcase/{r.testCaseKey}/testresult",
+                          json_body=_result_payload(r, False), timeout=WRITE_TIMEOUT)
             saved += 1
         except HTTPException as e:
             if e.status_code == 401:
                 raise
-            errors.append({"testCaseKey": r.testCaseKey, "error": str(e.detail)[:300]})
+            if _timed_out(e):
+                unconfirmed.append(r)
+            else:
+                errors.append({"testCaseKey": r.testCaseKey, "error": str(e.detail)[:300]})
+    if unconfirmed:
+        ok, bad = _confirm_results(key, unconfirmed, db)
+        saved += ok
+        errors += bad
     return {"saved": saved, "errors": errors}
 
 
-# ── Новая модель: XML (выгрузка Zephyr или генерация Loom) → раскладка → «Применить» ──
+RESULTS_CHUNK = 50      # результатов в одном запросе записи: столько стенд успевает записать заметно быстрее таймаута
+WRITE_TIMEOUT = 120     # с — запись результатов дольше чтения: Jira пересчитывает прогресс прогона
+
+
+def _timed_out(e: HTTPException) -> bool:
+    """Jira не ответила за таймаут (_jira_request отдаёт это как 502 «… timed out»): запрос мог и выполниться."""
+    return e.status_code == 502 and "timed out" in str(e.detail).lower()
+
+
+def _confirm_results(key: str, results: list["CaseResult"], db: Session) -> tuple[int, list[dict]]:
+    """Результаты, на которые Jira не ответила вовремя: перечитать прогон и сверить статусы с тем, что записывали."""
+    logger.warning("Zephyr: %s — Jira не ответила на запись %s результатов, сверяю с прогоном", key, len(results))
+    try:
+        now = {x["testCaseKey"]: x["status"].strip().lower() for x in run(key, db=db)["items"]}
+    except HTTPException as e:
+        msg = f"Jira не ответила вовремя, и проверить запись не удалось: {str(e.detail)[:200]}. Откройте прогон — результат мог записаться"
+        return 0, [{"testCaseKey": r.testCaseKey, "error": msg} for r in results]
+    ok = [r for r in results if now.get(r.testCaseKey) == r.status.strip().lower()]
+    bad = [{"testCaseKey": r.testCaseKey, "error": "Jira не ответила вовремя, результат в прогоне не появился"}
+           for r in results if r not in ok]
+    return len(ok), bad
+
+
+# ── Новая модель: XML (выгрузка Zephyr или генерация Shark) → раскладка → «Применить» ──
 #
 # Разбор XML даёт папки и кейсы; раскладку (что в какую папку дерева) человек делает в интерфейсе, а «Применить»
 # создаёт в Zephyr недостающие папки (родители — раньше детей) и кейсы. Папка, которая уже есть, не ошибка.
@@ -2106,7 +2154,7 @@ def apply_model(body: ApplyBody, db: Session = Depends(get_db)) -> dict:
 # Публичный API v1: папку можно создать (POST /folder), кейс — создать, изменить (PUT /testcase/{key}), удалить.
 # id существующих папок v1 не отдаёт (внутренний foldertree на стенде закрыт, 403), поэтому «переименовать» и
 # «переместить» папку = перенести все её кейсы (с вложенными) в новый путь. Старая папка в Zephyr остаётся пустой —
-# удалить её можно только в интерфейсе Zephyr; в дереве Loom (оно строится по кейсам) её не будет.
+# удалить её можно только в интерфейсе Zephyr; в дереве Shark (оно строится по кейсам) её не будет.
 
 def _create_folders(cfg: dict, project: str, paths: list[str]) -> dict[str, str]:
     """Папки и их родители (родители раньше). «Уже есть» — не ошибка. Возвращает ошибки по путям."""
@@ -2384,7 +2432,7 @@ def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
 # не хранит — кейсы читаются из Jira пачками (export/cases, xml=true — сразу кусок XML), фронт показывает прогресс
 # и склеивает файл: начало и конец — export/frame, кейсы — куски пачек. Обратно на сервер ничего большого не уходит.
 # Удаление папки: публичный API папки не удаляет (id папок не отдаёт) — удаляются все её кейсы (с вложенными),
-# пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева Loom уходит (folder/forget).
+# пустая папка в Zephyr остаётся (удаляется в интерфейсе Zephyr), из дерева Shark уходит (folder/forget).
 
 class FolderKeys(BaseModel):
     project: str = Field(..., min_length=1)
@@ -2516,7 +2564,7 @@ class FolderForget(BaseModel):
 
 @router.post("/api/zephyr/folder/forget")
 def forget_folder(body: FolderForget, db: Session = Depends(get_db)) -> dict:
-    """Убрать папку и вложенные из дерева Loom после удаления их кейсов. Кейсы, что не удалились, держат папку."""
+    """Убрать папку и вложенные из дерева Shark после удаления их кейсов. Кейсы, что не удалились, держат папку."""
     cfg = _load_cfg(db)
     project, folder = body.project.strip().upper(), _clean_path(body.folder)
     idx = get_index(cfg, project)

@@ -1,8 +1,8 @@
-# Loom — инструкция для Claude Code
+# Shark — инструкция для Claude Code
 
 ## Что это за проект
 
-**Loom** — веб-приложение для QA-инженеров. Генерирует тест-кейсы, оформляет баг-репорты, создаёт автотесты на Java, управляет алертами через Jupyter.
+**Shark** — веб-приложение для QA-инженеров. Генерирует тест-кейсы, оформляет баг-репорты, создаёт автотесты на Java, управляет алертами через Jupyter.
 
 - **Бэкенд:** Python 3.10+, FastAPI, uvicorn, порт **8000**
 - **Фронтенд:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 3, порт **3000** (нужен Node.js 20 LTS)
@@ -16,7 +16,8 @@
 
 ## Прежнее имя
 
-Проект назывался SimpleTest. В коде и текстах теперь Loom, но идентификаторы, к которым привязаны данные и инфраструктура,
+Проект назывался SimpleTest, затем Loom (06.11.2026), с 07.11.2026 — **Shark** (переименование только визуальное:
+тексты интерфейса, заголовки, сообщения). В коде и текстах теперь Shark, но идентификаторы, к которым привязаны данные и инфраструктура,
 оставлены **намеренно — менять их нельзя** без миграции:
 
 | Что осталось | Почему |
@@ -59,6 +60,19 @@ python -m uvicorn backend.main:app --reload --port 8000
 # Фронтенд (в другом терминале)
 npm run dev --prefix frontend
 ```
+
+### Мок-режим (без корпоративной сети)
+
+```bash
+SHARK_MOCK=1 .venv/bin/python -m uvicorn backend.main:app --reload --port 8000
+```
+
+Jira (вместе с Zephyr ATM и Structure), Confluence, Bitbucket, Allure TestOps, Jenkins и LLM отвечают заготовками
+из `backend/mock/` — в сеть не уходит ни один запрос. Данные — в `data_mock/` и `data_mock/shark_mock.db`
+(при первом запуске копия `data/` и `simpletest.db`), настоящие не трогаются; начать с чистого листа —
+удалить `data_mock/`. Задачи Jira придумываются по ключу детерминированно, правки живут до перезапуска.
+Нет заготовки — в логе «Мок: нет заготовки для …», экран получает 501 с этим текстом. Kafka и внешние БД
+(JDBC) не подменяются. В `.claude/launch.json` — конфигурация `backend-mock`.
 
 > На macOS с двумя Python: uvicorn может взять неправильный Python.
 > Всегда запускай через `python -m uvicorn`, не через `uvicorn` напрямую.
@@ -107,11 +121,13 @@ bash certs/build_bundle.sh
 ## Структура проекта
 
 ```
-Loom/
+Shark/
 ├── backend/
 │   ├── main.py              # FastAPI точка входа, SSL-конфиг, роутеры
+│   ├── mock/               # Мок-режим SHARK_MOCK=1: заготовки Jira, Confluence, Bitbucket, TestOps, Jenkins, LLM
 │   ├── api/
-│   │   ├── generation.py    # WebSocket генерация тест-кейсов
+│   │   ├── generation.py    # WebSocket генерация тест-кейсов (прежний однопроходный режим; история и экспорт сессий)
+│   │   ├── tm_gen.py        # Тестовая модель по этапам Sber911-QA: планирование → утверждение → генерация → проверка арбитром → правки (/api/tm/*); готовый XML без окна экспорта (/api/tm/xml)
 │   │   ├── bugs.py          # Форматирование баг-репортов
 │   │   ├── autotests_gen.py # Генерация Java автотестов
 │   │   ├── alerts.py        # Управление скриптами алертов
@@ -140,6 +156,7 @@ Loom/
 │   │   │   ├── AlertsSection.tsx       # Алерты / Jupyter (открывается плиткой папки)
 │   │   │   ├── AutoModelSection.tsx    # Автотесты (Java) — скрыт, код сохранён
 │   │   │   └── RevisorSection.tsx      # Ревизия — скрыт, код сохранён
+│   │   ├── tmgen/           # Тестовая модель по этапам: StagePanel (план с правкой, вопросы, замечания арбитра), PlaceEditor (место в дереве), DataTreePicker, TmBatchBar; состояние — contexts/TmGenContext
 │   │   ├── taskgen/         # Генерация по задачам: выбор задач (TaskPickerModal), форма (TaskDrafts), очередь (TaskJobsBar), предпросмотр и отправка в модель (ModelPreviewModal); логика — lib/taskModel.ts, очередь — GenerationContext
 │   │   ├── incidents/       # Генератор инцидентов: IncidentGenSection (вкладки), IncidentLibrary, IncidentGenSettings
 │   │   ├── data/            # «Данные»: DataDocs (дерево + страница), DocTree, DocPage (свойства — в «Подробнее»), DocAsk (вопрос к документу / поиск), NewDocForm, QaDocView
@@ -155,7 +172,8 @@ Loom/
 ├── mcp_server/              # MCP-сервер для GigaCode (ОТКЛЮЧЁН вместе с коннекторами, код сохранён)
 ├── agents/
 │   ├── llm_client.py        # Универсальный LLM клиент (все провайдеры)
-│   ├── layered_generator.py # 4-слойный генератор тест-кейсов
+│   ├── layered_generator.py # 4-слойный генератор (прежний режим) и сборка XML; у кейса тестовой модели — своя папка, АС, метки
+│   ├── tm_pipeline.py       # Промты этапов тестовой модели; правила — agents/tm_rules/ (копия _tech/ Sber911-QA: rules.md, ke-services.md, qa-doc-template.md)
 │   └── file_parser.py       # Парсинг файлов (PDF, DOCX, Excel)
 ├── db/
 │   ├── vector_store.py      # ChromaDB эталоны (RAG)
@@ -218,9 +236,10 @@ Loom/
 - `st_notifications` — журнал под колокольчиком (последние 100 записей, в этом браузере)
 - `st_login_note` — **sessionStorage**: сообщение о маркерах после входа, показывается один раз
 - `st_nav_collapsed` — основное меню свёрнуто в полосу с иконками; `st_nav_order`, `st_nav_hidden` — порядок и скрытые разделы меню
-- `st_gen_task_jobs` — **sessionStorage**: очередь генерации по задачам (что готово, сессии) до конца сессии вкладки
+- `st_tm_gen` — **sessionStorage**: сессии тестовой модели по этапам на экране генерации (открытая и очередь задач); сами сессии — на сервере
+- `st_gen_task_jobs` — **sessionStorage**: прежняя очередь генерации по задачам (форма её больше не запускает)
 - `st_jira_last_list` — последний открытый список Jira tool (с него раздел и открывается; архивный не запоминается)
-- `st_jira_tool_list_setup` — раскрыта ли «Настройка списка» вверху левой колонки Jira tool
+- `st_jira_tool_team_open` — раскрыт ли виджет «Команда» в левой колонке Jira tool (по умолчанию свёрнут)
 - `st_jira_issue_table_w:<окно>` — ширины колонок таблиц в окнах Jira tool (`defects` — «Дефекты», `stories` — «Статус (st)»)
 - `st_data_panes` — ширина дерева «Данных» (тянется мышью); `st_data_tree_open` — раскрытые папки дерева «Данных»; `st_data_doc` — последний открытый документ; `st_data_editor_mode` — вид редактора (Редактор / Рядом / Просмотр)
 - `st_incident_rows` — строки «Генератора инцидентов» (КЭ, приоритет, инструкция); `st_incident_spec` — черновик прежней формы (не используется)
@@ -242,7 +261,7 @@ Bearer-токен (токен в localStorage на фронте, проверя�
   ```
   Живёт в коде (`USERS` в `backend/api/auth.py`), валидна на любой машине сразу после клона.
 - **Права у всех одинаковые** (роль `superuser`). Учётки и роли `SberMonitoring`/`monitoring` убраны 29.10.2026;
-  разделение прав — когда появится общий сервер. Маркеры Jira/Confluence — общие на этот Loom (каждый работает у себя).
+  разделение прав — когда появится общий сервер. Маркеры Jira/Confluence — общие на этот Shark (каждый работает у себя).
 
 ---
 

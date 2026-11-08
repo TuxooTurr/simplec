@@ -10,6 +10,7 @@ import { SectionSettingsButton } from "@/components/ui";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { useTestDataJob, type TdArchiveEntry } from "@/contexts/TestDataJobContext";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 import {
   listTestDataConnections,
   suggestTestDataScript,
@@ -256,11 +257,7 @@ export default function TestDataSection() {
     <div className="p-6 space-y-6 animate-fade-in">
       {/* Header — настройки раздела всегда вверху справа */}
       <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center">
-          <Database className="w-5 h-5 text-white" />
-        </div>
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-text-main">Тестовые данные</h1>
           <p className="text-sm text-text-muted">Поиск данных во внешних БД. Только SELECT-запросы.</p>
         </div>
         <div className="flex-1" />
@@ -281,7 +278,7 @@ export default function TestDataSection() {
         <div className="flex items-center justify-between">
           <label className={LABEL_CLS}>Базы данных</label>
           <button onClick={loadConnections} className="text-text-muted hover:text-primary transition-colors" title="Обновить список">
-            <RefreshCw className={`w-3.5 h-3.5 ${connLoading ? "animate-spin" : ""}`} />
+            <RefreshIcon busy={connLoading} className="w-3.5 h-3.5" />
           </button>
         </div>
 

@@ -6,7 +6,7 @@
  * Как это работает для человека:
  *   1. Коннектор: название, адрес и способ входа — вручную (SSO, 2FA) или логином и
  *      паролем техучётки (пароль хранится зашифрованным, в интерфейс не возвращается).
- *   2. «Записать операцию» — окно Chrome: входите и делаете, что нужно. Loom
+ *   2. «Записать операцию» — окно Chrome: входите и делаете, что нужно. Shark
  *      записывает шаги и запросы сайта. Пароль не записывается; форма входа запоминается.
  *   3. Мастер: что делает операция (данные с сайта или повтор действий), какие из
  *      введённых значений — параметры, какой нужен результат. Сохранить.
@@ -589,7 +589,7 @@ function ConnectorForm({ initial, onSaved, onCancel }: {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="radiogroup" aria-label="Способ входа">
           {([
             ["manual", LogIn, "Вход вручную", "Вы входите сами в окне браузера (SSO, двухфакторная). Пароль никуда не сохраняется."],
-            ["password", KeyRound, "Логин и пароль техучётки", "Loom входит сам, когда сессия истекла. Только для технических учёток тестовых стендов."],
+            ["password", KeyRound, "Логин и пароль техучётки", "Shark входит сам, когда сессия истекла. Только для технических учёток тестовых стендов."],
           ] as const).map(([id, Icon, title, text]) => (
             <button key={id} type="button" role="radio" aria-checked={f.auth_mode === id} onClick={() => setF({ ...f, auth_mode: id })}
               className={`text-left flex gap-3 p-3 rounded-lg border transition-colors ${
@@ -624,7 +624,7 @@ function ConnectorForm({ initial, onSaved, onCancel }: {
           <p className="text-xs text-text-muted">
             {recipe?.password_selector
               ? <>Форма входа известна из записи: логин в <code>{recipe.user_selector || "—"}</code>, пароль в <code>{recipe.password_selector}</code>.</>
-              : "Форму входа Loom запомнит при первой записи: в окне записи войдите этим логином и паролем."}
+              : "Форму входа Shark запомнит при первой записи: в окне записи войдите этим логином и паролем."}
           </p>
         </div>
       )}

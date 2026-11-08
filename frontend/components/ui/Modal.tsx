@@ -15,11 +15,21 @@ export interface ModalProps {
   headerExtra?: ReactNode;
 }
 
+/* Открытые окна по порядку открытия. Esc закрывает только верхнее: окно, открытое поверх другого
+   (менеджер драйверов поверх подключений, подтверждение поверх формы), не закрывает заодно и нижнее. */
+const openStack: number[] = [];
+let nextId = 1;
+
 export function Modal({ open, onClose, title, children, size = "max-w-md", headerExtra }: ModalProps) {
   // Keep the dialog mounted briefly after `open` flips to false so the
   // close animation can play out.
   const [rendered, setRendered] = useState(open);
   const closeTimer = useRef<number | null>(null);
+  const idRef = useRef(0);
+  if (!idRef.current) idRef.current = nextId++;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (open) {
@@ -33,13 +43,30 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
     };
   }, [open, rendered]);
 
-  /* ESC to close */
+  /* Esc закрывает верхнее окно; фокус — в окно при открытии и обратно на кнопку, которой открыли, после закрытия */
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const id = idRef.current;
+    const opener = document.activeElement as HTMLElement | null;
+    openStack.push(id);
+    // Фокус в окно, если внутри ещё ничего не взяло его само (autoFocus у поля).
+    const t = window.setTimeout(() => {
+      if (panelRef.current && !panelRef.current.contains(document.activeElement)) panelRef.current.focus();
+    }, 0);
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || openStack[openStack.length - 1] !== id) return;
+      e.stopPropagation();
+      onCloseRef.current();
+    };
     window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [open, onClose]);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("keydown", h);
+      const i = openStack.lastIndexOf(id);
+      if (i >= 0) openStack.splice(i, 1);
+      if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
+    };
+  }, [open]);
 
   // На сервере (SSR) document нет — открытое окно появится после загрузки страницы.
   if (!rendered || typeof document === "undefined") return null;
@@ -56,12 +83,14 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onClick={(e) => e.stopPropagation()}
         className={`flex max-h-[90vh] w-full ${size} flex-col rounded-xl shadow-2xl t-modal-panel ${closing ? "is-closing" : ""}
-          bg-[var(--color-modal-bg)] border border-border-main`}
+          bg-[var(--color-modal-bg)] border border-border-main outline-none`}
       >
         {/* Header — не скроллится, всегда виден крестик закрытия */}
         {title && (

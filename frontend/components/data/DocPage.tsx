@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ExternalLink, FileText, Folder, History, Link2, Loader2, Paperclip, Pencil, RefreshCw, Save, SlidersHorizontal, Sparkles, Tag, Target, Trash2, X } from "lucide-react";
+import { AlertTriangle, ExternalLink, FileText, Folder, History, Link2, Loader2, Paperclip, Pencil, Save, SlidersHorizontal, Sparkles, Tag, Target, Trash2, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import NotionRenderer, { headingSlug, looksLikeMarkdown } from "@/components/NotionRenderer";
 import QaDocView from "@/components/data/QaDocView";
@@ -12,6 +12,7 @@ import QaGenerateModal from "@/components/data/QaGenerateModal";
 import DocAsk from "@/components/data/DocAsk";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { newReqVersion, parseFile, syncReqSources, type ReqFolder, type Requirement } from "@/lib/api";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 export const ACCEPT_FILES = ".pdf,.docx,.doc,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.md,.markdown";
 
@@ -257,7 +258,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
             <span className="group inline-flex">
               <button type="button" onClick={() => void sync()} disabled={syncing} aria-label="Обновить из Confluence"
                 className="inline-flex items-center gap-1 rounded-md border border-border-main px-2 py-0.5 text-xs text-text-main hover:border-primary/50 hover:text-primary disabled:opacity-50">
-                {syncing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Обновить
+                <RefreshIcon busy={syncing} className="w-3 h-3" /> Обновить
               </button>
               <span role="tooltip"
                 className="pointer-events-none absolute left-0 top-full z-20 mt-1.5 w-full max-w-sm rounded-lg border border-border-main bg-bg-card px-3 py-2 text-xs text-text-main shadow-lg opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">

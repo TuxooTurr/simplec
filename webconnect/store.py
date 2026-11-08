@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-_ROOT = Path(__file__).resolve().parent.parent / "data"
+from db.paths import DATA_DIR as _ROOT  # noqa: E402 — в мок-режиме своя папка
 _CONNECTORS_FILE = _ROOT / "web_connectors.json"
 _SERVICES_FILE = _ROOT / "log_services.json"
 _RECORDINGS_DIR = _ROOT / "webconnect_recordings"

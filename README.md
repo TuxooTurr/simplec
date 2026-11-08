@@ -1,4 +1,4 @@
-# Loom
+# Shark
 
 **AI-платформа для генерации тест-кейсов, автотестов и мониторинга**
 
@@ -49,7 +49,7 @@
 ## Архитектура
 
 ```
-Loom/
+Shark/
 ├── backend/                  # FastAPI-приложение
 │   ├── main.py               # Инициализация, роутинг, middleware
 │   ├── schemas.py            # Pydantic-модели
@@ -151,7 +151,7 @@ Loom/
 
 ```bash
 git clone https://github.com/TuxooTurr/simplec.git
-cd Loom
+cd Shark
 
 python3.12 -m venv .venv
 source .venv/bin/activate        # macOS/Linux
@@ -172,7 +172,7 @@ python3.12 -m uvicorn backend.main:app --reload --port 8000
 
 ```bash
 git clone https://github.com/TuxooTurr/simplec.git
-cd Loom
+cd Shark
 
 python3.12 -m venv .venv
 source .venv/bin/activate

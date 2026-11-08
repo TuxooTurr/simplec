@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Activity, CalendarRange, List, Loader2, Play, RefreshCw, Settings2 } from "lucide-react";
+import { CalendarRange, List, Loader2, Play, Settings2 } from "lucide-react";
 import AqaIssueModal from "@/components/aqa/AqaIssueModal";
 import AqaNewIssue from "@/components/aqa/AqaNewIssue";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
@@ -19,6 +19,7 @@ import {
 } from "@/lib/aqaApi";
 import { openForm } from "@/lib/backgroundForms";
 import { AQA_REFRESH_MS, aqaCache, isFresh, persistAqaCache, putCommits, sameSource, type Entry } from "@/lib/aqaCache";
+import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
 
 const VIEW_KEY = "st_aqa_view";
 const ZOOM_KEY = "st_aqa_zoom";
@@ -166,11 +167,12 @@ export default function AqaTrackingSection() {
   const issuesTotal = epics.reduce((n, e) => n + e.issues.length, 0);
   const ZBTN = "px-2.5 py-1 text-xs rounded-md transition-colors";
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(() => loadAll(true), { busy: commits.busy || testops.busy || road.busy, title: "Обновить всё: коммиты, запуски и роадмап" });
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-main bg-bg-card px-6 py-3">
-        <Activity className="h-5 w-5 text-primary" />
-        <h1 className="whitespace-nowrap text-lg font-bold text-text-main">Трекинг AQA</h1>
+      <div className="flex flex-shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border-main bg-[var(--color-chrome)] px-6 py-3">
         <span className="min-w-0 truncate text-xs text-text-muted">коммиты, запуски автотестов и роадмап</span>
         {Object.keys(stale).length > 0 && (
           <span className="truncate text-xs text-amber-700 dark:text-amber-400" title={Object.values(stale).join("\n")}>
@@ -178,8 +180,6 @@ export default function AqaTrackingSection() {
         )}
         <button type="button" onClick={() => setRunOpen(true)} className="ml-auto inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90">
           <Play className="h-4 w-4" /> Запустить автотесты</button>
-        <button type="button" onClick={() => loadAll(true)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
-          <RefreshCw className="h-4 w-4" /> Обновить всё</button>
         <button type="button" onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-border-main px-3 py-1.5 text-sm text-text-main hover:bg-bg-subtle">
           <Settings2 className="h-4 w-4" /> Подключения</button>
       </div>
@@ -200,7 +200,7 @@ export default function AqaTrackingSection() {
             {road.data && <span className="text-xs text-text-muted">эпиков {epics.length} · задач и дефектов {issuesTotal}</span>}
             <button type="button" onClick={() => loadRoad(true)} disabled={road.busy || !settings?.epics.length} title="Обновить роадмап" aria-label="Обновить роадмап"
               className="p-1 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-40">
-              <RefreshCw className={`h-3.5 w-3.5 ${road.busy ? "animate-spin" : ""}`} /></button>
+              <RefreshIcon busy={road.busy} className="h-3.5 w-3.5" /></button>
             <span className="flex-1" />
             {view === "timeline" && (
               <div role="group" aria-label="Цвет полос" className="flex rounded-lg border border-border-main p-0.5">

@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
-title Loom — Запуск
+title Shark — Запуск
 
 echo.
 echo  ╔══════════════════════════════════════╗
-echo  ║        Loom — Запуск           ║
+echo  ║        Shark — Запуск           ║
 echo  ╚══════════════════════════════════════╝
 echo.
 
@@ -88,14 +88,14 @@ if not exist ".env" (
 :: ── Запуск бэкенда ───────────────────────────────────────────
 echo.
 echo [→] Запускаю бэкенд (порт 8000)...
-start "Loom Backend" cmd /k "title Loom Backend && call .venv\Scripts\activate.bat && python -m uvicorn backend.main:app --port 8000"
+start "Shark Backend" cmd /k "title Shark Backend && call .venv\Scripts\activate.bat && python -m uvicorn backend.main:app --port 8000"
 
 :: Ждём пока бэкенд стартует
 timeout /t 4 /nobreak >nul
 
 :: ── Запуск фронтенда ─────────────────────────────────────────
 echo [→] Запускаю фронтенд (порт 3000)...
-start "Loom Frontend" cmd /k "title Loom Frontend && cd frontend && npm run dev"
+start "Shark Frontend" cmd /k "title Shark Frontend && cd frontend && npm run dev"
 
 :: Ждём и открываем браузер
 timeout /t 6 /nobreak >nul
@@ -105,7 +105,7 @@ start http://localhost:3000
 
 echo.
 echo  ╔══════════════════════════════════════════════════════╗
-echo  ║  Loom запущен!                                 ║
+echo  ║  Shark запущен!                                 ║
 echo  ║  Фронтенд:  http://localhost:3000                    ║
 echo  ║  API:       http://localhost:8000                    ║
 echo  ║                                                      ║

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bug, ChevronRight, ExternalLink, Layers, List, Loader2, RefreshCw, Search } from "lucide-react";
+import { Bug, ChevronRight, ExternalLink, Layers, List, Loader2, Search } from "lucide-react";
 import AqaNewIssue from "@/components/aqa/AqaNewIssue";
 import TestResultDetail from "@/components/aqa/TestResultDetail";
 import Modal from "@/components/ui/Modal";
@@ -9,6 +9,7 @@ import { LaunchDot } from "@/components/aqa/LaunchesCard";
 import { StatsBar, ago, fmtDur, fmtWhen, passRate, statusItems, statusOf } from "@/components/aqa/widgets";
 import { getAqaBehaviors, getAqaLaunch, getAqaResult, type AqaBehavior, type AqaLaunch, type AqaLaunchDetails, type AqaResult } from "@/lib/aqaApi";
 import { openForm } from "@/lib/backgroundForms";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 const VIEW_KEY = "st_aqa_launch_view";
 const NONE = "Без поведения";
@@ -178,7 +179,7 @@ export default function LaunchModal({ open, launches, launchId, onClose, epics, 
                     </div>
                     <button type="button" onClick={() => id !== null && load(id, true)} disabled={busy} title="Обновить запуск" aria-label="Обновить запуск"
                       className="p-1.5 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
-                      <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /></button>
+                      <RefreshIcon busy={busy} className="h-4 w-4" /></button>
                     {data.url && (
                       <a href={data.url} target="_blank" rel="noopener noreferrer"
                         className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg border border-border-main px-2.5 py-1 text-xs text-text-main hover:bg-bg-subtle">

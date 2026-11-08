@@ -9,16 +9,29 @@ import {
 } from "@/lib/backupApi";
 
 /**
- * Резервная копия: выгрузить данные раздела или всех разделов в .json и восстановить из файла.
- * Восстановление показывает, что есть в файле по разделам, и заменяет только отмеченные.
+ * Резервная копия окном — для разделов (кнопка BackupButton, импорт в Jira tool).
+ * В «Настройках» то же содержимое стоит прямо во вкладке «Резервная копия» (BackupPanel), без окна.
  */
-export default function BackupModal({ open, onClose, section, file: file0 }: {
+export default function BackupModal({ open, onClose, section, file }: {
   open: boolean; onClose: () => void;
   /** Раздел, откуда открыли: «только этот раздел» по умолчанию предлагается он. */
   section: string;
   /** Файл, уже выбранный в другом месте (импорт в Jira tool узнал резервную копию). */
   file?: File | null;
 }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Резервная копия данных" size="max-w-2xl">
+      {/* Содержимое монтируется при открытии — каждое открытие начинается с чистого листа. */}
+      {open && <BackupPanel section={section} file={file} />}
+    </Modal>
+  );
+}
+
+/**
+ * Резервная копия: выгрузить данные раздела или всех разделов в .json и восстановить из файла.
+ * Восстановление показывает, что есть в файле по разделам, и заменяет только отмеченные.
+ */
+export function BackupPanel({ section, file: file0 }: { section: string; file?: File | null }) {
   const [scope, setScope] = useState<"section" | "all">("all");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -28,10 +41,8 @@ export default function BackupModal({ open, onClose, section, file: file0 }: {
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) return;
-    setNote(null); setDone(null); setLoaded(null);
     if (file0) void load(file0);
-  }, [open, file0]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [file0]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const doExport = async () => {
     setBusy(true); setNote(null);
@@ -73,7 +84,6 @@ export default function BackupModal({ open, onClose, section, file: file0 }: {
   const rows = loaded ? Array.from(new Set([...loaded.summary.map(s => s.id), ...Object.keys(browser)])) : [];
 
   return (
-    <Modal open={open} onClose={onClose} title="Резервная копия данных" size="max-w-2xl">
       <div className="space-y-5 text-sm">
         <section className="space-y-2">
           <h3 className="font-semibold text-text-main">Выгрузить в файл</h3>
@@ -93,7 +103,7 @@ export default function BackupModal({ open, onClose, section, file: file0 }: {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white font-semibold disabled:opacity-50">
             {busy && !loaded ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />} Скачать .json</button>
           <p className="text-xs text-text-muted">Токены, пароли и ключи API в файл не попадают — после восстановления на новой установке их вводят заново.
-            Перед удалением папки Loom выгрузите «Все разделы».</p>
+            Перед удалением папки Shark выгрузите «Все разделы».</p>
         </section>
 
         <section className="space-y-2 border-t border-border-main pt-4">
@@ -153,6 +163,5 @@ export default function BackupModal({ open, onClose, section, file: file0 }: {
             {note.ok ? <Check className="w-4 h-4 mt-0.5 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />}{note.text}</p>
         )}
       </div>
-    </Modal>
   );
 }

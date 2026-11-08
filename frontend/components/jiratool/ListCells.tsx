@@ -585,7 +585,7 @@ export function RoleCell({ label, dir, value, people, onChange, onAddPerson, onL
 
 export interface ReqOption { id: string; name: string; feature?: string }
 
-/** Адрес требования в Loom: раздел «Данные» сам раскроет его и прокрутит к нему. */
+/** Адрес требования в Shark: раздел «Данные» сам раскроет его и прокрутит к нему. */
 export const reqDocHref = (id: string) => `/etalons?req=${encodeURIComponent(id)}`;
 
 /**
@@ -689,7 +689,7 @@ export function ReqCell({ value, url, options, onChange, onUrl }: {
             {value.map(id => {
               const doc = byId.get(id);
               return doc ? (
-                <a key={id} href={reqDocHref(id)} target="_blank" rel="noopener" title={`${doc.name} — открыть в Loom`}
+                <a key={id} href={reqDocHref(id)} target="_blank" rel="noopener" title={`${doc.name} — открыть в Shark`}
                   className="max-w-full truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] hover:bg-primary/20 hover:underline">
                   {doc.name}
                 </a>

@@ -7,6 +7,7 @@ import FormHost from "./FormHost";
 import { Toasts } from "./NotificationBell";
 import { WorkspaceProvider } from "@/contexts/WorkspaceContext";
 import { GenerationProvider } from "@/contexts/GenerationContext";
+import { TmGenProvider } from "@/contexts/TmGenContext";
 import { AlertsSchedulerProvider } from "@/contexts/AlertsSchedulerContext";
 import { MetricsUiProvider } from "@/contexts/MetricsUiContext";
 import { TestDataJobProvider } from "@/contexts/TestDataJobContext";
@@ -15,6 +16,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
   return (
     <WorkspaceProvider>
       <GenerationProvider>
+      <TmGenProvider>
         <AlertsSchedulerProvider>
           <MetricsUiProvider>
             <TestDataJobProvider>
@@ -30,6 +32,7 @@ export default function WorkspaceShell({ children }: { children: React.ReactNode
             </TestDataJobProvider>
           </MetricsUiProvider>
         </AlertsSchedulerProvider>
+      </TmGenProvider>
       </GenerationProvider>
     </WorkspaceProvider>
   );

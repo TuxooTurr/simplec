@@ -3,29 +3,46 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 
+export type Theme = "light" | "dark";
+
+/** Событие смены темы: переключатель в шапке и выбор в «Настройках» держат друг друга в курсе. */
+const THEME_EVENT = "st-theme-change";
+
+export function readTheme(): Theme {
+  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+}
+
+/** Включить тему: плавная смена цветов, запоминание в st_theme, оповещение всех переключателей. */
+export function applyTheme(next: Theme) {
+  const root = document.documentElement;
+  // Cross-fade colours for the duration of the switch, then drop the helper
+  // class so it never slows ordinary hovers.
+  root.classList.add("theme-transition");
+  root.classList.toggle("dark", next === "dark");
+  try { localStorage.setItem("st_theme", next); } catch { /* приватный режим — тема просто не запомнится */ }
+  window.dispatchEvent(new CustomEvent<Theme>(THEME_EVENT, { detail: next }));
+  window.setTimeout(() => root.classList.remove("theme-transition"), 300);
+}
+
+/** Текущая тема с подпиской на смену из любого места. */
+export function useTheme(): [Theme, boolean] {
+  const [theme, setTheme] = useState<Theme>("light");
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setTheme(readTheme());
+    setMounted(true);
+    const h = (e: Event) => setTheme((e as CustomEvent<Theme>).detail);
+    window.addEventListener(THEME_EVENT, h);
+    return () => window.removeEventListener(THEME_EVENT, h);
+  }, []);
+  return [theme, mounted];
+}
+
 export function ThemeToggle({ className = "" }: { className?: string }) {
   // The real theme class is set pre-paint by the inline script in layout.tsx,
   // so we read it back from the DOM instead of guessing (no hydration flash).
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
-    setMounted(true);
-  }, []);
-
-  const toggle = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    const root = document.documentElement;
-
-    // Cross-fade colours for the duration of the switch, then drop the helper
-    // class so it never slows ordinary hovers.
-    root.classList.add("theme-transition");
-    root.classList.toggle("dark", next === "dark");
-    localStorage.setItem("st_theme", next);
-    setTheme(next);
-    window.setTimeout(() => root.classList.remove("theme-transition"), 300);
-  };
+  const [theme, mounted] = useTheme();
+  const toggle = () => applyTheme(theme === "dark" ? "light" : "dark");
 
   const isDark = theme === "dark";
 

@@ -1,5 +1,5 @@
 /**
- * Loom UI Component Library
+ * Shark UI Component Library
  *
  * Единая библиотека переиспользуемых компонентов.
  * Все компоненты поддерживают светлую и тёмную тему через CSS-переменные.
@@ -14,9 +14,10 @@ export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { Toggle, type ToggleProps } from "./Toggle";
 export { SaveBar, type SaveBarProps } from "./SaveBar";
 export { Card, PageHeader, type CardProps } from "./Card";
-export { ThemeToggle } from "./ThemeToggle";
+export { ThemeToggle, applyTheme, useTheme, type Theme } from "./ThemeToggle";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { Tabs, type TabsProps, type Tab } from "./Tabs";
 export { FilePathInput, type FilePathInputProps } from "./FilePathInput";
 export { PasswordInput, MASKED_PLACEHOLDER, type PasswordInputProps } from "./PasswordInput";
 export { SectionSettingsButton, type SectionSettingsButtonProps } from "./SectionSettingsButton";
+export { RefreshButton, RefreshIcon, SharkSpinner, usePanelRefresh, usePanelRefreshSlot, type RefreshButtonProps, type PanelRefresh } from "./RefreshButton";

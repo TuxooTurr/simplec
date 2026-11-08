@@ -1,5 +1,5 @@
 /**
- * Резервная копия Loom — клиент к /api/backup/* (бэкенд: backend/api/backup.py) плюс данные браузера.
+ * Резервная копия Shark — клиент к /api/backup/* (бэкенд: backend/api/backup.py) плюс данные браузера.
  *
  * В файл: данные сервера (data/*.json, настройки и таблицы БД, эталоны) и данные этого браузера (localStorage
  * ключи st_*: списки Jira tool, история генераций и т. п.). Секреты не выгружаются — ни сервером, ни здесь.
@@ -114,7 +114,7 @@ export async function makeBackup(scope: string): Promise<BackupFile> {
 }
 
 export function downloadBackup(b: BackupFile): string {
-  const name = `Loom — ${b.scope === "all" ? "все разделы" : b.scopeTitle} — ${b.createdAt.slice(0, 16).replace("T", " ").replace(":", "-")}.json`;
+  const name = `Shark — ${b.scope === "all" ? "все разделы" : b.scopeTitle} — ${b.createdAt.slice(0, 16).replace("T", " ").replace(":", "-")}.json`;
   const blob = new Blob([JSON.stringify(b, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -124,7 +124,7 @@ export function downloadBackup(b: BackupFile): string {
   return a.download;
 }
 
-/** Файл — резервная копия Loom (а не, например, выгрузка списков Jira tool)? */
+/** Файл — резервная копия Shark (а не, например, выгрузка списков Jira tool)? */
 export function isBackup(raw: unknown): raw is BackupFile {
   return !!raw && typeof raw === "object" && (raw as { format?: string }).format === BACKUP_FORMAT;
 }
@@ -132,7 +132,7 @@ export function isBackup(raw: unknown): raw is BackupFile {
 export async function readBackup(file: File): Promise<BackupFile> {
   let raw: unknown;
   try { raw = JSON.parse(await file.text()); } catch { throw new Error("Файл не читается как JSON"); }
-  if (!isBackup(raw)) throw new Error("Это не резервная копия Loom");
+  if (!isBackup(raw)) throw new Error("Это не резервная копия Shark");
   // Сводку по серверу пересчитывает бэкенд: файл могли править руками.
   const p = await fetchJson<{ summary: BackupSummary[] }>("/api/backup/preview", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ backup: raw }),

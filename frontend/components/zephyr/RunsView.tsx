@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, FolderTree as FolderTreeIcon, Loader2, PlayCircle, RefreshCw, Search, X } from "lucide-react";
+import { ChevronDown, FolderTree as FolderTreeIcon, Loader2, PlayCircle, Search, X } from "lucide-react";
 import { fmtDate, fmtDuration, getRun, getRuns, zephyrRunUrl, type ZFolder, type ZRun, type ZRunFull } from "@/lib/zephyrApi";
 import FolderTree from "./FolderTree";
 import { CaseCard, IssueLinks, ResultBar, ResultPill } from "./parts";
@@ -9,6 +9,7 @@ import Player from "./Player";
 import CaseDialog from "./CaseDialog";
 import RunCard, { RunTypeChip } from "./RunCard";
 import { Resizer, usePaneSize } from "./Resizer";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 /** Кейсы открытых прогонов — в памяти до перезагрузки страницы: повторный клик не ходит в Jira, «Обновить» — ходит. */
 const runCache = new Map<string, ZRunFull>();
@@ -112,7 +113,7 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
           </label>
           <button type="button" onClick={refreshList} disabled={refreshing} title="Перечитать список прогонов из Jira" aria-label="Обновить прогоны"
             className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /></button>
+            <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" /></button>
         </div>
         <div className="flex items-center gap-1.5 mb-2">
           <select value={typeF} onChange={e => setTypeF(e.target.value)} aria-label="Вид тестирования прогона" className={`${SELECT} min-w-0 flex-1`}>
@@ -174,7 +175,7 @@ export default function RunsView({ project, baseUrl, reloadKey, openKey }: {
                 </div>
                 <button type="button" onClick={() => openRun(run.key, true)} disabled={runBusy} title="Перечитать кейсы прогона из Jira"
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-50">
-                  <RefreshCw className={`w-4 h-4 ${runBusy ? "animate-spin" : ""}`} /> Обновить</button>
+                  <RefreshIcon busy={runBusy} className="w-4 h-4" /> Обновить</button>
                 <button type="button" onClick={() => setPlaying(true)} disabled={!run.items.length}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
                   <PlayCircle className="w-4 h-4" /> Плеер</button>

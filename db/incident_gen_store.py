@@ -12,9 +12,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "incident_gen.json"
+_FILE = DATA_DIR / "incident_gen.json"
 _lock = threading.Lock()
 HISTORY_MAX = 100
 

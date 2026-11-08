@@ -76,7 +76,7 @@ export function ExportFolderModal({ project, folder, onClose }: { project: strin
         <p className="text-xs text-text-muted">
           В файле — структура папок (и пустые папки) и кейсы со всеми полями: название, цель, предусловие, приоритет, статус,
           метки, владелец, длительность, связи с задачами, пользовательские поля, шаги. Формат — Zephyr XML: этот же файл
-          принимает «Новая модель из XML». Шагов в модели Loom нет, поэтому кейсы читаются из Jira пачками по 100.
+          принимает «Новая модель из XML». Шагов в модели Shark нет, поэтому кейсы читаются из Jira пачками по 100.
         </p>
         {sizeErr && <p className="text-red-600 dark:text-red-400">{sizeErr}</p>}
         {prog && !res && <Progress done={prog.done} total={prog.total} label="Прочитано кейсов из Jira" />}
@@ -102,7 +102,7 @@ export function ExportFolderModal({ project, folder, onClose }: { project: strin
 
 /**
  * Удаление папки: все её кейсы и кейсы вложенных папок удаляются из Zephyr (пачками, с прогрессом), папка уходит
- * из дерева Loom. Сама папка в Zephyr остаётся пустой — публичный API Zephyr папки не удаляет.
+ * из дерева Shark. Сама папка в Zephyr остаётся пустой — публичный API Zephyr папки не удаляет.
  */
 export function DeleteFolderModal({ project, folder, onDone, onClose }: {
   project: string; folder: string;
@@ -136,7 +136,7 @@ export function DeleteFolderModal({ project, folder, onDone, onClose }: {
         </p>
         <p className="text-xs text-text-muted">
           Публичный API Zephyr не удаляет папки — удаляются их кейсы. Пустая папка в Zephyr останется (её можно удалить в
-          интерфейсе Zephyr), в дереве Loom её не будет. Кейс, который не удалится (например, нет прав), оставит свою
+          интерфейсе Zephyr), в дереве Shark её не будет. Кейс, который не удалится (например, нет прав), оставит свою
           папку в дереве.
         </p>
         {sizeErr && <p className="text-red-600 dark:text-red-400">{sizeErr}</p>}

@@ -1,5 +1,5 @@
 /**
- * Уведомления Loom: «пуш» вверху справа и запись под колокольчиком.
+ * Уведомления Shark: «пуш» вверху справа и запись под колокольчиком.
  *
  * Хранилище — обычный модуль, а не контекст: вызвать notify() можно откуда угодно, в том числе из запроса, который
  * пережил уход с раздела (компонента уже нет, а результат надо показать). Журнал — в localStorage этого браузера.
@@ -12,7 +12,7 @@ const MAX_NOTES = 100;
 const TOAST_MS = { success: 7000, info: 7000, error: 15000 };
 
 export type NoteKind = "success" | "error" | "info";
-/** Ссылка записи: http(s) — в новой вкладке, «/…» — раздел Loom. */
+/** Ссылка записи: http(s) — в новой вкладке, «/…» — раздел Shark. */
 export interface NoteLink { label: string; href: string }
 export interface Note { id: string; at: number; kind: NoteKind; title: string; text?: string; links?: NoteLink[]; read: boolean }
 

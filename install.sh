@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Loom — быстрая установка на новый компьютер
+# Shark — быстрая установка на новый компьютер
 # Использование: bash install.sh
 #
 # Поддерживает: venv (macOS/Linux) и Conda (активируй env перед запуском)
 
 set -e
 
-echo "=== Loom installer ==="
+echo "=== Shark installer ==="
 echo ""
 
 # 1. Python — определяем исполняемый файл

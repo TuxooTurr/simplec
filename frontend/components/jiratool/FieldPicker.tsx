@@ -20,12 +20,15 @@ interface PickerProps {
   /** Порядок выбора важен и показывается номерами: первый выбранный — первый уровень. */
   ordered?: boolean;
   footer?: ReactNode;
+  /** Группы, свёрнутые по умолчанию (поля Jira): раскрываются щелчком, при поиске — сами. */
+  collapsed?: (group: string) => boolean;
 }
 
 /** Строка поиска + список с множественным выбором. Используется и во всплывающем окне, и в колонке. */
-export function PickerPanel({ label, options, selected, onChange, max, ordered, footer, listHeight = "max-h-72" }:
+export function PickerPanel({ label, options, selected, onChange, max, ordered, footer, collapsed, listHeight = "max-h-72" }:
   PickerProps & { listHeight?: string }) {
   const [q, setQ] = useState("");
+  const [opened, setOpened] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -73,10 +76,24 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
 
       <div className={`${listHeight} overflow-y-auto scrollbar-thin`} role="listbox" aria-multiselectable="true" aria-label={label}>
         {groups.length === 0 && <p className="text-xs text-text-muted p-2">Ничего не нашлось</p>}
-        {groups.map(([group, opts]) => (
+        {groups.map(([group, opts]) => {
+          const foldable = !!collapsed?.(group);
+          const shut = foldable && !q.trim() && !opened.has(group);
+          const picked = opts.filter(o => selected.includes(o.value)).length;
+          return (
           <div key={group} className="mb-1">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted px-2 py-1">{group}</p>
-            {opts.map(o => {
+            {foldable ? (
+              <button type="button" aria-expanded={!shut}
+                onClick={() => setOpened(prev => { const n = new Set(prev); if (n.has(group)) n.delete(group); else n.add(group); return n; })}
+                className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-text-muted hover:bg-bg-subtle hover:text-text-main">
+                <ChevronDown className={`h-3 w-3 transition-transform ${shut ? "-rotate-90" : ""}`} />
+                <span className="flex-1 truncate">{group}</span>
+                <span className="font-normal normal-case tracking-normal">{picked ? `выбрано ${picked} · ` : ""}{opts.length}</span>
+              </button>
+            ) : (
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted px-2 py-1">{group}</p>
+            )}
+            {!shut && opts.map(o => {
               const idx = selected.indexOf(o.value);
               const on = idx >= 0;
               return (
@@ -94,7 +111,8 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
               );
             })}
           </div>
-        ))}
+          );
+        })}
       </div>
       {footer && <div className="border-t border-border-main mt-1 pt-1.5">{footer}</div>}
     </div>

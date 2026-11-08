@@ -5,7 +5,7 @@ import {
   Sparkles, ChevronDown, RotateCcw, Download, Clock,
   Paperclip, FileText, SlidersHorizontal, X, CheckCircle2, Plus, Trash2,
   StopCircle, History, ChevronLeft, BookmarkPlus, Loader2, XCircle, FlaskConical,
-  Copy, CheckCheck, RefreshCw, AlertCircle, PenLine, ListChecks, Save,
+  Copy, CheckCheck, RefreshCw, AlertCircle, PenLine, ListChecks, Save, FolderTree, ArrowLeft, Send,
 } from "lucide-react";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import StatusPanel from "@/components/StatusPanel";
@@ -13,25 +13,29 @@ import CaseCard from "@/components/CaseCard";
 import ExportPanel, { type ExportPanelParams } from "@/components/ExportPanel";
 import ModelPreviewModal from "@/components/taskgen/ModelPreviewModal";
 import TaskDrafts from "@/components/taskgen/TaskDrafts";
-import TaskJobsBar from "@/components/taskgen/TaskJobsBar";
 import TaskPickerModal from "@/components/taskgen/TaskPickerModal";
 import NotionRenderer from "@/components/NotionRenderer";
-import { Select } from "@/components/ui/Select";
+import StagePanel from "@/components/tmgen/StagePanel";
+import TmBatchBar from "@/components/tmgen/TmBatchBar";
+import DataTreePicker from "@/components/tmgen/DataTreePicker";
+import { useTmGen } from "@/contexts/TmGenContext";
+import { tmXml, zephyrProject, type TmStart } from "@/lib/tmApi";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import {
   parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession, exportGenSession,
   listTestDataConnections, getTestDataSchemasText,
-  listRequirements, addRequirement,
-  type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement,
+  listRequirements, addRequirement, listReqFolders,
+  type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement, type ReqFolder,
 } from "@/lib/api";
 import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
-import { featureOf, modelFolder, taskSource, type ModelGroup, type TaskDraft, type TaskFile, type TaskJob, type TaskPick } from "@/lib/taskModel";
+import { dataFolderPath, featureOf, modelFolder, taskSource, type ModelGroup, type TaskDraft, type TaskFile, type TaskJob, type TaskPick } from "@/lib/taskModel";
 import { parseZephyrXml } from "@/lib/zephyrStaging";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 /** Ширина формы, когда результат сбоку: остальное место — кейсам. */
 const FORM_W = "w-[520px]";
 
-type Stage = "input" | "generating" | "review" | "export" | "history" | "histitem";
+type Stage = "input" | "generating" | "tm" | "review" | "export" | "history" | "histitem";
 
 /* Лейблы глубины — только для отображения старых записей истории */
 const DEPTH_LABELS: Record<string, string> = {
@@ -151,6 +155,12 @@ const STATUS_BADGE: Record<string, { label: string; cls: string }> = {
   done:       { label: "Готово",        cls: "tone-success" },
   error:      { label: "Ошибка",       cls: "tone-danger" },
   cancelled:  { label: "Отменена",     cls: "tone-neutral" },
+  planning:     { label: "Планирование…",     cls: "tone-info" },
+  plan_ready:   { label: "Ждёт утверждения",  cls: "tone-info" },
+  writing:      { label: "Генерация…",        cls: "tone-info" },
+  reviewing:    { label: "Проверка…",         cls: "tone-info" },
+  review_ready: { label: "Замечания арбитра", cls: "tone-info" },
+  fixing:       { label: "Исправление…",      cls: "tone-info" },
 };
 
 /* ── End history helpers ─────────────────────────────────────────── */
@@ -175,11 +185,14 @@ export default function GenerationSection() {
   const [featureName, setFeatureName] = useState("");
   const [featureTouched, setFeatureTouched] = useState(false);
 
-  // Источник требования: свободный текст или выбор из сохранённой библиотеки требований
-  const [reqSource, setReqSource] = useState<"free" | "list">("free");
-  const [requirementsList, setRequirementsList] = useState<Requirement[]>([]);
-  const [reqListLoading, setReqListLoading] = useState(false);
-  const [selectedReqId, setSelectedReqId] = useState("");
+  // Источник требования: свободный ввод, документы из дерева «Данных» или задачи списка Jira tool
+  const [reqSource, setReqSource] = useState<"free" | "data" | "tasks">("free");
+  const [dataFolders, setDataFolders] = useState<ReqFolder[]>([]);
+  const [dataDocs, setDataDocs] = useState<Requirement[]>([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [pickedDocs, setPickedDocs] = useState<Set<string>>(new Set());
+  // Платформы из вводных методики: W — веб и бэкенд, M — мобильное приложение
+  const [platforms, setPlatforms] = useState<"W" | "M" | "W и M">("W");
   const [reqSaving, setReqSaving] = useState(false);
   const [reqSaved, setReqSaved] = useState(false);
 
@@ -249,6 +262,7 @@ export default function GenerationSection() {
   const [histView, setHistView] = useState<GenSession | null>(null);
   const [histViewLoading, setHistViewLoading] = useState(false);
   const [histFromStage, setHistFromStage] = useState<Stage>("input");
+  const tmOpenRef = useRef<(id: string) => void>(() => {});
   const [exportSource, setExportSource] = useState<{ cases: Case[]; qaDoc: string; sessionId?: string } | null>(null);
   const [exportBackStage, setExportBackStage] = useState<Stage>("review");
   const genMetaRef = useRef({ feature: "", project: "", team: "", ke: "", depth: "max", platform: ["Web"] as string[], requirement: "" });
@@ -335,6 +349,8 @@ export default function GenerationSection() {
 
   /** Открыть полную сессию из истории */
   const openHistSession = useCallback(async (entry: GenSessionSummary) => {
+    // Незавершённая тестовая модель по этапам — открываем её этапы, а не карточку истории.
+    if (entry.kind === "tm" && entry.status !== "done") { tmOpenRef.current(entry.id); setStage("tm"); return; }
     setHistViewLoading(true);
     try {
       const full = await getGenSession(entry.id);
@@ -352,25 +368,34 @@ export default function GenerationSection() {
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   // ── End history ────────────────────────────────────────────────
 
-  // ── Библиотека требований (переключаемый источник) ────────────────
-  const refreshRequirements = useCallback(async () => {
-    setReqListLoading(true);
+  // ── Дерево «Данных» (вкладка «Из «Данных»») ───────────────────────
+  const refreshData = useCallback(async () => {
+    setDataLoading(true);
     try {
-      setRequirementsList(await listRequirements());
+      const [d, f] = await Promise.all([listRequirements(), listReqFolders()]);
+      setDataDocs(d); setDataFolders(f);
     } catch {
-      // тихо — список требований не критичен для генерации
+      // тихо — без «Данных» остаются свободный ввод и задачи
     } finally {
-      setReqListLoading(false);
+      setDataLoading(false);
     }
   }, []);
 
-  useEffect(() => { if (reqSource === "list") refreshRequirements(); }, [reqSource, refreshRequirements]);
+  useEffect(() => { if (reqSource === "data") refreshData(); }, [reqSource, refreshData]);
 
-  function handlePickRequirement(id: string) {
-    setSelectedReqId(id);
-    const item = requirementsList.find((r) => r.id === id);
-    if (item) setRequirement(item.text);
-  }
+  const chosenDocs = dataDocs.filter(d => pickedDocs.has(d.id));
+  /** Документ отмечен: фича — из документа или его папки, если ещё не вписана. */
+  const toggleDoc = (d: Requirement) => {
+    setPickedDocs(cur => {
+      const n = new Set(cur);
+      if (n.has(d.id)) n.delete(d.id); else n.add(d.id);
+      return n;
+    });
+    if (!pickedDocs.has(d.id) && !featureName.trim()) {
+      const path = dataFolderPath(dataFolders, d.folder_id);
+      setFeatureName((d.feature || path[path.length - 1] || d.name).trim());
+    }
+  };
 
   async function handleSaveAsRequirement() {
     if (!requirement.trim()) return;
@@ -383,7 +408,7 @@ export default function GenerationSection() {
       });
       setReqSaved(true);
       setTimeout(() => setReqSaved(false), 2000);
-      if (reqSource === "list") refreshRequirements();
+      if (reqSource === "data") refreshData();
     } catch (err) {
       alert("Не удалось сохранить требование: " + String(err));
     } finally {
@@ -392,21 +417,31 @@ export default function GenerationSection() {
   }
   // ── End требования ─────────────────────────────────────────────
 
-  const { state, events, progress, cases, qaDoc, qaDocTruncated, start, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected,
-    taskJobs, startTasks, continueTasks, clearTasks, attachToSession } = useGeneration();
-  const runningJob = taskJobs.find(j => j.status === "run");
-  const doneJobs = taskJobs.filter(j => j.status === "done" && j.sessionId);
+  const { state, events, progress, cases, qaDoc, qaDocTruncated, resume, exportCases, cancel, exportResult, exporting, reset, sessionId, wsConnected,
+    attachToSession } = useGeneration();
+  const tm = useTmGen();
+  tmOpenRef.current = tm.open;
+  // Принятые наборы по задачам — как прежние задачи очереди: по ним выгрузка в модель с прогоном на задачу.
+  const doneJobs: TaskJob[] = tm.sessions.filter(s => s.status === "done" && s.task).map(s => ({
+    key: s.task!.key, summary: s.task!.summary, project: s.task!.project, feature: s.feature, requirement: "",
+    reqNames: s.task!.reqNames, dataPath: s.place, status: "done", sessionId: s.id, caseCount: s.cases.length,
+  }));
+  const batchMode = tm.sessions.some(s => s.task);
 
-  // Шапка экрана генерации и «сохранить документ» — про задачу, что идёт сейчас.
-  useEffect(() => {
-    if (runningJob) genMetaRef.current = { ...genMetaRef.current, feature: runningJob.feature, requirement: runningJob.requirement };
-  }, [runningJob?.key]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Сессия тестовой модели есть (в том числе после перезагрузки) — правая зона показывает её этапы.
+  useEffect(() => { if (tm.active && stage === "input") setStage("tm"); }, [tm.active?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tm.sessions.some(s => s.status === "done")) refreshHistory(); }, [tm.sessions.filter(s => s.status === "done").length]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // История — после каждой готовой задачи; на экране результата отмечены все кейсы открытой задачи.
-  useEffect(() => { if (doneJobs.length) refreshHistory(); }, [doneJobs.length]);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (taskJobs.length && cases.length) setSelectedCases(new Set(cases.map((_, i) => i)));
-  }, [sessionId, cases.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** Принятый (или проверенный) набор → прежний экран результата: кейсы, эталон, экспорт. */
+  const openTmCases = (id: string) => {
+    const s = tm.sessions.find(x => x.id === id);
+    genMetaRef.current = { ...genMetaRef.current, feature: s?.feature ?? "", requirement: s?.requirement ?? "" };
+    historySavedRef.current = true;
+    currentHistIdRef.current = id;
+    void attachToSession(id);
+    setSelectedCases(new Set((s?.cases ?? []).map((_, i) => i)));
+    setStage("review");
+  };
 
   /** Задачи выбраны: новые предзаполняем из требований, у оставшихся правки не трогаем. */
   const pickTasks = (tasks: TaskPick[]) => setTaskDrafts(cur => tasks.map(t =>
@@ -435,12 +470,50 @@ export default function GenerationSection() {
   const taskGroup = async (job: TaskJob, xml: string, root: string): Promise<ModelGroup> => {
     const [parsed, session] = await Promise.all([parseZephyrXml(xml), getGenSession(job.sessionId!)]);
     const types = new Map((session.cases as Case[] | undefined ?? []).map(c => [c.name, c.case_type]));
+    const scenarios = new Map((session.cases as (Case & { scenario?: string })[] | undefined ?? []).map(c => [c.name, c.scenario]));
     return {
       id: job.key, task: { key: job.key, summary: job.summary }, reqNames: job.reqNames, run: true,
       folder: modelFolder(root, job.dataPath.length ? job.dataPath : [job.feature]),
-      cases: parsed.cases.map((c, i) => ({ ...c, id: `${job.key}:${i}`, caseType: types.get(c.name), on: true })),
+      cases: parsed.cases.map((c, i) => ({ ...c, id: `${job.key}:${i}`, caseType: types.get(c.name), scenario: scenarios.get(c.name), on: true })),
     };
   };
+
+  // ── Готовый XML тестовой модели: без окна настроек экспорта — скачать или сразу в Zephyr ──
+  const [tmXmlBusy, setTmXmlBusy] = useState<"" | "download" | "zephyr">("");
+  const [tmXmlErr, setTmXmlErr] = useState("");
+  const xmlName = (name: string) => `${name.replace(/[\\/:*?"<>|]+/g, "_").trim() || "model"}.xml`;
+
+  const downloadTm = async (ids: string[], only?: Record<string, number[]>) => {
+    setTmXmlBusy("download"); setTmXmlErr("");
+    try {
+      const r = await tmXml(ids, zephyrProject(), only);
+      const one = tm.sessions.find(s => s.id === ids[0]);
+      downloadBlob(r.xml, xmlName(ids.length === 1 ? (one?.task ? `${one.task.key} ${one.feature}` : one?.feature ?? "") : `Тестовая модель ${new Date().toLocaleDateString("ru-RU")}`), "application/xml");
+    } catch (e) { setTmXmlErr((e as Error).message); }
+    setTmXmlBusy("");
+  };
+
+  /** В Zephyr — через предпросмотр структуры: там видно, куда лягут кейсы, и создаются прогоны задач. */
+  const sendTm = async (ids: string[], only?: Record<string, number[]>) => {
+    setTmXmlBusy("zephyr"); setTmXmlErr("");
+    try {
+      const project = zephyrProject();
+      const r = await tmXml(ids, project, only);
+      const groups = await Promise.all(r.files.map(async f => {
+        const s = tm.sessions.find(x => x.id === f.id);
+        if (s?.task) {
+          const job: TaskJob = { key: s.task.key, summary: s.task.summary, project: s.task.project, feature: s.feature, requirement: "",
+            reqNames: s.task.reqNames, dataPath: s.place, status: "done", sessionId: s.id, caseCount: s.cases.length };
+          return taskGroup(job, f.xml, "Новая ТМ");
+        }
+        return { id: f.id, reqNames: [], folder: "", run: false,
+          cases: (await parseZephyrXml(f.xml)).cases.map((c, i) => ({ ...c, id: `${f.id}:${i}`, on: true })) } as ModelGroup;
+      }));
+      setPreview({ project, groups });
+    } catch (e) { setTmXmlErr((e as Error).message); }
+    setTmXmlBusy("");
+  };
+  const tmXmlActions = { busy: tmXmlBusy, error: tmXmlErr, download: downloadTm, send: sendTm };
 
   const openPreview = async (p: { project: string; folder: string }) => {
     setPreviewBusy(true); setTaskExportErr("");
@@ -520,36 +593,39 @@ export default function GenerationSection() {
     }
   };
 
+  /** Сессии тестовой модели по этапам: одна — свободный ввод или документы, по задачам — очередь, у каждой своя. */
   const handleGenerate = async () => {
-    if (taskDrafts.length) {
-      // По задачам: каждая — своя сессия. Задача без источника пропускается (она подсвечена в списке).
-      const schemas = await schemasBlock();
-      const jobs: TaskJob[] = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).map(t => ({
-        key: t.key, summary: t.summary, project: t.project, feature: t.feature.trim(),
-        requirement: buildLlmSourceText(t.text, fileAttachments) + schemas,
-        reqNames: t.docs.map(d => d.name), dataPath: t.dataPath, status: "wait",
-      }));
-      if (!jobs.length) return;
-      historySavedRef.current = false;
+    const schemas = await schemasBlock();
+    try {
+      if (reqSource === "tasks") {
+        const items: TmStart[] = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).map(t => ({
+          requirement: buildLlmSourceText(t.text, fileAttachments) + schemas, feature: t.feature.trim(), provider, platforms,
+          source: "task", place: t.dataPath,
+          task: { key: t.key, summary: t.summary, project: t.project, reqNames: t.docs.map(d => d.name), dataPath: t.dataPath },
+        }));
+        if (!items.length) return;
+        await tm.startBatch(items);
+      } else {
+        if (!featureName.trim()) { setFeatureTouched(true); return; }
+        const docText = chosenDocs.map(d => `=== Требование: ${d.name} ===\n${(d.text || d.qa_doc || "").trim()}`).join("\n\n");
+        const text = reqSource === "data" ? buildLlmSourceText(docText, fileAttachments) : buildLlmSourceText(requirement, fileAttachments);
+        if (!text) return;
+        const place = reqSource === "data" ? dataFolderPath(dataFolders, chosenDocs.find(d => d.folder_id)?.folder_id) : [];
+        await tm.startOne({ requirement: text + schemas, feature: featureName.trim(), provider, platforms, source: reqSource, place });
+      }
+      reset();
       setTaskFiles(null); setTaskExportMode(false);
-      startTasks(jobs, provider);
-      return;
+      setStage("tm");
+    } catch {
+      // текст ошибки — под кнопкой (tm.error)
     }
-    if (!featureName.trim()) { setFeatureTouched(true); return; }
-    const text = buildLlmSourceText(requirement, fileAttachments);
-    if (!text) return;
-
-    const finalText = text + await schemasBlock();
-
-    genMetaRef.current = { feature: featureName.trim(), project: "", team: "", ke: "", depth: "max", platform: ["Web"], requirement: finalText };
-    historySavedRef.current = false;
-    start({ requirement: finalText, feature: featureName.trim(), depth: "max", provider, platform: "Web" });
   };
 
 
   const handleReset = () => {
     historySavedRef.current = false;
-    clearTasks();
+    tm.clear();
+    setPickedDocs(new Set());
     setTaskDrafts([]); setTaskFiles(null); setTaskExportMode(false); setTaskExportErr("");
     reset();
     setStage("input");
@@ -562,20 +638,20 @@ export default function GenerationSection() {
 
   const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
   const readyTasks = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).length;
-  const hasGenerationSource = taskDrafts.length > 0
-    ? readyTasks > 0
+  const hasGenerationSource = reqSource === "tasks" ? readyTasks > 0
+    : reqSource === "data" ? chosenDocs.some(d => (d.text || d.qa_doc || "").trim())
     : Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
+  const tmBusy = !!tm.active && ["planning", "writing", "reviewing", "fixing"].includes(tm.active.status);
 
   /* ─────────────── RENDER ─────────────── */
-  const withForm = stage === "input" || stage === "generating" || stage === "review";
+  const withForm = stage === "input" || stage === "generating" || stage === "tm" || stage === "review";
   return (
     <>
       {/* Modal рендерится на уровне компонента (вне stage-блоков) */}
       <TaskPickerModal open={pickerOpen} picked={taskDrafts} onPick={pickTasks} onClose={() => setPickerOpen(false)} />
       {preview && <ModelPreviewModal open project={preview.project} groups={preview.groups} onClose={() => setPreview(null)} />}
-      {taskJobs.length > 0 && (stage === "input" || stage === "generating" || stage === "review") && (
-        <TaskJobsBar jobs={taskJobs} current={sessionId} onOpen={j => void attachToSession(j.sessionId!)} onContinue={() => continueTasks(provider)}
-          onExport={() => { setExportSource(null); setTaskExportMode(true); setTaskFiles(null); setExportBackStage("review"); setStage("export"); }} />
+      {batchMode && (stage === "input" || stage === "tm" || stage === "review") && (
+        <TmBatchBar sessions={tm.sessions} current={tm.active?.id ?? null} onOpen={id => { tm.open(id); setStage("tm"); }} xml={tmXmlActions} />
       )}
 
       {/* Форма и результат: зона одна — рядом (у каждого своя прокрутка), зон две — результат под формой */}
@@ -598,24 +674,7 @@ export default function GenerationSection() {
           </p>
 
           <div>
-          {/* Задачи Jira tool: модель берёт их требования из «Данных», кейсы лягут в папки по дереву, на задачу — прогон */}
-          <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
-            <div className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className={LABEL_CLS}>Задачи из Jira tool</p>
-                <p className="text-xs text-text-muted">
-                  Требования возьмутся из «Данных», кейсы лягут в папки по их дереву, на каждую задачу создастся прогон.
-                </p>
-              </div>
-              <button type="button" onClick={() => setPickerOpen(true)}
-                className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-                <ListChecks className="w-4 h-4" /> {taskDrafts.length ? "Изменить" : "Выбрать задачи"}
-              </button>
-            </div>
-            {taskDrafts.length > 0 && <div className="mt-3"><TaskDrafts tasks={taskDrafts} onChange={setTaskDrafts} /></div>}
-          </div>
-
-          {taskDrafts.length === 0 && (<>
+          {reqSource !== "tasks" && (<>
           {/* Название фичи — для имён кейсов: [Фича] Группа проверок. Наименование проверки */}
           <div className="bg-bg-card border border-border-main rounded-xl p-4 mb-3">
             <label className={LABEL_CLS}>
@@ -640,54 +699,58 @@ export default function GenerationSection() {
             )}
           </div>
 
-          {/* Requirement input */}
+          </>)}
+
+          {/* Требование: свободный ввод, документы «Данных» или задачи списка Jira tool */}
           <div className="bg-bg-card border border-border-main rounded-xl p-5 mb-4">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-col items-start gap-2 mb-3">
               <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide">Требование</label>
-              <div className="flex items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5">
-                <button
-                  type="button"
-                  onClick={() => setReqSource("free")}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    reqSource === "free" ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-                  }`}
-                >
-                  <PenLine className="w-3 h-3" /> Свободный ввод
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReqSource("list")}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    reqSource === "list" ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"
-                  }`}
-                >
-                  <ListChecks className="w-3 h-3" /> Из списка требований
-                </button>
+              <div className="flex max-w-full items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5">
+                {([
+                  { id: "free", label: "Свободный ввод", icon: <PenLine className="w-3 h-3" /> },
+                  { id: "data", label: "Из «Данных»", icon: <FolderTree className="w-3 h-3" /> },
+                  { id: "tasks", label: "Из списка задач", icon: <ListChecks className="w-3 h-3" /> },
+                ] as const).map(t => (
+                  <button key={t.id} type="button" onClick={() => setReqSource(t.id)} aria-pressed={reqSource === t.id}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                      reqSource === t.id ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"}`}>
+                    {t.icon} {t.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            {reqSource === "list" && (
-              <div className="mb-3">
-                <Select
-                  value={selectedReqId}
-                  onChange={handlePickRequirement}
-                  placeholder={reqListLoading ? "Загрузка…" : requirementsList.length === 0 ? "Список пуст — сохраните требование ниже" : "Выберите требование…"}
-                  searchable
-                  searchPlaceholder="Поиск по названию или фиче…"
-                  disabled={reqListLoading || requirementsList.length === 0}
-                >
-                  {requirementsList.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.feature ? `[${r.feature}] ${r.name}` : r.name}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-text-muted mt-1.5">
-                  Требование подставится в поле ниже — его можно доредактировать перед генерацией.
+            {reqSource === "data" && (
+              <div className="mb-3 space-y-2">
+                {dataLoading && !dataFolders.length ? (
+                  <p className="flex items-center gap-1.5 text-xs text-text-muted"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Загружаю дерево…</p>
+                ) : (
+                  <DataTreePicker folders={dataFolders} docs={dataDocs} mode="docs" selectedDocs={pickedDocs} onToggleDoc={toggleDoc} />
+                )}
+                <p className="text-xs text-text-muted">
+                  {chosenDocs.length
+                    ? <>Выбрано: {chosenDocs.length}. Место в модели — папка документа: <b className="font-medium text-text-main">{dataFolderPath(dataFolders, chosenDocs.find(d => d.folder_id)?.folder_id).join(" / ") || "не в папке — уточните на планировании"}</b></>
+                    : "Отметьте документы — их текст уйдёт в генерацию, место в дереве возьмётся из папки документа."}
                 </p>
               </div>
             )}
 
+            {reqSource === "tasks" && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <p className="min-w-0 flex-1 text-xs text-text-muted">
+                    Выберите список Jira tool и задачи. Требования возьмутся из «Данных», место в дереве — из папки требований; у каждой задачи свой план и своё утверждение.
+                  </p>
+                  <button type="button" onClick={() => setPickerOpen(true)}
+                    className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                    <ListChecks className="w-4 h-4" /> {taskDrafts.length ? "Изменить" : "Выбрать задачи"}
+                  </button>
+                </div>
+                {taskDrafts.length > 0 && <TaskDrafts tasks={taskDrafts} onChange={setTaskDrafts} />}
+              </div>
+            )}
+
+            {reqSource === "free" && (<>
             <textarea
               value={requirement}
               onChange={(e) => setRequirement(e.target.value)}
@@ -773,9 +836,23 @@ export default function GenerationSection() {
                 {fileAttachments.length > 0 && ` + ${fileChars.toLocaleString()} симв. из файлов`}
               </span>
             </div>
+                      </>)}
+            {reqSource === "free" && (
+              <p className="mt-1 text-[11px] text-text-muted">Место в дереве предложит планирование — его можно поправить перед генерацией.</p>
+            )}
           </div>
 
-          </>)}
+          {/* Платформы из вводных: в имени кейса [W] или [M] */}
+          <div className="bg-bg-card border border-border-main rounded-xl px-4 py-3 mb-4 flex flex-wrap items-center gap-3">
+            <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Платформы</span>
+            <div className="flex items-center gap-1 bg-bg-subtle border border-border-main rounded-lg p-0.5">
+              {(["W", "M", "W и M"] as const).map(p => (
+                <button key={p} type="button" onClick={() => setPlatforms(p)} aria-pressed={platforms === p}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium ${platforms === p ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"}`}>{p}</button>
+              ))}
+            </div>
+            <span className="text-[11px] text-text-muted">W — веб и бэкенд, M — мобильное приложение</span>
+          </div>
 
           {/* Test data from DB */}
           <TestDataSettingsModal
@@ -881,15 +958,18 @@ export default function GenerationSection() {
           <div className="flex justify-end">
             <button
               onClick={handleGenerate}
-              disabled={!hasGenerationSource || stage === "generating"}
+              disabled={!hasGenerationSource || tmBusy}
+              title={tmBusy ? "Идёт этап текущей модели — дождитесь или остановите его" : undefined}
               className={`flex items-center gap-2 px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-semibold
                 hover:bg-primary-dark transition-all duration-150 active:scale-[0.98] shadow-sm hover:shadow-md
-                ${!hasGenerationSource || stage === "generating" ? "opacity-40" : ""}`}
+                ${!hasGenerationSource || tmBusy ? "opacity-40" : ""}`}
             >
               <Sparkles className="w-4 h-4" />
-              {taskDrafts.length ? `Генерировать по задачам: ${readyTasks}` : "Генерировать тест-кейсы"}
+              {reqSource === "tasks" ? `Спланировать по задачам: ${readyTasks}` : "Спланировать тест-кейсы"}
             </button>
           </div>
+          <p className="mt-2 text-right text-[11px] text-text-muted">Планирование → утверждение → генерация → проверка арбитром</p>
+          {tm.error && stage !== "tm" && <p className="mt-1 text-right text-xs text-red-500">{tm.error}</p>}
           </div>
         </div>
 
@@ -899,6 +979,12 @@ export default function GenerationSection() {
           <Sparkles className="h-8 w-8 opacity-30" />
           <p className="text-sm">Здесь появятся тест-кейсы</p>
         </div>
+      )}
+
+      {/* ── ТЕСТОВАЯ МОДЕЛЬ ПО ЭТАПАМ ── */}
+      {stage === "tm" && tm.active && <StagePanel session={tm.active} onOpenCases={openTmCases} xml={tmXmlActions} />}
+      {stage === "tm" && !tm.active && (
+        <div className="flex h-full items-center justify-center p-8 text-sm text-text-muted"><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Загружаю сессию…</div>
       )}
 
       {/* ── GENERATING ── */}
@@ -1069,6 +1155,12 @@ export default function GenerationSection() {
                   Продолжить
                 </button>
               )}
+              {tm.active && tm.active.id === sessionId && (
+                <button onClick={() => setStage("tm")}
+                  className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150 whitespace-nowrap flex-shrink-0">
+                  <ArrowLeft className="w-3 h-3" /> К этапам
+                </button>
+              )}
               <button
                 onClick={() => { refreshHistory(); setHistFromStage("review"); setStage("history"); }}
                 className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs
@@ -1135,6 +1227,17 @@ export default function GenerationSection() {
                       </button>
                     );
                   })()}
+                  {tm.sessions.some(x => x.id === sessionId && x.status === "done") ? (<>
+                    {/* Тестовая модель: XML уже собран из кейсов — скачать или сразу в Zephyr, без окна экспорта */}
+                    <button disabled={!!tmXmlBusy} onClick={() => void downloadTm([sessionId!], { [sessionId!]: [...selectedCases].sort((a, b) => a - b) })}
+                      className="flex items-center gap-1 px-2.5 py-1.5 border border-border-main rounded-lg text-xs text-text-main hover:bg-bg-subtle disabled:opacity-40 whitespace-nowrap flex-shrink-0">
+                      {tmXmlBusy === "download" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} Скачать XML ({selectedCases.size})
+                    </button>
+                    <button disabled={!!tmXmlBusy} onClick={() => void sendTm([sessionId!], { [sessionId!]: [...selectedCases].sort((a, b) => a - b) })}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-dark disabled:opacity-40 shadow-sm whitespace-nowrap flex-shrink-0">
+                      {tmXmlBusy === "zephyr" ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />} В Zephyr ({selectedCases.size})
+                    </button>
+                  </>) : (
                   <button
                     onClick={() => {
                       const sel = cases.filter((_, i) => selectedCases.has(i));
@@ -1149,11 +1252,13 @@ export default function GenerationSection() {
                     <Download className="w-3 h-3" />
                     Экспорт ({selectedCases.size})
                   </button>
+                  )}
                 </>
               )}
             </div>
           </div>
 
+          {tmXmlErr && stage === "review" && <p className="mb-3 text-sm text-red-500">{tmXmlErr}</p>}
           <div>
             {events.length > 0 && (
               <div className="mb-4 max-w-2xl">
@@ -1302,7 +1407,7 @@ export default function GenerationSection() {
               disabled={histLoading}
               className="flex items-center gap-1.5 text-xs text-text-muted hover:text-primary transition-colors disabled:opacity-40"
             >
-              <RefreshCw className={`w-3 h-3 ${histLoading ? "animate-spin" : ""}`} />
+              <RefreshIcon busy={histLoading} className="w-3 h-3" />
               Обновить
             </button>
           </div>

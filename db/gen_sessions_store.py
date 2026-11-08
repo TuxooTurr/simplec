@@ -9,9 +9,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_SESSIONS_FILE = _ROOT / "data" / "gen_sessions.json"
+_SESSIONS_FILE = DATA_DIR / "gen_sessions.json"
 _MAX_SESSIONS = 50
 
 
@@ -38,7 +39,7 @@ class GenSessionsStore:
         result = []
         for s in sessions[:limit]:
             summary = {k: v for k, v in s.items()
-                       if k not in ("cases", "qa_doc", "case_list", "events", "export_result")}
+                       if k not in ("cases", "qa_doc", "case_list", "events", "export_result", "plan", "review", "answers")}
             summary["case_count"] = len(s.get("cases", []))
             summary["has_qa_doc"] = bool(s.get("qa_doc"))
             summary["has_export"] = bool(s.get("export_result"))

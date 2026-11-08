@@ -25,10 +25,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DRIVERS_FILE = _ROOT / "data" / "jdbc_drivers.json"
-_JARS_DIR = _ROOT / "data" / "jdbc_drivers"
+_DRIVERS_FILE = DATA_DIR / "jdbc_drivers.json"
+_JARS_DIR = DATA_DIR / "jdbc_drivers"
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 

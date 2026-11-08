@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Zap, Loader2, LogIn } from "lucide-react";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/components/ui/ThemeToggle";
 import { loginTokensNote, stashLoginNote } from "@/lib/authApi";
 
 /* Вход — логином и паролем Jira: пароль проверяет Jira, заодно проверяются токены Jira и Confluence
@@ -33,79 +34,84 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+  /* Экран входа — по теме: видео перекрашено в цвета Shark (светлая — символы #4F46E5 на #eef2ff, тёмная — #818cf8 на #0f172a).
+     Видео на весь экран (object-cover: лишнее по краям обрезается); фон страницы = фон кадра — виден, пока видео грузится.
+     Видео ставится после монтирования: до него тема неизвестна, и грузить не тот файл незачем. Без звука, по кругу;
+     при «уменьшить движение» — неподвижный кадр. */
+  const [theme, mounted] = useTheme();
+  const dark = theme === "dark";
+  const media = dark ? { video: "/login/shark-dark.mp4", poster: "/login/shark-poster-dark.jpg", bg: "15,23,42" }
+    : { video: "/login/shark.mp4", poster: "/login/shark-poster.jpg", bg: "238,242,255" };
+  const FIELD = "w-full rounded-xl border px-4 py-3 text-[15px] shadow-sm backdrop-blur-sm transition focus:outline-none focus:ring-4 " +
+    "border-indigo-900/15 bg-white/75 text-slate-900 placeholder:text-slate-500 focus:border-indigo-500/60 focus:bg-white/95 focus:ring-indigo-500/10 " +
+    "dark:border-indigo-200/15 dark:bg-slate-900/70 dark:text-slate-100 dark:placeholder:text-slate-400 dark:focus:border-indigo-300/50 dark:focus:bg-slate-900/90";
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-bg-main to-primary/10">
-      <div className="w-full max-w-sm">
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-lg mb-4">
-            <Zap className="w-7 h-7 text-white" strokeWidth={2.5} />
-          </div>
-          <h1 className="text-2xl font-bold text-text-main">Loom</h1>
-          <p className="text-sm text-text-muted mt-1">AI-платформа для QA-инженеров</p>
-        </div>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#eef2ff] dark:bg-[#0f172a]">
+      {mounted && (
+        <>
+          <video
+            key={media.video}
+            aria-hidden
+            className="pointer-events-none absolute inset-0 h-full w-full object-cover motion-reduce:hidden"
+            src={media.video}
+            poster={media.poster}
+            autoPlay muted loop playsInline preload="auto"
+          />
+          {/* при «уменьшить движение» — неподвижная картинка вместо видео */}
+          <div aria-hidden className="pointer-events-none absolute inset-0 hidden bg-cover bg-center bg-no-repeat motion-reduce:block"
+            style={{ backgroundImage: `url(${media.poster})` }} />
+        </>
+      )}
+      {/* мягкое затенение фоном под формой — текст читается поверх символов видео */}
+      <div aria-hidden className="pointer-events-none absolute inset-0"
+        style={{ background: `radial-gradient(ellipse 42% 46% at 50% 50%, rgba(${media.bg},0.94) 0%, rgba(${media.bg},0.75) 55%, rgba(${media.bg},0) 100%)` }} />
 
-        <form onSubmit={handleSubmit} className="bg-bg-card rounded-2xl border border-border-main shadow-sm p-6 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-              Логин Jira
-            </label>
-            <input
-              value={loginStr}
-              onChange={e => { setLoginStr(e.target.value); setError(""); }}
-              placeholder="Логин Сигмы"
-              autoComplete="username"
-              autoFocus
-              className="w-full border border-border-main rounded-lg px-3 py-2.5 text-sm
-                bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60
-                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
-            />
-          </div>
+      <form onSubmit={handleSubmit} className="relative z-10 w-full max-w-[340px] space-y-3 px-4">
+        <h1 className="t-rise select-none pb-4 text-center text-[96px] leading-none tracking-[0.04em] text-indigo-950 dark:text-indigo-100"
+          style={{ fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', 'Franklin Gothic Bold', sans-serif" }}>
+          SHARK
+        </h1>
 
-          <div>
-            <label className="block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5">
-              Пароль Jira
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => { setPassword(e.target.value); setError(""); }}
-              placeholder="Пароль Сигмы"
-              autoComplete="current-password"
-              className="w-full border border-border-main rounded-lg px-3 py-2.5 text-sm
-                bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60
-                focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition-shadow"
-            />
-          </div>
-
-          {error && (
-            <p
-              role="alert"
-              className="animate-shake text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2
-                dark:text-red-300 dark:bg-red-900/20 dark:border-red-800/50"
-            >
-              {error}
-            </p>
-          )}
-
+        <input
+          value={loginStr}
+          onChange={e => { setLoginStr(e.target.value); setError(""); }}
+          placeholder="Логин"
+          aria-label="Логин Jira"
+          autoComplete="username"
+          autoFocus
+          className={`t-rise ${FIELD}`}
+          style={{ ["--i" as string]: 1 }}
+        />
+        <div className="t-rise relative" style={{ ["--i" as string]: 2 }}>
+          <input
+            type="password"
+            value={password}
+            onChange={e => { setPassword(e.target.value); setError(""); }}
+            placeholder="Пароль"
+            aria-label="Пароль Jira"
+            autoComplete="current-password"
+            className={`${FIELD} pr-12`}
+          />
           <button
             type="submit"
             disabled={loading || !loginStr.trim() || !password.trim()}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary text-white rounded-lg
-              text-sm font-semibold hover:bg-primary-dark transition-all disabled:opacity-40 shadow-sm
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg-main"
+            aria-label="Войти"
+            title="Войти"
+            className="absolute right-1.5 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-lg bg-indigo-600 text-white
+              transition hover:bg-indigo-700 disabled:bg-indigo-600/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40
+              dark:bg-indigo-400 dark:text-slate-950 dark:hover:bg-indigo-300 dark:disabled:bg-indigo-400/25"
           >
-            {loading
-              ? <><Loader2 className="w-4 h-4 animate-spin" /> Вхожу и проверяю токены…</>
-              : <><LogIn className="w-4 h-4" /> Войти</>}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
           </button>
-        </form>
+        </div>
 
-        <p className="text-center text-xs text-text-muted/70 mt-4 leading-relaxed">
-          Токены Jira и Confluence при входе проверяются и, если нужно, выпускаются заново.<br />
-          Нет доступа к Jira — войдите универсальной учётной записью.
-        </p>
-      </div>
+        {error && (
+          <p role="alert" className="animate-shake rounded-xl border border-red-200 bg-red-50/90 px-3 py-2 text-sm text-red-700 dark:border-red-400/30 dark:bg-red-950/80 dark:text-red-200">
+            {error}
+          </p>
+        )}
+      </form>
     </div>
   );
 }

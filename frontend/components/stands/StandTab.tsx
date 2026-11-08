@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, Check, ExternalLink, Inbox, Link2, ListPlus, Loader2, Maximize2, Minimize2, Pencil, Plus, RefreshCw, Settings2, Snowflake, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, Inbox, Link2, ListPlus, Loader2, Maximize2, Minimize2, Pencil, Plus, Settings2, Snowflake, Trash2, X } from "lucide-react";
 import {
   addStandBookings, addStandFreeze, createStandPage, decideStandPending, deleteStandBooking, deleteStandFreeze, editStandBooking, getStand,
   pullStandRequests, saveStandSettings, saveStandsConfig, addMs, saveMsCatalog,
@@ -13,6 +13,7 @@ import StandTimeline, { barWhen, barsOf, bookingWhen, TEAM_CLS, ZOOM, type Featu
 import ImportFromList, { type PickedFeature } from "./ImportFromList";
 import ServicePicker from "./ServicePicker";
 import { useFeatureStage } from "./useFeatureStage";
+import { usePanelRefresh } from "@/components/ui/RefreshButton";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 const STATUS_CLS: Record<string, string> = {
@@ -118,6 +119,9 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
     return barsOf(v).find(b => b.key === pickedKey) ?? null;
   }, [v, pickedKey]);
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(() => run(() => getStand(stand)), { busy, title: "Перечитать график из Confluence" });
+
   if (!pageId) return <BindPage stand={stand} onBound={onPageBound} defaultUrl={defaultUrl} />;
   if (!v) return <p className="flex items-center gap-2 text-sm text-text-muted">{busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Читаю график из Confluence…</> : msg?.text}</p>;
 
@@ -142,8 +146,6 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
             disabled={busy} title="Прочитать новые комментарии-заявки на странице стенда и ответить на них итогом"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Inbox className="w-4 h-4" />} Забрать заявки</button>
-          <button type="button" onClick={() => run(() => getStand(stand))} disabled={busy} title="Перечитать график из Confluence" aria-label="Обновить"
-            className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main disabled:opacity-50"><RefreshCw className="w-4 h-4" /></button>
           <button type="button" onClick={() => setFreezeOpen(o => !o)} aria-expanded={freezeOpen}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
             <Snowflake className="w-4 h-4" /> Заморозка</button>
@@ -274,7 +276,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
                   <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}
                     <span className="text-xs text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
-                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "Loom"}</span>
+                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "Shark"}</span>
                   <button type="button" onClick={() => setEditing(it.id)} disabled={busy} aria-label={`Изменить ${it.task || "бронь"}`}
                     title="Изменить: дни, время, команду, микросервис, фичу" className="p-1 text-text-muted hover:text-primary disabled:opacity-50"><Pencil className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
@@ -623,7 +625,7 @@ function BindPage({ stand, onBound, defaultUrl }: { stand: string; onBound: () =
             По умолчанию</button>
         )}
       </div>
-      <p className="text-xs text-text-muted">Страница создаётся в пространстве из настроек Confluence (шестерёнка вверху). Коллегам, у которых свой Loom, достаточно привязать ту же ссылку.</p>
+      <p className="text-xs text-text-muted">Страница создаётся в пространстве из настроек Confluence (шестерёнка вверху). Коллегам, у которых свой Shark, достаточно привязать ту же ссылку.</p>
       {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
     </div>
   );

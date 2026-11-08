@@ -12,9 +12,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_VIEWS_FILE = _ROOT / "data" / "jira_views.json"
+_VIEWS_FILE = DATA_DIR / "jira_views.json"
 
 
 class JiraViewsStore:

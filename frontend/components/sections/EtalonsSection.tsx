@@ -1,13 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import {
-  BookOpen, Plus, RefreshCw, Trash2, ChevronDown,
-  Loader2, Smartphone, Tag, X, Save, Paperclip, FileText,
-  Code2, Bug, FolderOpen, ClipboardList,
-} from "lucide-react";
+import { BookOpen, Plus, Trash2, ChevronDown, Loader2, Smartphone, Tag, X, Save, Paperclip, FileText, Code2, Bug, FolderOpen, ClipboardList } from "lucide-react";
 import { Select } from "@/components/ui";
 import DataDocs from "@/components/data/DataDocs";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 import {
   listEtalons, addEtalon, deleteEtalon, getEtalonStats, parseFile,
   listAutotests, addAutotest, deleteAutotest,
@@ -202,7 +199,7 @@ function TestCasesTab() {
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
             text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" />
           Обновить
         </button>
       </div>
@@ -506,7 +503,7 @@ function AutotestsTab() {
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
             text-text-muted hover:bg-bg-subtle transition-all duration-150 disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Обновить
+          <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" /> Обновить
         </button>
       </div>
 
@@ -730,7 +727,7 @@ function DefectsTab() {
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
             text-text-muted hover:bg-bg-subtle transition-all duration-150 disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Обновить
+          <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" /> Обновить
         </button>
       </div>
 
@@ -998,7 +995,7 @@ function ContextDocsTab() {
           className="flex items-center gap-1.5 px-4 py-2 border border-border-main rounded-lg text-sm
             text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 disabled:opacity-50"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" />
           Обновить
         </button>
       </div>
@@ -1163,7 +1160,6 @@ export default function EtalonsSection() {
       <div>
         {/* Заголовок */}
         <div className="mb-4">
-          <h1 className="text-xl font-bold text-text-main mb-1">Данные</h1>
           <p className="text-sm text-text-muted">
             Документы в папках, как в Notion: исходник (Markdown, PDF и DOCX собираются в разметку) и документ QA с текстом для рассказа.
           </p>

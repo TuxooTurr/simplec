@@ -13,9 +13,10 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "datagen_config.json"
+_FILE = DATA_DIR / "datagen_config.json"
 
 # Значения по умолчанию — то, что было зашито в коде до появления настроек.
 DEFAULT_TCS = {

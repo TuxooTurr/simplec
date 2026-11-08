@@ -30,12 +30,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "requirements.json"
-_FOLDERS = _ROOT / "data" / "requirement_folders.json"
+_FILE = DATA_DIR / "requirements.json"
+_FOLDERS = DATA_DIR / "requirement_folders.json"
 _FOLDERS_DEFAULT = Path(__file__).resolve().parent / "requirement_folders_default.json"
 _MAX_ITEMS = 500
 

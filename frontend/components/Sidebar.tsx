@@ -3,12 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import {
-  Zap, BookOpen, LayoutList, BarChart2, Database, ScrollText,
-  GripVertical, Eye, EyeOff,
-  SlidersHorizontal, Check, Network, SplitSquareHorizontal, FlaskConical, CalendarDays, Activity,
-  PanelLeftClose, PanelLeftOpen,
-} from "lucide-react";
+import { Zap, BookOpen, LayoutList, BarChart2, Database, ScrollText, GripVertical, Eye, EyeOff, Check, Network, SplitSquareHorizontal, FlaskConical, CalendarDays, Activity, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
@@ -52,6 +47,8 @@ const ORDER_KEY = "st_nav_order";
 const HIDDEN_KEY = "st_nav_hidden";
 /** Меню свёрнуто в полосу с иконками: рабочие зоны шире на освободившееся место. */
 const COLLAPSED_KEY = "st_nav_collapsed";
+/** Событие «войти в настройку разделов» — шлёт пункт меню под ФИО. */
+export const NAV_EDIT_EVENT = "st-nav-edit";
 
 function loadList(key: string): string[] {
   if (typeof window === "undefined") return [];
@@ -113,6 +110,13 @@ export default function Sidebar() {
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
   const visibleNav = mounted && !editMode ? orderedNav.filter((n) => !hiddenSet.has(n.id)) : orderedNav;
 
+  // «Настроить разделы» живёт в меню под ФИО (TopActions) — оно присылает событие, меню слева входит в режим настройки.
+  useEffect(() => {
+    const start = () => { setAnimate(true); setCollapsed(false); setEditMode(true); };
+    window.addEventListener(NAV_EDIT_EVENT, start);
+    return () => window.removeEventListener(NAV_EDIT_EVENT, start);
+  }, []);
+
   const setNavCollapsed = (next: boolean) => {
     setAnimate(true);
     setCollapsed(next);
@@ -148,8 +152,7 @@ export default function Sidebar() {
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
-              <span className="text-[15px] font-bold text-text-main tracking-tight">Loom</span>
-              <p className="text-[11px] text-text-muted leading-none mt-0.5 truncate">AI-генератор тест-кейсов</p>
+              <span className="text-[15px] font-bold text-text-main tracking-tight">Shark</span>
             </div>
           )}
           <button type="button" onClick={() => setNavCollapsed(!collapsed)} aria-expanded={!collapsed}
@@ -247,20 +250,16 @@ export default function Sidebar() {
           );
         })}
 
-        <button
-          type="button"
-          onClick={() => { if (collapsed) setNavCollapsed(false); setEditMode((v) => !v); }}
-          title={collapsed ? "Настроить разделы" : undefined}
-          aria-label={collapsed ? "Настроить разделы" : undefined}
-          className={`mt-1 flex w-full items-center rounded-lg py-2 text-sm font-medium transition-colors
-            ${collapsed ? "justify-center" : "gap-2.5 px-3"}
-            ${editMode
-              ? "bg-primary/10 text-primary"
-              : "text-text-muted hover:bg-[var(--color-sidebar-hover)] hover:text-text-main"}`}
-        >
-          {editMode ? <Check className="w-4 h-4" /> : <SlidersHorizontal className="w-4 h-4" />}
-          {!collapsed && <span className="flex-1 text-left">{editMode ? "Готово" : "Настроить разделы"}</span>}
-        </button>
+        {editMode && (
+          <button
+            type="button"
+            onClick={() => setEditMode(false)}
+            className="mt-1 flex w-full items-center gap-2.5 rounded-lg bg-primary/10 px-3 py-2 text-sm font-medium text-primary transition-colors"
+          >
+            <Check className="w-4 h-4" />
+            <span className="flex-1 text-left">Готово</span>
+          </button>
+        )}
       </nav>
 
       {/* Активные алерты и статус LLM; пользователь, тема и настройки — вверху справа (TopActions) */}

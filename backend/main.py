@@ -31,6 +31,12 @@ logging.basicConfig(
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
 
+# ── Мок-режим (SHARK_MOCK=1): без корпоративной сети, данные в data_mock/ — см. backend/mock ─────────────────
+from db.paths import MOCK as _MOCK
+if _MOCK:
+    from backend.mock import install as _mock_install
+    _mock_install()
+
 # ── Корпоративные SSL-сертификаты (Sber BIG IP proxy) ────────────────────────
 import os as _os
 _CERTS_BUNDLE = _ROOT / "certs" / "ca-bundle.pem"
@@ -52,7 +58,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
-    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking,
+    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen,
 )
 
 # Веб-коннекторы (Playwright), анализатор логов на них и MCP-сервер для GigaCode временно отключены
@@ -66,6 +72,9 @@ try:
     init_db()
 except Exception as _e:
     warnings.warn(f"PostgreSQL недоступен, Генератор метрик не будет работать: {_e}")
+if _MOCK:
+    from backend.mock import seed_settings as _mock_seed
+    _mock_seed()
 
 
 @asynccontextmanager
@@ -110,7 +119,7 @@ async def lifespan(app_: FastAPI):
 
 
 app = FastAPI(
-    title="Loom API",
+    title="Shark API",
     description="AI-генератор тест-кейсов для Jira Zephyr Scale",
     version="3.1.0",
     lifespan=lifespan,
@@ -171,6 +180,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(system.router)
 app.include_router(generation.router)
+app.include_router(tm_gen.router)
 app.include_router(etalons.router)
 app.include_router(bugs.router)
 app.include_router(alerts.router)

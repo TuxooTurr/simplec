@@ -1,5 +1,5 @@
 /**
- * Модель Jira для Jira tool: типы задач, справочники сервера и правила Loom.
+ * Модель Jira для Jira tool: типы задач, справочники сервера и правила Shark.
  *
  * Данные — из настоящей Jira (бэкенд /api/jira/tool/*, подключение из Настройки → Jira).
  * Справочники (поля, статусы, приоритеты, решения) общие на весь сервер Jira, поэтому
@@ -21,7 +21,7 @@ export type FieldValue = string | string[] | null;
 export interface Issue {
   key: string;
   fields: Record<string, FieldValue>;
-  /** Черновик Loom: в Jira ещё не отправлялся, хранится в этом браузере. */
+  /** Черновик Shark: в Jira ещё не отправлялся, хранится в этом браузере. */
   local?: boolean;
   /** Ссылка на задачу в Jira. */
   url?: string;

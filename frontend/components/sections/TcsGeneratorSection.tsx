@@ -1,14 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  AlertTriangle, CheckCircle2, Database, Loader2, Minus, Play, Plus,
-  RefreshCw, Users,
-} from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Loader2, Minus, Play, Plus, Users } from "lucide-react";
 
 import { SectionSettingsButton, Select } from "@/components/ui";
 import TcsSettingsModal from "@/components/settings/TcsSettingsModal";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 import {
   getTcsParents, planTcsSync, runTcsSync,
   listTestDataConnections,
@@ -225,7 +223,7 @@ export default function TcsGeneratorSection() {
               <button onClick={() => loadParents(connId)} disabled={loadingParents || busy}
                 className="p-1 rounded text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors"
                 title="Обновить список">
-                <RefreshCw className={`w-3.5 h-3.5 ${loadingParents ? "animate-spin" : ""}`} />
+                <RefreshIcon busy={loadingParents} className="w-3.5 h-3.5" />
               </button>
             </div>
             {loadingParents ? (

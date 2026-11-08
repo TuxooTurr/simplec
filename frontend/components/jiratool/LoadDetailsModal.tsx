@@ -13,9 +13,10 @@ import LoadRowView from "./LoadRowView";
  * Подробная нагрузка списка — по всем направлениям: тестирование (тестировщик и его план) и поля направлений
  * (человек + план в ячейке). У каждого направления свой раздел: итог «план / ёмкость», люди с полосами загрузки
  * (глаз включает и выключает полосы — запоминается в списке), план без исполнителя и спрятанный перечень задач,
- * не учтённых в нагрузке. Здесь же галочки списка: считать ли выходные и не учитывать ли готовые задачи.
+ * не учтённых в нагрузке. «Настройки» — окно поверх: норма, резервы, выходные, готовые задачи и какие команды
+ * показывать на виджете слева.
  */
-export default function LoadDetailsModal({ list, people, settings, issueOf, skip, onClose, onRange, onAuto, onWeekends, onBars, onSettings }: {
+export default function LoadDetailsModal({ list, people, settings, issueOf, skip, onClose, onRange, onBars, onSettings }: {
   list: TaskList;
   people: Participant[];
   settings: LoadSettings;
@@ -23,11 +24,10 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
   skip: (key: string) => LoadSkip;
   onClose: () => void;
   onRange: (r: { from: string; to: string }) => void;
-  onAuto: (on: boolean) => void;
-  onWeekends: (on: boolean) => void;
   onBars: (dir: string, on: boolean) => void;
   onSettings: () => void;
 }) {
+  const widget = list.loadDirs?.length ? list.loadDirs : [TESTING];
   const range = list.load ?? defaultLoadRange();
   const loads = DIRECTIONS.map(d => directionLoad(list, d, people, range, skip, settings));
   const [open, setOpen] = useState<Set<string>>(() => new Set([TESTING]));
@@ -49,20 +49,11 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
           <span className="text-xs text-text-muted">
             {weekend ? `дней ${days}, из них выходных ${weekend}` : `рабочих дней ${days}`} · в день {fmtMinutes(settings.dayMinutes, "hm")}
           </span>
-          <button type="button" onClick={onSettings} title="Норма дня и резервы" aria-label="Норма дня и резервы"
-            className="ml-auto p-1.5 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-4 h-4" /></button>
+          <button type="button" onClick={onSettings} title="Норма дня, резервы, выходные, команды на виджете"
+            className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1 text-xs text-text-main hover:bg-bg-subtle">
+            <Settings2 className="w-3.5 h-3.5" /> Настройки
+          </button>
         </div>
-        <div className="flex flex-col gap-1.5 text-sm text-text-main">
-          <label className="flex items-start gap-2 cursor-pointer select-none">
-            <input type="checkbox" className="mt-1" checked={!!list.loadWeekends} onChange={e => onWeekends(e.target.checked)} />
-            <span>Считать выходные <span className="text-text-muted">— переработка: выходные добавляются в ёмкость; план сверх будней показывается отдельно</span></span>
-          </label>
-          <label className="flex items-start gap-2 cursor-pointer select-none">
-            <input type="checkbox" className="mt-1" checked={list.loadAuto !== false} onChange={e => onAuto(e.target.checked)} />
-            <span>Не учитывать задачи в «Готово к релизу» и дальше</span>
-          </label>
-        </div>
-
         <ul className="border border-border-main rounded-xl divide-y divide-border-main">
           {loads.map(d => {
             const isOpen = open.has(d.id);
@@ -88,6 +79,10 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
                       </>
                     )}
                   </button>
+                  {widget.includes(d.id) && (
+                    <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary whitespace-nowrap"
+                      title="Показывается в виджете нагрузки слева — меняется в «Настройках»">на виджете</span>
+                  )}
                   <button type="button" onClick={() => onBars(d.id, !bars)} aria-pressed={bars}
                     title={bars ? "Скрыть полосы загрузки людей" : "Показать полосы загрузки людей"} aria-label={`${d.label}: полосы загрузки`}
                     className="p-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle">
@@ -100,7 +95,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
                       const own = settings.reserves.filter(r => r.minutes > 0 && !r.participants.length && (!r.directions?.length || r.directions.includes(d.id)));
                       const left = Math.max(0, settings.dayMinutes - own.reduce((n, r) => n + r.minutes, 0));
                       return own.length > 0 && (
-                        <p className="text-[11px] text-text-muted" title="Резервы — шестерёнкой: всем, по направлениям или людям">
+                        <p className="text-[11px] text-text-muted" title="Резервы — в «Настройках»: всем, по направлениям или людям">
                           в день {fmtMinutes(settings.dayMinutes, "hm")} − {own.map(r => `${r.name} ${fmtMinutes(r.minutes, "hm")}`).join(" − ")} = <b className="font-medium text-text-main">{fmtMinutes(left)}</b> на задачи
                         </p>
                       );

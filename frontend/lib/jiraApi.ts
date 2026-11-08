@@ -32,6 +32,8 @@ export interface JiraSettings {
   ssl_verify: boolean;
   labels: string[];
   issuetype: string;
+  /** Проект Jira tool: поля, поиск и создание задач во всех списках. */
+  project?: string;
 }
 
 export interface JiraProjectMeta {

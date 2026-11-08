@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, CalendarDays, CheckCircle2, ClipboardCopy, ExternalLink, Link2, Loader2, MinusCircle, PenLine, RotateCcw, Settings2, Stethoscope, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCopy, ExternalLink, Link2, Loader2, MinusCircle, PenLine, RotateCcw, Settings2, Stethoscope, XCircle } from "lucide-react";
 import {
   getConfluenceSettings, probeConfluenceRead, probeConfluenceWrite, testConfluence,
   type ConfProbeReport,
@@ -18,7 +18,7 @@ const INPUT = "w-full text-sm border border-border-main rounded-lg px-2.5 py-1.5
 /**
  * График стендов — кто, когда и какие микросервисы ставит на Major-Check и Major-GO в выбранном окне релиза.
  * У каждого стенда своя страница Confluence: данные — в свойстве страницы (с версией — одновременные правки
- * не затирают друг друга), текст страницы собирает Loom; заявки коллеги оставляют комментариями к странице.
+ * не затирают друг друга), текст страницы собирает Shark; заявки коллеги оставляют комментариями к странице.
  * Подключение к Confluence — как к Jira в Jira tool: плашка «не подключён», окно настроек, точка статуса;
  * проверка API — окном по кнопке, как в Zephyr Tool.
  */
@@ -45,7 +45,6 @@ export default function StandScheduleSection() {
       <div className="px-6 py-6 space-y-5">
         <header className="flex flex-wrap items-start gap-3">
           <div className="min-w-0 flex-1 space-y-1">
-            <h1 className="flex items-center gap-2 text-lg font-bold text-text-main"><CalendarDays className="w-5 h-5 text-primary" /> График стендов</h1>
             <p className="text-sm text-text-muted">
               Кто, когда и какие микросервисы ставит на стенд: дни, период и время установки. Один микросервис у двух команд
               в пересекающееся время — конфликт.

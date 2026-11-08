@@ -10,9 +10,10 @@
 
 import json
 from pathlib import Path
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_FILE = _ROOT / "data" / "hub_tiles.json"
+_FILE = DATA_DIR / "hub_tiles.json"
 
 FIELDS = ("title", "subtitle", "icon", "color")
 

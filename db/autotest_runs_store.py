@@ -11,10 +11,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_CONFIG_FILE = _ROOT / "data" / "autotest_run_config.json"
-_HISTORY_FILE = _ROOT / "data" / "autotest_run_history.json"
+_CONFIG_FILE = DATA_DIR / "autotest_run_config.json"
+_HISTORY_FILE = DATA_DIR / "autotest_run_history.json"
 _HISTORY_MAX = 50
 
 

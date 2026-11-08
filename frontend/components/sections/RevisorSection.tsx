@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Scale, Search, RefreshCw, X, AlertCircle } from "lucide-react";
+import { Search, RefreshCw, X, AlertCircle } from "lucide-react";
 import { SectionSettingsButton } from "@/components/ui";
 import RevisorSettingsModal from "@/components/settings/RevisorSettingsModal";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 import {
   getRevisorData, getStands,
   podStatus, rowMatchStatus,
@@ -231,7 +232,6 @@ export default function RevisorSection() {
         {/* ── Page header ──────────────────────────────────────── */}
         <div className="flex items-start justify-between mb-1 gap-4 flex-wrap">
           <h1 className="text-xl font-bold text-text-main flex items-center gap-2">
-            <Scale className="w-5 h-5 text-primary" />
             Ревизор стендов
           </h1>
           <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
@@ -258,7 +258,7 @@ export default function RevisorSection() {
                 text-sm text-text-muted hover:bg-bg-subtle hover:text-primary transition-all duration-150
                 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              <RefreshIcon busy={refreshing} className="w-3.5 h-3.5" />
               Обновить
             </button>
             {/* Настройки раздела — всегда крайняя правая кнопка шапки */}

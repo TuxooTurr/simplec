@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from db.postgres import get_db
 from db.metrics_models import MetricsSettings
 from agents.llm_client import GIGA_CORP_SCOPES, GIGA_IFT_URL, GIGA_PUBLIC_URL, gigachat_only
+from db.paths import DATA_DIR
 
 router = APIRouter()
 
@@ -822,7 +823,7 @@ def gigachat_test_chat(req: GigachatTestChatRequest) -> dict:
 
 # ── Загрузка файлов сертификатов GigaChat ────────────────────────────────────
 # Файлы кладём в защищённую папку с правами 0600 (как _resolve_pem_path/mkstemp).
-_CERTS_DIR = Path(__file__).resolve().parents[2] / "data" / "gigachat_certs"
+_CERTS_DIR = DATA_DIR / "gigachat_certs"
 _CERT_KINDS = {"cert": ".pem", "key": ".key", "ca": ".pem"}
 _MAX_CERT_SIZE = 1024 * 1024  # 1 МБ — сертификата с запасом хватает
 
@@ -866,7 +867,7 @@ async def gigachat_cert_upload(kind: str, file: UploadFile = File(...)) -> dict:
 # Файлы прочих настроек (Kafka SSL, CA для VPS-подключений) — тот же приём,
 # что и для сертификатов GigaChat: файл кладётся в защищённую папку, наружу
 # возвращается путь, который подставляется в поле формы.
-_FILES_DIR = Path(__file__).resolve().parents[2] / "data" / "settings_files"
+_FILES_DIR = DATA_DIR / "settings_files"
 _MAX_SETTINGS_FILE = 5 * 1024 * 1024   # 5 МБ хватает для сертификатов и ключей
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 

@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2, Plus, ScrollText, Search, Settings2, X } from "lucide-react";
+import { AlertTriangle, Loader2, Plus, Search, Settings2, X } from "lucide-react";
 import ErrorGroups from "@/components/logs/ErrorGroups";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import {
@@ -87,10 +87,10 @@ export default function LogAnalyzerSection() {
       <div className="space-y-5">
         <div>
           <h1 className="text-xl font-bold text-text-main mb-1 flex items-center gap-2">
-            <ScrollText className="w-5 h-5 text-primary" /> Анализатор логов
+            Анализатор логов
           </h1>
           <p className="text-sm text-text-muted">
-            Введите микросервис — Loom выгрузит его логи за выбранный период и сгруппирует ошибки по причине.
+            Введите микросервис — Shark выгрузит его логи за выбранный период и сгруппирует ошибки по причине.
           </p>
         </div>
 

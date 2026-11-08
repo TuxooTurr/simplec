@@ -5,9 +5,9 @@ TeamStore — хранилище команд из БД.
 import json
 import os
 
-TEAMS_FILE = os.path.join(
-    os.path.dirname(__file__), "..", "data", "teams.json"
-)
+from db.paths import DATA_DIR
+
+TEAMS_FILE = str(DATA_DIR / "teams.json")
 
 
 class TeamStore:

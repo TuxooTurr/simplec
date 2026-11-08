@@ -1,5 +1,5 @@
 """
-Резервная копия данных Loom — выгрузка в один .json и восстановление из него.
+Резервная копия данных Shark — выгрузка в один .json и восстановление из него.
 
 Зачем: данные живут внутри папки установки (data/*.json, simpletest.db, db/chroma_data). Переустановка «удалить
 папку → поставить заново» стирает их. Перед переустановкой — «Выгрузить всё», после — «Загрузить из файла».
@@ -13,7 +13,7 @@
 Не входят: кэши, которые собираются заново (индекс Zephyr), JAR-драйверы JDBC, сертификаты и ключи.
 
 Секреты (токены, пароли, ключи API) в файл не попадают: значение заменяется меткой REDACTED. При восстановлении
-на месте метки остаётся то, что уже сохранено на этом Loom (пароль подключения с тем же id, токен Jira…);
+на месте метки остаётся то, что уже сохранено на этом Shark (пароль подключения с тем же id, токен Jira…);
 нечего оставить — поле пустое, его вводят заново.
 
 Восстановление заменяет выбранные разделы целиком (настройки — по ключам, чужие ключи не трогает). Исключение —
@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from backend.api.auth import require_superuser
 from db.metrics_models import Base
 from db.postgres import get_db
+from db.paths import DATA_DIR
 
 # Вся выгрузка и восстановление — только суперюзеру: в файле все данные приложения.
 router = APIRouter(dependencies=[Depends(require_superuser)])
@@ -52,7 +53,7 @@ FORMAT = "simpletest.backup"
 VERSION = 1
 REDACTED = "__SIMPLETEST_REDACTED__"
 _ROOT = Path(__file__).resolve().parents[2]
-DATA_DIR = _ROOT / "data"
+DATA_DIR = DATA_DIR
 BACKUPS_DIR = DATA_DIR / "backups"
 KEEP_SNAPSHOTS = 5
 
@@ -564,9 +565,9 @@ def import_backup(body: ImportBody, db: Session = Depends(get_db)) -> dict:
 
 def _check(backup: dict) -> dict:
     if backup.get("format") != FORMAT:
-        raise HTTPException(422, "Это не резервная копия Loom")
+        raise HTTPException(422, "Это не резервная копия Shark")
     if int(backup.get("version") or 0) > VERSION:
-        raise HTTPException(422, "Копия сделана более новой версией Loom — обновите приложение")
+        raise HTTPException(422, "Копия сделана более новой версией Shark — обновите приложение")
     server = backup.get("server")
     if not isinstance(server, dict):
         raise HTTPException(422, "В копии нет данных сервера")

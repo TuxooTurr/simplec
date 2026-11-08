@@ -25,7 +25,14 @@ function ResetLink({ value, def, onReset }: { value: string; def?: string; onRes
  * или вставить вручную; API-токен TestOps и Jenkins — из профиля там же. Ссылки стоят по умолчанию (SBER911): стереть поле —
  * отключить источник, «По умолчанию» — вернуть.
  */
-export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+export default function AqaSettingsModal({ open, onClose, onSaved, only }: {
+  open: boolean; onClose: () => void; onSaved: () => void;
+  /** Только один источник — для «Настроек» (строки Bitbucket и TestOps). Сохраняются все поля как были загружены. */
+  only?: "bitbucket" | "testops";
+}) {
+  const show = (k: "bitbucket" | "testops" | "jenkins" | "epics") => !only || only === k;
+  const title = only === "bitbucket" ? "Bitbucket — репозиторий автотестов"
+    : only === "testops" ? "Allure TestOps — проект" : "Трекинг AQA — подключения";
   const [s, setS] = useState<AqaSettings | null>(null);
   const [epics, setEpics] = useState<string[]>([""]);
   const [busy, setBusy] = useState(false);
@@ -66,10 +73,10 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
   };
 
   return (
-    <Modal open={open} onClose={() => !busy && onClose()} title="Трекинг AQA — подключения" size="max-w-2xl">
+    <Modal open={open} onClose={() => !busy && onClose()} title={title} size={only ? "max-w-xl" : "max-w-2xl"}>
       {!s ? <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю…</p> : (
         <div className="space-y-5 text-sm">
-          <section className="space-y-2">
+          {show("bitbucket") && <section className="space-y-2">
             <div>
               <div className={LABEL}>
                 <label htmlFor="aqa-bb-url" className="inline-flex items-center gap-1.5"><GitCommitHorizontal className="w-3.5 h-3.5" /> Репозиторий автотестов в Bitbucket</label>
@@ -98,9 +105,9 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
                 <button type="button" onClick={() => setBbLogin(null)} aria-label="Отмена" className="text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
               </div>
             )}
-          </section>
+          </section>}
 
-          <section className="space-y-2">
+          {show("testops") && <section className="space-y-2">
             <div>
               <div className={LABEL}>
                 <label htmlFor="aqa-to-url" className="inline-flex items-center gap-1.5"><Rocket className="w-3.5 h-3.5" /> Проект в Allure TestOps</label>
@@ -115,9 +122,9 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
                 onFocus={() => s.testopsToken === MASK && setS({ ...s, testopsToken: "" })}
                 placeholder="Профиль TestOps → API tokens → Create" autoComplete="off" className={`${INPUT} font-mono text-xs`} />
             </label>
-          </section>
+          </section>}
 
-          <section className="space-y-2">
+          {show("jenkins") && <section className="space-y-2">
             <div>
               <div className={LABEL}>
                 <label htmlFor="aqa-jk-url" className="inline-flex items-center gap-1.5"><Play className="w-3.5 h-3.5" /> Джоб автотестов в Jenkins</label>
@@ -139,9 +146,9 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
               </label>
             </div>
             <p className="text-[11px] text-text-muted">Запуски идут от имени этого пользователя. Нужен API-токен, а не пароль.</p>
-          </section>
+          </section>}
 
-          <section className="space-y-2">
+          {show("epics") && <section className="space-y-2">
             <span className={LABEL}><ListChecks className="w-3.5 h-3.5" /> Эпики роадмапа — номер или ссылка на эпик в Jira</span>
             {!!s.pinnedEpics?.length && (
               <p className="flex flex-wrap items-center gap-1.5 text-xs text-text-muted">
@@ -161,7 +168,7 @@ export default function AqaSettingsModal({ open, onClose, onSaved }: { open: boo
               <button type="button" onClick={() => setEpics(p => [...p, ""])} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
                 <Plus className="w-3 h-3" /> Ещё эпик</button>
             )}
-          </section>
+          </section>}
 
           {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
           <div className="flex justify-end gap-2 border-t border-border-main pt-3">

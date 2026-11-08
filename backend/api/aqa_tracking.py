@@ -64,6 +64,7 @@ from sqlalchemy.orm import Session
 from backend.api import jira_defects
 from backend.api.jira_defects import _MASK, _get, _set
 from db.postgres import get_db
+from db.paths import DATA_DIR
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ MAX_RESULTS = 2000                     # кейсов в подробностя�
 MAX_FILES = 1000                       # файлов в подробностях коммита
 # Последний загруженный роадмап — снимок: попадает в резервную копию (раздел «Трекинг AQA») и показывается,
 # когда Jira недоступна.
-SNAPSHOT_FILE = Path(__file__).resolve().parents[2] / "data" / "aqa_roadmap.json"
+SNAPSHOT_FILE = DATA_DIR / "aqa_roadmap.json"
 
 _BB_RE = re.compile(r"^(https?://.+?)/projects/([^/]+)/repos/([^/?#]+)", re.I)
 _TO_RE = re.compile(r"^(https?://.+?)/project/(\d+)", re.I)
@@ -161,7 +162,7 @@ def _http(name: str, method: str, url: str, verify: Any, *, token: str = "", aut
     """Запрос к Bitbucket, TestOps или Jenkins; ошибки — понятным текстом с именем системы, как у Jira.
     raw — вернуть сам ответ (нужны заголовки)."""
     import requests
-    headers = {"Accept": accept, "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)"}
+    headers = {"Accept": accept, "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)"}
     if token:
         headers["Authorization"] = "Bearer " + token
     try:
@@ -239,7 +240,7 @@ def token_from_login(body: TokenFromLoginBody, db: Session) -> dict:
     try:
         r = _http("Bitbucket", "PUT", f"{cfg['base_url']}/rest/access-tokens/1.0/users/{login.lower()}", cfg["ssl_verify"],
                   auth=(login, body.password),
-                  json_body={"name": f"Loom {time.strftime('%Y-%m-%d %H:%M')}",
+                  json_body={"name": f"Shark {time.strftime('%Y-%m-%d %H:%M')}",
                              "permissions": ["PROJECT_READ", "REPO_READ"], "expiryDays": 180})
     except HTTPException as e:
         if e.status_code in (401, 403):
@@ -1225,7 +1226,7 @@ def _bb_ready(db: Session) -> dict:
     if not cfg["base_url"]:
         raise HTTPException(400, "Bitbucket не подключён — укажите ссылку на репозиторий в настройках вкладки")
     if not cfg["token"]:
-        raise HTTPException(400, "Нет маркера Bitbucket — войдите в Loom логином Jira или получите маркер в настройках вкладки")
+        raise HTTPException(400, "Нет маркера Bitbucket — войдите в Shark логином Jira или получите маркер в настройках вкладки")
     return cfg
 
 

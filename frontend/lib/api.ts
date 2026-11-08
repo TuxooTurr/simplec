@@ -6,7 +6,7 @@ import { authHeaders } from "./authApi";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const ah = authHeaders();
   const headers = new Headers(init?.headers);
   for (const [k, v] of Object.entries(ah)) {
@@ -447,7 +447,9 @@ export async function analyzeProject(path: string): Promise<ProjectAnalysis> {
 
 export interface GenSessionSummary {
   id:             string;
-  status:         "generating" | "done" | "error" | "cancelled";
+  /** Тестовая модель по этапам (lib/tmApi.ts) — свои статусы: planning, plan_ready, writing, reviewing, review_ready, fixing. */
+  status:         "generating" | "done" | "error" | "cancelled" | "planning" | "plan_ready" | "writing" | "reviewing" | "review_ready" | "fixing";
+  kind?:          "tm";
   created_at:     string;
   updated_at:     string;
   requirement:    string;
@@ -1277,7 +1279,7 @@ export const getCorpAuthStatus = () => fetchJson<CorpAuthStatus>("/api/corp-auth
 export const corpLogin = (login: string, password: string) =>
   postJson<CorpAuthStatus & { results: Record<"jira" | "confluence", { ok: boolean; text: string }> }>("/api/corp-auth/login", { login, password });
 
-/** Картинка из редактора → адрес для Markdown (хранится в Loom). */
+/** Картинка из редактора → адрес для Markdown (хранится в Shark). */
 export async function uploadReqAsset(file: File): Promise<{ url: string }> {
   const body = new FormData();
   body.append("file", file);

@@ -16,7 +16,7 @@ const VISIBLE = 4;
  * Переименование — двойной щелчок по названию или карандаш при наведении; Enter — сохранить, Esc — отменить.
  * Значок архива при наведении убирает список в блок «Архив» под колонкой (ArchivedLists).
  */
-export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove, onDropIssues, onRename, onArchive }: {
+export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDelete, onConfirmDelete, onCancelDelete, onMove, onDropIssues, onRename, onArchive, onEdit }: {
   items: ListsNavItem[];
   activeId: string | null;
   askDeleteId: string | null;
@@ -28,6 +28,8 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
   onDropIssues: (listId: string, keys: string[]) => void;
   onRename: (listId: string, name: string) => void;
   onArchive: (listId: string) => void;
+  /** Карандаш: окно редактирования списка (имя, шаблон, папки). Без него — переименование на месте. */
+  onEdit?: (listId: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [maxH, setMaxH] = useState<number | undefined>(undefined);
@@ -142,11 +144,12 @@ export default function ListsNav({ items, activeId, askDeleteId, onOpen, onAskDe
             {l.structure ? <FolderTree className="w-4 h-4 flex-shrink-0" /> : <LayoutList className="w-4 h-4 flex-shrink-0" />}
             <span className="min-w-0 flex-1">
               <span className="block truncate">{l.name}</span>
-              <span className="block text-[10px] text-text-muted font-normal">{l.project}</span>
             </span>
             <span className="text-[11px] text-text-muted group-hover/li:hidden">{l.count}</span>
           </button>
-          <button type="button" onClick={() => startEdit(l)} aria-label={`Переименовать список ${l.name}`} title="Переименовать список"
+          <button type="button" onClick={() => (onEdit ? onEdit(l.id) : startEdit(l))}
+            aria-label={onEdit ? `Редактировать список ${l.name}` : `Переименовать список ${l.name}`}
+            title={onEdit ? "Список: имя, шаблон, папки, свои поля" : "Переименовать список"}
             className="hidden group-hover/li:inline-flex focus-visible:inline-flex p-1.5 rounded-md text-text-muted hover:text-primary">
             <Pencil className="w-3.5 h-3.5" />
           </button>

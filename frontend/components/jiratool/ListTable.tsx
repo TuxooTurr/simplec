@@ -5,7 +5,7 @@ import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal,
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
   LOAD_COL, REQ_COL, MS_COL, ruleResult, DRAG_ISSUES, TESTING, inDirection, categoryOf, groupIssues, isRoleCol, loadSkip, isWritableGroupRef, orderIndex,
-  type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue,
+  type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue, type TimeFmt,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
 import type { ReqOption } from "./ListCells";
@@ -73,10 +73,13 @@ type FolderKey = string | null | undefined;
 export default function ListTable({
   ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
-  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, msShared, reqOptions, onReqs, onReqUrl, onClearMark,
+  onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, timeFmt, onTimeFmt, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, msShared, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   ctx: ColCtx;
   issues: Issue[];
+  /** Формат трудозатрат и его смена — переключатель в шапке колонок со временем (нагрузка, направления). */
+  timeFmt?: TimeFmt;
+  onTimeFmt?: (f: TimeFmt) => void;
   sort: SortState;
   onSort: (s: SortState) => void;
   /**
@@ -110,7 +113,7 @@ export default function ListTable({
   onMoveRow: (key: string, target: string, place: Place) => void;
   /** Порядок колонок: переставить col перед/после target. */
   onMoveColumn: (col: ColRef, target: ColRef, place: Place) => void;
-  /** Перенос в другую группу по полю Loom: записать значения и (если есть target) встать рядом с ним. */
+  /** Перенос в другую группу по полю Shark: записать значения и (если есть target) встать рядом с ним. */
   onMoveToGroup: (key: string, changes: GroupChange[], target: string | null, place: Place) => void;
   /** Перенос в другую папку (null — «Без папки»); внутри неё задача сама попадёт в свою группу. */
   onMoveToFolder: (key: string, folder: string | null, target: string | null, place: Place) => void;
@@ -121,7 +124,7 @@ export default function ListTable({
   onMoveFolder: (name: string, target: string, place: Place) => void;
   /** Своё текстовое поле: переносить текст или обрезать многоточием. */
   onToggleWrap: (fieldId: string) => void;
-  /** Черновик Loom: открыть форму, чтобы поправить или отправить в Jira. */
+  /** Черновик Shark: открыть форму, чтобы поправить или отправить в Jira. */
   onOpenDraft: (issue: Issue) => void;
   /** Трудозатраты задачи: план (минуты; null — убрать), начало или конец теста. */
   onSpend: (key: string, patch: { plan?: number | null }) => void;
@@ -223,7 +226,7 @@ export default function ListTable({
      Папки — уровень выше группировки: перенос в другую папку меняет только папку,
      в новой папке задача сама встаёт в свою группу. Внутри папки (или списка без папок):
      в той же группе — порядок; в другой группе — только если все отличающиеся уровни —
-     записываемые поля Loom (участник, свои поля): у задачи меняется значение.
+     записываемые поля Shark (участник, свои поля): у задачи меняется значение.
      При сортировке по колонке ручной порядок не виден — перетаскивание строк выключено. */
   const rowsMovable = !sort;
   /**
@@ -414,7 +417,7 @@ export default function ListTable({
           {issue.url ? (
             <a href={issue.url} target="_blank" rel="noreferrer" title="Открыть в Jira" className="font-mono text-xs text-primary hover:underline">{issue.key} ↗</a>
           ) : issue.local ? (
-            <button type="button" onClick={() => onOpenDraft(issue)} title="Черновик Loom: открыть, поправить или отправить в Jira"
+            <button type="button" onClick={() => onOpenDraft(issue)} title="Черновик Shark: открыть, поправить или отправить в Jira"
               className="font-mono text-xs text-primary hover:underline">{issue.key}</button>
           ) : <span className="font-mono text-xs text-primary">{issue.key}</span>}
           {issue.local && (
@@ -698,6 +701,14 @@ export default function ListTable({
                       <span className="truncate">{colLabel(c, list)}</span>
                       {sort?.col === c && (sort.dir === 1 ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />)}
                     </button>
+                    {onTimeFmt && timeFmt && (c === LOAD_COL || c === PARTICIPANT_COL || isRoleCol(c)) && (
+                      <button type="button" onClick={() => onTimeFmt(timeFmt === "hm" ? "dhm" : "hm")}
+                        title={`Трудозатраты: ${timeFmt === "hm" ? "часы и минуты" : "дни, часы и минуты"} — переключить для всех колонок и Excel`}
+                        aria-label="Формат времени"
+                        className="ml-1 flex-shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-text-muted ring-1 ring-border-main hover:text-text-main">
+                        {timeFmt === "hm" ? "ч·м" : "д·ч·м"}
+                      </button>
+                    )}
                     <button type="button" onClick={() => onTogglePin(c)} aria-pressed={pinned.has(c)}
                       aria-label={pinned.has(c) ? `Открепить колонку ${colLabel(c, list)}` : `Закрепить колонку ${colLabel(c, list)}`}
                       title={pinned.has(c) ? "Открепить" : "Закрепить: колонка не уедет при прокрутке вбок"}

@@ -2,7 +2,7 @@
 Справочник микросервисов графика стендов (выпадающий список в форме брони) — файл data/ms_catalog.json.
 
 С 22.10.2026 на графике бронируют микросервисы, а не КЭ. Справочник КЭ (db/ke_store.py) остаётся как есть —
-его переиспользуют в другом месте. Механика та же: один на оба стенда и на всех, кто работает с этим Loom;
+его переиспользуют в другом месте. Механика та же: один на оба стенда и на всех, кто работает с этим Shark;
 создаётся из формы брони или правится списком в настройках стенда; базовый список — db/ms_catalog_default.json
 (репозитории платформы, 22.10.2026; дописывается один раз, удалённое руками не возвращается).
 Описания репозиториев — db/ms_catalog_info.json: подсказка в выпадающем списке (по имени вроде «pkap-zno-integ-ms»
@@ -15,9 +15,10 @@ import json
 from pathlib import Path
 
 from db import ke_store
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-MS_FILE = _ROOT / "data" / "ms_catalog.json"
+MS_FILE = DATA_DIR / "ms_catalog.json"
 DEFAULT_FILE = Path(__file__).resolve().parent / "ms_catalog_default.json"
 INFO_FILE = Path(__file__).resolve().parent / "ms_catalog_info.json"
 

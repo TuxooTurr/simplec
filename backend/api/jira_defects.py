@@ -48,6 +48,7 @@ _K_TOKEN_PATH = "jira_token_path"
 _K_SSL_VERIFY = "jira_ssl_verify"     # "1" / "" (пусто = выключено, корп. BIG IP)
 _K_LABELS     = "jira_labels_presets" # JSON-список пресетов лейблов
 _K_ISSUETYPE  = "jira_issuetype"
+_K_PROJECT    = "jira_project"        # проект Jira tool: от него поля, поиск и создание задач во всех списках
 _K_LABELS_SEEDED = "jira_labels_seeded"  # JSON-список лейблов по умолчанию, которые уже добавлены в пресеты
 
 # Лейблы по умолчанию. Новый лейбл отсюда попадает в сохранённый список пресетов один раз:
@@ -126,6 +127,7 @@ def _load_cfg(db: Session) -> dict:
         "ssl_verify": _get(db, _K_SSL_VERIFY, "") == "1",
         "labels":     labels,
         "issuetype":  _get(db, _K_ISSUETYPE, "Дефект"),
+        "project":    _get(db, _K_PROJECT, "SBER911"),
     }
 
 
@@ -158,7 +160,7 @@ def _jira_request(cfg: dict, method: str, path: str,
     # при этом curl с тем же токеном проходит.
     headers = {
         "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)",
     }
     if auth is None:
         headers["Authorization"] = "Bearer " + _resolve_token(cfg)
@@ -394,6 +396,8 @@ class JiraSettingsBody(BaseModel):
     ssl_verify: bool = False
     labels: list[str] = Field(default_factory=list)
     issuetype: str = "Дефект"
+    # None — не менять: старые формы и другие места шлют настройки без проекта.
+    project: Optional[str] = None
 
 
 class TokenFromLoginBody(BaseModel):
@@ -434,6 +438,7 @@ def get_settings(db: Session = Depends(get_db)) -> dict:
         "ssl_verify": cfg["ssl_verify"],
         "labels":     cfg["labels"],
         "issuetype":  cfg["issuetype"],
+        "project":    cfg["project"],
     }
 
 
@@ -446,6 +451,8 @@ def put_settings(body: JiraSettingsBody, db: Session = Depends(get_db)) -> dict:
     _set(db, _K_SSL_VERIFY, "1" if body.ssl_verify else "", "Проверка SSL Jira")
     _save_labels(db, [l for l in body.labels if l.strip()])
     _set(db, _K_ISSUETYPE, body.issuetype.strip() or "Дефект", "Тип задачи для дефектов")
+    if body.project is not None and body.project.strip():
+        _set(db, _K_PROJECT, body.project.strip().upper(), "Проект Jira tool")
     db.commit()
     return get_settings(db)
 
@@ -484,7 +491,7 @@ def token_from_login(body: TokenFromLoginBody, db: Session = Depends(get_db)) ->
 
     result = _jira_request(
         cfg, "POST", "/rest/pat/latest/tokens",
-        json_body={"name": f"Loom {time.strftime('%Y-%m-%d %H:%M')}",
+        json_body={"name": f"Shark {time.strftime('%Y-%m-%d %H:%M')}",
                    "expirationDuration": 180},
         auth=(body.login.strip(), body.password),
     )
@@ -913,7 +920,7 @@ async def attach_files(
         "Authorization": "Bearer " + _resolve_token(cfg),
         # Обязателен для загрузки вложений в Jira — без него 403 XSRF check failed.
         "X-Atlassian-Token": "no-check",
-        "User-Agent": "Mozilla/5.0 (compatible; Loom-QA/1.0)",
+        "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)",
     }
 
     payload = []

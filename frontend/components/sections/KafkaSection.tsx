@@ -1,11 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Network, Search, X, Plus, Minus, Pencil, Trash2, Loader2, Check, RefreshCw, Copy, CheckCheck,
-  ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff,
-} from "lucide-react";
+import { Search, X, Plus, Minus, Pencil, Trash2, Loader2, Check, Copy, CheckCheck, ArrowUp, ArrowDown, ArrowUpDown, Eye, EyeOff } from "lucide-react";
 import { ConnectionsModal, ConnectionRow, FilePathInput, SectionSettingsButton, Select } from "@/components/ui";
+import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import {
   listKafkaConnections, createKafkaConnection, updateKafkaConnection, deleteKafkaConnection,
   testKafkaConnection, getKafkaTopics, fetchKafkaMessages,
@@ -344,14 +342,13 @@ export default function KafkaSection() {
     setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(refresh, { title: "Обновить сообщения" });
+
   return (
     <div className="flex h-full flex-col p-6">
       {/* Header */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2">
-          <Network className="h-5 w-5 text-primary" />
-          <h1 className="text-lg font-bold text-text-main">Просмотр Kafka</h1>
-        </div>
         <Select
           value={connId}
           onChange={(v) => { setConnId(v); setT1(""); setT2(""); setT3(""); setT4(""); setSelected(null); }}
@@ -402,10 +399,6 @@ export default function KafkaSection() {
               className="w-16 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2 py-1 text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
             сообщений
           </label>
-          <button type="button" onClick={refresh} title="Обновить"
-            className="rounded-lg border border-border-main p-1.5 text-text-muted hover:bg-bg-subtle">
-            <RefreshCw className="h-4 w-4" />
-          </button>
           {/* Настройки раздела — всегда крайняя правая кнопка шапки */}
           <SectionSettingsButton label="Подключения" onClick={() => setManageOpen(true)} />
         </div>

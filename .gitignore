@@ -48,3 +48,5 @@ certs/ca-bundle.pem
 data/certs_vault/
 data/.cert_key
 data/gigachat_certs/
+# Мок-режим (SHARK_MOCK=1): своя папка данных и база
+data_mock/

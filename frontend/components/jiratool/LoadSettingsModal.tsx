@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import {
-  DIRECTIONS, LOAD_DAY_MINUTES, fmtMinutes, inDirection, netDayMinutes, newId, parseDuration,
+  DIRECTIONS, LOAD_DAY_MINUTES, TESTING, fmtMinutes, inDirection, netDayMinutes, newId, parseDuration,
   type LoadReserve, type LoadSettings, type Participant,
 } from "@/lib/jiraTool";
 
@@ -16,12 +16,17 @@ const toHours = (min: number) => String(Math.round((min / 60) * 100) / 100);
  * из него время — например, у тестирования час на встречи и час на автотесты, у бэкенда — своё.
  * Резерв — всем, людям выбранных направлений или конкретным людям.
  */
-export default function LoadSettingsModal({ open, settings, participants, onSave, onClose }: {
+export default function LoadSettingsModal({ open, settings, participants, onSave, onClose, list }: {
   open: boolean;
   settings: LoadSettings;
   participants: Participant[];
   onSave: (s: LoadSettings) => void;
   onClose: () => void;
+  /** Открытый список: выходные, готовые задачи и команды на виджете — применяются сразу. */
+  list?: {
+    name: string; weekends: boolean; auto: boolean; onWeekends: (on: boolean) => void; onAuto: (on: boolean) => void;
+    dirs: string[]; onDirs: (dirs: string[]) => void;
+  };
 }) {
   const [day, setDay] = useState(toHours(settings.dayMinutes));
   const [reserves, setReserves] = useState<(LoadReserve & { text: string })[]>(
@@ -53,7 +58,31 @@ export default function LoadSettingsModal({ open, settings, participants, onSave
   return (
     <Modal open={open} onClose={onClose} title="Настройка нагрузки" size="max-w-2xl">
       <div className="space-y-5">
-        <p className="text-xs text-text-muted">Общая для всех списков: норма и резервы относятся к людям, а не к спискам.</p>
+        {list && (
+          <section className="space-y-1.5 rounded-lg border border-border-main p-3">
+            <p className="text-xs font-semibold text-text-muted">Список «{list.name}»</p>
+            <label className="flex items-start gap-2 cursor-pointer select-none text-sm text-text-main">
+              <input type="checkbox" className="mt-1" checked={list.weekends} onChange={e => list.onWeekends(e.target.checked)} />
+              <span>Считать выходные <span className="text-text-muted">— переработка: выходные добавляются в ёмкость; план сверх будней показывается отдельно</span></span>
+            </label>
+            <label className="flex items-start gap-2 cursor-pointer select-none text-sm text-text-main">
+              <input type="checkbox" className="mt-1" checked={list.auto} onChange={e => list.onAuto(e.target.checked)} />
+              <span>Не учитывать задачи в «Готово к релизу» и дальше</span>
+            </label>
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[11px] text-text-muted mr-0.5" title="Несколько команд — на виджете общий итог и «Развернуть»">Команды на виджете:</span>
+              {DIRECTIONS.map(d => {
+                const on = list.dirs.includes(d.id);
+                const next = on ? list.dirs.filter(x => x !== d.id) : [...list.dirs, d.id];
+                return (
+                  <button key={d.id} type="button" aria-pressed={on} className={chip(on)}
+                    onClick={() => list.onDirs(next.length ? DIRECTIONS.map(x => x.id).filter(id => next.includes(id)) : [TESTING])}>{d.label}</button>
+                );
+              })}
+            </div>
+          </section>
+        )}
+        <p className="text-xs text-text-muted">Норма и резервы — общие для всех списков: они относятся к людям, а не к спискам.</p>
 
         <section className="space-y-1.5">
           <label htmlFor="load-day" className="block text-xs font-semibold text-text-muted">Рабочий день на задачи, часов</label>

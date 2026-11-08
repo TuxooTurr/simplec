@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Download, FilePlus2, FileUp, FlaskConical, ListChecks, Loader2, PlayCircle, RefreshCw, Rocket, Search, Sparkles, Stethoscope, Upload, X } from "lucide-react";
+import { Download, FilePlus2, FileUp, ListChecks, Loader2, PlayCircle, Rocket, Search, Sparkles, Stethoscope, Upload, X } from "lucide-react";
 import FolderTree from "@/components/zephyr/FolderTree";
 import RunsView from "@/components/zephyr/RunsView";
 import ReleasesView from "@/components/zephyr/ReleasesView";
@@ -18,6 +18,7 @@ import { DeleteFolderModal, DeleteStagedFolderModal, ExportFolderModal } from "@
 import { dropStagedFolder, loadStaging, saveStaging, stagedFolderSize, stagingFromXml, takeHandoff, usedFolders, type ApplyResult, type Parent, type Staging } from "@/lib/zephyrStaging";
 import { getJiraSettings } from "@/lib/jiraApi";
 import { createFolder, getCases, getIndex, getTree, moveCases, moveFolder as moveFolderApi, refreshFolder, type ZCase, type ZFolder } from "@/lib/zephyrApi";
+import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
 
 /** Узел дерева по пути — для подтверждения переноса (сколько кейсов уедет). */
 function findNode(nodes: ZFolder[], path: string): ZFolder | null {
@@ -37,7 +38,7 @@ function readProject(): string {
 }
 
 /**
- * Zephyr Tool — проект тестирования Zephyr Scale в Loom: дерево папок с кейсами, карточка кейса
+ * Zephyr Tool — проект тестирования Zephyr Scale в Shark: дерево папок с кейсами, карточка кейса
  * со шагами и связями с Jira, прогоны с прогрессом и статусами.
  *
  * Этап 1 — чтение. Запись (создание, правка, удаление кейсов, папок, прогонов, добавление кейсов в прогон,
@@ -114,7 +115,7 @@ export default function ZephyrSection() {
     try { setStaging(await stagingFromXml(xml, source)); setStagedPick(null); } catch (e) { setImportErr((e as Error).message); }
     setImportBusy(false);
   };
-  // XML из генерации Loom («Открыть в Zephyr Tool») — забираем при открытии раздела.
+  // XML из генерации Shark («Открыть в Zephyr Tool») — забираем при открытии раздела.
   useEffect(() => {
     const h = takeHandoff();
     if (h) void importXml(h.xml, h.source);
@@ -215,11 +216,12 @@ export default function ZephyrSection() {
   const customFields = useMemo(() => customFieldNames(cases ?? []), [cases]);
   const tabCls = (on: boolean) => `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${on ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main hover:bg-bg-subtle"}`;
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(reloadModel, { busy: modelBusy === "all", disabled: !!modelBusy, title: "Перечитать модель из Jira целиком" });
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <FlaskConical className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Zephyr Tool</h1>
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
         <input value={projectDraft} onChange={e => setProjectDraft(e.target.value)} onBlur={applyProject}
           onKeyDown={e => e.key === "Enter" && applyProject()} aria-label="Проект Jira"
           className="w-28 text-sm font-mono border border-border-main rounded-lg px-2.5 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
@@ -232,9 +234,6 @@ export default function ZephyrSection() {
             <Rocket className="w-4 h-4" /> Релиз</button>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={reloadModel} disabled={!!modelBusy} title="Перечитать модель из Jira целиком" aria-label="Обновить из Jira"
-            className="p-2 rounded-lg border border-border-main text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
-            <RefreshCw className={`w-4 h-4 ${modelBusy === "all" ? "animate-spin" : ""}`} /></button>
           <button type="button" onClick={() => setProbeOpen(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
             <Stethoscope className="w-4 h-4" /> Проверить API</button>
@@ -327,7 +326,7 @@ export default function ZephyrSection() {
                 {folder && (
                   <button type="button" onClick={reloadFolder} disabled={!!modelBusy} title="Перечитать из Jira только кейсы этой папки"
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle disabled:opacity-50 whitespace-nowrap">
-                    <RefreshCw className={`w-3.5 h-3.5 ${modelBusy === "folder" ? "animate-spin" : ""}`} /> Обновить папку</button>
+                    <RefreshIcon busy={modelBusy === "folder"} className="w-3.5 h-3.5" /> Обновить папку</button>
                 )}
                 <button type="button" onClick={() => setExportFor(folder)}
                   title={folder ? "Выгрузить папку со всеми вложенными в Zephyr XML" : "Выгрузить всю модель проекта в Zephyr XML"}
@@ -381,7 +380,7 @@ export default function ZephyrSection() {
             <p className="text-text-muted">
               Будет перенесено кейсов (с вложенными папками): <b className="text-text-main">{folderMove.count}</b> — по запросу в Jira на каждый.
               Публичный API Zephyr не даёт переименовать папку напрямую, поэтому старая папка в Zephyr останется пустой —
-              её можно удалить в интерфейсе Zephyr. В дереве Loom её не будет.
+              её можно удалить в интерфейсе Zephyr. В дереве Shark её не будет.
             </p>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setFolderMove(null)} disabled={moveBusy} className="px-3 py-2 rounded-lg border border-border-main text-text-muted">Отмена</button>

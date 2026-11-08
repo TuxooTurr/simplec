@@ -2,14 +2,14 @@
 
 /**
  * Настройки Confluence для графика стендов — устроены так же, как настройки Jira (JiraSettingsBlock):
- * адрес, пространство, проверка SSL и маркер доступа одним из способов — по логину/паролю Сигмы
- * (маркер создаётся через API, пароль не хранится), файлом или строкой. Маркер Confluence свой, не тот, что у Jira.
+ * адрес, пространство, проверка SSL и маркер доступа: выпускается сам при входе в Shark логином Jira, иначе — файлом
+ * или строкой. Маркер Confluence свой, не тот, что у Jira.
  */
 
 import { useEffect, useState } from "react";
-import { Loader2, KeyRound, CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, XCircle } from "lucide-react";
 import {
-  confluenceTokenFromLogin, getConfluenceSettings, saveConfluenceSettings, testConfluence, type ConfluenceSettings,
+  getConfluenceSettings, saveConfluenceSettings, testConfluence, type ConfluenceSettings,
 } from "@/lib/confluenceApi";
 
 const INPUT_CLS =
@@ -19,13 +19,11 @@ const INPUT_CLS =
 const LBL = "block text-xs font-semibold text-text-muted uppercase tracking-wide mb-1.5";
 const MASK = "●●●●●●●●●●●●";
 
-type AuthMode = "sigma" | "file" | "token";
+type AuthMode = "login" | "file" | "token";
 
 export default function ConfluenceSettingsBlock() {
   const [s, setS] = useState<ConfluenceSettings | null>(null);
-  const [mode, setMode] = useState<AuthMode>("sigma");
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<AuthMode>("login");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -51,20 +49,6 @@ export default function ConfluenceSettingsBlock() {
     setBusy(false);
   };
 
-  const getToken = async () => {
-    if (!login.trim() || !password) { setMsg({ ok: false, text: "Введите логин и пароль Сигмы" }); return; }
-    setBusy(true); setMsg(null);
-    try {
-      // сначала сохраняем адрес и SSL, чтобы запрос маркера ушёл по правильному адресу
-      await saveConfluenceSettings(s);
-      await confluenceTokenFromLogin(login.trim(), password, s.base_url);
-      setPassword("");
-      setS(await getConfluenceSettings());
-      setMsg({ ok: true, text: "Маркер получен и сохранён (действует 180 дней). Пароль не сохраняется." });
-    } catch (e) { setMsg({ ok: false, text: String(e) }); }
-    setBusy(false);
-  };
-
   const doTest = async () => {
     setBusy(true); setMsg(null);
     try {
@@ -77,14 +61,14 @@ export default function ConfluenceSettingsBlock() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 items-end gap-x-6 gap-y-3">
         <div>
           <label className={LBL}>Confluence URL</label>
           <input value={s.base_url} onChange={e => patch({ base_url: e.target.value })}
             placeholder="https://confluence.sberbank.ru" className={`${INPUT_CLS} font-mono`} />
         </div>
         <div>
-          <label className={LBL}>Пространство для страниц стендов</label>
+          <label className={LBL} title="Пространство Confluence для страниц графика стендов">Пространство стендов</label>
           <input value={s.space} onChange={e => patch({ space: e.target.value })}
             placeholder="QA911 или ~логин (личное)" className={`${INPUT_CLS} font-mono`} />
         </div>
@@ -102,7 +86,7 @@ export default function ConfluenceSettingsBlock() {
         <label className={LBL}>Авторизация</label>
         <div className="flex gap-1.5 mb-3">
           {([
-            { id: "sigma", label: "Логин/пароль Сигмы" },
+            { id: "login", label: "При входе в Shark" },
             { id: "file",  label: "Файл с маркером" },
             { id: "token", label: "Маркер строкой" },
           ] as { id: AuthMode; label: string }[]).map(m => (
@@ -115,29 +99,13 @@ export default function ConfluenceSettingsBlock() {
           ))}
         </div>
 
-        {mode === "sigma" && (
-          <div className="space-y-2">
-            <p className="text-xs text-text-muted">
-              По логину/паролю создаётся персональный маркер доступа через Confluence API — пароль не сохраняется.
-              Маркер Confluence свой: токен Jira сюда не подойдёт.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <input value={login} onChange={e => setLogin(e.target.value)}
-                placeholder="Логин Сигмы" className={INPUT_CLS} autoComplete="off" />
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-                placeholder="Пароль Сигмы" className={INPUT_CLS} autoComplete="new-password" />
-            </div>
-            <button onClick={getToken} disabled={busy}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-dark disabled:opacity-40">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
-              Получить маркер
-            </button>
-            {s.token === MASK && (
-              <p className="text-xs text-green-600 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Маркер сохранён
-              </p>
-            )}
-          </div>
+        {mode === "login" && (
+          <p className={`flex items-center gap-1.5 text-xs ${s.token === MASK ? "text-green-600" : "text-text-muted"}`}>
+            {s.token === MASK && <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />}
+            {s.token === MASK
+              ? "Маркер есть — выпущен при входе в Shark логином Jira."
+              : "Маркер выпускается сам, когда входите в Shark логином и паролем Jira. Без корпоративной сети — вставьте его строкой."}
+          </p>
         )}
 
         {mode === "file" && (

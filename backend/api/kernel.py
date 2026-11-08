@@ -21,11 +21,12 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from db.paths import DATA_DIR
 
 router = APIRouter()
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
-_AUDIT_FILE = _ROOT / "data" / "kernel_audit.json"
+_AUDIT_FILE = DATA_DIR / "kernel_audit.json"
 _AUDIT_MAX = 200
 
 

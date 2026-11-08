@@ -126,6 +126,13 @@ def _dict_to_tc(d: dict):
         priority=d.get("priority", "Normal"),
         case_type=d.get("case_type", "positive"),
         estimated_minutes=d.get("estimated_minutes", 5),
+        folder=d.get("folder", "") or "",
+        system=d.get("system", "") or "",
+        labels=d.get("labels") or None,
+        domain=d.get("domain", "") or "",
+        critical=d.get("critical") if isinstance(d.get("critical"), bool) else None,
+        objective=d.get("objective", "") or "",
+        precondition=d.get("precondition", "") or "",
     )
 
 

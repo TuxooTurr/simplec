@@ -21,6 +21,7 @@ import {
 } from "@/lib/metricsApi";
 import { INPUT_CLS, INPUT_SM, LABEL_CLS, SectionSettingsButton, Select } from "@/components/ui";
 import KafkaMetricsSettingsModal from "@/components/settings/KafkaMetricsSettingsModal";
+import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
 
 // ── Styles (backward-compat aliases, use <Button> where possible) ────────────
 
@@ -1707,7 +1708,7 @@ function BuilderPanel({ metricId, onClose, onSaved }: BuilderPanelProps) {
                 История отправок
               </span>
               <button className={BTN_SM} onClick={refreshLogs} disabled={logsLoading}>
-                <RefreshCw className={`w-3 h-3 ${logsLoading ? "animate-spin" : ""}`} />
+                <RefreshIcon busy={logsLoading} className="w-3 h-3" />
               </button>
             </div>
             <LogsSection logs={logs} loading={logsLoading} />
@@ -1867,6 +1868,9 @@ export default function MetricsSection() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(() => loadSystems(), { busy: loading, title: "Обновить метрики" });
+
   if (loading) return (
     <div className="h-full flex items-center justify-center">
       <Loader2 className="w-6 h-6 animate-spin text-text-muted" />
@@ -1919,9 +1923,6 @@ export default function MetricsSection() {
         </button>
         <button className={BTN_GHOST} onClick={() => handleToggleAll("stop")} disabled={globalBusy}>
           <Square className="w-3.5 h-3.5 text-orange-500" /> Все стоп
-        </button>
-        <button className={BTN_GHOST} onClick={() => loadSystems()} disabled={loading}>
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} /> Обновить
         </button>
 
         <div className="flex-1" />

@@ -21,6 +21,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from db.requirements_store import RequirementsStore
+from db.paths import DATA_DIR
 
 router = APIRouter()
 
@@ -287,13 +288,13 @@ def _page_meta(cfg: dict, data: dict) -> dict:
 #
 # Картинки страниц Confluence (и вставленные в редакторе) хранятся у нас: data/requirement_assets/<sha1>.<ext> —
 # документ показывает их и после правки или удаления страницы, у каждой версии — свои. Отдаются только с входом
-# в Loom (интерфейс подгружает их с маркером). В предпросмотре до загрузки — напрямую из Confluence.
+# в Shark (интерфейс подгружает их с маркером). В предпросмотре до загрузки — напрямую из Confluence.
 
 import hashlib as _hashlib
 import re as _re_mod
 from pathlib import Path as _Path
 
-ASSETS_DIR = _Path(__file__).resolve().parent.parent.parent / "data" / "requirement_assets"
+ASSETS_DIR = DATA_DIR / "requirement_assets"
 _IMG_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
 _ASSET_RE = _re_mod.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp|svg)$")
 _ATT_RE = _re_mod.compile(r"(!?)\[([^\]]*)\]\(attachment:(\d+)/([^)\s]+)\)")

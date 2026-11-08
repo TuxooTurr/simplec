@@ -90,6 +90,8 @@ export type ModelCase = Omit<StagedCase, "target" | "error"> & {
   /** Папка из XML (генерация без задачи) — кейс ложится в неё как есть. */
   folder: string;
   caseType?: string;
+  /** Пользовательский сценарий из тестовой модели по этапам — папка между фичей и типом сценария. */
+  scenario?: string;
   on: boolean;
 };
 
@@ -105,7 +107,8 @@ export interface ModelGroup {
 }
 
 /** Итоговая папка кейса. */
-export const casePath = (g: ModelGroup, c: ModelCase) => (g.task ? cleanPath(`${g.folder}/${scenarioFolder(c.caseType)}`) : cleanPath(c.folder));
+export const casePath = (g: ModelGroup, c: ModelCase) =>
+  (g.task ? cleanPath(`${g.folder}/${c.scenario ? `${c.scenario}/` : ""}${scenarioFolder(c.caseType)}`) : cleanPath(c.folder));
 
 /** Задача и требования — в цель кейса: из кейса видно, откуда он. */
 export function linkedObjective(g: ModelGroup, objective: string): string {

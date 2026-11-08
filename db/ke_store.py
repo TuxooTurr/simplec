@@ -1,7 +1,7 @@
 """
 Справочник КЭ графика стендов (выпадающий список в форме брони) — файл data/ke_catalog.json.
 
-Один на оба стенда и на всех, кто работает с этим Loom. Новые КЭ создаются прямо из формы брони
+Один на оба стенда и на всех, кто работает с этим Shark. Новые КЭ создаются прямо из формы брони
 или правятся списком в настройках стенда.
 
 Базовый список — db/ke_catalog_default.json (лежит в репозитории). КЭ из него, которых справочник ещё не видел,
@@ -16,9 +16,10 @@ import json
 import re
 import threading
 from pathlib import Path
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-KE_FILE = _ROOT / "data" / "ke_catalog.json"
+KE_FILE = DATA_DIR / "ke_catalog.json"
 DEFAULT_FILE = Path(__file__).resolve().parent / "ke_catalog_default.json"
 _lock = threading.Lock()
 

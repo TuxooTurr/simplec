@@ -2,9 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import {
-  AlertTriangle, BookOpen, Bug, CheckCircle2, CheckSquare, ChevronUp, ExternalLink, Loader2, Minus, RefreshCw, Search, Send, Settings2, Sparkles, X,
-} from "lucide-react";
+import { AlertTriangle, BookOpen, Bug, CheckCircle2, CheckSquare, ChevronUp, ExternalLink, Loader2, Minus, Search, Send, Settings2, Sparkles, X } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { FORM_DOCK_ID } from "@/components/FormHost";
 import type { FormControl } from "@/lib/backgroundForms";
@@ -21,8 +19,9 @@ import {
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
 import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, type Participant } from "@/lib/jiraTool";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
-/** Что уходит в список: черновик Loom или созданная в Jira задача (тогда есть jiraKey/url). */
+/** Что уходит в список: черновик Shark или созданная в Jira задача (тогда есть jiraKey/url). */
 export interface IssueDraft {
   type: string;
   summary: string;
@@ -51,7 +50,7 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
  * Все поля видны сразу: можно заполнить руками, а можно описать своими словами и нажать
  * «Сгенерировать» — ИИ заполнит название и описание (для дефекта — и критичность).
  * Источник для ИИ — документы из раздела «Данные» (требования): контент подстраивается под них.
- * Дальше выбор: «Создать в Loom» (черновик в списке) или сразу «Создать в Jira».
+ * Дальше выбор: «Создать в Shark» (черновик в списке) или сразу «Создать в Jira».
  * С initial — это уже черновик из списка: его можно поправить и сохранить или отправить в Jira.
  *
  * Форму открывают через openForm (lib/backgroundForms.ts), и она живёт выше раздела. «Свернуть» убирает её на полку внизу
@@ -75,7 +74,7 @@ export default function IssueFormModal({ control, project, participants, listNam
   prefill?: Partial<Pick<IssueDraft, "type" | "summary" | "description" | "priority" | "labels" | "epicKey">>;
   /** Связать созданную в Jira задачу с этой (дефект к стори из окна «Дефекты»). */
   linkTo?: { key: string; summary: string };
-  /** Только создание в Jira: без списка Loom — ни галочки «Добавить в список», ни черновика. */
+  /** Только создание в Jira: без списка Shark — ни галочки «Добавить в список», ни черновика. */
   jiraOnly?: boolean;
   /** Вложения с самого начала (например, скриншоты из плеера). */
   files?: File[];
@@ -97,7 +96,7 @@ export default function IssueFormModal({ control, project, participants, listNam
   const isDefect = type === "Дефект";
   /**
    * Добавить созданную задачу в текущий список (по умолчанию — да). Без галочки задача только уходит в Jira,
-   * поэтому «Создать в Loom» недоступно: черновику без списка негде жить. У черновика из списка галочки нет.
+   * поэтому «Создать в Shark» недоступно: черновику без списка негде жить. У черновика из списка галочки нет.
    */
   const [addToList, setAddToList] = useState(true);
 
@@ -431,7 +430,7 @@ export default function IssueFormModal({ control, project, participants, listNam
               {files.length > 0 && (
                 <p className="text-[11px] text-text-muted mt-1">
                   Уйдут вложениями в Jira при создании. Документы и скриншоты ещё и читает генерация.
-                  {(initial || addToList) && " В черновике Loom вложения не сохраняются."}
+                  {(initial || addToList) && " В черновике Shark вложения не сохраняются."}
                 </p>
               )}
             </div>
@@ -459,7 +458,7 @@ export default function IssueFormModal({ control, project, participants, listNam
                     <button type="button" onClick={loadEpics} disabled={epicsLoading}
                       title="Выгрузить список эпиков из Jira заново"
                       className="flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50">
-                      <RefreshCw className={`w-3 h-3 ${epicsLoading ? "animate-spin" : ""}`} />
+                      <RefreshIcon busy={epicsLoading} className="w-3 h-3" />
                       {epicsCache ? `выгрузить заново · ${formatLoadedAt(epicsCache.loadedAt)}` : "выгрузить эпики из Jira"}
                     </button>
                   )}
@@ -525,7 +524,7 @@ export default function IssueFormModal({ control, project, participants, listNam
           )}
           <p className="text-[11px] text-text-muted flex items-center gap-1.5 min-w-0">
             {jiraReady ? <>Jira подключена · проект {project}</> : (
-              <>Jira не подключена — можно создать только в Loom.
+              <>Jira не подключена — можно создать только в Shark.
                 <button type="button" onClick={() => setSettingsOpen(true)} className="inline-flex items-center gap-1 text-primary hover:underline">
                   <Settings2 className="w-3 h-3" /> Подключить</button></>
             )}
@@ -536,7 +535,7 @@ export default function IssueFormModal({ control, project, participants, listNam
             {!jiraOnly && <button type="button" disabled={!summary.trim() || sending || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
               title={!initial && !addToList ? "Черновик живёт только в списке — включите «Добавить в список»" : "Черновик в списке — в Jira не уходит"}
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-              {initial ? "Сохранить черновик" : "Создать в Loom"}</button>}
+              {initial ? "Сохранить черновик" : "Создать в Shark"}</button>}
             <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked || (!!epicChoices && !epicKey)} onClick={sendToJira}
               title={jiraReady ? `Создать ${type.toLowerCase()} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">

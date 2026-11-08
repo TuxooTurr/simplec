@@ -1,8 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { ExternalLink, RefreshCw, Settings2 } from "lucide-react";
+import { ExternalLink, Settings2 } from "lucide-react";
 import type { AqaStats } from "@/lib/aqaApi";
+import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 /** Общие кирпичики виджетов «Трекинга AQA»: карточка, показатель, полоса статусов кейсов, форматы дат. */
 
@@ -66,7 +67,7 @@ export function Card({ icon, title, extra, link, onRefresh, busy, children }: {
           className="p-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><ExternalLink className="w-3.5 h-3.5" /></a>}
         <button type="button" onClick={onRefresh} disabled={busy} title="Обновить" aria-label={`Обновить: ${title}`}
           className="p-1 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-50">
-          <RefreshCw className={`w-3.5 h-3.5 ${busy ? "animate-spin" : ""}`} /></button>
+          <RefreshIcon busy={busy} className="w-3.5 h-3.5" /></button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col p-4">{children}</div>
     </section>

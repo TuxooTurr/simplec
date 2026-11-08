@@ -2,12 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ScrollText, Search, Loader2, AlertTriangle, ChevronDown, ChevronUp,
-  Copy, CheckCheck, Bug, Sparkles, Filter, Clock, Server,
-  RefreshCw, Settings, XCircle, CheckCircle2, ChevronRight,
-  History, ChevronLeft, Trash2, Upload, FileText, Send,
-} from "lucide-react";
+import { ScrollText, Search, Loader2, AlertTriangle, ChevronDown, ChevronUp, Copy, CheckCheck, Bug, Sparkles, Filter, Clock, Server, Settings, XCircle, CheckCircle2, ChevronRight, History, ChevronLeft, Trash2, Upload, Send } from "lucide-react";
 import { Select, SectionSettingsButton } from "@/components/ui";
 import LogsVpsSettingsModal from "@/components/settings/LogsVpsSettingsModal";
 import {
@@ -21,6 +16,7 @@ import {
 } from "@/lib/settingsApi";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import NotionRenderer from "@/components/NotionRenderer";
+import { usePanelRefresh } from "@/components/ui/RefreshButton";
 
 /* ── Стили (дизайн-система) ─────────────────────────────────────────────── */
 
@@ -325,9 +321,7 @@ function FileLogAnalysis({ provider, onOpenVps, vpsLabel }: {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Загрузка файла — стартовый экран раздела. Подключение к VPS не пропало,
           а переехало кнопкой в правый угол: файл нужен чаще, чем поиск по VPS. */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <FileText className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Анализатор логов</h1>
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
 
         <div className="flex-1" />
 
@@ -684,6 +678,9 @@ export default function LogsSection() {
 
   /* ── История ─────────────────────────────────────────────────────────── */
 
+  // «Обновить» — в шапке панели, как у всех разделов.
+  usePanelRefresh(loadConnections, { busy: loadingConns, title: "Обновить подключения" });
+
   if (stage === "history") return (
     <div className="p-6 overflow-y-auto scrollbar-thin animate-slide-up">
       <div className="w-full max-w-3xl">
@@ -816,9 +813,7 @@ export default function LogsSection() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Toolbar ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <ScrollText className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Анализатор логов</h1>
+      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
 
         <div className="flex-1" />
 
@@ -844,9 +839,6 @@ export default function LogsSection() {
           История
         </button>
 
-        <button onClick={loadConnections} className={BTN_GHOST} title="Обновить подключения">
-          <RefreshCw className={`w-4 h-4 ${loadingConns ? "animate-spin" : ""}`} />
-        </button>
 
         {/* Настройки раздела — всегда крайняя правая кнопка шапки */}
         <SectionSettingsButton label="Подключения" onClick={() => setSettingsOpen(true)} />

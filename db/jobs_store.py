@@ -12,11 +12,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
-_JOBS_FILE    = _ROOT / "data" / "jobs.json"
-_FOLDERS_FILE = _ROOT / "data" / "job_folders.json"
-_HISTORY_FILE = _ROOT / "data" / "job_history.json"
+_JOBS_FILE    = DATA_DIR / "jobs.json"
+_FOLDERS_FILE = DATA_DIR / "job_folders.json"
+_HISTORY_FILE = DATA_DIR / "job_history.json"
 _HISTORY_MAX  = 100
 
 

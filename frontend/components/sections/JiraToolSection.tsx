@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, Archive, ArchiveRestore, ChevronDown, Info, SlidersHorizontal, ClipboardCheck, FileSpreadsheet, Rocket, Columns3, Loader2, MessageSquareShare, FilePlus2, Folder, FolderTree, GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose,
-  ListFilter, PanelLeftOpen, Pencil, Plus, RefreshCw, Search, Settings2, Trash2, Users, X,
+  AlertTriangle, ChevronDown, Info, ClipboardCheck, FileSpreadsheet, Columns3, Loader2, MessageSquareShare, FilePlus2, FolderTree,
+  GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose, ListFilter, PanelLeftOpen, Plus, Search, Trash2,
+  Users, X,
 } from "lucide-react";
 
-import { PickerPanel, type PickOption } from "@/components/jiratool/FieldPicker";
+import FieldPicker, { type PickOption } from "@/components/jiratool/FieldPicker";
+import ListEditModal from "@/components/jiratool/ListEditModal";
+import { getJiraSettings } from "@/lib/jiraApi";
 import ListTable, { sortIssues, type SortState } from "@/components/jiratool/ListTable";
 import type { FilterOption } from "@/components/jiratool/ColumnFilter";
 import ReqAssignModal, { type ReqAssignMode } from "@/components/jiratool/ReqAssignModal";
@@ -42,7 +45,7 @@ import {
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, liveLists, setArchived, startList, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
-  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionAssignment, isCommonReserve, ownStageInfo,
+  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionLoad, directionAssignment, isCommonReserve, ownStageInfo,
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
@@ -50,12 +53,13 @@ import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree
 import { describeNotes, dropSent, peopleFieldChanges, peopleSnapshot, queuePeopleChanges } from "@/lib/jiraPeopleSync";
 import { FIELD_BY_ID } from "@/lib/jiraModel";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
+import { usePanelRefresh } from "@/components/ui/RefreshButton";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
    структуры — из настоящей Jira (подключение и токен — Настройки → Jira, те же,
    что у регистрации дефектов). Списки, участники, свои поля, трудозатраты и
-   черновики — у Loom, в этом браузере.
+   черновики — у Shark, в этом браузере.
    Шапка списка — проект и действия с задачами; всё, что настраивает вид списка
    (колонки, группировка, папки, свои поля, поиск), — в левой колонке. */
 
@@ -66,14 +70,14 @@ import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToo
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "load" | "loadDetails" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "loadDetails" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue };
-type Panel = "columns" | "group" | null;
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
 const ASIDE_KEY = "st_jira_tool_aside";
 /** Раскрыта ли «Настройка списка» вверху колонки — тоже удобство одного браузера. */
-const LIST_SETUP_KEY = "st_jira_tool_list_setup";
+/** Раскрыт ли виджет «Команда» в левой колонке. */
+const TEAM_OPEN_KEY = "st_jira_tool_team_open";
 /** Последний открытый список — с него раздел и открывается (не с первого в колонке). */
 const LAST_LIST_KEY = "st_jira_last_list";
 
@@ -98,8 +102,6 @@ export default function JiraToolSection() {
   const [state, setState] = useState<ToolState | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newList, setNewList] = useState<string | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [askDelete, setAskDelete] = useState(false);
   const [filter, setFilter] = useState("");
   /**
    * Фильтры в заголовках колонок: колонка → отмеченные значения ("" — пусто). На время работы со списком:
@@ -112,13 +114,17 @@ export default function JiraToolSection() {
   const [selecting, setSelecting] = useState(false);
   const stopSelecting = () => { setSelecting(false); setSelected(new Set()); };
   const [modal, setModal] = useState<ModalState>(null);
+  // Настройка нагрузки открывается из «Подробно» поверх него — отдельным окном, а не вместо.
+  const [loadSettingsOpen, setLoadSettingsOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   /** Настройка списка раскрыта (сверху колонки, по умолчанию — свёрнутая полоса). */
-  const [listSetupOpen, setListSetupOpen] = useState(false);
-  const toggleListSetup = (on: boolean) => { setListSetupOpen(on); try { localStorage.setItem(LIST_SETUP_KEY, on ? "1" : "0"); } catch { /* не запомнится */ } };
-  const [panel, setPanel] = useState<Panel>(null);
-  const [newFolder, setNewFolder] = useState<string | null>(null);
-  const [askDeleteFolder, setAskDeleteFolder] = useState<string | null>(null);
+  /** Окно редактирования списка (карандаш у списка слева). */
+  const [editList, setEditList] = useState<string | null>(null);
+  /** «Команда» слева раскрыта — удобство одного браузера, по умолчанию свёрнута. */
+  const [teamOpen, setTeamOpen] = useState(false);
+  const toggleTeam = () => setTeamOpen(o => { try { localStorage.setItem(TEAM_OPEN_KEY, o ? "0" : "1"); } catch { /* не запомнится */ } return !o; });
+  /** Проект Jira tool — из настроек Jira (один на все списки). */
+  const [settingsProject, setSettingsProject] = useState("");
   /** Справочник микросервисов (общий с графиком стендов) — для поля «Микросервисы (st)». */
   const [msCatalog, setMsCatalog] = useState<{ ms: string[]; info: Record<string, string> }>({ ms: [], info: {} });
   useEffect(() => { getMsCatalog().then(setMsCatalog).catch(() => { /* бэкенд недоступен — поле работает без списка */ }); }, []);
@@ -132,8 +138,6 @@ export default function JiraToolSection() {
 
   /** Шаблон для нового списка ("" — пустой) и название сохраняемого шаблона (null — поле скрыто). */
   const [newTpl, setNewTpl] = useState("");
-  const [tplName, setTplName] = useState<string | null>(null);
-  const [tplNote, setTplNote] = useState("");
 
   /* ── Требования («Данные») и отчёты в чат ── */
   const { provider } = useWorkspace();
@@ -170,7 +174,6 @@ export default function JiraToolSection() {
   });
   const [busy, setBusy] = useState(0);
   const [loadErr, setLoadErr] = useState("");
-  const [projectInput, setProjectInput] = useState("");
   /** Ключи, которые уже запрошены (или упали с ошибкой — тогда ждут «Обновить»), и у которых подтянуты связанные. */
   const inflight = useRef(new Set<string>());
   const relatedDone = useRef(new Set<string>());
@@ -186,7 +189,7 @@ export default function JiraToolSection() {
     setCache({ ...c.issues }); setMissingState(new Set(c.missing)); setRefreshedAt(c.refreshedAt);
     relatedDone.current = c.related;
     try { setCollapsed(localStorage.getItem(ASIDE_KEY) === "1"); } catch { /* развёрнута по умолчанию */ }
-    try { setListSetupOpen(localStorage.getItem(LIST_SETUP_KEY) === "1"); } catch { /* свёрнута по умолчанию */ }
+    try { setTeamOpen(localStorage.getItem(TEAM_OPEN_KEY) === "1"); } catch { /* свёрнуто по умолчанию */ }
   }, []);
 
   const connect = (refresh = false) => {
@@ -198,6 +201,7 @@ export default function JiraToolSection() {
         setCache({ ...store.issues }); setMissingState(new Set(store.missing)); relatedDone.current = store.related;
         setJira({ state: "ok", baseUrl: c.base_url });
         getProjects().then(r => setProjects(r.projects)).catch(() => setProjects([]));
+        getJiraSettings().then(st => setSettingsProject((st.project ?? "").toUpperCase()), () => undefined);
       })
       .catch(e => setJira({ state: "error", message: (e as Error).message }));
   };
@@ -398,10 +402,15 @@ export default function JiraToolSection() {
     if (need.length || rel.length) void sync(need, rel);
   }, [jira.state, listKeys, cache, missing]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Проект выбирается в настройках Jira — один на все списки: списки подстраиваются под него.
+  useEffect(() => {
+    if (!settingsProject || !state || state.lists.every(l => l.project === settingsProject)) return;
+    update(s => ({ ...s, lists: s.lists.map(l => (l.project === settingsProject ? l : { ...l, project: settingsProject })) }));
+  }, [settingsProject, state?.lists.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Поля проекта списка — для выбора колонок.
   const listProject = list?.project ?? "";
   useEffect(() => {
-    setProjectInput(listProject);
     if (jira.state !== "ok" || !listProject || projectFieldIds[listProject]) return;
     getProjectFields(listProject)
       .then(r => setProjectFieldIds(m => ({ ...m, [listProject]: r.fields })))
@@ -497,6 +506,12 @@ export default function JiraToolSection() {
     return u;
   }, [state?.lists, state?.participants]);
 
+  // «Обновить из Jira» — в шапке панели, как у всех разделов.
+  usePanelRefresh(state && list ? refreshFromJira : null, {
+    busy: busy > 0, disabled: jira.state !== "ok", badge: pendingPeople || undefined,
+    title: pendingPeople ? `Отправить в Jira людей (изменений: ${pendingPeople}) и перечитать задачи списка` : "Перечитать задачи списка из Jira",
+  });
+
   if (!state) return <Shell><div className="p-6 text-sm text-text-muted">Загрузка…</div></Shell>;
 
   const reqName = new Map(reqOptions.map(r => [r.id, r.name]));
@@ -511,15 +526,18 @@ export default function JiraToolSection() {
 
   /* ── Колонки и группировка: поля проекта списка ── */
   const hasFolders = !!list?.folderList?.length;
+  // Сначала поля Shark (st) и свои поля списка, потом поля Jira — они в выборе свёрнуты.
   const fieldOptions: PickOption[] = list ? [
-    ...listFields(list, projectFieldIds[list.project] ?? null).map(f => ({ value: `jira:${f.id}`, label: f.name, group: f.custom ? `Пользовательские поля ${list.project}` : "Поля Jira",
-                                     hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
-    // Поля, которые считает Loom, — с пометкой (st): рядом с настоящим «Статусом» из Jira
+    // Поля, которые считает Shark, — с пометкой (st): рядом с настоящим «Статусом» из Jira
     // стоит «Статус (st)», и их не перепутать.
     ...[STAGE_COL, DEFECTS_COL, BLOCK_COL, PARTICIPANT_COL, ...ROLE_COLS, LOAD_COL, REQ_COL, MS_COL, ...(hasFolders ? [FOLDER_COL] : [])]
-      .map(c => ({ value: c, label: colLabel(c, list), group: "Поля Loom", hint: "st" })),
+      .map(c => ({ value: c, label: colLabel(c, list), group: "Поля Shark", hint: "st" })),
     ...list.ownFields.map(f => ({ value: `own:${f.id}`, label: f.name, group: "Свои поля списка", hint: `st · ${OWN_TYPE_LABEL[f.type]}` })),
+    ...listFields(list, projectFieldIds[list.project] ?? null).map(f => ({ value: `jira:${f.id}`, label: f.name, group: f.custom ? `Пользовательские поля ${list.project}` : "Поля Jira",
+                                     hint: f.custom ? f.id.replace("customfield_", "cf ") : undefined })),
   ] : [];
+  /** Поля Jira в выборе колонок и группировки свёрнуты: их сотни, нужны редко. */
+  const jiraGroup = (g: string) => g === "Поля Jira" || g.startsWith("Пользовательские поля");
   // Папка — не группировка, а уровень над ней (разделы таблицы), поэтому в группировке её нет.
   // Числа и время (дефекты, трудозатраты) — не для группировки: у каждой задачи своё значение.
   // Ссылки тоже не группируем — у каждой задачи своя.
@@ -574,7 +592,7 @@ export default function JiraToolSection() {
     try {
       if (id && !state?.lists.find(l => l.id === id)?.archivedAt) localStorage.setItem(LAST_LIST_KEY, id);
     } catch { /* приватный режим */ }
-    setActiveId(id); setSort(null); setFilter(""); setColFilters({}); setAskDelete(false); stopSelecting(); setRenaming(null); setTplName(null);
+    setActiveId(id); setSort(null); setFilter(""); setColFilters({}); stopSelecting();
   };
   /** В архив: открыт был он — переходим на следующий список в работе. */
   const archiveList = (id: string) => {
@@ -588,21 +606,10 @@ export default function JiraToolSection() {
     const name = (newList ?? "").trim();
     if (!name) return;
     const tpl = state?.templates.find(t => t.id === newTpl);
-    const l = tpl ? listFromTemplate(name, list?.project ?? DEFAULT_PROJECT, tpl) : emptyList(name, list?.project);
+    const project = settingsProject || list?.project || DEFAULT_PROJECT;
+    const l = tpl ? listFromTemplate(name, project, tpl) : emptyList(name, project);
     update(s => ({ ...s, lists: [...s.lists, l] }));
     openList(l.id); setNewList(null); setNewTpl("");
-  };
-
-  /** Структура текущего списка → шаблон. Шаблон с тем же названием перезаписывается. */
-  const saveTemplate = () => {
-    const name = (tplName ?? "").trim();
-    if (!list || !name) return;
-    const tpl = templateOf(list, name);
-    const replaced = state?.templates.some(t => t.name === name);
-    update(s => ({ ...s, templates: [...s.templates.filter(t => t.name !== name), tpl] }));
-    setTplName(null);
-    setTplNote(replaced ? `Шаблон «${name}» обновлён` : `Шаблон «${name}» сохранён`);
-    setTimeout(() => setTplNote(""), 3000);
   };
 
   /** Поля задачи из формы — пока Jira не вернула свои (или для черновика). */
@@ -620,7 +627,7 @@ export default function JiraToolSection() {
     setTimeout(() => void sync([key], []), 2000);
   };
 
-  /** Задача из формы «Создать задачу»: созданная в Jira — с настоящим ключом, иначе — черновик Loom. */
+  /** Задача из формы «Создать задачу»: созданная в Jira — с настоящим ключом, иначе — черновик Shark. */
   const saveIssue = (d: IssueDraft) => {
     if (!list) return;
     // Создали в Jira без галочки «Добавить в список» — в списке ничего не меняем.
@@ -659,7 +666,7 @@ export default function JiraToolSection() {
     const fields = { ...old.fields, ...formFields(d), updated: nowStamp() };
     if (d.jira) addJiraIssue(d.jira.key, { key: d.jira.key, url: d.jira.url, fields });
     update(s => {
-      // Отправленный черновик становится задачей Jira: из черновиков уходит, всё Loom-овое по ключу переезжает.
+      // Отправленный черновик становится задачей Jira: из черновиков уходит, всё Shark-овое по ключу переезжает.
       const next = d.jira
         ? (r => ({ ...r, created: r.created.filter(i => i.key !== d.jira!.key) }))(replaceDraft(s, old.key, { key: d.jira.key, url: d.jira.url, fields }))
         : { ...s, created: s.created.map(i => (i.key === old.key ? { ...i, fields } : i)) };
@@ -762,21 +769,7 @@ export default function JiraToolSection() {
     if (errors.length) setLoadErr(`Состав источников не сверен — ${errors.join("; ")}`);
   };
 
-  const commitProject = () => {
-    if (!list) return;
-    const v = projectInput.trim().toUpperCase();
-    const known = !projects.length || projects.some(p => p.key === v);
-    if (/^[A-Z][A-Z0-9_]*$/.test(v) && known && v !== list.project) updateList(l => ({ ...l, project: v }));
-    else setProjectInput(list.project);
-  };
-
   /* ── Папки списка ── */
-  const addFolder = () => {
-    const name = (newFolder ?? "").trim();
-    if (!name) return;
-    updateList(l => ({ ...l, folderList: Array.from(new Set([...(l.folderList ?? []), name])) }));
-    setNewFolder(null);
-  };
   /** Переименование в уже существующее имя сливает папки. */
   const renameFolder = (name: string, next: string) => updateList(l => ({
     ...l,
@@ -788,7 +781,7 @@ export default function JiraToolSection() {
     folderList: (l.folderList ?? []).filter(f => f !== name),
     folders: Object.fromEntries(Object.entries(l.folders ?? {}).filter(([, f]) => f !== name)),
   }));
-  /** Требования по задачам: на уровне Loom (общие на все списки). */
+  /** Требования по задачам: на уровне Shark (общие на все списки). */
   /** Микросервисы задач: «set» — значение ячейки; add / replace / remove — массово для выбранных (как требования). */
   const setMs = (keys: string[], names: string[], mode: ReqAssignMode | "set") => update(s => {
     const links = { ...s.msLinks };
@@ -939,7 +932,6 @@ export default function JiraToolSection() {
   });
 
   /** Из свёрнутой полоски: развернуть колонку и сразу открыть нужную настройку. */
-  const openPanel = (p: Panel) => { toggleAside(false); setPanel(p); };
 
   // «д · ч · мин» считает день по норме из настроек нагрузки — до отрисовки ячеек.
   if (state) setTimeDay(state.loadSettings.dayMinutes);
@@ -965,8 +957,6 @@ export default function JiraToolSection() {
                 <Plus className="w-4 h-4" />
               </button>
             </div>
-            {list && <RailButton label="Колонки" onClick={() => openPanel("columns")}><Columns3 className="w-4 h-4" /></RailButton>}
-            {list && <RailButton label="Группировка" onClick={() => openPanel("group")} badge={list.groupBy.length || undefined}><Layers className="w-4 h-4" /></RailButton>}
             <button type="button" onClick={() => setModal("participants")} aria-label="Справочник людей"
               title={`Справочник людей: ${state.participants.map(p => p.name).join(", ") || "пока никого"}`}
               className="w-12 flex-shrink-0 bg-bg-card border border-border-main rounded-xl py-2 flex flex-col items-center -space-y-1.5 hover:border-primary/40">
@@ -986,207 +976,6 @@ export default function JiraToolSection() {
         ) : (
           /* ── Развёрнутая колонка ── */
           <aside className="w-72 flex-shrink-0 flex flex-col gap-3 overflow-y-auto scrollbar-thin pr-0.5 animate-fade-in">
-            {/*
-              Настройка списка — самой верхней полосой, свёрнута по умолчанию (экономит место): щелчок — раскрывается
-              привычный виджет, всё ниже сдвигается. Раскрыта ли — удобство одного браузера (LIST_SETUP_KEY).
-            */}
-            {list && (
-              <div className={`bg-bg-card border rounded-xl flex flex-col ${listSetupOpen ? "border-primary/30" : "border-border-main"}`}>
-                <button type="button" onClick={() => toggleListSetup(!listSetupOpen)} aria-expanded={listSetupOpen}
-                  title={listSetupOpen ? "Свернуть настройку списка" : "Колонки, группировка, папки, свои поля, шаблон"}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-left rounded-xl hover:bg-bg-subtle/60">
-                  <SlidersHorizontal className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap">Настройка списка</span>
-                  <span className="min-w-0 flex-1 text-xs text-text-main truncate text-right">{listSetupOpen ? "" : list.name}</span>
-                  <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform flex-shrink-0 ${listSetupOpen ? "rotate-180" : ""}`} />
-                </button>
-                {listSetupOpen && (
-                  <div className="px-3 pb-3 flex flex-col gap-3 animate-fade-in">
-                  <div className="flex items-center gap-1 min-w-0">
-                    {renaming !== null ? (
-                      <input autoFocus value={renaming} onChange={e => setRenaming(e.target.value)} aria-label="Название списка"
-                        onBlur={() => { if (renaming.trim()) updateList(l => ({ ...l, name: renaming.trim() })); setRenaming(null); }}
-                        onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setRenaming(null); }}
-                        className="min-w-0 flex-1 text-sm font-semibold bg-[var(--color-input-bg)] border border-primary/40 rounded-lg px-2 py-1 text-text-main focus:outline-none" />
-                    ) : (
-                      <p className="min-w-0 flex-1 text-sm font-semibold text-text-main truncate" title={list.name}>{list.name}</p>
-                    )}
-                    <button type="button" onClick={() => setTplName(t => (t === null ? list.name : null))} aria-label="Сохранить как шаблон"
-                      aria-pressed={tplName !== null} title="Сохранить как шаблон: колонки, свои поля и папки (без задач)"
-                      className={`p-1 rounded-md hover:text-primary ${tplName !== null ? "text-primary" : "text-text-muted"}`}>
-                      <LayoutTemplate className="w-3.5 h-3.5" />
-                    </button>
-                    <button type="button" onClick={() => setRenaming(list.name)} aria-label="Переименовать список" title="Переименовать список"
-                      className="p-1 rounded-md text-text-muted hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
-                    <button type="button" onClick={() => (list.archivedAt ? restoreList(list.id) : archiveList(list.id))}
-                      aria-label={list.archivedAt ? "Вернуть из архива" : "Убрать в архив"} title={list.archivedAt ? "Вернуть в работу" : "Убрать в архив"}
-                      className="p-1 rounded-md text-text-muted hover:text-primary">
-                      {list.archivedAt ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}</button>
-                    <button type="button" onClick={() => setAskDelete(true)} aria-label="Удалить список" title="Удалить список"
-                      className="p-1 rounded-md text-text-muted hover:text-red-500"><Trash2 className="w-3.5 h-3.5" /></button>
-                  </div>
-                  {tplName !== null && (
-                    <div className="flex flex-col gap-1.5 -mt-1 p-2 rounded-lg bg-bg-subtle">
-                      <p className="text-[11px] text-text-muted">
-                        В шаблон попадут колонки по порядку ({list.columns.length}), свои поля ({list.ownFields.length}) и папки
-                        ({list.folderList?.length ?? 0}). Задачи и значения — нет.
-                      </p>
-                      <div className="flex gap-1.5">
-                        <input autoFocus value={tplName} onChange={e => setTplName(e.target.value)} maxLength={60}
-                          onKeyDown={e => { if (e.key === "Enter") saveTemplate(); if (e.key === "Escape") setTplName(null); }}
-                          placeholder="Название шаблона" aria-label="Название шаблона"
-                          className="min-w-0 flex-1 text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                        <button type="button" onClick={saveTemplate} disabled={!tplName.trim()}
-                          className="px-2.5 rounded-md bg-primary text-white text-xs font-semibold disabled:opacity-40">Сохранить</button>
-                      </div>
-                      {state.templates.some(t => t.name === tplName.trim()) && (
-                        <p className="text-[11px] text-amber-700 dark:text-amber-300">Шаблон с таким названием есть — он будет заменён.</p>
-                      )}
-                    </div>
-                  )}
-                  {tplNote && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 -mt-1" role="status">{tplNote}</p>}
-                  {askDelete && (
-                    <div className="flex items-center gap-1.5 text-xs -mt-1">
-                      <span className="text-text-muted flex-1">Удалить список? Задачи в Jira останутся.</span>
-                      <button type="button" onClick={() => {
-                        update(s => ({ ...s, lists: s.lists.filter(l => l.id !== list.id) }));
-                        openList(startList({ lists: state.lists.filter(l => l.id !== list.id) }, null) ?? "");
-                      }} className="px-2 py-1 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
-                      <button type="button" onClick={() => setAskDelete(false)} className="px-2 py-1 rounded-md border border-border-main text-text-muted">Нет</button>
-                    </div>
-                  )}
-
-                  <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)]
-                    focus-within:ring-2 focus-within:ring-primary/30">
-                    <Search className="w-3.5 h-3.5 text-text-muted" />
-                    <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Найти в списке" aria-label="Найти в списке"
-                      className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
-                    {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
-                  </label>
-                  {activeFilters.length > 0 && (
-                    <p className="flex items-center gap-1.5 px-1 text-[11px] text-primary">
-                      <ListFilter className="w-3.5 h-3.5" />
-                      Фильтр по колонкам: {activeFilters.map(([c]) => colLabel(c, list)).join(", ")}
-                      <button type="button" onClick={() => setColFilters({})} className="ml-auto text-text-muted hover:text-text-main underline">сбросить</button>
-                    </p>
-                  )}
-
-                  <Section icon={<Columns3 className="w-4 h-4" />} title="Колонки" note={`${list.columns.length}`}
-                    open={panel === "columns"} onToggle={() => setPanel(p => (p === "columns" ? null : "columns"))}>
-                    <PickerPanel label="Колонки" options={fieldOptions} selected={list.columns} listHeight="max-h-64"
-                      onChange={columns => updateList(l => ({ ...l, columns }))}
-                      footer={
-                        <button type="button" onClick={() => setModal({ own: null })}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
-                          <FilePlus2 className="w-4 h-4" /> Своё поле…
-                        </button>
-                      } />
-                  </Section>
-
-                  <Section icon={<Layers className="w-4 h-4" />} title="Группировка"
-                    note={list.groupBy.length ? list.groupBy.map(g => colLabel(g, list)).join(" → ") : "нет"}
-                    open={panel === "group"} onToggle={() => setPanel(p => (p === "group" ? null : "group"))}>
-                    <PickerPanel label="Группировка" options={groupOptions} selected={list.groupBy} max={3} ordered listHeight="max-h-64"
-                      onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
-                  </Section>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-xs font-semibold text-text-main">Папки</p>
-                      <button type="button" onClick={() => setNewFolder("")} className="text-xs text-primary hover:underline">+ папка</button>
-                    </div>
-                    <div className="flex flex-col gap-0.5">
-                      {!list.folderList?.length && newFolder === null && (
-                        <span className="text-[11px] text-text-muted">Нет. Папки делят список на разделы; группировка — внутри каждой.</span>
-                      )}
-                      {(list.folderList ?? []).map(f => {
-                        const n = list.keys.filter(k => list.folders?.[k] === f).length;
-                        return askDeleteFolder === f ? (
-                          <div key={f} className="flex flex-col gap-1 px-2 py-1.5 rounded-md bg-red-50 dark:bg-red-950/40 text-xs">
-                            <span className="text-text-main">
-                              Удалить папку «{f}»?{n > 0 && <> Задачи ({n}) останутся в списке — в разделе «{NO_FOLDER}».</>}
-                            </span>
-                            <span className="flex gap-1.5">
-                              <button type="button" onClick={() => { deleteFolder(f); setAskDeleteFolder(null); }}
-                                className="px-2 py-0.5 rounded-md bg-red-600 text-white font-semibold">Удалить</button>
-                              <button type="button" onClick={() => setAskDeleteFolder(null)}
-                                className="px-2 py-0.5 rounded-md border border-border-main text-text-muted">Нет</button>
-                            </span>
-                          </div>
-                        ) : (
-                          <span key={f} className="group/fd flex items-center gap-1.5 text-xs text-text-main px-1 py-0.5 rounded-md hover:bg-bg-subtle">
-                            <Folder className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                            <span className="truncate flex-1">{f}</span>
-                            <span className="text-text-muted group-hover/fd:hidden">{n}</span>
-                            <button type="button" onClick={() => setAskDeleteFolder(f)} aria-label={`Удалить папку ${f}`} title="Удалить папку"
-                              className="hidden group-hover/fd:inline-flex focus-visible:inline-flex p-0.5 rounded text-text-muted hover:text-red-500">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </span>
-                        );
-                      })}
-                      {newFolder !== null && (
-                        <input autoFocus value={newFolder} onChange={e => setNewFolder(e.target.value)} aria-label="Название папки"
-                          onBlur={() => (newFolder.trim() ? addFolder() : setNewFolder(null))}
-                          onKeyDown={e => { if (e.key === "Enter") addFolder(); if (e.key === "Escape") setNewFolder(null); }}
-                          placeholder="Название папки, Enter"
-                          className="text-sm border border-primary/40 rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-xs font-semibold text-text-main">Свои поля</p>
-                      <button type="button" onClick={() => setModal({ own: null })} className="text-xs text-primary hover:underline">+ поле</button>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {list.ownFields.length === 0 && <span className="text-[11px] text-text-muted">Нет — добавьте дату ретеста, стенд и т.п.</span>}
-                      {list.ownFields.map(f => (
-                        <button key={f.id} type="button" onClick={() => setModal({ own: f })} title={`${OWN_TYPE_LABEL[f.type]} — изменить`}
-                          className="flex items-center gap-1 px-2 py-1 rounded-md bg-bg-subtle text-xs text-text-main hover:text-primary">
-                          <Pencil className="w-3 h-3" /> {f.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {!!list.sources?.length && (
-                    <div className="border-t border-border-main pt-2">
-                      <p className="text-xs font-semibold text-text-main mb-1"
-                        title="При обновлении из Jira (по кнопке и фоном раз в 30 минут) состав сверяется: новые — «n», выпавшие — «У»">
-                        Источники · сверка состава
-                      </p>
-                      <div className="flex flex-col gap-0.5">
-                        {list.sources.map(src => (
-                          <span key={src.id} className="group/src flex items-start gap-1.5 text-[11px] text-text-muted py-0.5"
-                            title={`${src.kind === "jql" ? "JQL" : "Релиз"}: ${src.name}\nЗадач в составе: ${src.keys.length} · сверено ${src.checkedAt}`}>
-                            {src.kind === "jql" ? <Search className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" /> : <Rocket className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />}
-                            <span className={`flex-1 min-w-0 truncate text-text-main ${src.kind === "jql" ? "font-mono" : ""}`}>{src.name}</span>
-                            <span className="flex-shrink-0">{src.keys.length}</span>
-                            <button type="button" aria-label={`Не отслеживать: ${src.name}`} title="Не отслеживать состав (задачи останутся в списке)"
-                              onClick={() => updateList(l => ({ ...l, sources: (l.sources ?? []).filter(x => x.id !== src.id) }))}
-                              className="hidden group-hover/src:inline-flex focus-visible:inline-flex p-0.5 rounded hover:text-red-500">
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {STRUCTURE_ENABLED && list.structure && (
-                    <div className="text-[11px] text-text-muted flex items-start gap-1.5 border-t border-border-main pt-2">
-                      <FolderTree className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-primary" />
-                      <span className="flex-1">Из структуры «{list.structure.name}» · {list.structure.importedAt}</span>
-                      <button type="button" onClick={refreshStructure} title="Подтянуть новые задачи и папки"
-                        className="p-0.5 rounded hover:text-primary"><RefreshCw className="w-3.5 h-3.5" /></button>
-                    </div>
-                  )}
-                  </div>
-                )}
-              </div>
-            )}
-
             <div className="bg-bg-card border border-border-main rounded-xl p-2 flex flex-col gap-0.5">
               <div className="flex items-center justify-between pl-2 pr-0.5">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted py-1">Списки</p>
@@ -1204,7 +993,7 @@ export default function JiraToolSection() {
                   if (id === activeId) openList(startList({ lists: state.lists.filter(x => x.id !== id) }, null) ?? "");
                   setAskDeleteList(null);
                 }}
-                onDropIssues={moveToList}
+                onDropIssues={moveToList} onEdit={setEditList}
                 onRename={(id, name) => update(s => ({ ...s, lists: s.lists.map(x => (x.id === id ? { ...x, name } : x)) }))}
                 onMove={(id, target, place) => update(s => {
                   const byId = new Map(s.lists.map(x => [x.id, x]));
@@ -1265,26 +1054,48 @@ export default function JiraToolSection() {
               )}
             </div>
 
-            <div className="bg-bg-card border border-border-main rounded-xl p-3">
-              <div className="flex items-center justify-between mb-2">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Тестировщики</p>
-                <button type="button" onClick={() => setModal("participants")} title="Справочник людей: тестировщики и люди направлений"
+            {/* Команда: свёрнута по умолчанию — кружки людей; раскрыта — все люди справочника с направлениями */}
+            <div className="bg-bg-card border border-border-main rounded-xl">
+              <div className="flex items-center gap-2 px-3 py-2">
+                <button type="button" onClick={toggleTeam} aria-expanded={teamOpen}
+                  className="min-w-0 flex-1 flex items-center gap-2 text-left">
+                  <ChevronDown className={`w-3.5 h-3.5 flex-shrink-0 text-text-muted transition-transform ${teamOpen ? "" : "-rotate-90"}`} />
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Команда</span>
+                  {!teamOpen && (
+                    <span className="flex min-w-0 -space-x-1.5 overflow-hidden">
+                      {state.participants.slice(0, 7).map(p => (
+                        <span key={p.id} className="w-5 h-5 flex-shrink-0 rounded-full ring-2 ring-[var(--color-bg-card)] flex items-center justify-center text-white text-[8px] font-bold"
+                          style={{ backgroundColor: p.color }}>{initials(p.name)}</span>
+                      ))}
+                      {state.participants.length > 7 && <span className="pl-2.5 text-[10px] text-text-muted">+{state.participants.length - 7}</span>}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11px] text-text-muted">{state.participants.length || ""}</span>
+                </button>
+                <button type="button" onClick={() => setModal("participants")} title="Справочник людей: команда по направлениям"
                   className="text-xs text-primary hover:underline">Справочник</button>
               </div>
-              {peopleErr && <p className="mb-2 text-[11px] text-red-600 dark:text-red-400">{peopleErr}</p>}
-              <div className="flex flex-wrap gap-1.5">
-                {!state.participants.some(p => inDirection(p, TESTING)) && <span className="text-xs text-text-muted">Пока никого</span>}
-                {state.participants.filter(p => inDirection(p, TESTING)).map(p => (
-                  <span key={p.id} title={`${p.name}${p.role ? ` · ${p.role}` : ""} · задач: ${usage[p.id] ?? 0}`}
-                    className="w-7 h-7 rounded-full flex items-center justify-center text-white text-[10px] font-bold" style={{ backgroundColor: p.color }}>
-                    {initials(p.name)}
-                  </span>
-                ))}
-              </div>
+              {peopleErr && <p className="px-3 pb-2 text-[11px] text-red-600 dark:text-red-400">{peopleErr}</p>}
+              {teamOpen && (
+                <ul className="px-2 pb-2 space-y-0.5 animate-fade-in">
+                  {state.participants.length === 0 && <li className="px-1 text-xs text-text-muted">Пока никого — добавьте людей в «Справочник».</li>}
+                  {state.participants.map(p => (
+                    <li key={p.id} className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-bg-subtle"
+                      title={`${p.name}${p.role ? ` · ${p.role}` : ""} · задач: ${usage[p.id] ?? 0}`}>
+                      <span className="w-6 h-6 flex-shrink-0 rounded-full flex items-center justify-center text-white text-[9px] font-bold"
+                        style={{ backgroundColor: p.color }}>{initials(p.name)}</span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-text-main">{p.name}</span>
+                      <span className="flex-shrink-0 truncate text-[10px] text-text-muted max-w-[7rem]">
+                        {DIRECTIONS.filter(d => inDirection(p, d.id)).map(d => d.label).join(", ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             {list && (
-              <LoadPanel list={list} participants={state.participants} settings={state.loadSettings} onSettings={() => setModal("load")}
+              <LoadPanel list={list} participants={state.participants} settings={state.loadSettings}
                 skip={key => loadSkip(list, byKey.get(key), stageOf)}
                 onRange={load => updateList(l => ({ ...l, load }))}
                 onDetails={() => setModal("loadDetails")} />
@@ -1321,7 +1132,7 @@ export default function JiraToolSection() {
               ) : (
                 <p>Подключение к Jira…</p>
               )}
-              <p>Списки, свои поля и черновики хранятся в этом браузере, справочник людей — на сервере Loom.</p>
+              <p>Списки, свои поля и черновики хранятся в этом браузере, справочник людей — на сервере Shark.</p>
               <button type="button" onClick={() => setSettingsOpen(true)} className="hover:text-text-main underline-offset-2 hover:underline">
                 Настройки Jira
               </button>
@@ -1363,7 +1174,7 @@ export default function JiraToolSection() {
           {jiraPeopleErr && jira.state === "ok" && (
             <div role="alert" className="flex items-center gap-3 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-sm">
               <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0" />
-              <span className="min-w-0 flex-1 text-text-main">Jira не приняла людей (в Loom они сохранены): {jiraPeopleErr}</span>
+              <span className="min-w-0 flex-1 text-text-main">Jira не приняла людей (в Shark они сохранены): {jiraPeopleErr}</span>
               <button type="button" onClick={() => setJiraPeopleErr("")} aria-label="Скрыть" className="p-1 text-text-muted hover:text-text-main"><X className="w-4 h-4" /></button>
             </div>
           )}
@@ -1383,12 +1194,6 @@ export default function JiraToolSection() {
                   onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
                   onRename={(id, name) => updateList(l => renameView(l, id, name))}
                   onDelete={id => updateList(l => deleteView(l, id))} />
-                <input value={projectInput} onChange={e => setProjectInput(e.target.value.toUpperCase())} list="jt-projects"
-                  onBlur={commitProject} onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setProjectInput(list.project); }}
-                  aria-label="Проект списка" spellCheck={false}
-                  title={`Проект списка: от него зависят поля, поиск и создание задач${projects.find(p => p.key === list.project) ? ` · ${projects.find(p => p.key === list.project)!.name}` : ""}`}
-                  className="w-32 text-sm font-semibold uppercase border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                <datalist id="jt-projects">{projects.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}</datalist>
                 <div className="min-w-[10rem] flex-1" title={list.name}>
                   <p className="text-sm font-semibold text-text-main truncate">
                     {list.name}
@@ -1410,26 +1215,29 @@ export default function JiraToolSection() {
                     )}</p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {/* Формат трудозатрат во всём Jira tool и в Excel: ч·мин или д·ч·мин (день — норма из настроек нагрузки) */}
-                  <span className="flex rounded-lg border border-border-main overflow-hidden text-xs" role="radiogroup" aria-label="Формат времени"
-                    title={`Трудозатраты: часы и минуты или дни, часы и минуты (день = ${fmtMinutes(state.loadSettings.dayMinutes, "hm")} — норма из настроек нагрузки)`}>
-                    {(["hm", "dhm"] as const).map(f => (
-                      <button key={f} type="button" role="radio" aria-checked={timeFmt === f}
-                        onClick={() => { setTimeFmt(f); setTimeFmtState(f); }}
-                        className={`px-2.5 py-2 whitespace-nowrap ${timeFmt === f ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
-                        {f === "hm" ? "ч · мин" : "д · ч · мин"}
+                  {/* Поиск по списку */}
+                  <label className="flex items-center gap-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary/30">
+                    <Search className="w-3.5 h-3.5 text-text-muted" />
+                    <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Найти в списке" aria-label="Найти в списке"
+                      className="w-32 bg-transparent text-sm text-text-main focus:outline-none" />
+                    {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
+                  </label>
+                  {activeFilters.length > 0 && (
+                    <button type="button" onClick={() => setColFilters({})} title={`Фильтр по колонкам: ${activeFilters.map(([c]) => colLabel(c, list)).join(", ")} — сбросить`}
+                      className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-bg-subtle whitespace-nowrap">
+                      <ListFilter className="w-3.5 h-3.5" /> фильтры: {activeFilters.length} ×</button>
+                  )}
+                  {/* Колонки и группировка — рядом с действиями над задачами */}
+                  <FieldPicker label="Колонки" icon={<Columns3 className="w-4 h-4" />} align="right" options={fieldOptions} selected={list.columns}
+                    collapsed={jiraGroup} onChange={columns => updateList(l => ({ ...l, columns }))}
+                    footer={
+                      <button type="button" onClick={() => setModal({ own: null })}
+                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
+                        <FilePlus2 className="w-4 h-4" /> Создать своё поле…
                       </button>
-                    ))}
-                  </span>
-                  <button type="button" onClick={refreshFromJira} disabled={jira.state !== "ok"} aria-label="Обновить из Jira"
-                    title={pendingPeople ? `Отправить в Jira людей (изменений: ${pendingPeople}) и перечитать задачи списка` : "Перечитать задачи списка из Jira"}
-                    className="relative p-2 rounded-lg border border-border-main text-text-muted hover:text-primary disabled:opacity-40">
-                    <RefreshCw className={`w-4 h-4 ${busy > 0 ? "animate-spin" : ""}`} />
-                    {pendingPeople > 0 && (
-                      <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold leading-4 text-center">
-                        {pendingPeople}</span>
-                    )}
-                  </button>
+                    } />
+                  <FieldPicker label="Группировка" icon={<Layers className="w-4 h-4" />} align="right" options={groupOptions} selected={list.groupBy}
+                    max={3} ordered collapsed={jiraGroup} onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
                   {STRUCTURE_ENABLED && (
                     <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
@@ -1530,6 +1338,7 @@ export default function JiraToolSection() {
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
                 ) : (
                   <ListTable key={list.id} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
+                    timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
                     selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
                     selected={selected}
                     onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
@@ -1701,14 +1510,19 @@ export default function JiraToolSection() {
         <LoadDetailsModal list={list} people={state.participants} settings={state.loadSettings} issueOf={key => byKey.get(key)}
           skip={key => loadSkip(list, byKey.get(key), stageOf)} onClose={() => setModal(null)}
           onRange={load => updateList(l => ({ ...l, load }))}
-          onAuto={on => updateList(l => ({ ...l, loadAuto: on ? undefined : false }))}
-          onWeekends={on => updateList(l => ({ ...l, loadWeekends: on || undefined }))}
           onBars={(dir, on) => updateList(l => ({ ...l, loadBars: { ...l.loadBars, [dir]: on } }))}
-          onSettings={() => setModal("load")} />
+          onSettings={() => setLoadSettingsOpen(true)} />
       )}
-      {modal === "load" && (
-        <LoadSettingsModal open settings={state.loadSettings} participants={state.participants} onClose={() => setModal(null)}
-          onSave={loadSettings => update(s => ({ ...s, loadSettings }))} />
+      {loadSettingsOpen && (
+        <LoadSettingsModal open settings={state.loadSettings} participants={state.participants} onClose={() => setLoadSettingsOpen(false)}
+          onSave={loadSettings => update(s => ({ ...s, loadSettings }))}
+          list={list ? {
+            name: list.name, weekends: !!list.loadWeekends, auto: list.loadAuto !== false,
+            onWeekends: on => updateList(l => ({ ...l, loadWeekends: on || undefined })),
+            onAuto: on => updateList(l => ({ ...l, loadAuto: on ? undefined : false })),
+            dirs: list.loadDirs?.length ? list.loadDirs : [TESTING],
+            onDirs: loadDirs => updateList(l => ({ ...l, loadDirs })),
+          } : undefined} />
       )}
       {modal && typeof modal === "object" && "issueFor" in modal && (
         <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
@@ -1727,28 +1541,63 @@ export default function JiraToolSection() {
           }}
           onSave={saveOwn} onDelete={modal.own ? () => deleteOwn(modal.own!.id) : undefined} />
       )}
+      {editList && (() => {
+        const el = state.lists.find(l => l.id === editList);
+        if (!el) return null;
+        const upd = (fn: (l: TaskList) => TaskList) => update(s => ({ ...s, lists: s.lists.map(l => (l.id === el.id ? fn(l) : l)) }));
+        return (
+          <ListEditModal list={el} templateNames={state.templates.map(t => t.name)} onClose={() => setEditList(null)}
+            onRename={name => upd(l => ({ ...l, name }))}
+            onSaveTemplate={name => { const t = templateOf(el, name); update(s => ({ ...s, templates: [...s.templates.filter(x => x.name !== name), t] })); }}
+            onAddFolder={name => upd(l => ({ ...l, folderList: Array.from(new Set([...(l.folderList ?? []), name])) }))}
+            onRenameFolder={(name, next) => upd(l => ({
+              ...l,
+              folderList: Array.from(new Set((l.folderList ?? []).map(f => (f === name ? next : f)))),
+              folders: Object.fromEntries(Object.entries(l.folders ?? {}).map(([k, f]) => [k, f === name ? next : f])),
+            }))}
+            onDeleteFolder={name => upd(l => ({
+              ...l,
+              folderList: (l.folderList ?? []).filter(f => f !== name),
+              folders: Object.fromEntries(Object.entries(l.folders ?? {}).filter(([, f]) => f !== name)),
+            }))}
+            onOwn={f => { if (el.id !== activeId) openList(el.id); setEditList(null); setModal({ own: f }); }}
+            onUntrack={id => upd(l => ({ ...l, sources: (l.sources ?? []).filter(x => x.id !== id) }))}
+            onArchive={() => { archiveList(el.id); setEditList(null); }}
+            onRestore={() => restoreList(el.id)}
+            onDelete={() => {
+              update(s => ({ ...s, lists: s.lists.filter(l => l.id !== el.id) }));
+              if (el.id === activeId) openList(startList({ lists: state.lists.filter(l => l.id !== el.id) }, null) ?? "");
+              setEditList(null);
+            }} />
+        );
+      })()}
       <JiraSettingsModal open={settingsOpen} onClose={() => { setSettingsOpen(false); connect(true); }} />
     </Shell>
   );
 }
 
 /**
- * Нагрузка по списку — только команда тестирования: у каждого тестировщика сумма плана (ячейка «Тестировщик») его задач
- * в этом списке против нормы за период (дни × норма дня минус резервы). Превышение — красным; если в списке
- * считаются выходные — сколько из плана уходит на выходные (переработка). Остальные направления, галочки
- * «выходные» и «готовые не считать» — в подробной нагрузке.
+ * Нагрузка по списку. На виджете — только период и итог; всё остальное — в «Подробно»: все команды, а там же
+ * «Настройки» (норма дня, резервы, выходные и какие команды показывать здесь; по умолчанию — тестирование).
+ * Одна команда — люди с полосами «план / норма»; несколько — общий итог и «Развернуть» — люди по командам.
  */
-function LoadPanel({ list, participants, settings, onSettings, skip, onRange, onDetails }: {
+function LoadPanel({ list, participants, settings, skip, onRange, onDetails }: {
   list: TaskList;
   participants: Participant[];
   settings: LoadSettings;
-  onSettings: () => void;
   skip: (key: string) => ReturnType<typeof loadSkip>;
   onRange: (r: { from: string; to: string }) => void;
   onDetails: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const range = list.load ?? defaultLoadRange();
-  const rows = listLoad(list, participants, range, skip, settings);
+  const dirs = DIRECTIONS.filter(d => (list.loadDirs?.length ? list.loadDirs : [TESTING]).includes(d.id));
+  const loads = dirs.map(d => directionLoad(list, d, participants, range, skip, settings));
+  const single = loads.length === 1;
+  const planned = loads.reduce((n, d) => n + d.planned, 0);
+  const capacity = loads.reduce((n, d) => n + d.capacity, 0);
+  const over = planned > capacity;
+  const pct = capacity ? Math.min(100, Math.round((planned / capacity) * 100)) : planned ? 100 : 0;
   // Резервы у всех — в общую строку нормы; личные — в подсказке и под строкой участника.
   const common = settings.reserves.filter(r => r.minutes > 0 && isCommonReserve(r));
   const commonMin = common.reduce((n, r) => n + r.minutes, 0);
@@ -1758,13 +1607,11 @@ function LoadPanel({ list, participants, settings, onSettings, skip, onRange, on
   return (
     <div className="bg-bg-card border border-border-main rounded-xl p-3 space-y-2">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">Нагрузка · Testing</p>
-        <span className="flex items-center gap-2">
-          <button type="button" onClick={onDetails} title="Все направления, выходные, не учтённые задачи"
-            className="text-xs text-primary hover:underline">Подробно</button>
-          <button type="button" onClick={onSettings} aria-label="Настройка нагрузки: норма дня и резервы" title="Норма дня и резервы (автотесты, дежурства…)"
-            className="p-1 -m-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle"><Settings2 className="w-3.5 h-3.5" /></button>
-        </span>
+        <p className="min-w-0 truncate text-[10px] font-semibold uppercase tracking-wide text-text-muted" title={dirs.map(d => d.label).join(", ")}>
+          Нагрузка · {single ? dirs[0].label : `команд ${dirs.length}`}
+        </p>
+        <button type="button" onClick={onDetails} title="Все команды и настройки нагрузки"
+          className="flex-shrink-0 text-xs text-primary hover:underline">Подробно</button>
       </div>
       <div className="flex items-center gap-1">
         <input type="date" value={range.from} max={range.to} onChange={e => e.target.value && onRange({ ...range, from: e.target.value })}
@@ -1773,35 +1620,44 @@ function LoadPanel({ list, participants, settings, onSettings, skip, onRange, on
         <input type="date" value={range.to} min={range.from} onChange={e => e.target.value && onRange({ ...range, to: e.target.value })}
           aria-label="Нагрузка: по дату" className={dateCls} />
       </div>
-      <p className="text-[11px] text-text-muted" title="Праздники не учитываются. Норму дня и резервы — шестерёнкой; выходные — в «Подробно».">
+      <p className="text-[11px] text-text-muted" title="Праздники не учитываются. Норма дня, резервы и выходные — «Подробно» → «Настройки».">
         {weekend ? <>Дней: {days}, из них выходных {weekend}</> : <>Рабочих дней: {days}</>} · в день {fmtMinutes(settings.dayMinutes, "hm")}
         {commonMin > 0 && <> − {common.map(r => `${r.name} ${fmtMinutes(r.minutes, "hm")}`).join(", ")} = <b className="font-medium text-text-main">{fmtMinutes(Math.max(0, settings.dayMinutes - commonMin), "hm")}</b></>}
       </p>
-      {rows.length === 0 ? (
-        <p className="text-xs text-text-muted">Добавьте тестировщиков в справочник и назначьте их на задачи — здесь появится их нагрузка.</p>
+      {single ? (
+        loads[0].rows.length === 0 ? (
+          <p className="text-xs text-text-muted">Добавьте людей команды в справочник и назначьте их на задачи — здесь появится их нагрузка.</p>
+        ) : (
+          <ul className="space-y-1.5">{loads[0].rows.map(r => <LoadRowView key={r.participant.id} r={r} bars />)}</ul>
+        )
       ) : (
-        <ul className="space-y-1.5">
-          {rows.map(r => <LoadRowView key={r.participant.id} r={r} bars />)}
-        </ul>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <span className="flex-1 h-1.5 rounded-full bg-bg-subtle overflow-hidden" aria-hidden>
+              <span className={`block h-full rounded-full ${over ? "bg-red-500" : "bg-primary/70"}`} style={{ width: `${pct}%` }} />
+            </span>
+            <span className={`text-xs tabular-nums whitespace-nowrap ${over ? "font-semibold text-red-600 dark:text-red-400" : "text-text-main"}`}
+              title="План выбранных команд / их норма за период">
+              {fmtMinutes(planned)} / {fmtMinutes(capacity)}
+            </span>
+          </div>
+          <button type="button" onClick={() => setExpanded(e => !e)} aria-expanded={expanded}
+            className="flex items-center gap-1 text-xs text-text-muted hover:text-text-main">
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${expanded ? "" : "-rotate-90"}`} />
+            {expanded ? "Свернуть" : "Развернуть"} · людей {loads.reduce((n, d) => n + d.rows.length, 0)}
+          </button>
+          {expanded && loads.map(d => (
+            <div key={d.id} className="space-y-1">
+              <p className="flex items-center justify-between text-[11px] font-semibold text-text-muted">
+                <span>{d.label}</span>
+                <span className={`tabular-nums font-normal ${d.planned > d.capacity ? "text-red-600 dark:text-red-400" : ""}`}>{fmtMinutes(d.planned)} / {fmtMinutes(d.capacity)}</span>
+              </p>
+              {d.rows.length === 0 ? <p className="text-[11px] text-text-muted">нет людей</p>
+                : <ul className="space-y-1.5">{d.rows.map(r => <LoadRowView key={r.participant.id} r={r} bars />)}</ul>}
+            </div>
+          ))}
+        </div>
       )}
-    </div>
-  );
-}
-
-/** Раскрывающийся блок настройки в левой колонке. */
-function Section({ icon, title, note, open, onToggle, children }: {
-  icon: ReactNode; title: string; note: string; open: boolean; onToggle: () => void; children: ReactNode;
-}) {
-  return (
-    <div className={`rounded-lg border ${open ? "border-primary/30" : "border-border-main"}`}>
-      <button type="button" onClick={onToggle} aria-expanded={open}
-        className="w-full flex items-center gap-2 px-2.5 py-2 text-left">
-        <span className="text-text-muted">{icon}</span>
-        <span className="text-sm font-medium text-text-main">{title}</span>
-        <span className="min-w-0 flex-1 text-[11px] text-text-muted truncate text-right">{note}</span>
-        <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform flex-shrink-0 ${open ? "rotate-180" : ""}`} />
-      </button>
-      {open && <div className="px-2 pb-2 animate-fade-in">{children}</div>}
     </div>
   );
 }
@@ -1818,14 +1674,7 @@ function RailButton({ label, onClick, badge, children }: { label: string; onClic
   );
 }
 
+/** Название раздела — в шапке панели (вместе с «Обновить»), здесь его не повторяем. */
 function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-border-main bg-bg-card flex-shrink-0">
-        <LayoutList className="w-5 h-5 text-primary" />
-        <h1 className="text-lg font-bold text-text-main">Jira tool</h1>
-      </div>
-      <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
-    </div>
-  );
+  return <div className="h-full overflow-hidden">{children}</div>;
 }

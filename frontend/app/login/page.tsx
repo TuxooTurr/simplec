@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import { SharkSpinner } from "@/components/ui/RefreshButton";
+import { BRAND_FONT } from "@/components/BrandWord";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/components/ui/ThemeToggle";
 import { loginTokensNote, stashLoginNote } from "@/lib/authApi";
@@ -27,10 +29,9 @@ export default function LoginPage() {
     try {
       const tokens = await login(loginStr.trim(), password);
       stashLoginNote(loginTokensNote(tokens));
-      router.replace("/generation");
+      router.replace("/generation");      // акула остаётся до перехода — форма обратно не мигает
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
-    } finally {
       setLoading(false);
     }
   };
@@ -67,9 +68,16 @@ export default function LoginPage() {
       <div aria-hidden className="pointer-events-none absolute inset-0"
         style={{ background: `radial-gradient(ellipse 42% 46% at 50% 50%, rgba(${media.bg},0.94) 0%, rgba(${media.bg},0.75) 55%, rgba(${media.bg},0) 100%)` }} />
 
-      <form onSubmit={handleSubmit} className="relative z-10 w-full max-w-[340px] space-y-3 px-4">
+      {/* Вход идёт: поля убраны, видео играет дальше, по центру — акула по кругу, как в «Обновить» */}
+      {loading && (
+        <div role="status" aria-label="Вход…" className="relative z-10 text-indigo-700 dark:text-indigo-200 animate-fade-in">
+          <SharkSpinner size={88} />
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className={`relative z-10 w-full max-w-[340px] space-y-3 px-4 ${loading ? "hidden" : ""}`}>
         <h1 className="t-rise select-none pb-4 text-center text-[96px] leading-none tracking-[0.04em] text-indigo-950 dark:text-indigo-100"
-          style={{ fontFamily: "Impact, Haettenschweiler, 'Arial Narrow Bold', 'Franklin Gothic Bold', sans-serif" }}>
+          style={{ fontFamily: BRAND_FONT }}>
           SHARK
         </h1>
 
@@ -102,7 +110,7 @@ export default function LoginPage() {
               transition hover:bg-indigo-700 disabled:bg-indigo-600/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40
               dark:bg-indigo-400 dark:text-slate-950 dark:hover:bg-indigo-300 dark:disabled:bg-indigo-400/25"
           >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </button>
         </div>
 

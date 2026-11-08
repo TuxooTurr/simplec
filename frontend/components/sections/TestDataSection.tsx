@@ -1,5 +1,6 @@
 "use client";
 
+import { backdropClose } from "@/lib/backdrop";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Database, Sparkles, Play, Copy, CheckCheck,
@@ -572,7 +573,7 @@ export default function TestDataSection() {
 
       {/* Просмотр снимка запроса из архива — та самая «страница», что была получена тогда */}
       {viewEntry && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto" onClick={() => setViewEntry(null)}>
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto" {...backdropClose(() => setViewEntry(null))}>
           <div className="bg-bg-main rounded-2xl border border-border-main w-full max-w-4xl my-8 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
               <div className="min-w-0">

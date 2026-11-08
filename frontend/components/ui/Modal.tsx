@@ -1,5 +1,6 @@
 "use client";
 
+import { backdropClose } from "@/lib/backdrop";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
@@ -80,7 +81,7 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center p-4 t-modal-overlay ${closing ? "is-closing" : ""}`}
       style={{ backgroundColor: "var(--color-modal-overlay)" }}
-      onClick={onClose}
+      {...backdropClose(onClose)}
     >
       <div
         ref={panelRef}

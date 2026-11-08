@@ -1510,7 +1510,7 @@ export default function JiraToolSection() {
         <LoadDetailsModal list={list} people={state.participants} settings={state.loadSettings} issueOf={key => byKey.get(key)}
           skip={key => loadSkip(list, byKey.get(key), stageOf)} onClose={() => setModal(null)}
           onRange={load => updateList(l => ({ ...l, load }))}
-          onBars={(dir, on) => updateList(l => ({ ...l, loadBars: { ...l.loadBars, [dir]: on } }))}
+          onWidget={loadDirs => updateList(l => ({ ...l, loadDirs }))}
           onSettings={() => setLoadSettingsOpen(true)} />
       )}
       {loadSettingsOpen && (

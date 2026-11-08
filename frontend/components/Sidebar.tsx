@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import BrandWord from "./BrandWord";
 import { Zap, BookOpen, LayoutList, BarChart2, Database, ScrollText, GripVertical, Eye, EyeOff, Check, Network, SplitSquareHorizontal, FlaskConical, CalendarDays, Activity, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { ComponentType } from "react";
 import LLMStatusBar from "./LLMStatusBar";
@@ -145,16 +146,10 @@ export default function Sidebar() {
     <aside className={`${collapsed ? "w-16" : "w-64"} h-screen bg-[var(--color-sidebar-bg)] border-r border-border-main flex flex-col flex-shrink-0
       ${animate ? "transition-[width] duration-200 ease-out motion-reduce:transition-none" : ""}`}>
       {/* Logo */}
-      <div className={`border-b border-border-main ${collapsed ? "px-2 py-3" : "pl-5 pr-2 py-4"}`}>
-        <div className={`flex items-center gap-2.5 ${collapsed ? "flex-col" : ""}`}>
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-primary-dark flex items-center justify-center shadow-sm flex-shrink-0">
-            <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
-          </div>
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <span className="text-[15px] font-bold text-text-main tracking-tight">Shark</span>
-            </div>
-          )}
+      {/* Название — шрифтом экрана входа, без разрядки, на 49% ширины зоны; слева — по краю пунктов меню (px-3, как у nav) */}
+      <div className={`border-b border-border-main ${collapsed ? "px-2 py-3" : "pl-3 pr-2 py-2"}`}>
+        <div className={`flex items-center gap-[3px] ${collapsed ? "flex-col" : ""}`}>
+          {!collapsed && <BrandWord className="flex-1" scale={0.49} spacing={0} />}
           <button type="button" onClick={() => setNavCollapsed(!collapsed)} aria-expanded={!collapsed}
             aria-label={collapsed ? "Развернуть меню" : "Свернуть меню"} title={collapsed ? "Развернуть меню" : "Свернуть меню — рабочие зоны станут шире"}
             className="flex-shrink-0 rounded-lg p-1.5 text-text-muted transition-colors hover:bg-bg-subtle hover:text-primary">

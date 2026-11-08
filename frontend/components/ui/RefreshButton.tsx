@@ -35,6 +35,15 @@ export function SharkSpinner({ size = 16, className = "" }: { size?: number; cla
   );
 }
 
+/** Загрузка экрана: та же акула по кругу, по центру области. Вход, переходы между разделами, проверка входа. */
+export function SharkLoader({ size = 40, label = "Загрузка", className = "" }: { size?: number; label?: string; className?: string }) {
+  return (
+    <div role="status" aria-label={label} className={`flex h-full w-full items-center justify-center text-primary ${className}`}>
+      <SharkSpinner size={size} />
+    </div>
+  );
+}
+
 /** Значок «Обновить»: стрелки в покое, акула — пока идёт загрузка. */
 export function RefreshIcon({ busy, className = "w-4 h-4" }: { busy?: boolean; className?: string }) {
   if (busy) {

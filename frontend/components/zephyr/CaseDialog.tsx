@@ -1,5 +1,6 @@
 "use client";
 
+import { backdropClose } from "@/lib/backdrop";
 import { useEffect, type ReactNode } from "react";
 import { Maximize2, X } from "lucide-react";
 
@@ -28,7 +29,7 @@ export default function CaseDialog({ label, title, minimized, onMinimize, onRest
   return (
     <>
       <div className={`fixed inset-0 z-40 flex items-center justify-center p-6 ${minimized ? "hidden" : ""}`}
-        style={{ backgroundColor: "var(--color-modal-overlay)" }} onClick={onMinimize}>
+        style={{ backgroundColor: "var(--color-modal-overlay)" }} {...backdropClose(onMinimize)}>
         <div role="dialog" aria-modal="true" aria-label={label} onClick={e => e.stopPropagation()}
           className="flex flex-col w-full max-w-3xl h-[86vh] rounded-xl overflow-hidden shadow-2xl border border-border-main bg-bg-card">
           {children}

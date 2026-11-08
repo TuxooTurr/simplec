@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import WorkspaceShell from "@/components/WorkspaceShell";
 import LoginNote from "@/components/LoginNote";
-import { Loader2 } from "lucide-react";
+import { SharkLoader } from "@/components/ui/RefreshButton";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -19,8 +19,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-bg-main">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="h-screen bg-bg-main">
+        <SharkLoader size={48} label="Проверка входа" />
       </div>
     );
   }

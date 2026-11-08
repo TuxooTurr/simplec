@@ -11,12 +11,12 @@ import LoadRowView from "./LoadRowView";
 
 /**
  * Подробная нагрузка списка — по всем направлениям: тестирование (тестировщик и его план) и поля направлений
- * (человек + план в ячейке). У каждого направления свой раздел: итог «план / ёмкость», люди с полосами загрузки
- * (глаз включает и выключает полосы — запоминается в списке), план без исполнителя и спрятанный перечень задач,
- * не учтённых в нагрузке. «Настройки» — окно поверх: норма, резервы, выходные, готовые задачи и какие команды
- * показывать на виджете слева.
+ * (человек + план в ячейке). У каждого направления свой раздел: итог «план / ёмкость», люди с полосами загрузки,
+ * план без исполнителя и спрятанный перечень задач, не учтённых в нагрузке. Глаз у направления — показывать ли его
+ * на виджете нагрузки слева (по умолчанию только тестирование; последнее видимое не прячется). «Настройки» — окно
+ * поверх: норма, резервы, выходные, готовые задачи.
  */
-export default function LoadDetailsModal({ list, people, settings, issueOf, skip, onClose, onRange, onBars, onSettings }: {
+export default function LoadDetailsModal({ list, people, settings, issueOf, skip, onClose, onRange, onWidget, onSettings }: {
   list: TaskList;
   people: Participant[];
   settings: LoadSettings;
@@ -24,7 +24,8 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
   skip: (key: string) => LoadSkip;
   onClose: () => void;
   onRange: (r: { from: string; to: string }) => void;
-  onBars: (dir: string, on: boolean) => void;
+  /** Команды на виджете — порядок как в DIRECTIONS. */
+  onWidget: (dirs: string[]) => void;
   onSettings: () => void;
 }) {
   const widget = list.loadDirs?.length ? list.loadDirs : [TESTING];
@@ -49,7 +50,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
           <span className="text-xs text-text-muted">
             {weekend ? `дней ${days}, из них выходных ${weekend}` : `рабочих дней ${days}`} · в день {fmtMinutes(settings.dayMinutes, "hm")}
           </span>
-          <button type="button" onClick={onSettings} title="Норма дня, резервы, выходные, команды на виджете"
+          <button type="button" onClick={onSettings} title="Норма дня, резервы, выходные, готовые задачи"
             className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-border-main px-2.5 py-1 text-xs text-text-main hover:bg-bg-subtle">
             <Settings2 className="w-3.5 h-3.5" /> Настройки
           </button>
@@ -57,7 +58,8 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
         <ul className="border border-border-main rounded-xl divide-y divide-border-main">
           {loads.map(d => {
             const isOpen = open.has(d.id);
-            const bars = list.loadBars?.[d.id] !== false;
+            const shown = widget.includes(d.id);
+            const last = shown && widget.length === 1;
             const pct = d.capacity ? Math.min(100, Math.round((d.planned / d.capacity) * 100)) : d.planned ? 100 : 0;
             const over = d.planned > d.capacity;
             const empty = !d.rows.length && !d.unassigned.keys.length && !d.skippedKeys.length;
@@ -79,14 +81,11 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
                       </>
                     )}
                   </button>
-                  {widget.includes(d.id) && (
-                    <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary whitespace-nowrap"
-                      title="Показывается в виджете нагрузки слева — меняется в «Настройках»">на виджете</span>
-                  )}
-                  <button type="button" onClick={() => onBars(d.id, !bars)} aria-pressed={bars}
-                    title={bars ? "Скрыть полосы загрузки людей" : "Показать полосы загрузки людей"} aria-label={`${d.label}: полосы загрузки`}
-                    className="p-1 rounded-md text-text-muted hover:text-primary hover:bg-bg-subtle">
-                    {bars ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                  <button type="button" disabled={last} aria-pressed={shown} aria-label={`${d.label}: на виджете нагрузки`}
+                    onClick={() => onWidget(DIRECTIONS.map(x => x.id).filter(id => (id === d.id ? !shown : widget.includes(id))))}
+                    title={last ? "На виджете должна остаться хотя бы одна команда" : shown ? "Показывается на виджете нагрузки — скрыть" : "Показать на виджете нагрузки"}
+                    className={`p-1 rounded-md hover:bg-bg-subtle disabled:cursor-not-allowed disabled:opacity-60 ${shown ? "text-primary" : "text-text-muted hover:text-primary"}`}>
+                    {shown ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
                   </button>
                 </div>
                 {isOpen && (
@@ -103,7 +102,7 @@ export default function LoadDetailsModal({ list, people, settings, issueOf, skip
                     {d.rows.length === 0 ? (
                       <p className="text-xs text-text-muted">В справочнике нет людей этого направления — добавьте их в «Справочник» или прямо в ячейке направления.</p>
                     ) : (
-                      <ul className="space-y-1.5">{d.rows.map(r => <LoadRowView key={r.participant.id} r={r} bars={bars} />)}</ul>
+                      <ul className="space-y-1.5">{d.rows.map(r => <LoadRowView key={r.participant.id} r={r} bars />)}</ul>
                     )}
                     {d.unassigned.keys.length > 0 && (
                       <p className="text-xs text-amber-700 dark:text-amber-300" title={d.unassigned.keys.join(", ")}>

@@ -1,5 +1,6 @@
 "use client";
 
+import { backdropClose } from "@/lib/backdrop";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SplitSquareHorizontal, Play, Loader2, Paperclip, Trophy,
@@ -448,7 +449,7 @@ export default function ModelBenchSection() {
         {showScenarioModal && (
           <div
             className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto"
-            onClick={() => setShowScenarioModal(false)}
+            {...backdropClose(() => setShowScenarioModal(false))}
           >
             <div
               className="bg-bg-main rounded-2xl border border-border-main w-full max-w-2xl my-8 shadow-2xl"

@@ -100,22 +100,28 @@ function plural(n: number, one: string, few: string, many: string): string {
   return many;
 }
 
+/** Плитки — одного размера, пропорция 4:3: сетка колонок от 220 px, высота — от ширины. */
+const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4";
+const TILE_BOX = "aspect-[4/3] rounded-xl";
+/** Описание плитки — не больше двух строк, остальное — многоточие; целиком — в подсказке при наведении. */
+const CLAMP2 = "text-xs text-text-muted leading-relaxed line-clamp-2";
+
 function TileShell({ onClick, onEdit, editLabel, onDelete, deleteLabel, delay, children }: {
   onClick: () => void; onEdit?: () => void; editLabel: string; onDelete?: () => void; deleteLabel?: string;
   delay: number; children: React.ReactNode;
 }) {
   // Карандаш и корзина — отдельные кнопки поверх плитки: кнопка внутри кнопки недопустима.
   return (
-    <div className="relative group/tile animate-fade-in" style={{ animationDelay: `${delay}ms` }}>
+    <div className={`relative group/tile animate-fade-in ${TILE_BOX}`} style={{ animationDelay: `${delay}ms` }}>
       <button
         type="button"
         onClick={onClick}
-        className="group w-full h-full text-left bg-bg-card border border-border-main rounded-xl p-5 transition-all
+        className="group flex w-full h-full flex-col overflow-hidden text-left bg-bg-card border border-border-main rounded-xl p-4 transition-all
           hover:border-primary/40 hover:shadow-md hover:-translate-y-0.5 cursor-pointer
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
       >
         {children}
-        <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary
+        <span className="mt-auto pt-2 inline-flex items-center gap-1 text-xs font-medium text-primary
           opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity">
           Открыть →
         </span>
@@ -294,7 +300,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
             <h2 id="gen-scenarios" className="text-xs font-semibold uppercase tracking-wide text-text-muted mb-3">
               Сценарии
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className={TILE_GRID}>
               {generators.map(({ id, title, subtitle, Icon, color }) => {
                 const st = tileOf(id);
                 return (
@@ -302,8 +308,8 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                     editLabel={`Оформление плитки «${st.title || title}»`}
                     onEdit={isSuperuser ? () => setEditing({ key: id, defaults: { title, subtitle, Icon, color } }) : undefined}>
                     <TileGlyph icon={st.icon} color={st.color} fallbackIcon={Icon} fallbackColor={color} />
-                    <h3 className="text-sm font-semibold text-text-main mb-1 pr-7">{st.title || title}</h3>
-                    <p className="text-xs text-text-muted leading-relaxed">{st.subtitle || subtitle}</p>
+                    <h3 className="text-sm font-semibold text-text-main mb-1 pr-7 truncate" title={st.title || title}>{st.title || title}</h3>
+                    <p className={CLAMP2} title={st.subtitle || subtitle}>{st.subtitle || subtitle}</p>
                   </TileShell>
                 );
               })}
@@ -318,7 +324,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
           {loadErr && (
             <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-xl p-3">{loadErr}</p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className={TILE_GRID}>
             {alertTiles.map(t => {
               const running = runningIn(t.folderId);
               const key = ALERTS_PREFIX + t.key;
@@ -336,7 +342,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                   }) : undefined}>
                   <TileGlyph icon={st.icon} color={st.color} fallbackIcon={ALERT_DEFAULTS.Icon} fallbackColor={ALERT_DEFAULTS.color} />
                   <div className={`flex items-center gap-2 mb-1 min-w-0 ${isSuperuser && t.folderId ? "pr-16" : "pr-7"}`}>
-                    <h3 className="text-sm font-semibold text-text-main truncate">{title}</h3>
+                    <h3 className="text-sm font-semibold text-text-main truncate" title={title}>{title}</h3>
                     {running > 0 && (
                       <span className="flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold
                         bg-green-100 text-green-700 dark:bg-green-950/50 dark:text-green-300">
@@ -345,7 +351,7 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                       </span>
                     )}
                   </div>
-                  {st.subtitle && <p className="text-xs text-text-muted leading-relaxed mb-0.5">{st.subtitle}</p>}
+                  {st.subtitle && <p className={`${CLAMP2} mb-0.5`} title={st.subtitle}>{st.subtitle}</p>}
                   <p className="text-xs text-text-muted leading-relaxed">{count}</p>
                 </TileShell>
               );
@@ -356,15 +362,15 @@ export default function EventGeneratorsSection({ syncUrl = false }: { syncUrl?: 
                 <button
                   type="button"
                   onClick={() => setNewFolder("")}
-                  className="flex flex-col items-center justify-center gap-2 min-h-[132px] rounded-xl border-2 border-dashed
+                  className={`flex flex-col items-center justify-center gap-2 ${TILE_BOX} border-2 border-dashed
                     border-border-main text-text-muted hover:text-primary hover:border-primary/40 transition-colors
-                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}
                 >
                   <FolderPlus className="w-5 h-5" />
                   <span className="text-xs font-medium">Новая папка алертов</span>
                 </button>
               ) : (
-                <div className="flex flex-col justify-center gap-2 min-h-[132px] rounded-xl border-2 border-dashed border-primary/40 p-4">
+                <div className={`flex flex-col justify-center gap-2 ${TILE_BOX} border-2 border-dashed border-primary/40 p-4`}>
                   <label htmlFor="new-alert-folder" className="text-xs font-semibold text-text-muted">Название папки</label>
                   <div className="flex items-center gap-1">
                     <input

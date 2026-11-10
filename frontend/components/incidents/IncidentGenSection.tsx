@@ -236,7 +236,7 @@ export default function IncidentGenSection() {
                   <ScenarioIcon name={s.icon} active={on} />
                   <span className="min-w-0">
                     <span className="block text-sm font-medium leading-tight text-text-main">{s.name}</span>
-                    <span className="mt-0.5 block text-[11px] leading-snug text-text-muted line-clamp-2">{s.short}</span>
+                    <span className="mt-0.5 block text-[11px] leading-snug text-text-muted line-clamp-2" title={s.short}>{s.short}</span>
                   </span>
                 </button>
               );

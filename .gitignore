@@ -50,3 +50,6 @@ data/.cert_key
 data/gigachat_certs/
 # Мок-режим (SHARK_MOCK=1): своя папка данных и база
 data_mock/
+
+# Рабочие файлы долгих задач (архивы-источники, черновики) — не в git
+.work/

@@ -168,7 +168,8 @@ def test_каталог_три_услуги_и_около_двадцати_сц�
     from backend.api import incident_catalog as cat
     c = ig.get_catalog()
     assert [s["ci"] for s in c["services"]] == ["CI02302514", "CI00233293", "CI00641491"]
-    assert c["scenarios"] >= 20 and c["priorities"] == ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    assert c["events"] >= 20 and c["priorities"] == ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    assert 10 <= len(c["scenarios"]) <= 15 and all(not s["custom"] for s in c["services"])
     kinds = {k for k, _, _ in cat.scenarios("CI00233293")}
     assert kinds == {"monitoring", "manual", "alert"}
 
@@ -197,20 +198,74 @@ def test_случайный_сценарий_время_отправки():
     assert "Зарегистрирован: 25.10.2026 в 14:07" in cat.render("CI00641491", now=now)["description"]
 
 
-def test_строки_одна_строка_один_инцидент_инструкция_по_галочке(monkeypatch):
+def test_все_сценарии_собираются_на_любой_кэ():
+    from backend.api import incident_catalog as cat
+    ig.add_service(ig.ServiceBody(ci="CI09999999", name="Своя услуга"))
+    for sc in cat.SCENARIOS:
+        for ci in ("CI00233293", "CI09999999"):
+            built = ig.build_package(ig.Package(scenario=sc["id"], items=[ig.PackageItem(ci=ci, count=2)]), {}, rng=random.Random(3))
+            main = [b for b in built if b["main"]]
+            assert len(main) == 2 and all(b["message"]["priorityCode"] == sc["priority"] for b in main)
+            assert all(bool(b["instruction"]) == sc["instruction"] for b in main)
+            assert all((b["kind"], b["variant"]) in cat.pool(ci, sc["events"]) for b in main)
+            assert sc["extra"][0] <= len(built) - 2 <= sc["extra"][1]
+            assert all(not b["instruction"] for b in built if not b["main"])
+            assert all("{" not in b["message"]["description"] for b in built)
+
+
+def test_пакет_у_каждой_кэ_своё_количество_приоритет_инструкция():
+    I = ig.PackageItem
+    b = ig.build_package(ig.Package(scenario="mass", extra_min=0, extra_max=0, items=[
+        I(ci="CI00641491", count=2, priority="LOW", instruction=False),
+        I(ci="CI00233293", count=1),                     # приоритет и инструкция — из сценария
+        I(ci="CI02302514", count=0, priority="HIGH")]), {})  # 0 — не регистрируется
+    assert [x["ci"] for x in b] == ["CI00641491", "CI00641491", "CI00233293"]
+    assert [x["message"]["priorityCode"] for x in b] == ["LOW", "LOW", "CRITICAL"]
+    assert [bool(x["instruction"]) for x in b] == [False, False, True]
+    assert all(x["message"]["largeScale"] for x in b)
+    vpi = ig.build_package(ig.Package(scenario="vpi", extra_min=0, extra_max=0, items=[I(ci="CI00233293", count=1)]), {})
+    assert vpi[0]["message"]["potentialVPI"] and vpi[0]["kind"] == "alert"
+    # другие инциденты на АС — раньше основного
+    st = ig.build_package(ig.Package(scenario="storm", items=[I(ci="CI00233293", count=1)]), {}, rng=random.Random(1))
+    main_at = st[0]["message"]["createdAt"]
+    assert all(x["message"]["createdAt"] < main_at for x in st[1:]) and len(st) >= 6
+    for bad in (ig.Package(scenario="нет", items=[I(ci="CI00233293", count=1)]),
+                ig.Package(scenario="full", items=[I(ci="CI1234", count=1)]),
+                ig.Package(scenario="full", items=[I(ci="CI00233293", count=0)]),          # нечего отправлять
+                ig.Package(scenario="full", items=[I(ci="CI00233293", count=1), I(ci="CI00233293", count=2)]),
+                ig.Package(scenario="full", items=[I(ci="CI00233293", count=1)], extra_min=3, extra_max=1)):
+        with pytest.raises(HTTPException):
+            ig.build_package(bad, {})
+
+
+def test_свои_кэ_добавить_изменить_удалить():
+    from backend.api import incident_catalog as cat
+    r = ig.add_service(ig.ServiceBody(ci="CI01234567", name="Касса", hosts=[], logs=False))
+    mine = next(s for s in r["services"] if s["ci"] == "CI01234567")
+    assert mine["custom"] and len(mine["hosts"]) == 4 and mine["logs"] is False and mine["metrics"] is None
+    for bad in (ig.ServiceBody(ci="CI01234567"), ig.ServiceBody(ci="CI00233293"), ig.ServiceBody(ci="КЭ 1")):
+        with pytest.raises(HTTPException):
+            ig.add_service(bad)
+    r = ig.edit_service("CI01234567", ig.ServiceBody(ci="CI01234568", name="Касса 2", hosts=["h1"], metrics=True))
+    mine = next(s for s in r["services"] if s["ci"] == "CI01234568")
+    assert mine["name"] == "Касса 2" and mine["hosts"] == ["h1"] and mine["metrics"] is True
+    assert "Касса 2" in cat.render("CI01234568", "manual", "error")["description"]
+    with pytest.raises(HTTPException):
+        ig.edit_service("CI00233293", ig.ServiceBody(ci="CI00233293"))
+    with pytest.raises(HTTPException):
+        ig.delete_service("CI00233293")
+    assert all(s["ci"] != "CI01234568" for s in ig.delete_service("CI01234568")["services"])
+
+
+def test_пакет_отправка_и_история(monkeypatch):
     from agents.kafka_client import KafkaClient
     FakeProducer.sent = []
     monkeypatch.setattr(KafkaClient, "_build_producer", staticmethod(lambda cfg: FakeProducer()))
     monkeypatch.setattr(ig, "kafka_cfg", lambda s: {})
-    rows = [ig.Row(ci="CI00233293", priority="HIGH", instruction=True),
-            ig.Row(ci="CI00641491"),
-            ig.Row(ci="CI02302514", priority="CRITICAL")]
-    p = ig.preview_rows(ig.RowsBody(rows=rows))
-    assert p["total"] == 3 and [i["message"]["priorityCode"] for i in p["items"]] == ["HIGH", "MEDIUM", "CRITICAL"]
-    assert p["items"][0]["instruction"] and p["items"][1]["instruction"] == ""
-    assert [i["message"]["itService"]["code"] for i in p["items"]] == ["CI00233293", "CI00641491", "CI02302514"]
-    run = asyncio.run(ig.send_rows(ig.RowsBody(rows=rows)))
-    assert len(run["results"]) == 3 and run["cis"] == ["CI00233293", "CI00641491", "CI02302514"]
-    assert "нет SQL-шаблона" in run["results"][0]["instruction_error"] and not run["results"][1]["hasInstruction"]
-    with pytest.raises(HTTPException):
-        ig.preview_rows(ig.RowsBody(rows=[ig.Row(ci="CI00233293", kind="manual", variant="нет")]))
+    pkg = ig.Package(scenario="full", items=[ig.PackageItem(ci="CI00233293", count=2)], extra_min=1, extra_max=1)
+    p = ig.preview_package(pkg)
+    assert p["total"] == 3 and p["main"] == 2
+    run = asyncio.run(ig.send_package(pkg))
+    assert len(run["results"]) == 3 and run["preset"] == "Полный набор данных" and run["scenario"] == "full"
+    assert "нет SQL-шаблона" in run["results"][0]["instruction_error"] and not run["results"][2]["hasInstruction"]
+    assert ig.history()["history"][0]["id"] == run["id"]

@@ -137,8 +137,8 @@ Shark/
 │   │   ├── xlsx_export.py   # POST /api/export/xlsx — таблица в Excel (генератор backend/xlsx_writer.py, без openpyxl)
 │   │   ├── backup.py        # Резервная копия: выгрузка всех данных (data/*.json, БД, эталоны) в .json и восстановление
 │   │   ├── corp_auth.py     # Единая учётная запись: логин/пароль Сигмы → маркеры Jira и Confluence (пароль не хранится)
-│   │   ├── incident_catalog.py # Генератор инцидентов: 3 КЭ и ~20 сценариев текста (мониторинг, обращения, алерты Рефлекса)
-│   │   ├── incident_gen.py  # Генератор инцидентов: сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
+│   │   ├── incident_catalog.py # Генератор инцидентов: КЭ (3 встроенные + свои, с отметками «логи/метрики на стенде»), ~20 событий текста и 15 сценариев (SCENARIOS)
+│   │   ├── incident_gen.py  # Генератор инцидентов: пакет «сценарий + строки КЭ (количество, приоритет, инструкция)» (+ другие инциденты на АС), свои КЭ, сообщения Sber ESM в Kafka, инструкции SQL-шаблоном (data/incident_gen.json)
 │   │   ├── requirements.py  # «Данные»: документы в дереве папок, страницы Confluence (СТ), версии и их сравнение, документ QA, вопрос к документу
 │   │   ├── aqa_tracking.py  # «Трекинг AQA»: закреплённые эпики (PINNED_EPICS — всегда на роадмапе); результат кейса TestOps (шаги, вложения, поведения; адреса шагов — _STEP_PATHS); запуск автотестов в Jenkins (параметры — из описания джоба, /api/aqa/jenkins/*; вход — логин и API-токен в «Подключениях»); коммиты Bitbucket по ветке и коммит подробно (файлы, строки +/−, файл «было / стало»), запуски Allure TestOps и запуск подробно, роадмап эпиков AQA из Jira по плановым датам (поля «Плановое начало/окончание» ищутся по названию; последний роадмап — снимок data/aqa_roadmap.json, входит в резервную копию и показывается без Jira); ссылки SBER911 по умолчанию (DEFAULT_BB_URL / DEFAULT_TO_URL); задача для окна правки и запись изменений в Jira (`/api/aqa/issue/{key}`: только изменённое, поле плановой даты выбирается по editmeta)
 │   │   ├── zephyr.py        # Zephyr Tool: индексы кейсов и прогонов, правка, крит регресс, релизы (data/zephyr_releases.json); сверка раскладки с моделью и прогоны по задачам (task-plan, task-runs)
@@ -158,7 +158,7 @@ Shark/
 │   │   │   └── RevisorSection.tsx      # Ревизия — скрыт, код сохранён
 │   │   ├── tmgen/           # Тестовая модель по этапам: StagePanel (план с правкой, вопросы, замечания арбитра), PlaceEditor (место в дереве), DataTreePicker, TmBatchBar; состояние — contexts/TmGenContext
 │   │   ├── taskgen/         # Генерация по задачам: выбор задач (TaskPickerModal), форма (TaskDrafts), очередь (TaskJobsBar), предпросмотр и отправка в модель (ModelPreviewModal); логика — lib/taskModel.ts, очередь — GenerationContext
-│   │   ├── incidents/       # Генератор инцидентов: IncidentGenSection (вкладки), IncidentLibrary, IncidentGenSettings
+│   │   ├── incidents/       # Генератор инцидентов: IncidentGenSection (сценарий → таблица КЭ: количество, приоритет, инструкция), ScenarioIcon (квадрат 32×32), ServiceDialog (своя КЭ), IncidentGenSettings
 │   │   ├── data/            # «Данные»: DataDocs (дерево + страница), DocTree, DocPage (свойства — в «Подробнее»), DocAsk (вопрос к документу / поиск), NewDocForm, QaDocView
 │   │   ├── ExportPanel.tsx  # Экспорт в Jira Zephyr Scale
 │   │   └── NotionRenderer.tsx  # Markdown → Notion-стиль
@@ -242,7 +242,7 @@ Shark/
 - `st_jira_tool_team_open` — раскрыт ли виджет «Команда» в левой колонке Jira tool (по умолчанию свёрнут)
 - `st_jira_issue_table_w:<окно>` — ширины колонок таблиц в окнах Jira tool (`defects` — «Дефекты», `stories` — «Статус (st)»)
 - `st_data_panes` — ширина дерева «Данных» (тянется мышью); `st_data_tree_open` — раскрытые папки дерева «Данных»; `st_data_doc` — последний открытый документ; `st_data_editor_mode` — вид редактора (Редактор / Рядом / Просмотр)
-- `st_incident_rows` — строки «Генератора инцидентов» (КЭ, приоритет, инструкция); `st_incident_spec` — черновик прежней формы (не используется)
+- `st_incident_form` — выбор «Генератора инцидентов» (сценарий и строки КЭ: количество, приоритет, инструкция); `st_incident_rows`, `st_incident_spec` — прежние формы (не используются)
 - `st_cell_icon_recent`, `st_cell_icon_color` — недавние ярлычки ячеек и выбранный цвет иконок (удобство одного браузера)
 - `st_aqa_cache` — **sessionStorage**: кэш «Трекинга AQA» на сессию (подключения, коммиты по ветке, запуски, роадмап);
   основная копия — в памяти модуля `frontend/lib/aqaCache.ts`, фоновое обновление раз в 30 минут

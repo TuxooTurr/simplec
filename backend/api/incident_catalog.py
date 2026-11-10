@@ -9,25 +9,35 @@
   • manual     — обращение пользователя, зарегистрированное вручную: свои тексты на каждую услугу, плюс
                  «не работает у всех» и «жалобы разные — непонятно, что сломалось»;
   • alert      — алерт системы мониторинга (Рефлекс): первичный анализ, корневая причина, отклонения, рекомендации.
-У каждого сценария — заголовок, текст описания и инструкция (Markdown) для «с инструкцией».
+У каждого события — заголовок, текст описания и инструкция (Markdown) для «с инструкцией».
+
+КЭ: три встроенные (SERVICES) и свои — команда добавляет их в интерфейсе (data/incident_gen.json, ключ services).
+У КЭ отмечено, есть ли на стенде логи и метрики: от этого зависят проверки «без логов» / «без метрик» из ноутбука
+test_incident_pakage_generator.ipynb — сам инцидент этого не задаёт, задаёт выбор КЭ.
+
+Сценарии (SCENARIOS, 15) — готовые наборы: какие события брать, приоритет, нужна ли инструкция, сколько других
+инцидентов на АС зарегистрировать рядом, «массовый» и «потенциальный ВПИ». Покрывают сочетания ноутбука
+(инструкция × другие инциденты на АС) и добавляют виды событий: один хост, кластер, хост не определён, массовый,
+БД, обращения, алерты Рефлекса, ВПИ, сеть и сертификаты.
 """
 
 from __future__ import annotations
 
 import random
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
 SERVICES: list[dict] = [
     {"ci": "CI02302514", "name": "ПКАП анализ состояния клиента корпоративного бизнеса", "crit": "Business Critical",
      "hosts": ["pvlsb-pkap0012", "pvlsb-pkap0014", "pvlsb-pkap0021", "pvlsb-pkap0027"], "app": "paonlineng", "db": "pkap_core",
-     "topic": "pkap.client-state"},
+     "topic": "pkap.client-state", "logs": None, "metrics": None},
     {"ci": "CI00233293", "name": "Sber911", "crit": "Business Critical",
      "hosts": ["pvlsb-s911app03", "pvlsb-s911app07", "pvlsb-s911gw02", "pvlsb-s911app11"], "app": "sber911-incident-card",
-     "db": "sber911", "topic": "sber911.incidents"},
+     "db": "sber911", "topic": "sber911.incidents", "logs": True, "metrics": True},
     {"ci": "CI00641491", "name": "ППРБ ФЛ Платформа", "crit": "Mission Critical",
      "hosts": ["pvlsb-pprbfl0105", "pvlsb-pprbfl0118", "pvlsb-pprbfl0122", "pvlsb-pprbfl0131"], "app": "pprb-fl-gateway",
-     "db": "pprb_fl", "topic": "pprb.fl.payments"},
+     "db": "pprb_fl", "topic": "pprb.fl.payments", "logs": False, "metrics": True},
 ]
 
 # ── Мониторинг (Zabbix) ──────────────────────────────────────────────────────
@@ -111,6 +121,15 @@ MANUAL_COMMON = [
     {"id": "unclear", "title": "Жалобы разные — непонятно, что сломалось",
      "text": "Поступают обращения из разных подразделений с разными симптомами (медленная работа, ошибки при сохранении, пустые списки). Какие серверы и компоненты затронуты — не установлено."},
 ]
+# Обращения для КЭ без своих текстов (свои КЭ): общие формулировки с названием услуги.
+MANUAL_GENERIC = [
+    {"id": "error", "title": "Ошибка при выполнении операции",
+     "text": "В услуге «{name}» при выполнении операции появляется сообщение «Внутренняя ошибка сервера», операция не выполняется. Воспроизводится у нескольких сотрудников."},
+    {"id": "slow", "title": "Медленно открываются экраны",
+     "text": "Экраны услуги «{name}» открываются больше минуты, часть запросов завершается по таймауту."},
+    {"id": "data", "title": "Не отображаются данные",
+     "text": "В услуге «{name}» пустые списки и карточки: данные не подгружаются, при обновлении страницы — «Сервис временно недоступен»."},
+]
 MANUAL_STEPS = ["Уточнить у обратившегося время, объект и скриншот ошибки.", "Найти запрос в логах приложения по времени обращения.",
                 "Проверить статусы связанных сервисов и последние релизы.", "Передать на 2-ю линию сопровождения с собранными данными."]
 
@@ -149,24 +168,161 @@ ALERT = [
 ]
 
 
+CI_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")
+CRITS = ["Mission Critical", "Business Critical", "Business Operational", "Office Productivity"]
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "app"
+
+
+def normalize_service(d: dict) -> dict:
+    """Своя КЭ: пустые поля — разумные значения, чтобы тексты событий собирались (хосты, приложение, БД, топик)."""
+    ci = str(d.get("ci") or "").strip()
+    name = str(d.get("name") or "").strip() or ci
+    app = _slug(str(d.get("app") or "").strip() or ci)
+    hosts = [h.strip() for h in (d.get("hosts") or []) if str(h).strip()][:12]
+    if not hosts:
+        short = re.sub(r"[^a-z0-9]", "", app)[:10] or "app"
+        hosts = [f"pvlsb-{short}{n:02d}" for n in (1, 2, 3, 4)]
+
+    def flag(v):
+        return None if v is None else bool(v)
+    return {"ci": ci, "name": name, "crit": d.get("crit") if d.get("crit") in CRITS else "Business Critical",
+            "hosts": hosts, "app": app, "db": str(d.get("db") or "").strip() or app.replace("-", "_"),
+            "topic": str(d.get("topic") or "").strip() or f"{app}.events",
+            "logs": flag(d.get("logs")), "metrics": flag(d.get("metrics"))}
+
+
+def custom_services() -> list[dict]:
+    from db import incident_gen_store as store
+    return [normalize_service(x) for x in store.read().get("services") or []]
+
+
+def all_services() -> list[dict]:
+    """Встроенные и свои КЭ; у своих — custom: True."""
+    builtin = {s["ci"] for s in SERVICES}
+    return [{**s, "custom": False} for s in SERVICES] + [
+        {**s, "custom": True} for s in custom_services() if s["ci"] not in builtin]
+
+
 def service(ci: str) -> dict:
-    for s in SERVICES:
+    for s in all_services():
         if s["ci"] == ci:
             return s
     raise KeyError(ci)
 
 
+def manual_pool(ci: str) -> list[dict]:
+    """Обращения услуги: свои тексты (у встроенных КЭ) или общие, плюс «не работает у всех» и «непонятно, что сломалось»."""
+    return MANUAL.get(ci) or MANUAL_GENERIC
+
+
 def scenarios(ci: str) -> list[tuple[str, str, str]]:
-    """Все сценарии для услуги: [(вид, id, заголовок)] — из них при отправке выбирается случайный."""
+    """Все события для услуги: [(вид, id, заголовок)] — из них при отправке выбирается случайный."""
     service(ci)
     return ([("monitoring", m["id"], m["title"]) for m in MONITORING]
-            + [("manual", m["id"], m["title"]) for m in MANUAL.get(ci, []) + MANUAL_COMMON]
+            + [("manual", m["id"], m["title"]) for m in manual_pool(ci) + MANUAL_COMMON]
             + [("alert", a["id"], a["title"]) for a in ALERT])
 
 
+# ── Сценарии ─────────────────────────────────────────────────────────────────
+# events — из каких событий выбирается случайное для основного инцидента:
+#   "monitoring:*" — любое событие мониторинга, "monitoring:cpu" — конкретное, "monitoring@one|many|all|unknown" — по
+#   масштабу; "manual:own" — обращения по услуге, "manual:outage" / "manual:unclear"; "alert:*", "alert:heap" и т.д.
+# extra — сколько других инцидентов на ту же АС зарегистрировать рядом (случайно от–до, раньше основного, без инструкции).
+# notebook — какой сценарий test_sc.json это покрывает (для сверки).
+
+SCENARIOS: list[dict] = [
+    {"id": "full", "name": "Полный набор данных", "icon": "layers",
+     "short": "Инцидент с инструкцией и другими инцидентами на АС — всё, что нужно для разбора.",
+     "events": ["monitoring:*", "alert:*"], "priority": "MEDIUM", "instruction": True, "extra": [1, 5], "notebook": "all"},
+    {"id": "no-instruction", "name": "Без инструкции", "icon": "file-x",
+     "short": "Инструкции нет, другие инциденты на АС есть: проверка, что разбор идёт без неё.",
+     "events": ["monitoring:*", "alert:*"], "priority": "MEDIUM", "instruction": False, "extra": [1, 5], "notebook": "no-instruction"},
+    {"id": "alone", "name": "Единственный инцидент на АС", "icon": "circle-dot",
+     "short": "С инструкцией, но других инцидентов по услуге нет — история пустая.",
+     "events": ["monitoring:*", "alert:*"], "priority": "MEDIUM", "instruction": True, "extra": [0, 0], "notebook": "no-add_inc"},
+    {"id": "bare", "name": "Только инцидент", "icon": "file",
+     "short": "Ни инструкции, ни других инцидентов: минимум данных.",
+     "events": ["monitoring:*", "alert:*"], "priority": "MEDIUM", "instruction": False, "extra": [0, 0],
+     "notebook": "no-instruction-add_inc"},
+    {"id": "storm", "name": "Серия инцидентов на АС", "icon": "repeat",
+     "short": "Основной и 5–10 похожих инцидентов по той же услуге за последние часы.",
+     "events": ["monitoring@one", "monitoring@many"], "priority": "HIGH", "instruction": True, "extra": [5, 10]},
+    {"id": "one-host", "name": "Сбой одного хоста", "icon": "server",
+     "short": "CPU, диск, память или health-check на одном узле.",
+     "events": ["monitoring@one"], "priority": "HIGH", "instruction": True, "extra": [0, 2]},
+    {"id": "cluster", "name": "Несколько узлов кластера", "icon": "network",
+     "short": "Проблема сразу на 2–3 хостах: CPU кластера, сеть, задержка между ЦОД.",
+     "events": ["monitoring@many"], "priority": "HIGH", "instruction": True, "extra": [1, 3]},
+    {"id": "unknown-host", "name": "Хост не определён", "icon": "help-circle",
+     "short": "Сработал групповой триггер или отставание Kafka — конкретный узел не указан.",
+     "events": ["monitoring@unknown"], "priority": "MEDIUM", "instruction": True, "extra": [0, 2]},
+    {"id": "mass", "name": "Массовый: услуга недоступна", "icon": "siren",
+     "short": "Недоступны все узлы, массовые обращения. Признак «массовый», критичный приоритет.",
+     "events": ["monitoring:all-down", "manual:outage"], "priority": "CRITICAL", "instruction": True, "extra": [3, 6],
+     "large_scale": True},
+    {"id": "database", "name": "Проблемы с базой данных", "icon": "database",
+     "short": "Исчерпан пул соединений или БД недоступна.",
+     "events": ["monitoring:db-pool", "alert:db-down"], "priority": "HIGH", "instruction": True, "extra": [1, 3]},
+    {"id": "user", "name": "Обращение пользователя", "icon": "user-round",
+     "short": "Сотрудник сообщил об ошибке — зарегистрировано вручную.",
+     "events": ["manual:own"], "priority": "MEDIUM", "instruction": True, "extra": [0, 1]},
+    {"id": "unclear", "name": "Непонятные жалобы", "icon": "message-circle-question",
+     "short": "Разные симптомы из разных подразделений, что сломалось — не ясно. Без инструкции.",
+     "events": ["manual:unclear"], "priority": "MEDIUM", "instruction": False, "extra": [1, 3]},
+    {"id": "alert", "name": "Алерт Рефлекса", "icon": "bell-ring",
+     "short": "Алерт с первичным анализом: корневая причина, отклонения, рекомендации.",
+     "events": ["alert:*"], "priority": "HIGH", "instruction": True, "extra": [0, 2]},
+    {"id": "vpi", "name": "Потенциальный ВПИ", "icon": "trending-up",
+     "short": "Рост ошибок или времени ответа — отмечен как потенциально влияющий на клиентов.",
+     "events": ["alert:errors", "alert:latency", "alert:multi"], "priority": "HIGH", "instruction": True, "extra": [1, 3],
+     "potential_vpi": True},
+    {"id": "infra", "name": "Сеть и сертификаты", "icon": "shield-alert",
+     "short": "Потеря пакетов, задержка между ЦОД, истекающий сертификат TLS.",
+     "events": ["monitoring:unreachable", "monitoring:net-latency", "monitoring:cert"], "priority": "LOW",
+     "instruction": True, "extra": [0, 1]},
+]
+
+
+def scenario(sid: str) -> dict:
+    for sc in SCENARIOS:
+        if sc["id"] == sid:
+            return sc
+    raise KeyError(sid)
+
+
+def pool(ci: str, events: list[str]) -> list[tuple[str, str]]:
+    """События сценария для услуги: [(вид, вариант)]. Пустой список — все события услуги."""
+    if not events:
+        return [(k, v) for k, v, _ in scenarios(ci)]
+    out: list[tuple[str, str]] = []
+    for token in events:
+        kind, _, rest = token.partition(":")
+        if "@" in kind:
+            kind, scope = kind.split("@", 1)
+            out += [(kind, m["id"]) for m in MONITORING if m["scope"] == scope]
+        elif kind == "monitoring":
+            out += [(kind, m["id"]) for m in MONITORING if rest in ("*", m["id"])]
+        elif kind == "alert":
+            out += [(kind, a["id"]) for a in ALERT if rest in ("*", a["id"])]
+        elif kind == "manual":
+            items = manual_pool(ci) if rest == "own" else (manual_pool(ci) + MANUAL_COMMON if rest == "*"
+                                                            else [m for m in MANUAL_COMMON if m["id"] == rest])
+            out += [(kind, m["id"]) for m in items]
+    if not out:
+        raise KeyError(",".join(events))
+    return list(dict.fromkeys(out))
+
+
 def catalog() -> dict:
-    return {"services": [{"ci": s["ci"], "name": s["name"], "crit": s["crit"]} for s in SERVICES],
-            "scenarios": len(scenarios(SERVICES[0]["ci"]))}
+    return {"services": all_services(),
+            "scenarios": [{k: sc.get(k) for k in ("id", "name", "icon", "short", "events", "priority", "instruction",
+                                                  "extra", "notebook")}
+                          | {"large_scale": bool(sc.get("large_scale")), "potential_vpi": bool(sc.get("potential_vpi"))}
+                          for sc in SCENARIOS],
+            "events": len(scenarios(SERVICES[0]["ci"])), "crits": CRITS}
 
 
 def _header(svc: dict, now: datetime, inner: str, auto: bool) -> str:
@@ -230,8 +386,8 @@ def render(ci: str, kind: str = "", variant: str = "", now: Optional[datetime] =
         return {"kind": kind, "variant": v["id"], "title": title, "description": _header(svc, now, inner, True),
                 "instruction": _steps(f"{v['title']} ({svc['name']}; хосты: {where}).", v["steps"])}
     if kind == "manual":
-        pool = MANUAL.get(ci, []) + MANUAL_COMMON
-        v = next((x for x in pool if x["id"] == variant), None) if variant else rng.choice(pool)
+        items = manual_pool(ci) + MANUAL_COMMON
+        v = next((x for x in items if x["id"] == variant), None) if variant else rng.choice(items)
         if v is None:
             raise KeyError(variant)
         text = v["text"].format(**f)

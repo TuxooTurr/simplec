@@ -1,5 +1,5 @@
 """
-Генератор инцидентов: настройки, библиотека описаний и инструкций, пресеты, история отправок.
+Генератор инцидентов: настройки, свои КЭ, библиотека описаний и инструкций, пресеты, история отправок.
 
 Файл: data/incident_gen.json (в .gitignore, попадает в резервную копию). Персональных данных по умолчанию нет:
 исполнитель и автор инструкции — настройки, которые заполняет команда.
@@ -42,7 +42,8 @@ def _now() -> str:
 
 
 def _empty() -> dict:
-    return {"settings": dict(DEFAULT_SETTINGS), "library": [], "presets": [], "history": []}
+    # services — свои КЭ (встроенные — в backend/api/incident_catalog.py)
+    return {"settings": dict(DEFAULT_SETTINGS), "library": [], "presets": [], "history": [], "services": []}
 
 
 def _load() -> dict:

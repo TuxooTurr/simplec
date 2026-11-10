@@ -96,7 +96,7 @@ export interface IncResult {
   instruction_error?: string | null;
 }
 
-export interface IncRun { id: string; at: string; preset: string; topic: string; cis: string[]; results: IncResult[] }
+export interface IncRun { id: string; at: string; preset: string; scenario?: string; topic: string; cis: string[]; results: IncResult[] }
 
 export interface IncPreviewItem { ci: string; main: boolean; message: Record<string, unknown>; instruction: string }
 
@@ -118,20 +118,51 @@ export function importIncFile(file: File) {
 }
 export const getKeCatalog = () => call<{ ke: string[] }>("/api/ke-catalog");
 
-// ── Простой режим: строка = инцидент «КЭ · приоритет · с инструкцией или без» ──
-// Сценарий (один хост, несколько, все узлы, обращение, алерт…) выбирает сервер случайно; время — момент отправки.
+// ── Пакет по сценарию: сценарий × КЭ × количество ──
+// Сценарий задаёт виды событий, приоритет, инструкцию и другие инциденты на АС; текст события сервер выбирает случайно
+// из событий сценария, время — момент отправки.
 
 export type IncPriority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
-export interface IncRow { ci: string; priority: IncPriority; instruction: boolean }
+export interface IncService {
+  ci: string; name: string; crit: string; hosts: string[]; app: string; db: string; topic: string;
+  /** Есть ли на стенде логи / метрики по КЭ; null — не отмечено. */
+  logs: boolean | null; metrics: boolean | null;
+  custom: boolean;
+}
+export type IncServiceBody = Omit<IncService, "custom">;
+
+export interface IncScenario {
+  id: string; name: string; icon: string; short: string; events: string[];
+  priority: IncPriority; instruction: boolean; extra: [number, number];
+  large_scale: boolean; potential_vpi: boolean;
+  /** Сценарий test_sc.json, который покрывает этот. */
+  notebook?: string | null;
+}
 
 export interface IncCatalog {
-  services: { ci: string; name: string; crit: string }[];
-  /** Сколько сценариев под капотом. */
-  scenarios: number;
+  services: IncService[];
+  scenarios: IncScenario[];
+  /** Сколько разных событий (текстов) под капотом. */
+  events: number;
   priorities: IncPriority[];
+  crits: string[];
+}
+
+/** Строка КЭ: count 0 — КЭ не участвует; priority и instruction пустые — из сценария. */
+export interface IncPackageItem { ci: string; count: number; priority?: IncPriority | null; instruction?: boolean | null }
+
+export interface IncPackage {
+  scenario: string;
+  items: IncPackageItem[];
+  /** Другие инциденты на АС; пусто — из сценария. */
+  extra_min?: number | null;
+  extra_max?: number | null;
 }
 
 export const getIncCatalog = () => call<IncCatalog>("/api/incident-gen/catalog");
-export const previewIncRows = (rows: IncRow[]) => call<{ total: number; items: IncPreviewItem[] }>("/api/incident-gen/rows/preview", "POST", { rows });
-export const sendIncRows = (rows: IncRow[]) => call<IncRun>("/api/incident-gen/rows/send", "POST", { rows });
+export const previewIncPackage = (p: IncPackage) => call<{ total: number; main: number; items: IncPreviewItem[] }>("/api/incident-gen/package/preview", "POST", p);
+export const sendIncPackage = (p: IncPackage) => call<IncRun>("/api/incident-gen/package/send", "POST", p);
+export const addIncService = (s: IncServiceBody) => call<{ services: IncService[] }>("/api/incident-gen/services", "POST", s);
+export const editIncService = (ci: string, s: IncServiceBody) => call<{ services: IncService[] }>(`/api/incident-gen/services/${encodeURIComponent(ci)}`, "PUT", s);
+export const deleteIncService = (ci: string) => call<{ services: IncService[] }>(`/api/incident-gen/services/${encodeURIComponent(ci)}`, "DELETE");

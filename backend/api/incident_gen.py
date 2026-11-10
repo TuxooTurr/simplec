@@ -11,6 +11,9 @@
   • у каждого сообщения свой ключ, ошибка отправки — в результате по этому сообщению, а не молча;
   • пресеты (в т.ч. сценарии из test_sc.json), библиотека описаний (из incident_instruction_examples.json —
     без полей о людях), история отправок.
+
+Интерфейс работает пакетами: сценарий (15 готовых, incident_catalog.SCENARIOS) и строки КЭ (встроенные и свои) — у каждой
+своё количество, приоритет и инструкция.
 """
 
 from __future__ import annotations
@@ -552,25 +555,91 @@ async def import_file(file: UploadFile = File(...)) -> dict:
     raise HTTPException(422, "Не узнал файл: ожидаются incident_instruction_examples.json, test_sc.json или test_sql_templates.json")
 
 
-# ── Простой режим: строка = инцидент «КЭ · приоритет · с инструкцией или без» ───
+# ── Пакет по сценарию: сценарий + строки КЭ (количество, приоритет, инструкция) ──
 #
-# Услуги и тексты — из каталога (backend/api/incident_catalog.py): три КЭ и ~20 сценариев (один хост, несколько,
-# все узлы, хост не определён, обращения, алерты Рефлекса). Сценарий на каждый инцидент — случайный, время — момент
-# отправки. Остальные поля сообщения — как в ноутбуке (Spec по умолчанию).
+# Сценарий (backend/api/incident_catalog.py, SCENARIOS) задаёт, из каких событий брать текст, приоритет и инструкцию
+# по умолчанию, сколько других инцидентов на АС зарегистрировать рядом, «массовый» и «потенциальный ВПИ». У каждой КЭ —
+# своё количество основных инцидентов (0 — КЭ не участвует), приоритет и инструкция. Другие инциденты по АС — раньше
+# основного на 5…600 минут, со случайным событием услуги, без инструкции (как дополнительные в ноутбуке).
 
 PRIORITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+Priority = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
 
-class Row(BaseModel):
+class PackageItem(BaseModel):
+    """Строка КЭ: сколько основных инцидентов (0 — КЭ не участвует), приоритет и инструкция — свои у каждой КЭ."""
     ci: str = Field(..., min_length=1)
-    kind: Literal["", "monitoring", "manual", "alert"] = ""   # пусто — случайный сценарий (так работает интерфейс)
-    variant: str = ""
-    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "MEDIUM"
-    instruction: bool = False
+    count: int = Field(0, ge=0, le=20)
+    priority: Optional[Priority] = None        # пусто — из сценария
+    instruction: Optional[bool] = None         # пусто — из сценария
 
 
-class RowsBody(BaseModel):
-    rows: list[Row] = Field(..., min_length=1, max_length=100)
+class Package(BaseModel):
+    scenario: str = Field(..., min_length=1)
+    items: list[PackageItem] = Field(..., min_length=1, max_length=100)
+    extra_min: Optional[int] = Field(None, ge=0, le=20)   # пусто — из сценария
+    extra_max: Optional[int] = Field(None, ge=0, le=20)
+
+
+def package_plan(pkg: Package) -> dict:
+    """Что выйдет из пакета (до текстов): сценарий, строки КЭ с count > 0 (приоритет и инструкция уже решены), диапазон других."""
+    from backend.api import incident_catalog as cat
+    try:
+        sc = cat.scenario(pkg.scenario)
+    except KeyError:
+        raise HTTPException(422, f"Нет сценария «{pkg.scenario}»")
+    emin = sc["extra"][0] if pkg.extra_min is None else pkg.extra_min
+    emax = sc["extra"][1] if pkg.extra_max is None else pkg.extra_max
+    if emax < emin:
+        raise HTTPException(422, "Других инцидентов «до» меньше, чем «от»")
+    rows: dict[str, dict] = {}
+    for it in pkg.items:
+        ci = it.ci.strip()
+        if it.count <= 0 or not ci:
+            continue
+        if ci in rows:
+            raise HTTPException(422, f"КЭ {ci} указана дважды")
+        rows[ci] = {"ci": ci, "count": it.count, "priority": it.priority or sc["priority"],
+                    "instruction": sc["instruction"] if it.instruction is None else it.instruction}
+    known = {s["ci"] for s in cat.all_services()}
+    unknown = [c for c in rows if c not in known]
+    if unknown:
+        raise HTTPException(422, f"Нет такой КЭ: {', '.join(unknown)} — добавьте её в списке КЭ")
+    if not rows:
+        raise HTTPException(422, "Ни у одной КЭ не указано количество инцидентов")
+    most = sum(r["count"] + emax for r in rows.values())
+    if most > MAX_TOTAL:
+        raise HTTPException(422, f"За раз — не больше {MAX_TOTAL} инцидентов, а может выйти до {most}")
+    return {"sc": sc, "rows": list(rows.values()), "extra": (emin, emax)}
+
+
+def build_package(pkg: Package, settings: dict, now: Optional[datetime] = None,
+                  rng: Optional[random.Random] = None) -> list[dict]:
+    from backend.api import incident_catalog as cat
+    rng = rng or random.Random()
+    now = now or datetime.now(timezone.utc)
+    p = package_plan(pkg)
+    sc = p["sc"]
+    out: list[dict] = []
+    for row in p["rows"]:
+        ci = row["ci"]
+        events = cat.pool(ci, sc["events"])
+        spec = Spec(cis=[Ci(code=ci)], priority=row["priority"], large_scale=bool(sc.get("large_scale")),
+                    potential_vpi=bool(sc.get("potential_vpi")))
+        for _ in range(row["count"]):
+            kind, variant = rng.choice(events)
+            ev = cat.render(ci, kind, variant, rng=rng)
+            msg = esm_message(settings, ci, inc_number(), ev["title"], ev["description"], spec, now)
+            out.append({"ci": ci, "main": True, "message": msg, "instruction": ev["instruction"] if row["instruction"] else "",
+                        "summary": ev["title"], "kind": kind, "variant": variant})
+        other = Spec(cis=[Ci(code=ci)])
+        for _ in range(rng.randint(*p["extra"])):
+            ev = cat.render(ci, rng=rng)
+            shift = timedelta(minutes=-rng.randint(5, 600))
+            msg = esm_message(settings, ci, inc_number(), ev["title"], ev["description"], other, now, shift)
+            out.append({"ci": ci, "main": False, "message": msg, "instruction": "", "summary": ev["title"],
+                        "kind": ev["kind"], "variant": ev["variant"]})
+    return out
 
 
 @router.get("/api/incident-gen/catalog")
@@ -579,36 +648,21 @@ def get_catalog() -> dict:
     return {**cat.catalog(), "priorities": PRIORITIES}
 
 
-def build_rows(rows: list[Row], settings: dict, now: Optional[datetime] = None) -> list[dict]:
+@router.post("/api/incident-gen/package/preview")
+def preview_package(pkg: Package) -> dict:
+    built = build_package(pkg, store.read()["settings"])
+    return {"total": len(built), "main": sum(1 for b in built if b["main"]), "items": built[:60]}
+
+
+@router.post("/api/incident-gen/package/send")
+async def send_package(pkg: Package) -> dict:
     from backend.api import incident_catalog as cat
-    now = now or datetime.now(timezone.utc)
-    out = []
-    for r in rows:
-        try:
-            ev = cat.render(r.ci, r.kind, r.variant)
-        except KeyError:
-            raise HTTPException(422, f"Нет такой услуги или сценария: {r.ci} / {r.kind or 'случайный'} {r.variant}".strip())
-        spec = Spec(cis=[Ci(code=r.ci)], priority=r.priority)
-        msg = esm_message(settings, r.ci, inc_number(), ev["title"], ev["description"], spec, now)
-        out.append({"ci": r.ci, "main": True, "message": msg, "instruction": ev["instruction"] if r.instruction else "",
-                    "summary": ev["title"], "kind": r.kind, "variant": ev["variant"]})
-    return out
-
-
-@router.post("/api/incident-gen/rows/preview")
-def preview_rows(body: RowsBody) -> dict:
-    built = build_rows(body.rows, store.read()["settings"])
-    return {"total": len(built), "main": len(built), "items": built}
-
-
-@router.post("/api/incident-gen/rows/send")
-async def send_rows(body: RowsBody) -> dict:
     settings = store.read()["settings"]
-    built = build_rows(body.rows, settings)
+    built = build_package(pkg, settings)
 
     def work() -> list[dict]:
         done = send_all(built, settings)
-        if any(r.instruction for r in body.rows):
+        if any(b["instruction"] for b in built):
             write_instructions(done, settings)
         return done
 
@@ -616,7 +670,71 @@ async def send_rows(body: RowsBody) -> dict:
     results = [{k: d.get(k) for k in ("ci", "main", "inc", "title", "offset", "partition", "error",
                                        "instruction_id", "instruction_error")} | {"hasInstruction": bool(d["instruction"])}
                for d in done]
-    run = {"id": store.new_id(), "at": store.stamp(), "preset": "", "topic": settings["topic"],
-           "cis": sorted({r.ci for r in body.rows}), "results": results}
+    run = {"id": store.new_id(), "at": store.stamp(), "preset": cat.scenario(pkg.scenario)["name"], "scenario": pkg.scenario,
+           "topic": settings["topic"], "cis": sorted({b["ci"] for b in built}), "results": results}
     store.update(lambda d: d.update(history=([run] + d["history"])[:store.HISTORY_MAX]))
     return run
+
+
+# ── Свои КЭ ──────────────────────────────────────────────────────────────────
+
+class ServiceBody(BaseModel):
+    ci: str = Field(..., min_length=2, max_length=64)
+    name: str = Field("", max_length=200)
+    crit: str = "Business Critical"
+    hosts: list[str] = Field(default_factory=list, max_length=12)
+    app: str = Field("", max_length=80)
+    db: str = Field("", max_length=80)
+    topic: str = Field("", max_length=200)
+    logs: Optional[bool] = None
+    metrics: Optional[bool] = None
+
+
+def _check_ci(ci: str) -> str:
+    from backend.api import incident_catalog as cat
+    ci = ci.strip()
+    if not cat.CI_RE.match(ci):
+        raise HTTPException(422, "Код КЭ — латиница, цифры, «_», «-», «.», например CI01234567")
+    return ci
+
+
+@router.post("/api/incident-gen/services")
+def add_service(body: ServiceBody) -> dict:
+    from backend.api import incident_catalog as cat
+    ci = _check_ci(body.ci)
+    if any(s["ci"] == ci for s in cat.SERVICES):
+        raise HTTPException(409, f"{ci} — уже встроенная КЭ")
+
+    def fn(d: dict) -> None:
+        if any(x.get("ci") == ci for x in d["services"]):
+            raise HTTPException(409, f"КЭ {ci} уже есть")
+        d["services"].append(cat.normalize_service({**body.model_dump(), "ci": ci}))
+    store.update(fn)
+    return {"services": cat.all_services()}
+
+
+@router.put("/api/incident-gen/services/{ci}")
+def edit_service(ci: str, body: ServiceBody) -> dict:
+    from backend.api import incident_catalog as cat
+    if any(s["ci"] == ci for s in cat.SERVICES):
+        raise HTTPException(403, "Встроенную КЭ не меняют — добавьте свою")
+    new_ci = _check_ci(body.ci)
+
+    def fn(d: dict) -> None:
+        idx = next((i for i, x in enumerate(d["services"]) if x.get("ci") == ci), None)
+        if idx is None:
+            raise HTTPException(404, f"КЭ {ci} уже нет")
+        if new_ci != ci and (any(x.get("ci") == new_ci for x in d["services"]) or any(s["ci"] == new_ci for s in cat.SERVICES)):
+            raise HTTPException(409, f"КЭ {new_ci} уже есть")
+        d["services"][idx] = cat.normalize_service({**body.model_dump(), "ci": new_ci})
+    store.update(fn)
+    return {"services": cat.all_services()}
+
+
+@router.delete("/api/incident-gen/services/{ci}")
+def delete_service(ci: str) -> dict:
+    from backend.api import incident_catalog as cat
+    if any(s["ci"] == ci for s in cat.SERVICES):
+        raise HTTPException(403, "Встроенную КЭ не удаляют")
+    store.update(lambda d: d.update(services=[x for x in d["services"] if x.get("ci") != ci]))
+    return {"services": cat.all_services()}

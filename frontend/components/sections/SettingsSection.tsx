@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ComponentType, type ReactNode } from "react";
-import { BookOpen, ChevronRight, Cpu, Database, GitBranch, HardDrive, Network, Rocket, Ticket } from "lucide-react";
+import { BookOpen, ChevronRight, Cpu, Database, GitBranch, HardDrive, Network, Play, Rocket, Ticket } from "lucide-react";
 
 import { Modal, Tabs } from "@/components/ui";
 import { LlmProvidersPanel, SystemStoresPanel } from "@/components/settings/LlmSettings";
@@ -25,8 +25,8 @@ import { getAqaSettings } from "@/lib/aqaApi";
  * (запрос в модель, в базу) — по кнопке внутри окна.
  */
 
-type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "llm" | "kafka" | "testdata" | "stores";
-const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "llm", "kafka", "testdata", "stores"];
+type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores";
+const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores"];
 
 type TabId = "integrations" | "connections" | "backup";
 const TABS: { id: TabId; label: string }[] = [
@@ -51,6 +51,7 @@ const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
       { id: "confluence", icon: BookOpen, title: "Confluence", description: "Учётная запись Сигмы и пространство для страниц" },
       { id: "testops", icon: Rocket, title: "Allure TestOps", description: "Проект с запусками автотестов и API-токен" },
       { id: "bitbucket", icon: GitBranch, title: "Bitbucket", description: "Репозиторий автотестов и маркер доступа" },
+      { id: "jenkins", icon: Play, title: "Jenkins", description: "Джоб запуска автотестов, логин и API-токен" },
       { id: "llm", icon: Cpu, title: "LLM-провайдеры", description: "GigaChat и совместимые модели: ключи, сертификаты, выбор модели" },
   ],
   connections: [
@@ -122,6 +123,9 @@ async function loadChips(): Promise<Partial<Record<PanelId, Chip>>> {
     chips.testops = !a.testopsUrl ? { tone: "idle", text: "Не подключено" }
       : !a.testopsOk ? { tone: "bad", text: "Ссылка не разобралась" }
       : a.testopsToken ? { tone: "ok", text: "Подключено" } : { tone: "warn", text: "Нужен токен" };
+    chips.jenkins = !a.jenkinsUrl ? { tone: "idle", text: "Не подключено" }
+      : !a.jenkinsOk ? { tone: "bad", text: "Ссылка не разобралась" }
+      : a.jenkinsUser && a.jenkinsToken ? { tone: "ok", text: "Подключено" } : { tone: "warn", text: "Нужны логин и токен" };
   }
   return chips;
 }
@@ -255,11 +259,12 @@ export default function SettingsSection() {
       <TestDataSettingsModal open={panel === "testdata"} onClose={close} onChanged={refreshChips} />
       <AqaSettingsModal open={panel === "testops"} only="testops" onClose={close} onSaved={refreshChips} />
       <AqaSettingsModal open={panel === "bitbucket"} only="bitbucket" onClose={close} onSaved={refreshChips} />
+      <AqaSettingsModal open={panel === "jenkins"} only="jenkins" onClose={close} onSaved={refreshChips} />
     </div>
   );
 }
 
 /** Строки, у которых есть состояние: пока оно грузится, вместо него — заглушка. */
 const STATUS_ROWS: Partial<Record<PanelId, true>> = {
-  jira: true, confluence: true, testops: true, bitbucket: true, llm: true, kafka: true, testdata: true,
+  jira: true, confluence: true, testops: true, bitbucket: true, jenkins: true, llm: true, kafka: true, testdata: true,
 };

@@ -50,6 +50,22 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
+    id: "2026-11-10-jenkins-settings",
+    version: "2.011.10",
+    date: "10 ноября 2026",
+    title: "Jenkins — в «Настройках»",
+    summary: "Подключение Jenkins теперь задаётся в «Настройках» рядом с Bitbucket и TestOps.",
+    sections: [
+      {
+        area: "Настройки",
+        subtitle: "Интеграции",
+        entries: [
+          { kind: "new", title: "Строка Jenkins", text: "Ссылка на джоб автотестов, логин и API-токен — в «Настройки → Интеграции». На строке видно, подключено ли и чего не хватает." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-08-brand-loader-modals",
     version: "2.011.08",
     date: "8 ноября 2026",

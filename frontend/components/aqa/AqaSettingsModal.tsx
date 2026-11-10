@@ -27,12 +27,13 @@ function ResetLink({ value, def, onReset }: { value: string; def?: string; onRes
  */
 export default function AqaSettingsModal({ open, onClose, onSaved, only }: {
   open: boolean; onClose: () => void; onSaved: () => void;
-  /** Только один источник — для «Настроек» (строки Bitbucket и TestOps). Сохраняются все поля как были загружены. */
-  only?: "bitbucket" | "testops";
+  /** Только один источник — для «Настроек» (строки Bitbucket, TestOps и Jenkins). Сохраняются все поля как были загружены. */
+  only?: "bitbucket" | "testops" | "jenkins";
 }) {
   const show = (k: "bitbucket" | "testops" | "jenkins" | "epics") => !only || only === k;
   const title = only === "bitbucket" ? "Bitbucket — репозиторий автотестов"
-    : only === "testops" ? "Allure TestOps — проект" : "Трекинг AQA — подключения";
+    : only === "testops" ? "Allure TestOps — проект"
+    : only === "jenkins" ? "Jenkins — джоб автотестов" : "Трекинг AQA — подключения";
   const [s, setS] = useState<AqaSettings | null>(null);
   const [epics, setEpics] = useState<string[]>([""]);
   const [busy, setBusy] = useState(false);

@@ -1276,48 +1276,37 @@ export default function JiraToolSection() {
             </div>
           ) : (
             <>
-              {/* Шапка: представления, проект и действия с задачами; на узком окне кнопки уходят строкой ниже */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                <ViewSwitcher views={listViews(list)} active={list.activeView ?? listViews(list)[0].id}
-                  onSwitch={id => updateList(l => switchView(l, id))}
-                  onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
-                  onRename={(id, name) => updateList(l => renameView(l, id, name))}
-                  onDelete={id => updateList(l => deleteView(l, id))} />
-                {/* Название — рамка постоянной ширины (до 100 символов, но не шире 40% окна): переключатель вида рядом не прыгает
-                    при смене списка; длинное — с многоточием, целиком — в подсказке. */}
-                <div className="flex-shrink-0 min-w-0" style={{ width: "min(100ch, 40vw)" }} title={list.name}>
-                  <p className="text-sm font-semibold text-text-main truncate">
-                    {list.name}
-                    {list.archivedAt && <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">в архиве</span>}
-                  </p>
-                  <p className="text-[11px] text-text-muted truncate">задач: {list.keys.length}
-                    {foreign > 0 && <span title="Поля этих задач берутся из их проектов"> · из других проектов: {foreign}</span>}
-                    {pending > 0 && busy > 0 && <> · загружаю из Jira: {pending}</>}
-                    {refreshedAt > 0 && (
-                      <span title="Задачи берутся из кэша сессии и обновляются из Jira фоном раз в 30 минут">
-                        {" "}· данные Jira: {new Date(refreshedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    )}
-                    {q && <> · найдено: {listIssues.length}</>}
-                    {sort && (
-                      <> · сортировка: {colLabel(sort.col, list)} {sort.dir === 1 ? "↑" : "↓"}{" "}
-                        <button type="button" onClick={() => setSort(null)} className="text-primary hover:underline"
-                          title="Вернуть ручной порядок — тогда строки можно перетаскивать">сбросить</button></>
-                    )}</p>
-                </div>
-                {/* Вид: список или график (как роадмап «Трекинга AQA») — значками, сразу за названием */}
-                <div role="group" aria-label="Вид списка" className="flex flex-shrink-0 rounded-lg border border-border-main p-0.5">
-                  <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"} aria-label="Список" title="Список"
-                    className={`p-1.5 rounded-md transition-colors ${view === "list" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
-                    <ListIcon className="h-4 w-4" /></button>
-                  <button type="button" onClick={() => pickView("chart")} aria-pressed={view === "chart"} aria-label="График" title="График"
-                    className={`p-1.5 rounded-md transition-colors ${view === "chart" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
-                    <CalendarRange className="h-4 w-4" /></button>
-                </div>
-                <div className="flex flex-wrap items-center gap-2 min-w-0">
-                  {/* У графика — масштаб и перечитать историю */}
+              {/* Шапка в две строки. Верх: представления и название слева; масштаб графика и «Список / График» — справа.
+                  Низ: поиск растягивается на всю свободную ширину; колонки и группировка — значками, действия — справа. */}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3 min-w-0">
+                  <ViewSwitcher views={listViews(list)} active={list.activeView ?? listViews(list)[0].id}
+                    onSwitch={id => updateList(l => switchView(l, id))}
+                    onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
+                    onRename={(id, name) => updateList(l => renameView(l, id, name))}
+                    onDelete={id => updateList(l => deleteView(l, id))} />
+                  <div className="flex-1 min-w-0" title={list.name}>
+                    <p className="text-sm font-semibold text-text-main truncate">
+                      {list.name}
+                      {list.archivedAt && <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">в архиве</span>}
+                    </p>
+                    <p className="text-[11px] text-text-muted truncate">задач: {list.keys.length}
+                      {foreign > 0 && <span title="Поля этих задач берутся из их проектов"> · из других проектов: {foreign}</span>}
+                      {pending > 0 && busy > 0 && <> · загружаю из Jira: {pending}</>}
+                      {refreshedAt > 0 && (
+                        <span title="Задачи берутся из кэша сессии и обновляются из Jira фоном раз в 30 минут">
+                          {" "}· данные Jira: {new Date(refreshedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      )}
+                      {q && <> · найдено: {listIssues.length}</>}
+                      {sort && (
+                        <> · сортировка: {colLabel(sort.col, list)} {sort.dir === 1 ? "↑" : "↓"}{" "}
+                          <button type="button" onClick={() => setSort(null)} className="text-primary hover:underline"
+                            title="Вернуть ручной порядок — тогда строки можно перетаскивать">сбросить</button></>
+                      )}</p>
+                  </div>
                   {view === "chart" && (
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
                       <div role="group" aria-label="Масштаб графика" className="flex rounded-lg border border-border-main p-0.5">
                         {TL_ZOOMS.map(z => (
                           <button key={z.id} type="button" onClick={() => pickZoom(z.w)} aria-pressed={tlZoom === z.w}
@@ -1330,43 +1319,55 @@ export default function JiraToolSection() {
                         <RefreshIcon busy={histBusy} className="h-3.5 w-3.5" /></button>
                     </div>
                   )}
-                  {/* Поиск по списку */}
-                  <label className="flex items-center gap-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary/30">
-                    <Search className="w-3.5 h-3.5 text-text-muted" />
+                  <div role="group" aria-label="Вид списка" className="flex flex-shrink-0 rounded-lg border border-border-main p-0.5">
+                    <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"} aria-label="Список" title="Список"
+                      className={`p-1.5 rounded-md transition-colors ${view === "list" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
+                      <ListIcon className="h-4 w-4" /></button>
+                    <button type="button" onClick={() => pickView("chart")} aria-pressed={view === "chart"} aria-label="График" title="График"
+                      className={`p-1.5 rounded-md transition-colors ${view === "chart" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
+                      <CalendarRange className="h-4 w-4" /></button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Поиск — растягивается по ширине окна */}
+                  <label className="flex flex-1 min-w-[12rem] items-center gap-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary/30">
+                    <Search className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
                     <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Найти в списке" aria-label="Найти в списке"
-                      className="w-32 bg-transparent text-sm text-text-main focus:outline-none" />
+                      className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
                     {filter && <button type="button" onClick={() => setFilter("")} aria-label="Очистить"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
                   </label>
-                  {activeFilters.length > 0 && (
-                    <button type="button" onClick={() => setColFilters({})} title={`Фильтр по колонкам: ${activeFilters.map(([c]) => colLabel(c, list)).join(", ")} — сбросить`}
-                      className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-bg-subtle whitespace-nowrap">
-                      <ListFilter className="w-3.5 h-3.5" /> фильтры: {activeFilters.length} ×</button>
-                  )}
-                  {/* Колонки и группировка — рядом с действиями над задачами */}
-                  <FieldPicker label="Колонки" icon={<Columns3 className="w-4 h-4" />} align="right" options={fieldOptions} selected={list.columns}
-                    collapsed={jiraGroup} onChange={columns => updateList(l => ({ ...l, columns }))}
-                    footer={
-                      <button type="button" onClick={() => setModal({ own: null })}
-                        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
-                        <FilePlus2 className="w-4 h-4" /> Создать своё поле…
+                  <div className="flex items-center gap-2 flex-shrink-0 ml-auto">
+                    {activeFilters.length > 0 && (
+                      <button type="button" onClick={() => setColFilters({})} title={`Фильтр по колонкам: ${activeFilters.map(([c]) => colLabel(c, list)).join(", ")} — сбросить`}
+                        className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs text-primary hover:bg-bg-subtle whitespace-nowrap">
+                        <ListFilter className="w-3.5 h-3.5" /> фильтры: {activeFilters.length} ×</button>
+                    )}
+                    {/* Колонки и группировка — рядом с действиями над задачами */}
+                    <FieldPicker iconOnly label="Колонки" icon={<Columns3 className="w-4 h-4" />} align="right" options={fieldOptions} selected={list.columns}
+                      collapsed={jiraGroup} onChange={columns => updateList(l => ({ ...l, columns }))}
+                      footer={
+                        <button type="button" onClick={() => setModal({ own: null })}
+                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-primary hover:bg-primary/5">
+                          <FilePlus2 className="w-4 h-4" /> Создать своё поле…
+                        </button>
+                      } />
+                    <FieldPicker iconOnly label="Группировка" icon={<Layers className="w-4 h-4" />} align="right" options={groupOptions} selected={list.groupBy}
+                      max={3} ordered collapsed={jiraGroup} onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
+                    {STRUCTURE_ENABLED && (
+                      <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
+                        <FolderTree className="w-4 h-4" /> Структура
                       </button>
-                    } />
-                  <FieldPicker label="Группировка" icon={<Layers className="w-4 h-4" />} align="right" options={groupOptions} selected={list.groupBy}
-                    max={3} ordered collapsed={jiraGroup} onChange={groupBy => updateList(l => ({ ...l, groupBy }))} />
-                  {STRUCTURE_ENABLED && (
-                    <button type="button" onClick={() => setModal("import")} disabled={jira.state !== "ok"} title="Импорт структуры: все задачи с папками"
+                    )}
+                    <button type="button" onClick={() => setModal("add")} disabled={jira.state !== "ok"}
                       className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
-                      <FolderTree className="w-4 h-4" /> Структура
+                      <Plus className="w-4 h-4" /> Добавить задачи
                     </button>
-                  )}
-                  <button type="button" onClick={() => setModal("add")} disabled={jira.state !== "ok"}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle whitespace-nowrap disabled:opacity-40">
-                    <Plus className="w-4 h-4" /> Добавить задачи
-                  </button>
-                  <button type="button" onClick={openCreate}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 whitespace-nowrap">
-                    <FilePlus2 className="w-4 h-4" /> Создать задачу
-                  </button>
+                    <button type="button" onClick={openCreate}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 whitespace-nowrap">
+                      <FilePlus2 className="w-4 h-4" /> Создать задачу
+                    </button>
+                  </div>
                 </div>
               </div>
 

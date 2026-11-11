@@ -120,7 +120,11 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
 }
 
 /** Кнопка со всплывающим выбором. align — к какому краю кнопки прижать окно; up — раскрыть вверх (кнопка у нижнего края страницы). */
-export default function FieldPicker({ align = "left", up = false, ...props }: PickerProps & { icon?: ReactNode; align?: "left" | "right"; up?: boolean }) {
+export default function FieldPicker({ align = "left", up = false, iconOnly = false, ...props }: PickerProps & {
+  icon?: ReactNode; align?: "left" | "right"; up?: boolean;
+  /** Только значок: название — в подсказке и для чтения с экрана. */
+  iconOnly?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
@@ -136,10 +140,11 @@ export default function FieldPicker({ align = "left", up = false, ...props }: Pi
   return (
     <div ref={box} className="relative">
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-sm transition-colors
+        aria-label={iconOnly ? props.label : undefined} title={iconOnly ? props.label : undefined}
+        className={`flex items-center gap-1.5 ${iconOnly ? "px-2" : "px-3"} py-1.5 rounded-lg border text-sm transition-colors
           ${open ? "border-primary/50 bg-primary/5 text-text-main" : "border-border-main text-text-main hover:bg-bg-subtle"}`}>
         {props.icon}
-        {props.label}
+        {!iconOnly && props.label}
         {props.selected.length > 0 && (
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-primary/15 text-primary text-[10px] font-bold flex items-center justify-center">
             {props.selected.length}

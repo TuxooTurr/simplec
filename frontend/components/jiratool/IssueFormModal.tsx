@@ -296,7 +296,7 @@ export default function IssueFormModal({ control, project, participants, listNam
 
   if (created) {
     return (
-      <Modal open={open} onClose={onClose} title="Создано в Jira" size="max-w-lg">
+      <Modal open={open} onClose={onClose} title="Создано в Jira" size="max-w-lg" minimizable={false}>
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm text-text-main">
             <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {type} <b>{created.key}</b> создан
@@ -317,7 +317,7 @@ export default function IssueFormModal({ control, project, participants, listNam
   return (
     <>
     {chip}
-    <Modal open={open} onClose={requestClose} size="max-w-6xl"
+    <Modal open={open} onClose={requestClose} size="max-w-6xl" minimizable={false}
       title={initial ? `Черновик ${initial.key}` : `Создать задачу · ${project}`}
       headerExtra={(
         <button type="button" onClick={minimize} title="Свернуть: работа продолжится, итог придёт уведомлением" aria-label="Свернуть форму"

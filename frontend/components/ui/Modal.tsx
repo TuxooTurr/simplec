@@ -3,7 +3,8 @@
 import { backdropClose } from "@/lib/backdrop";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { ChevronUp, Minus, X } from "lucide-react";
+import { FORM_DOCK_ID } from "@/components/FormHost";
 
 export interface ModalProps {
   open: boolean;
@@ -12,8 +13,14 @@ export interface ModalProps {
   children: ReactNode;
   /** max-w class (default: max-w-md) */
   size?: string;
-  /** Кнопки в шапке рядом с крестиком (например, «Свернуть»). */
+  /** Кнопки в шапке рядом с крестиком. */
   headerExtra?: ReactNode;
+  /**
+   * Кнопка «Свернуть» в шапке (по умолчанию — у любого окна с заголовком). Свёрнутое окно прячется ярлыком на полку
+   * внизу справа, а содержимое остаётся смонтированным: запись в Jira, генерация и прочая работа идут дальше.
+   * false — для окон со своим сворачиванием (форма задачи Jira tool через openForm).
+   */
+  minimizable?: boolean;
 }
 
 /* Открытые окна по порядку открытия. Esc закрывает только верхнее: окно, открытое поверх другого
@@ -21,7 +28,8 @@ export interface ModalProps {
 const openStack: number[] = [];
 let nextId = 1;
 
-export function Modal({ open, onClose, title, children, size = "max-w-md", headerExtra }: ModalProps) {
+export function Modal({ open, onClose, title, children, size = "max-w-md", headerExtra, minimizable = true }: ModalProps) {
+  const [minimized, setMinimized] = useState(false);
   // Keep the dialog mounted briefly after `open` flips to false so the
   // close animation can play out.
   const [rendered, setRendered] = useState(open);
@@ -37,7 +45,7 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
       if (closeTimer.current) window.clearTimeout(closeTimer.current);
       setRendered(true);
     } else if (rendered) {
-      closeTimer.current = window.setTimeout(() => setRendered(false), 160);
+      closeTimer.current = window.setTimeout(() => { setRendered(false); setMinimized(false); }, 160);
     }
     return () => {
       if (closeTimer.current) window.clearTimeout(closeTimer.current);
@@ -46,7 +54,7 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
 
   /* Esc закрывает верхнее окно; фокус — в окно при открытии и обратно на кнопку, которой открыли, после закрытия */
   useEffect(() => {
-    if (!open) return;
+    if (!open || minimized) return;     // свёрнутое не держит фокус и не закрывается по Esc
     const id = idRef.current;
     const opener = document.activeElement as HTMLElement | null;
     openStack.push(id);
@@ -67,19 +75,39 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
       if (i >= 0) openStack.splice(i, 1);
       if (opener && document.contains(opener)) opener.focus({ preventScroll: true });
     };
-  }, [open]);
+  }, [open, minimized]);
 
   // На сервере (SSR) document нет — открытое окно появится после загрузки страницы.
   if (!rendered || typeof document === "undefined") return null;
 
   const closing = !open;
+  const canMinimize = minimizable && !!title;
+
+  // Ярлык свёрнутого окна — на полке форм (FormHost), а без неё — в своём углу.
+  const dock = typeof document !== "undefined" ? document.getElementById(FORM_DOCK_ID) : null;
+  const chip = minimized && open && (
+    <div className="flex w-72 items-center gap-1 rounded-xl border border-border-main bg-[var(--color-modal-bg)] pl-3 pr-1 py-1.5 text-sm shadow-lg">
+      <button type="button" onClick={() => setMinimized(false)} title="Развернуть окно"
+        className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-medium text-text-main">{title}</span>
+          <span className="block text-[11px] text-text-muted">Свёрнуто — работа продолжается</span>
+        </span>
+        <ChevronUp className="h-4 w-4 flex-shrink-0 text-text-muted" />
+      </button>
+      <button type="button" onClick={onClose} aria-label={`Закрыть «${title}»`} title="Закрыть"
+        className="p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle"><X className="h-3.5 w-3.5" /></button>
+    </div>
+  );
 
   // Окно — в document.body, а не там, где его открыли: у предка с transform, filter или backdrop-filter
   // (шапка панели с размытием фона) position: fixed считается от этого предка, а не от экрана, и окно уезжало
   // за верх экрана (кнопка «Резервная копия» в шапке панели).
-  return createPortal(
+  return (<>
+    {chip && createPortal(dock ? chip : <div className="fixed bottom-4 right-4 z-40">{chip}</div>, dock ?? document.body)}
+    {createPortal(
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center p-4 t-modal-overlay ${closing ? "is-closing" : ""}`}
+      className={`fixed inset-0 z-50 flex items-center justify-center p-4 t-modal-overlay ${closing ? "is-closing" : ""} ${minimized ? "hidden" : ""}`}
       style={{ backgroundColor: "var(--color-modal-overlay)" }}
       {...backdropClose(onClose)}
     >
@@ -99,6 +127,17 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
             <h3 className="text-base font-semibold text-text-main">{title}</h3>
             <div className="flex items-center gap-1">
               {headerExtra}
+              {canMinimize && (
+                <button
+                  onClick={() => setMinimized(true)}
+                  aria-label="Свернуть окно"
+                  title="Свернуть: окно уйдёт на полку внизу справа, работа в нём продолжится"
+                  className="p-1 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-text-main transition-colors
+                    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  <Minus className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={onClose}
                 aria-label="Закрыть"
@@ -117,7 +156,8 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
       </div>
     </div>,
     document.body,
-  );
+  )}
+  </>);
 }
 
 export default Modal;

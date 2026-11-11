@@ -1,6 +1,5 @@
 "use client";
 
-import { backdropClose } from "@/lib/backdrop";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   SplitSquareHorizontal, Play, Loader2, Paperclip, Trophy,
@@ -8,6 +7,7 @@ import {
   Save, FileDown, BarChart3, SlidersHorizontal, X,
 } from "lucide-react";
 import NotionRenderer from "@/components/NotionRenderer";
+import Modal from "@/components/ui/Modal";
 import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { getCustomLlmProviders, type CustomLlmProvider } from "@/lib/settingsApi";
 import {
@@ -447,106 +447,88 @@ export default function ModelBenchSection() {
         </div>
 
         {showScenarioModal && (
-          <div
-            className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto"
-            {...backdropClose(() => setShowScenarioModal(false))}
-          >
-            <div
-              className="bg-bg-main rounded-2xl border border-border-main w-full max-w-2xl my-8 shadow-2xl"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
-                <h3 className="text-sm font-semibold text-text-main">Настройки сценариев</h3>
+          <Modal open onClose={() => setShowScenarioModal(false)} title="Настройки сценариев" size="max-w-2xl">
+            <div className="space-y-5">
+              <div>
+                <p className={LABEL_CLS}>Сохранённые сценарии</p>
+                {scenarios.length === 0 ? (
+                  <p className="text-xs text-text-muted mt-1">Пока нет ни одного сценария.</p>
+                ) : (
+                  <div className="space-y-1.5 mt-2">
+                    {scenarios.map((s) => (
+                      <div
+                        key={s.id}
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border-main bg-bg-card text-sm"
+                      >
+                        <span className="flex-1 truncate text-text-main">{s.name}</span>
+                        {s.judge_instructions.trim() && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary flex-shrink-0">
+                            есть критерии судье
+                          </span>
+                        )}
+                        <button
+                          onClick={() => handleDeleteScenario(s.id)}
+                          className="text-text-muted hover:text-red-500 flex-shrink-0"
+                          title="Удалить сценарий"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-border-main pt-4 space-y-3">
+                <p className={LABEL_CLS}>Новый сценарий</p>
+                <input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="Название сценария..."
+                  className={INPUT_CLS}
+                />
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Промпт, на котором тестируется LLM</label>
+                  <textarea
+                    value={formPrompt}
+                    onChange={(e) => setFormPrompt(e.target.value)}
+                    rows={6}
+                    placeholder="Системный промпт для тестируемых моделей..."
+                    className={`${INPUT_CLS} font-mono resize-none`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Транскрибация по умолчанию (необязательно)</label>
+                  <textarea
+                    value={formTranscript}
+                    onChange={(e) => setFormTranscript(e.target.value)}
+                    rows={3}
+                    placeholder="Пример текста для тестирования..."
+                    className={`${INPUT_CLS} resize-none`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-text-muted mb-1">Доп. рекомендации для судьи (необязательно)</label>
+                  <textarea
+                    value={formJudgeInstructions}
+                    onChange={(e) => setFormJudgeInstructions(e.target.value)}
+                    rows={4}
+                    placeholder="Что именно важно проверить при оценке качества (технические/логические критерии)..."
+                    className={`${INPUT_CLS} resize-none`}
+                  />
+                </div>
                 <button
-                  onClick={() => setShowScenarioModal(false)}
-                  className="p-1.5 text-text-muted hover:text-text-main rounded-lg hover:bg-bg-subtle"
+                  type="button"
+                  onClick={handleAddScenario}
+                  disabled={savingScenario || !formName.trim() || !formPrompt.trim()}
+                  className={BTN_PRIMARY}
                 >
-                  <X className="w-4 h-4" />
+                  {savingScenario ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Сохранить сценарий
                 </button>
               </div>
-
-              <div className="p-5 space-y-5 max-h-[75vh] overflow-y-auto">
-                <div>
-                  <p className={LABEL_CLS}>Сохранённые сценарии</p>
-                  {scenarios.length === 0 ? (
-                    <p className="text-xs text-text-muted mt-1">Пока нет ни одного сценария.</p>
-                  ) : (
-                    <div className="space-y-1.5 mt-2">
-                      {scenarios.map((s) => (
-                        <div
-                          key={s.id}
-                          className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border-main bg-bg-card text-sm"
-                        >
-                          <span className="flex-1 truncate text-text-main">{s.name}</span>
-                          {s.judge_instructions.trim() && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary flex-shrink-0">
-                              есть критерии судье
-                            </span>
-                          )}
-                          <button
-                            onClick={() => handleDeleteScenario(s.id)}
-                            className="text-text-muted hover:text-red-500 flex-shrink-0"
-                            title="Удалить сценарий"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="border-t border-border-main pt-4 space-y-3">
-                  <p className={LABEL_CLS}>Новый сценарий</p>
-                  <input
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    placeholder="Название сценария..."
-                    className={INPUT_CLS}
-                  />
-                  <div>
-                    <label className="block text-xs text-text-muted mb-1">Промпт, на котором тестируется LLM</label>
-                    <textarea
-                      value={formPrompt}
-                      onChange={(e) => setFormPrompt(e.target.value)}
-                      rows={6}
-                      placeholder="Системный промпт для тестируемых моделей..."
-                      className={`${INPUT_CLS} font-mono resize-none`}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-text-muted mb-1">Транскрибация по умолчанию (необязательно)</label>
-                    <textarea
-                      value={formTranscript}
-                      onChange={(e) => setFormTranscript(e.target.value)}
-                      rows={3}
-                      placeholder="Пример текста для тестирования..."
-                      className={`${INPUT_CLS} resize-none`}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-text-muted mb-1">Доп. рекомендации для судьи (необязательно)</label>
-                    <textarea
-                      value={formJudgeInstructions}
-                      onChange={(e) => setFormJudgeInstructions(e.target.value)}
-                      rows={4}
-                      placeholder="Что именно важно проверить при оценке качества (технические/логические критерии)..."
-                      className={`${INPUT_CLS} resize-none`}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleAddScenario}
-                    disabled={savingScenario || !formName.trim() || !formPrompt.trim()}
-                    className={BTN_PRIMARY}
-                  >
-                    {savingScenario ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    Сохранить сценарий
-                  </button>
-                </div>
-              </div>
             </div>
-          </div>
+          </Modal>
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

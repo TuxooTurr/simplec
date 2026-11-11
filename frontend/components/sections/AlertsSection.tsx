@@ -11,6 +11,7 @@ import {
   Maximize2, Minimize2, Copy,
 } from "lucide-react";
 import { Select } from "@/components/ui";
+import Modal from "@/components/ui/Modal";
 import {
   saveAlertScript, deleteAlertScript, parseNotebook, reorderAlertScripts,
   saveAlertFolder, deleteAlertFolder,
@@ -637,208 +638,191 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-fade-in">
-      {/* Ширина переключается: обычная для правки названия/папки, широкая — когда
-          пишешь код. Базовая max-w-4xl вместо прежней 2xl: в 672px редактор ячеек
-          не помещался.
-          В развёрнутом режиме max-w-none, а не vw-значение: этот fixed-контейнер
-          позиционируется от рабочей области (выше по дереву есть transform,
-          создающий containing block), поэтому vw дал бы недостижимую ширину. */}
-      <div className={`bg-bg-card rounded-2xl shadow-2xl w-full flex flex-col transition-[max-width,max-height] duration-200 ${
-        wide ? "max-w-none max-h-[96vh]" : "max-w-4xl max-h-[92vh]"}`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main flex-shrink-0">
-          <h2 className="text-base font-semibold">{editing ? "Редактировать алерт" : "Новый алерт"}</h2>
-          <div className="flex items-center gap-1">
-            <button onClick={() => setWide(w => !w)} title={wide ? "Свернуть окно" : "Развернуть окно"}
-              className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
-              {wide ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </button>
-            <button onClick={onClose} title="Закрыть"
-              className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
+    // Ширина переключается: обычная — для названия и папки, широкая — когда пишешь код (в max-w-4xl редактор ячеек едва помещается).
+    <Modal open onClose={onClose} title={editing ? "Редактировать алерт" : "Новый алерт"} size={wide ? "max-w-none" : "max-w-4xl"}
+      headerExtra={(
+        <button onClick={() => setWide(w => !w)} title={wide ? "Обычная ширина" : "Во всю ширину"} aria-label={wide ? "Обычная ширина" : "Во всю ширину"}
+          className="p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
+          {wide ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+        </button>
+      )}
+      footer={<div className="flex items-center justify-end gap-3">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
+        <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Сохранить
+        </button>
+      </div>}>
+      <div className="space-y-5">
+        {/* Name */}
+        <div>
+          <label className={LABEL_CLS}>Название *</label>
+          <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="МПР" />
         </div>
 
-        <div className="overflow-y-auto scrollbar-thin p-6 space-y-5 flex-1">
-          {/* Name */}
+        {/* Folder */}
+        {folders.length > 0 && (
           <div>
-            <label className={LABEL_CLS}>Название *</label>
-            <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="МПР" />
+            <label className={LABEL_CLS}>Папка</label>
+            <Select
+              value={folderId}
+              onChange={(value) => setFolderId(value)}
+              
+            >
+              <option value="">— без папки —</option>
+              {folders.map(f => (
+                <option key={f.id} value={f.id}>{f.name}</option>
+              ))}
+            </Select>
           </div>
+        )}
 
-          {/* Folder */}
-          {folders.length > 0 && (
-            <div>
-              <label className={LABEL_CLS}>Папка</label>
-              <Select
-                value={folderId}
-                onChange={(value) => setFolderId(value)}
-                
-              >
-                <option value="">— без папки —</option>
-                {folders.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </Select>
-            </div>
-          )}
-
-          {/* Visibility toggle for superuser */}
-          {isSuperuser && (
-            <label className="flex items-center gap-2.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={visibleToMon}
-                onChange={e => setVisibleToMon(e.target.checked)}
-                className="h-4 w-4 rounded border-border-main accent-primary"
-              />
-              <span className="text-sm text-text-main">
-                Доступен пользователю <span className="font-semibold text-blue-600">Monitoring</span>
-              </span>
-              {visibleToMon
-                ? <Eye className="w-3.5 h-3.5 text-green-600" />
-                : <EyeOff className="w-3.5 h-3.5 text-text-muted" />}
-            </label>
-          )}
-
-          {/* Cell type legend */}
-          <div className="flex gap-3 text-xs">
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-50 text-green-700 border border-green-200">
-              <Code className="w-3 h-3" /> <b>Init</b> — один раз при запуске
+        {/* Visibility toggle for superuser */}
+        {isSuperuser && (
+          <label className="flex items-center gap-2.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={visibleToMon}
+              onChange={e => setVisibleToMon(e.target.checked)}
+              className="h-4 w-4 rounded border-border-main accent-primary"
+            />
+            <span className="text-sm text-text-main">
+              Доступен пользователю <span className="font-semibold text-blue-600">Monitoring</span>
             </span>
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
-              <RefreshCw className="w-3 h-3" /> <b>Loop</b> — каждый тик планировщика
-            </span>
-          </div>
+            {visibleToMon
+              ? <Eye className="w-3.5 h-3.5 text-green-600" />
+              : <EyeOff className="w-3.5 h-3.5 text-text-muted" />}
+          </label>
+        )}
 
-          {/* Notebook */}
-          <div>
-            <label className={`${LABEL_CLS} flex items-center gap-1.5 mb-2`}>
-              <BookOpen className="w-3.5 h-3.5" /> Ноутбук{cells.length > 0 ? ` (${cells.length})` : ""}
+        {/* Cell type legend */}
+        <div className="flex gap-3 text-xs">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-green-50 text-green-700 border border-green-200">
+            <Code className="w-3 h-3" /> <b>Init</b> — один раз при запуске
+          </span>
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+            <RefreshCw className="w-3 h-3" /> <b>Loop</b> — каждый тик планировщика
+          </span>
+        </div>
+
+        {/* Notebook */}
+        <div>
+          <label className={`${LABEL_CLS} flex items-center gap-1.5 mb-2`}>
+            <BookOpen className="w-3.5 h-3.5" /> Ноутбук{cells.length > 0 ? ` (${cells.length})` : ""}
+          </label>
+          <NotebookEditor cells={cells} onChange={setCells} />
+        </div>
+
+        {/* Dynamic params */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className={`${LABEL_CLS} flex items-center gap-1.5`} style={{ marginBottom: 0 }}>
+              <Settings2 className="w-3.5 h-3.5" /> Динамические параметры{params.length > 0 ? ` (${params.length})` : ""}
             </label>
-            <NotebookEditor cells={cells} onChange={setCells} />
+            <button onClick={() => addParam(editTab === "json" ? "json" : "text")}
+              className="flex items-center gap-1 text-xs text-primary font-medium">
+              <Plus className="w-3.5 h-3.5" /> Добавить
+            </button>
           </div>
 
-          {/* Dynamic params */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className={`${LABEL_CLS} flex items-center gap-1.5`} style={{ marginBottom: 0 }}>
-                <Settings2 className="w-3.5 h-3.5" /> Динамические параметры{params.length > 0 ? ` (${params.length})` : ""}
-              </label>
-              <button onClick={() => addParam(editTab === "json" ? "json" : "text")}
-                className="flex items-center gap-1 text-xs text-primary font-medium">
-                <Plus className="w-3.5 h-3.5" /> Добавить
+          {/* Кнопки / JSON — раздельные наборы параметров */}
+          <div className="flex gap-1.5 mb-3">
+            {([["fields", "Кнопки", fieldParams], ["json", "JSON", jsonParams]] as const).map(([id, label, list]) => (
+              <button key={id} onClick={() => setEditTab(id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                  editTab === id
+                    ? "border-primary bg-[var(--color-active-bg)] text-primary"
+                    : "border-border-main text-text-muted hover:border-primary/40"}`}>
+                {label}
+                <span className="text-[10px] text-text-muted/70">{list.length}</span>
               </button>
-            </div>
+            ))}
+          </div>
 
-            {/* Кнопки / JSON — раздельные наборы параметров */}
-            <div className="flex gap-1.5 mb-3">
-              {([["fields", "Кнопки", fieldParams], ["json", "JSON", jsonParams]] as const).map(([id, label, list]) => (
-                <button key={id} onClick={() => setEditTab(id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
-                    editTab === id
-                      ? "border-primary bg-[var(--color-active-bg)] text-primary"
-                      : "border-border-main text-text-muted hover:border-primary/40"}`}>
-                  {label}
-                  <span className="text-[10px] text-text-muted/70">{list.length}</span>
-                </button>
+          {editTab === "json" && (
+            <div className="rounded-lg px-3 py-2.5 mb-3 border border-border-main bg-bg-subtle text-xs text-text-muted space-y-1">
+              <p className="font-semibold text-text-main">Как подставить тело в код</p>
+              <p>В «Значение в коде» впишите плейсхолдер, который стоит в скрипте <b>внутри кавычек</b> — тогда вставленный JSON попадёт в переменную как строка:</p>
+              <pre className="bg-[var(--color-code-bg)] rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">{`JSON_BODY = """__JSON_BODY__"""`}</pre>
+              <p>Скрипт разберёт её сам: <code className="font-mono">json.loads(JSON_BODY)</code>. При запуске поле принимает любое тело — оно заменит плейсхолдер целиком.</p>
+            </div>
+          )}
+          {paramIssues.length > 0 && (
+            <div className={`rounded-lg px-3 py-2.5 mb-3 border text-xs space-y-1 ${
+              hardIssues.length > 0
+                ? "tone-danger"
+                : "tone-warning"}`}>
+              <p className="font-semibold">
+                {hardIssues.length > 0
+                  ? "Подстановка не сработает как задумано:"
+                  : "Обратите внимание на подстановку:"}
+              </p>
+              {paramIssues.map((i, idx) => (
+                <p key={`${i.id}-${idx}`} className="leading-relaxed">• {i.text}</p>
               ))}
             </div>
-
-            {editTab === "json" && (
-              <div className="rounded-lg px-3 py-2.5 mb-3 border border-border-main bg-bg-subtle text-xs text-text-muted space-y-1">
-                <p className="font-semibold text-text-main">Как подставить тело в код</p>
-                <p>В «Значение в коде» впишите плейсхолдер, который стоит в скрипте <b>внутри кавычек</b> — тогда вставленный JSON попадёт в переменную как строка:</p>
-                <pre className="bg-[var(--color-code-bg)] rounded px-2 py-1.5 font-mono text-[11px] overflow-x-auto">{`JSON_BODY = """__JSON_BODY__"""`}</pre>
-                <p>Скрипт разберёт её сам: <code className="font-mono">json.loads(JSON_BODY)</code>. При запуске поле принимает любое тело — оно заменит плейсхолдер целиком.</p>
-              </div>
-            )}
-            {paramIssues.length > 0 && (
-              <div className={`rounded-lg px-3 py-2.5 mb-3 border text-xs space-y-1 ${
-                hardIssues.length > 0
-                  ? "tone-danger"
-                  : "tone-warning"}`}>
-                <p className="font-semibold">
-                  {hardIssues.length > 0
-                    ? "Подстановка не сработает как задумано:"
-                    : "Обратите внимание на подстановку:"}
-                </p>
-                {paramIssues.map((i, idx) => (
-                  <p key={`${i.id}-${idx}`} className="leading-relaxed">• {i.text}</p>
-                ))}
-              </div>
-            )}
-            {visibleParams.length === 0 ? (
-              <p className="text-xs text-text-muted bg-bg-subtle rounded-lg px-3 py-3">
-                {editTab === "json"
-                  ? "Добавьте JSON-параметр — при запуске в это поле можно будет вставить любое тело сообщения"
-                  : "Добавьте параметры — их значения будут подставляться в код перед выполнением"}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {visibleParams.map(p => (
-                  <div key={p.id} className="bg-bg-subtle rounded-lg px-3 py-3 space-y-2">
-                    <div className="grid grid-cols-[1fr_1fr_1fr_28px] gap-2 items-center">
-                      <div>
-                        <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Имя</span>
-                        <input value={p.label} onChange={e => updateParam(p.id, "label", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5`} placeholder="Система" />
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Ключ в коде</span>
-                        <input value={p.code_key} onChange={e => updateParam(p.id, "code_key", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5 font-mono`} placeholder="systems" />
-                      </div>
-                      <div>
-                        <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Значение в коде</span>
-                        <input value={p.placeholder} onChange={e => updateParam(p.id, "placeholder", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5 font-mono`} placeholder="CI0000000" />
-                      </div>
-                      <button onClick={() => removeParam(p.id)}
-                        className="flex items-center justify-center w-7 h-7 rounded-lg text-text-muted hover:text-red-500 hover:bg-red-50 mt-4">
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+          )}
+          {visibleParams.length === 0 ? (
+            <p className="text-xs text-text-muted bg-bg-subtle rounded-lg px-3 py-3">
+              {editTab === "json"
+                ? "Добавьте JSON-параметр — при запуске в это поле можно будет вставить любое тело сообщения"
+                : "Добавьте параметры — их значения будут подставляться в код перед выполнением"}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {visibleParams.map(p => (
+                <div key={p.id} className="bg-bg-subtle rounded-lg px-3 py-3 space-y-2">
+                  <div className="grid grid-cols-[1fr_1fr_1fr_28px] gap-2 items-center">
+                    <div>
+                      <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Имя</span>
+                      <input value={p.label} onChange={e => updateParam(p.id, "label", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5`} placeholder="Система" />
                     </div>
-                    <div className="grid grid-cols-[1fr_2fr] gap-2 items-start">
-                      <div>
-                        <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Тип поля</span>
-                        <Select
-                          value={p.field_type || "text"}
-                          onChange={(value) => updateParam(p.id, "field_type", value)}
-                          className="text-xs py-1.5"
-                        >
-                          {Object.entries(FIELD_TYPE_LABELS).map(([k, v]) => (
-                            <option key={k} value={k}>{v}</option>
-                          ))}
-                        </Select>
-                      </div>
-                      {(p.field_type === "select" || p.field_type === "multiselect" || p.field_type === "dropdown" || p.field_type === "dropdown_multi") && (
-                        <div>
-                          <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Варианты (через запятую)</span>
-                          <input
-                            value={(p.options ?? []).join(", ")}
-                            onChange={e => updateParam(p.id, "options", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-                            className={`${INPUT_CLS} text-xs py-1.5`}
-                            placeholder="вариант1, вариант2, вариант3"
-                          />
-                        </div>
-                      )}
+                    <div>
+                      <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Ключ в коде</span>
+                      <input value={p.code_key} onChange={e => updateParam(p.id, "code_key", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5 font-mono`} placeholder="systems" />
                     </div>
+                    <div>
+                      <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Значение в коде</span>
+                      <input value={p.placeholder} onChange={e => updateParam(p.id, "placeholder", e.target.value)} className={`${INPUT_CLS} text-xs py-1.5 font-mono`} placeholder="CI0000000" />
+                    </div>
+                    <button onClick={() => removeParam(p.id)}
+                      className="flex items-center justify-center w-7 h-7 rounded-lg text-text-muted hover:text-red-500 hover:bg-red-50 mt-4">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
+                  <div className="grid grid-cols-[1fr_2fr] gap-2 items-start">
+                    <div>
+                      <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Тип поля</span>
+                      <Select
+                        value={p.field_type || "text"}
+                        onChange={(value) => updateParam(p.id, "field_type", value)}
+                        className="text-xs py-1.5"
+                      >
+                        {Object.entries(FIELD_TYPE_LABELS).map(([k, v]) => (
+                          <option key={k} value={k}>{v}</option>
+                        ))}
+                      </Select>
+                    </div>
+                    {(p.field_type === "select" || p.field_type === "multiselect" || p.field_type === "dropdown" || p.field_type === "dropdown_multi") && (
+                      <div>
+                        <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wide">Варианты (через запятую)</span>
+                        <input
+                          value={(p.options ?? []).join(", ")}
+                          onChange={e => updateParam(p.id, "options", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
+                          className={`${INPUT_CLS} text-xs py-1.5`}
+                          placeholder="вариант1, вариант2, вариант3"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-main flex-shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
-          <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Сохранить
-          </button>
-        </div>
+        {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
       </div>
-    </div>
+    </Modal>
   );
 }
 

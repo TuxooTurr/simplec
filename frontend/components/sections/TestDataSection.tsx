@@ -1,6 +1,5 @@
 "use client";
 
-import { backdropClose } from "@/lib/backdrop";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Database, Sparkles, Play, Copy, CheckCheck,
@@ -8,6 +7,7 @@ import {
   RefreshCw, X, Table2, Server, Ban, History, Trash2, Clock,
 } from "lucide-react";
 import { SectionSettingsButton } from "@/components/ui";
+import Modal from "@/components/ui/Modal";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
 import { useSplitView, useWorkspace } from "@/contexts/WorkspaceContext";
 import { useTestDataJob, type TdArchiveEntry } from "@/contexts/TestDataJobContext";
@@ -573,58 +573,44 @@ export default function TestDataSection() {
 
       {/* Просмотр снимка запроса из архива — та самая «страница», что была получена тогда */}
       {viewEntry && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto" {...backdropClose(() => setViewEntry(null))}>
-          <div className="bg-bg-main rounded-2xl border border-border-main w-full max-w-4xl my-8 shadow-2xl" onClick={(ev) => ev.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-border-main">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm font-semibold text-text-main">
-                  {viewEntry.mode === "sql" ? <FileCode className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
-                  Запрос от {new Date(viewEntry.ts).toLocaleString("ru-RU")}
-                </div>
-                <p className="text-xs text-text-muted truncate mt-0.5">БД: {viewEntry.connNames.join(", ") || "—"}</p>
+        <Modal open onClose={() => setViewEntry(null)} title={`Запрос от ${new Date(viewEntry.ts).toLocaleString("ru-RU")} · БД: ${viewEntry.connNames.join(", ") || "—"}`} size="max-w-4xl"
+          headerExtra={(
+            <button
+              onClick={() => {
+                if (viewEntry.mode === "sql") { setQueryMode("sql"); setQueryText(viewEntry.sql); }
+                else { setQueryMode("natural"); setNaturalQuery(viewEntry.requirement); }
+                setViewEntry(null);
+              }}
+              className={BTN_SECONDARY}
+            >
+              <RefreshCw className="w-3 h-3" /> Подставить в форму
+            </button>
+          )}>
+          <div className="space-y-4">
+            {viewEntry.mode === "natural" && viewEntry.requirement && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-text-muted">Запрос на естественном языке:</p>
+                <p className="text-sm text-text-main bg-bg-subtle border border-border-main rounded-lg p-3">{viewEntry.requirement}</p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    if (viewEntry.mode === "sql") { setQueryMode("sql"); setQueryText(viewEntry.sql); }
-                    else { setQueryMode("natural"); setNaturalQuery(viewEntry.requirement); }
-                    setViewEntry(null);
-                  }}
-                  className={BTN_SECONDARY}
-                >
-                  <RefreshCw className="w-3 h-3" /> Подставить в форму
-                </button>
-                <button onClick={() => setViewEntry(null)} className="p-1.5 text-text-muted hover:text-text-main rounded-lg hover:bg-bg-subtle">
-                  <X className="w-4 h-4" />
-                </button>
+            )}
+            {viewEntry.sql && (
+              <div className="space-y-1">
+                <p className="text-xs font-medium text-text-muted">SQL:</p>
+                <pre className="bg-bg-subtle border border-border-main rounded-lg p-3 text-xs font-mono text-text-main overflow-x-auto whitespace-pre-wrap">{viewEntry.sql}</pre>
               </div>
-            </div>
-            <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-              {viewEntry.mode === "natural" && viewEntry.requirement && (
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-text-muted">Запрос на естественном языке:</p>
-                  <p className="text-sm text-text-main bg-bg-subtle border border-border-main rounded-lg p-3">{viewEntry.requirement}</p>
-                </div>
-              )}
-              {viewEntry.sql && (
-                <div className="space-y-1">
-                  <p className="text-xs font-medium text-text-muted">SQL:</p>
-                  <pre className="bg-bg-subtle border border-border-main rounded-lg p-3 text-xs font-mono text-text-main overflow-x-auto whitespace-pre-wrap">{viewEntry.sql}</pre>
-                </div>
-              )}
-              {viewEntry.error ? (
-                <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-                  <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span className="break-all">{viewEntry.error}</span>
-                </div>
-              ) : viewEntry.results ? (
-                <ResultsView results={viewEntry.results} nameFor={(id, r) => r.db_name ?? id} />
-              ) : (
-                <p className="text-sm text-text-muted">Результат не сохранён.</p>
-              )}
-            </div>
+            )}
+            {viewEntry.error ? (
+              <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span className="break-all">{viewEntry.error}</span>
+              </div>
+            ) : viewEntry.results ? (
+              <ResultsView results={viewEntry.results} nameFor={(id, r) => r.db_name ?? id} />
+            ) : (
+              <p className="text-sm text-text-muted">Результат не сохранён.</p>
+            )}
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

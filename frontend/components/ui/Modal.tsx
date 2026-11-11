@@ -3,7 +3,7 @@
 import { backdropClose } from "@/lib/backdrop";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ChevronUp, Minus, X } from "lucide-react";
+import { CheckCircle2, ChevronUp, Loader2, Minus, X } from "lucide-react";
 import { FORM_DOCK_ID } from "@/components/FormHost";
 
 export interface ModalProps {
@@ -21,6 +21,8 @@ export interface ModalProps {
    * false — для окон со своим сворачиванием (форма задачи Jira tool через openForm).
    */
   minimizable?: boolean;
+  /** Низ окна (кнопки «Сохранить / Отмена»): не прокручивается вместе с телом. */
+  footer?: ReactNode;
 }
 
 /* Открытые окна по порядку открытия. Esc закрывает только верхнее: окно, открытое поверх другого
@@ -28,8 +30,10 @@ export interface ModalProps {
 const openStack: number[] = [];
 let nextId = 1;
 
-export function Modal({ open, onClose, title, children, size = "max-w-md", headerExtra, minimizable = true }: ModalProps) {
+export function Modal({ open, onClose, title, children, size = "max-w-md", headerExtra, minimizable = true, footer }: ModalProps) {
   const [minimized, setMinimized] = useState(false);
+  /** Что видно на ярлыке свёрнутого: идёт работа (в окне крутится индикатор) или работа закончилась, пока окно было свёрнуто. */
+  const [work, setWork] = useState<"idle" | "busy" | "done">("idle");
   // Keep the dialog mounted briefly after `open` flips to false so the
   // close animation can play out.
   const [rendered, setRendered] = useState(open);
@@ -77,6 +81,23 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
     };
   }, [open, minimized]);
 
+  /* Пока окно свёрнуто, следим за его содержимым: индикатор загрузки (крутилка .animate-spin или aria-busy) — «идёт работа»;
+     пропал — «готово». Так ярлык показывает ход любой работы без доработки каждого окна. */
+  useEffect(() => {
+    if (!minimized) { setWork("idle"); return; }
+    const el = panelRef.current;
+    if (!el) return;
+    const busyNow = () => !!el.querySelector('.animate-spin, [aria-busy="true"]');
+    let was = busyNow();
+    setWork(was ? "busy" : "idle");
+    const mo = new MutationObserver(() => {
+      const b = busyNow();
+      if (b !== was) { setWork(b ? "busy" : "done"); was = b; }
+    });
+    mo.observe(el, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "aria-busy"] });
+    return () => mo.disconnect();
+  }, [minimized]);
+
   // На сервере (SSR) document нет — открытое окно появится после загрузки страницы.
   if (!rendered || typeof document === "undefined") return null;
 
@@ -89,9 +110,12 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
     <div className="flex w-72 items-center gap-1 rounded-xl border border-border-main bg-[var(--color-modal-bg)] pl-3 pr-1 py-1.5 text-sm shadow-lg">
       <button type="button" onClick={() => setMinimized(false)} title="Развернуть окно"
         className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        {work === "busy" ? <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
+          : work === "done" ? <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-500" /> : null}
         <span className="min-w-0 flex-1">
           <span className="block truncate font-medium text-text-main">{title}</span>
-          <span className="block text-[11px] text-text-muted">Свёрнуто — работа продолжается</span>
+          <span className={`block text-[11px] ${work === "done" ? "text-emerald-600 dark:text-emerald-400" : "text-text-muted"}`}>
+            {work === "busy" ? "Идёт работа…" : work === "done" ? "Готово — разверните, чтобы посмотреть" : "Свёрнуто"}</span>
         </span>
         <ChevronUp className="h-4 w-4 flex-shrink-0 text-text-muted" />
       </button>
@@ -150,9 +174,10 @@ export function Modal({ open, onClose, title, children, size = "max-w-md", heade
           </div>
         )}
         {/* Тело — скроллится, если контент выше окна: кнопки больше не уезжают за экран */}
-        <div className={`overflow-y-auto px-6 pb-6 ${title ? "" : "pt-6"}`}>
+        <div className={`overflow-y-auto px-6 ${footer ? "pb-4" : "pb-6"} ${title ? "" : "pt-6"}`}>
           {children}
         </div>
+        {footer && <div className="shrink-0 border-t border-border-main px-6 py-4">{footer}</div>}
       </div>
     </div>,
     document.body,

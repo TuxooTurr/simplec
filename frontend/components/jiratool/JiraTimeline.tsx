@@ -29,6 +29,13 @@ const DAY = 86_400_000;
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 const NEUTRAL = "#cbd5e1";
 
+/** Статус (st) из расчёта списка → значение для цвета: этап (у заблокированной — этап без блокировки) или «нет этапа». */
+function liveStage(info: StageInfo): StageVal {
+  const b = info.kind === "blocked" ? info.base : info;
+  if (b.kind === "stage" || b.kind === "epic") return b.stage;
+  return b.kind === "unmapped" ? `unmapped:${b.status}` : "no-stories";
+}
+
 /** Без этапа (не сопоставлен, нет сторей) — светло-серый. */
 const noStage = (v: StageVal) => v.startsWith("unmapped:") || v === "no-stories";
 const colorOf = (v: StageVal): string => (noStage(v) ? NEUTRAL : String(stageStyle(v).backgroundColor));
@@ -64,7 +71,10 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
   const box = useRef<HTMLDivElement>(null);
   const dayW = Math.max(MIN_W, Math.min(MAX_W, zoom || 18));
   const [hover, setHover] = useState<{ issue: Issue; x: number; y: number } | null>(null);
-  const [chrono, setChrono] = useState<Issue | null>(null);
+  /** Открытые окна задач: несколько сразу — каждое можно свернуть на полку и работать в другом. */
+  const [chronos, setChronos] = useState<Issue[]>([]);
+  const openChrono = (i: Issue) => setChronos(list => (list.some(x => x.key === i.key) ? list : [...list, i]));
+  const closeChrono = (key: string) => setChronos(list => list.filter(x => x.key !== key));
   const drag = useRef<{ x: number; left: number } | null>(null);
   const [scrollX, setScrollX] = useState(0);
   const now = Date.now();
@@ -220,7 +230,8 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
               <div className="relative flex-shrink-0" style={{ width: W }}>
                 {sec.placed.map(p => (
                   <TaskBar key={p.issue.key} issue={p.issue} t={p.t} hasBar={p.hasBar} top={PAD + p.lane * LANE} x={x} viewLeft={scrollX}
-                    onTip={tip} onLeave={() => setHover(null)} onChrono={() => { setHover(null); setChrono(p.issue); }} />
+                    live={liveStage(stageOf(p.issue))}
+                    onTip={tip} onLeave={() => setHover(null)} onChrono={() => { setHover(null); openChrono(p.issue); }} />
                 ))}
               </div>
             </div>
@@ -230,11 +241,11 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
       <Legend />
 
       {hover && <HoverCard issue={hover.issue} at={hover} t={timelines.get(hover.issue.key)} info={stageOf(hover.issue)} />}
-      {chrono && (
-        <ChronoModal issue={chrono} t={timelines.get(chrono.key)} info={stageOf(chrono)} team={teamOf(chrono)} onClose={() => setChrono(null)}
-          onOpenIssue={() => { const i = chrono; setChrono(null); onOpenIssue(i); }}
-          onStage={st => onStageManual(chrono.key, st)} onPlanSaved={() => onPlanSaved(chrono.key)} />
-      )}
+      {chronos.map(c => (
+        <ChronoModal key={c.key} issue={c} t={timelines.get(c.key)} info={stageOf(c)} team={teamOf(c)} onClose={() => closeChrono(c.key)}
+          onOpenIssue={() => onOpenIssue(c)}
+          onStage={st => onStageManual(c.key, st)} onPlanSaved={() => onPlanSaved(c.key)} />
+      ))}
     </div>
   );
 }
@@ -243,8 +254,10 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
  * Задача в полосе папки: план пунктиром, плашка по отрезкам статуса, отметка срока. Подпись — внутри плашки: значок типа
  * всегда, ключ и название — сколько поместится (шире плашка или крупнее масштаб — видно целиком).
  */
-function TaskBar({ issue, t, hasBar, top, x, viewLeft, onTip, onLeave, onChrono }: {
+function TaskBar({ issue, t, hasBar, top, x, viewLeft, live, onTip, onLeave, onChrono }: {
   issue: Issue; t: TaskTimeline | undefined; hasBar: boolean; top: number; x: (ms: number) => number;
+  /** Статус (st) сейчас — как в списке и подсказке: им красится последний отрезок, а у не начатой — вся плашка. */
+  live: StageVal;
   /** Левый край видимой части графика, px: подпись длинной плашки держится у него, а не уезжает за экран. */
   viewLeft: number;
   onTip: (i: Issue, e: React.MouseEvent) => void; onLeave: () => void; onChrono: () => void;
@@ -267,13 +280,17 @@ function TaskBar({ issue, t, hasBar, top, x, viewLeft, onTip, onLeave, onChrono 
         aria-label={`${issue.key} ${summary}: хронология, статус и даты`}
         className="absolute rounded-md overflow-hidden focus-visible:ring-2 focus-visible:ring-primary/50 hover:ring-2 hover:ring-primary/40"
         style={{ left, width, top: barTop, height: BAR_H }}>
+        {/* Отрезки по статусам; последний — нынешним статусом (ручной смене — сразу цвет). Без отрезков (ещё не начата,
+            план впереди, или статус сменили только что) — вся плашка цветом нынешнего статуса; серая — только без статуса. */}
         <span className="absolute inset-0 flex">
-          {hasBar && t ? t.segments.map((sg, i) => (
-            <span key={i} className="h-full flex-shrink-0" style={{ width: Math.max(0, x(sg.to) - x(sg.from)), backgroundColor: colorOf(sg.stage) }} />
-          )) : <span className="h-full w-full bg-text-muted/25" />}
+          {hasBar && t && t.segments.length ? t.segments.map((sg, i, all) => {
+            const st = i === all.length - 1 ? live : sg.stage;
+            return <span key={i} className="h-full flex-shrink-0" style={{ width: Math.max(0, x(sg.to) - x(sg.from)), backgroundColor: colorOf(st) }} />;
+          }).concat(<span key="rest" className="h-full flex-1" style={{ backgroundColor: colorOf(live) }} />)
+            : <span className={`h-full w-full ${hasBar ? "" : "opacity-60"}`} style={{ backgroundColor: colorOf(live) }} />}
         </span>
         <span style={{ paddingLeft: shift + 3 }} className={`relative flex h-full items-center gap-1 pr-[3px] min-w-0 text-[11px] leading-none whitespace-nowrap
-          ${hasBar ? "text-white [text-shadow:0_0_3px_rgb(0_0_0/.55)]" : "text-text-main"}`}>
+          ${noStage(live) ? "text-text-main" : "text-white [text-shadow:0_0_3px_rgb(0_0_0/.55)]"}`}>
           <IssueTypeIcon type={type} />
           <span className="font-mono text-[10px] opacity-90 flex-shrink-0">{issue.key}</span>
           <span className="truncate min-w-0">{summary || "без названия"}</span>

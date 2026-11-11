@@ -8,6 +8,7 @@ import {
   History, Zap, Eraser, CircleCheck,
 } from "lucide-react";
 import { Select } from "@/components/ui";
+import Modal from "@/components/ui/Modal";
 import {
   getJobs, saveJob, deleteJob, executeJob, executeJobBatch,
   getJobHistory, getJobFolders, saveJobFolder, deleteJobFolder,
@@ -820,80 +821,72 @@ function JobModal({ initial, folders, connections, onSave, onClose }: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 animate-fade-in">
-      <div className="bg-bg-card rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border-main flex-shrink-0">
-          <h2 className="text-base font-semibold">{editing ? "Редактировать джоб" : "Новый джоб"}</h2>
-          <button onClick={onClose} className="text-text-muted hover:text-text-main"><X className="w-5 h-5" /></button>
+    <Modal open onClose={onClose} title={editing ? "Редактировать джоб" : "Новый джоб"} size="max-w-lg"
+      footer={<div className="flex items-center justify-end gap-3">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
+        <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Сохранить
+        </button>
+      </div>}>
+      <div className="space-y-5">
+        {/* Name */}
+        <div>
+          <label className={LABEL_CLS}>Имя джоба *</label>
+          <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="Например: Запуск отчёта продаж" />
         </div>
-
-        <div className="overflow-y-auto scrollbar-thin p-6 space-y-5 flex-1">
-          {/* Name */}
-          <div>
-            <label className={LABEL_CLS}>Имя джоба *</label>
-            <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="Например: Запуск отчёта продаж" />
-          </div>
-
-          {/* Connection */}
-          <div>
-            <label className={LABEL_CLS}>База данных *</label>
-            <Select  value={connId} onChange={(value) => setConnId(value)}>
-              <option value="">— Выберите подключение —</option>
-              {connections.map(c => (
-                <option key={c.id} value={c.id}>
-                  {c.display_name} ({c.driver_name} · {c.host}:{c.port}/{c.db_name})
-                </option>
-              ))}
-            </Select>
-            {connections.length === 0 && (
-              <p className="text-xs text-amber-600 mt-1">Нет подключений. Добавьте БД в настройках.</p>
-            )}
-          </div>
-
-          {/* SQL template */}
-          <div>
-            <label className={LABEL_CLS}>UPDATE SQL-скрипт *</label>
-            <textarea
-              className={INPUT_CLS + " font-mono text-xs min-h-[100px]"}
-              rows={4}
-              value={sql}
-              onChange={e => setSql(e.target.value)}
-              placeholder="UPDATE qrtz_triggers SET next_fire_time = {nextfiretime} WHERE trigger_name = 'myJob'"
-            />
-            <p className="text-[11px] text-text-muted mt-1">
-              Используйте <code className="bg-bg-muted px-1 rounded">{"{nextfiretime}"}</code> — будет заменён на epoch-мс (время + 30 сек).
-            </p>
-          </div>
-
-          {/* Folder */}
-          {folders.length > 0 && (
-            <div>
-              <label className={LABEL_CLS}>Папка</label>
-              <Select value={folderId} onChange={(value) => setFolderId(value)} >
-                <option value="">— без папки —</option>
-                {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-              </Select>
-            </div>
+      
+        {/* Connection */}
+        <div>
+          <label className={LABEL_CLS}>База данных *</label>
+          <Select  value={connId} onChange={(value) => setConnId(value)}>
+            <option value="">— Выберите подключение —</option>
+            {connections.map(c => (
+              <option key={c.id} value={c.id}>
+                {c.display_name} ({c.driver_name} · {c.host}:{c.port}/{c.db_name})
+              </option>
+            ))}
+          </Select>
+          {connections.length === 0 && (
+            <p className="text-xs text-amber-600 mt-1">Нет подключений. Добавьте БД в настройках.</p>
           )}
-
-          {/* Visibility */}
-          <label className="flex items-center gap-2.5 cursor-pointer">
-            <input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)} className="h-4 w-4 rounded border-border-main accent-primary" />
-            <span className="text-sm text-text-main">
-              Доступно для <span className="font-semibold text-blue-600">SberMonitoring+</span>
-            </span>
-          </label>
-
-          {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
         </div>
-
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-border-main flex-shrink-0">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
-          <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Сохранить
-          </button>
+      
+        {/* SQL template */}
+        <div>
+          <label className={LABEL_CLS}>UPDATE SQL-скрипт *</label>
+          <textarea
+            className={INPUT_CLS + " font-mono text-xs min-h-[100px]"}
+            rows={4}
+            value={sql}
+            onChange={e => setSql(e.target.value)}
+            placeholder="UPDATE qrtz_triggers SET next_fire_time = {nextfiretime} WHERE trigger_name = 'myJob'"
+          />
+          <p className="text-[11px] text-text-muted mt-1">
+            Используйте <code className="bg-bg-muted px-1 rounded">{"{nextfiretime}"}</code> — будет заменён на epoch-мс (время + 30 сек).
+          </p>
         </div>
+      
+        {/* Folder */}
+        {folders.length > 0 && (
+          <div>
+            <label className={LABEL_CLS}>Папка</label>
+            <Select value={folderId} onChange={(value) => setFolderId(value)} >
+              <option value="">— без папки —</option>
+              {folders.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </Select>
+          </div>
+        )}
+      
+        {/* Visibility */}
+        <label className="flex items-center gap-2.5 cursor-pointer">
+          <input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)} className="h-4 w-4 rounded border-border-main accent-primary" />
+          <span className="text-sm text-text-main">
+            Доступно для <span className="font-semibold text-blue-600">SberMonitoring+</span>
+          </span>
+        </label>
+
+        {err && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{err}</p>}
       </div>
-    </div>
+    </Modal>
   );
 }

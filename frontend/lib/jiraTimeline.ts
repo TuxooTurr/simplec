@@ -5,8 +5,8 @@
  *   по таблице сопоставления (stageForStatus). Эпик — минимальный этап его сторей в каждый момент, как в списке.
  * - Ручные смены статуса (st) — из журнала Shark (ToolState.stageLog): ручной держится, пока этап по Jira тот же,
  *   что был при установке; Jira сдвинулась — ручной снят. Правило то же, что в makeStageResolver.
- * - Плашка — от планового начала (нет или раньше создания — от создания; работа началась раньше плана — от первой
- *   смены статуса) до
+ * - Плашка — от планового начала (нет или раньше создания — от создания; статус сменили раньше плана — по Jira или
+ *   руками — от первой смены) до
  *   момента, когда задача стала «Готово к релизу» и дальше (или «Исключено»), а не стала — до сейчас.
  * - Срок нарушен: к концу дня планового окончания задача не «Готово к релизу» / «Готово» (и не «Исключено») — красная
  *   отметка в этот момент и запись «Срок нарушен» в хронологии; дальше плашка красится по статусам как обычно.
@@ -39,7 +39,11 @@ export interface TaskTimeline {
   /** Начало и конец плашки, мс. end ≤ start — фактической плашки нет (план в будущем). */
   start: number;
   end: number;
+  /** Плановое начало; не задано в Jira — дата создания (planFromCreated). */
   planStart: number | null;
+  planFromCreated: boolean;
+  /** Статус (st) сейчас — по последнему событию. */
+  current: StageVal;
   /** Конец дня планового окончания, мс. */
   deadline: number | null;
   segments: Segment[];
@@ -197,12 +201,16 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
   }
   const pts = withMarks(base, log[issue.key] ?? []);
 
-  const planStart = dayAt(h?.planStart ?? "");
-  const deadline = dayAt(h?.planEnd ?? "", true);
   const created = pts[0]?.at ?? now;
+  // Даты начала нет — считаем от создания задачи (у дефектов и у всех остальных).
+  const planGiven = dayAt(h?.planStart ?? "");
+  const planStart = planGiven ?? created;
+  const planFromCreated = planGiven === null;
+  const deadline = dayAt(h?.planEnd ?? "", true);
   const firstChange = pts.length > 1 ? pts[1].at : null;
   // До создания задачи работы не было: плановое начало раньше создания — плашка с создания.
-  let start = Math.max(planStart ?? created, created);
+  // Смена статуса — по Jira или руками — значит, работа идёт: плашка с первой смены, даже если план позже.
+  let start = Math.max(planStart, created);
   if (firstChange !== null && firstChange < start) start = firstChange;
 
   const current = pts[pts.length - 1]?.stage ?? "no-stories";
@@ -232,5 +240,5 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
     }
   }
   chrono.sort((a, b) => a.at - b.at || (a.kind === "overdue" ? 1 : b.kind === "overdue" ? -1 : 0));
-  return { key: issue.key, start, end, planStart, deadline, segments, overdueAt, chrono, final };
+  return { key: issue.key, start, end, planStart, planFromCreated, current, deadline, segments, overdueAt, chrono, final };
 }

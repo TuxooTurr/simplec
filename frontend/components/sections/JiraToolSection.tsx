@@ -73,7 +73,7 @@ import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
 const STRUCTURE_ENABLED = false;
 
 type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "loadDetails" | { stageFor: Issue }
-  | { own: OwnField | null } | { defectsFor: Issue } | { issueFor: Issue };
+  | { own: OwnField | null } | { defectsFor: Issue };
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
 const ASIDE_KEY = "st_jira_tool_aside";
@@ -108,6 +108,9 @@ const updateAnywhere = (fn: StateChange) => { if (liveUpdate) liveUpdate(fn); el
 export default function JiraToolSection() {
   const [state, setState] = useState<ToolState | null>(null);
   const [view, setView] = useState<"list" | "chart">("list");
+  /** Окна задач (описание, плановые даты) — несколько сразу: каждое сворачивается на полку независимо от других. */
+  const [issueWins, setIssueWins] = useState<Issue[]>([]);
+  const openIssueWin = (i: Issue) => setIssueWins(list => (list.some(x => x.key === i.key) ? list : [...list, i]));
   const [tlZoom, setTlZoom] = useState<number>(48);
   const [hist, setHist] = useState<Record<string, IssueHistory>>(() => historyCache.items);
   const [histBusy, setHistBusy] = useState(false);
@@ -1454,7 +1457,7 @@ export default function JiraToolSection() {
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
                 ) : view === "chart" ? (
                   <JiraTimeline sections={folderSections(list, listIssues)} timelines={timelines} stageOf={stageOf} teamOf={teamOf}
-                    dayW={tlZoom} onDayW={pickZoom} onOpenIssue={issue => setModal({ issueFor: issue })} onStageManual={setStageManual}
+                    dayW={tlZoom} onDayW={pickZoom} onOpenIssue={openIssueWin} onStageManual={setStageManual}
                     onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }}
                     loading={histBusy} error={histErr} />
                 ) : (
@@ -1486,7 +1489,7 @@ export default function JiraToolSection() {
                     onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key), marks: withoutMark(l.marks, key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
                     onClearMark={key => updateList(l => ({ ...l, marks: withoutMark(l.marks, key) }))}
                     onOpenDefects={issue => setModal({ defectsFor: issue })}
-                    onOpenIssue={issue => setModal({ issueFor: issue })}
+                    onOpenIssue={openIssueWin}
                     onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
                     onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
                     onMoveToGroup={(key, changes, target, place) => updateListPeople(l => {
@@ -1645,10 +1648,10 @@ export default function JiraToolSection() {
             onDirs: loadDirs => updateList(l => ({ ...l, loadDirs })),
           } : undefined} />
       )}
-      {modal && typeof modal === "object" && "issueFor" in modal && (
-        <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)}
+      {issueWins.map(w => (
+        <IssueModal key={w.key} open issue={w} onClose={() => setIssueWins(list => list.filter(x => x.key !== w.key))}
           onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }} />
-      )}
+      ))}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} chat={chat}
           onCreate={modal.defectsFor.local ? undefined : () => openDefect(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />

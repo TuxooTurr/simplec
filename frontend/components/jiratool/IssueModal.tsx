@@ -38,6 +38,8 @@ function Person({ label, name }: { label: string; name: unknown }) {
   );
 }
 
+const fmtIso = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
+
 const DATE_INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main " +
   "focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50";
 
@@ -47,7 +49,7 @@ const DATE_INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 b
  * поле для записи — по экрану редактирования (editmeta). Поля нет на экране — дата только для чтения.
  */
 export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: () => void }) {
-  const [loaded, setLoaded] = useState<{ start: string; end: string; canStart: string | null; canEnd: string | null } | null>(null);
+  const [loaded, setLoaded] = useState<{ start: string; end: string; canStart: string | null; canEnd: string | null; created: string } | null>(null);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,7 +60,7 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
     setLoaded(null); setNote(null);
     getAqaIssue(issueKey).then(d => {
       if (!alive) return;
-      setLoaded({ start: d.planStart ?? "", end: d.planEnd ?? "", canStart: d.editable.planStart, canEnd: d.editable.planEnd });
+      setLoaded({ start: d.planStart ?? "", end: d.planEnd ?? "", canStart: d.editable.planStart, canEnd: d.editable.planEnd, created: d.created ?? "" });
       setStart(d.planStart ?? ""); setEnd(d.planEnd ?? "");
     }).catch(e => alive && setNote({ kind: "err", text: `Даты не загрузились: ${(e as Error).message}` }));
     return () => { alive = false; };
@@ -98,13 +100,16 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
       </label>
       {!loaded && !note && <Loader2 className="w-4 h-4 mb-2 animate-spin text-text-muted" />}
       {changed && (
-        <button type="button" onClick={save} disabled={busy || bad}
+        <button type="button" onClick={save} disabled={busy || bad} aria-busy={busy}
           className="px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-40">
           {busy ? "Записываю…" : "Записать в Jira"}</button>
       )}
       <p className={`basis-full text-[11px] ${note?.kind === "err" || bad ? "text-red-600 dark:text-red-400" : note?.kind === "warn" ? "text-amber-700 dark:text-amber-300" : "text-text-muted"}`}>
         {bad ? "Дата начала позже даты завершения" : note ? note.text
           : "Необязательно. Из полей Jira «Плановое начало» и «Плановое окончание» — по ним задача стоит на графике и считается срок."}
+        {!bad && loaded && !start && loaded.created && (
+          <span className="block">Дата начала не задана — на графике считается от создания задачи: {fmtIso(loaded.created)}.</span>
+        )}
       </p>
     </div>
   );

@@ -1283,7 +1283,9 @@ export default function JiraToolSection() {
                   onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
                   onRename={(id, name) => updateList(l => renameView(l, id, name))}
                   onDelete={id => updateList(l => deleteView(l, id))} />
-                <div className="min-w-[10rem] flex-1" title={list.name}>
+                {/* Название — рамка постоянной ширины (до 100 символов, но не шире 40% окна): переключатель вида рядом не прыгает
+                    при смене списка; длинное — с многоточием, целиком — в подсказке. */}
+                <div className="flex-shrink-0 min-w-0" style={{ width: "min(100ch, 40vw)" }} title={list.name}>
                   <p className="text-sm font-semibold text-text-main truncate">
                     {list.name}
                     {list.archivedAt && <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">в архиве</span>}
@@ -1303,10 +1305,19 @@ export default function JiraToolSection() {
                           title="Вернуть ручной порядок — тогда строки можно перетаскивать">сбросить</button></>
                     )}</p>
                 </div>
-                {/* Вид: список или график (как роадмап «Трекинга AQA»); у графика — масштаб и перечитать историю */}
-                <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Вид: список или график (как роадмап «Трекинга AQA») — значками, сразу за названием */}
+                <div role="group" aria-label="Вид списка" className="flex flex-shrink-0 rounded-lg border border-border-main p-0.5">
+                  <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"} aria-label="Список" title="Список"
+                    className={`p-1.5 rounded-md transition-colors ${view === "list" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
+                    <ListIcon className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => pickView("chart")} aria-pressed={view === "chart"} aria-label="График" title="График"
+                    className={`p-1.5 rounded-md transition-colors ${view === "chart" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
+                    <CalendarRange className="h-4 w-4" /></button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 min-w-0">
+                  {/* У графика — масштаб и перечитать историю */}
                   {view === "chart" && (
-                    <>
+                    <div className="flex items-center gap-2 flex-shrink-0">
                       <div role="group" aria-label="Масштаб графика" className="flex rounded-lg border border-border-main p-0.5">
                         {TL_ZOOMS.map(z => (
                           <button key={z.id} type="button" onClick={() => pickZoom(z.w)} aria-pressed={tlZoom === z.w}
@@ -1317,18 +1328,8 @@ export default function JiraToolSection() {
                         title="Перечитать историю статусов из Jira" aria-label="Перечитать историю статусов из Jira"
                         className="p-1.5 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-40">
                         <RefreshIcon busy={histBusy} className="h-3.5 w-3.5" /></button>
-                    </>
+                    </div>
                   )}
-                  <div role="group" aria-label="Вид списка" className="flex rounded-lg border border-border-main p-0.5">
-                    <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"}
-                      className={`px-2.5 py-1 text-xs rounded-md inline-flex items-center gap-1 transition-colors ${view === "list" ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
-                      <ListIcon className="h-3.5 w-3.5" /> Список</button>
-                    <button type="button" onClick={() => pickView("chart")} aria-pressed={view === "chart"}
-                      className={`px-2.5 py-1 text-xs rounded-md inline-flex items-center gap-1 transition-colors ${view === "chart" ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
-                      <CalendarRange className="h-3.5 w-3.5" /> График</button>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
                   {/* Поиск по списку */}
                   <label className="flex items-center gap-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary/30">
                     <Search className="w-3.5 h-3.5 text-text-muted" />

@@ -227,7 +227,9 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
   for (let i = 0; i < pts.length; i++) {
     const from = Math.max(pts[i].at, start);
     const to = Math.min(i + 1 < pts.length ? pts[i + 1].at : end, end);
-    if (to > from) segments.push({ from, to, stage: pts[i].stage });
+    // Последний отрезок оставляем и нулевой длины: статус только что сменили (руками или в Jira) — на плашке он виден
+    // хвостиком с момента смены, а не перекрашивает всю плашку.
+    if (to > from || (i === pts.length - 1 && to >= from)) segments.push({ from, to, stage: pts[i].stage });
   }
 
   const chrono: ChronoEntry[] = pts.flatMap(p => p.chrono ?? []);

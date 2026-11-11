@@ -25,6 +25,8 @@ const MIN_W = 1, MAX_W = 2880;
 // значок типа должен поместиться.
 const LANE = 30, PAD = 8, MIN_SECTION = 56, HEAD = 46, LEFT = 220, BACK_DAYS = 7, AHEAD_DAYS = 60;
 const BAR_H = 20, MIN_BAR = 22, LANE_GAP = 6;
+/** Хвостик статуса, сменённого только что, px: виден на любом масштабе. */
+const TAIL = 5;
 const DAY = 86_400_000;
 const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 const NEUTRAL = "#cbd5e1";
@@ -97,7 +99,7 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
     return sections.filter(sec => sec.issues.length).map(sec => {
       const items = sec.issues.map(issue => {
         const t = timelines.get(issue.key);
-        const hasBar = !!t && t.end > t.start;
+        const hasBar = !!t && t.segments.length > 0;
         const a = t ? (hasBar ? t.start : t.planStart ?? t.start) : now;
         const b = t ? Math.max(hasBar ? t.end : a, t.deadline ?? a) : now;
         return { issue, t, hasBar, left: x(a), right: Math.max(x(b), x(a) + MIN_BAR) };
@@ -267,7 +269,14 @@ function TaskBar({ issue, t, hasBar, top, x, viewLeft, live, onTip, onLeave, onC
   const now = Date.now();
   const a = t ? (hasBar ? t.start : t.planStart ?? t.start) : now;
   const b = t ? (hasBar ? t.end : t.deadline ?? a) : now;
-  const left = x(a), width = Math.max(MIN_BAR, x(b) - left);
+  const segs = (hasBar && t ? t.segments : []).map((sg, i, all) => ({
+    stage: sg.stage, w: Math.max(i === all.length - 1 ? TAIL : 0, x(sg.to) - x(sg.from)),
+  }));
+  if (segs.length && segs[segs.length - 1].stage !== live) segs.push({ stage: live, w: TAIL });
+  const left = x(a);
+  const width = Math.max(MIN_BAR, segs.length ? segs.reduce((n, sg) => n + sg.w, 0) : x(b) - left);
+  // Короче MIN_BAR — последний отрезок растягиваем до конца плашки, чтобы не было пустого места.
+  if (segs.length) segs[segs.length - 1].w += width - segs.reduce((n, sg) => n + sg.w, 0);
   const barTop = top + (LANE - BAR_H) / 2;
   const shift = Math.max(0, Math.min(viewLeft - left, width - MIN_BAR));
   return (
@@ -280,14 +289,13 @@ function TaskBar({ issue, t, hasBar, top, x, viewLeft, live, onTip, onLeave, onC
         aria-label={`${issue.key} ${summary}: хронология, статус и даты`}
         className="absolute rounded-md overflow-hidden focus-visible:ring-2 focus-visible:ring-primary/50 hover:ring-2 hover:ring-primary/40"
         style={{ left, width, top: barTop, height: BAR_H }}>
-        {/* Отрезки по статусам; последний — нынешним статусом (ручной смене — сразу цвет). Без отрезков (ещё не начата,
-            план впереди, или статус сменили только что) — вся плашка цветом нынешнего статуса; серая — только без статуса. */}
+        {/* Отрезки — каждый своим статусом с момента смены. Последний не уже TAIL: статус, сменённый только что, виден хвостиком.
+            Расчёт списка показывает другой статус, чем последний отрезок (старый ручной без отметки времени), — хвостик этим
+            статусом. Без отрезков (не начата, план впереди) — бледная плашка плана нынешним статусом; серая — без статуса. */}
         <span className="absolute inset-0 flex">
-          {hasBar && t && t.segments.length ? t.segments.map((sg, i, all) => {
-            const st = i === all.length - 1 ? live : sg.stage;
-            return <span key={i} className="h-full flex-shrink-0" style={{ width: Math.max(0, x(sg.to) - x(sg.from)), backgroundColor: colorOf(st) }} />;
-          }).concat(<span key="rest" className="h-full flex-1" style={{ backgroundColor: colorOf(live) }} />)
-            : <span className={`h-full w-full ${hasBar ? "" : "opacity-60"}`} style={{ backgroundColor: colorOf(live) }} />}
+          {segs.length
+            ? segs.map((sg, i) => <span key={i} className="h-full flex-shrink-0" style={{ width: sg.w, backgroundColor: colorOf(sg.stage) }} />)
+            : <span className="h-full w-full opacity-60" style={{ backgroundColor: colorOf(live) }} />}
         </span>
         <span style={{ paddingLeft: shift + 3 }} className={`relative flex h-full items-center gap-1 pr-[3px] min-w-0 text-[11px] leading-none whitespace-nowrap
           ${noStage(live) ? "text-text-main" : "text-white [text-shadow:0_0_3px_rgb(0_0_0/.55)]"}`}>

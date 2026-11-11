@@ -51,7 +51,9 @@ export interface TeamMember { dir: string; name: string; role: string; color?: s
  * Jira tool — вид «График». По оси Y — только папки списка; задачи папки — плашками в её полосе, по дорожкам, чтобы не
  * наезжали друг на друга. Справа от плашки — значок типа (эпик, стори, баг…), ключ и название. По оси X — время.
  * Плашка задачи стоит по датам и окрашена по отрезкам статуса (st): каждый цвет — с момента смены статуса (точность —
- * минуты, на масштабе «Часы» видно время). Пунктир вокруг — плановые даты. Красная отметка — срок нарушен: к концу дня
+ * минуты, на масштабе «Часы» видно время). Плашка стоит от планового начала до планового окончания (поля Jira, как в «Трекинге
+ * AQA»); часть плана после «сейчас» — пунктиром, пока задачу не закроют; закрыта — плашка кончается в момент закрытия; дат нет —
+ * сегодня на сутки. Красная отметка — срок нарушен: к концу дня
  * планового окончания задача не «Готово к релизу» и дальше; плашка после неё красится по статусам как обычно.
  * Наведение — подробности и команда задачи (начиная с аналитика); щелчок по плашке — хронология (оттуда — окно задачи).
  */
@@ -99,10 +101,10 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
     return sections.filter(sec => sec.issues.length).map(sec => {
       const items = sec.issues.map(issue => {
         const t = timelines.get(issue.key);
-        const hasBar = !!t && t.segments.length > 0;
-        const a = t ? (hasBar ? t.start : t.planStart ?? t.start) : now;
-        const b = t ? Math.max(hasBar ? t.end : a, t.deadline ?? a) : now;
-        return { issue, t, hasBar, left: x(a), right: Math.max(x(b), x(a) + MIN_BAR) };
+        // Плашка — от планового начала до планового окончания (просрочка — дальше); без дат — сегодня на сутки.
+        const a = t ? t.start : now;
+        const b = t ? t.end : now + 86_400_000;
+        return { issue, t, left: x(a), right: Math.max(x(b), x(a) + MIN_BAR) };
       }).sort((p, q) => p.left - q.left || p.right - q.right);
       const laneEnd: number[] = [];
       const placed = items.map(it => {
@@ -231,7 +233,7 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
               </div>
               <div className="relative flex-shrink-0" style={{ width: W }}>
                 {sec.placed.map(p => (
-                  <TaskBar key={p.issue.key} issue={p.issue} t={p.t} hasBar={p.hasBar} top={PAD + p.lane * LANE} x={x} viewLeft={scrollX}
+                  <TaskBar key={p.issue.key} issue={p.issue} t={p.t} top={PAD + p.lane * LANE} x={x} viewLeft={scrollX}
                     live={liveStage(stageOf(p.issue))}
                     onTip={tip} onLeave={() => setHover(null)} onChrono={() => { setHover(null); openChrono(p.issue); }} />
                 ))}
@@ -256,9 +258,9 @@ export default function JiraTimeline({ sections, timelines, stageOf, teamOf, day
  * Задача в полосе папки: план пунктиром, плашка по отрезкам статуса, отметка срока. Подпись — внутри плашки: значок типа
  * всегда, ключ и название — сколько поместится (шире плашка или крупнее масштаб — видно целиком).
  */
-function TaskBar({ issue, t, hasBar, top, x, viewLeft, live, onTip, onLeave, onChrono }: {
-  issue: Issue; t: TaskTimeline | undefined; hasBar: boolean; top: number; x: (ms: number) => number;
-  /** Статус (st) сейчас — как в списке и подсказке: им красится последний отрезок, а у не начатой — вся плашка. */
+function TaskBar({ issue, t, top, x, viewLeft, live, onTip, onLeave, onChrono }: {
+  issue: Issue; t: TaskTimeline | undefined; top: number; x: (ms: number) => number;
+  /** Статус (st) сейчас — как в списке и подсказке: им — хвостик, если последний отрезок другой, и бледный остаток плана. */
   live: StageVal;
   /** Левый край видимой части графика, px: подпись длинной плашки держится у него, а не уезжает за экран. */
   viewLeft: number;
@@ -267,38 +269,41 @@ function TaskBar({ issue, t, hasBar, top, x, viewLeft, live, onTip, onLeave, onC
   const type = String(issue.fields.issuetype ?? "");
   const summary = String(issue.fields.summary ?? "");
   const now = Date.now();
-  const a = t ? (hasBar ? t.start : t.planStart ?? t.start) : now;
-  const b = t ? (hasBar ? t.end : t.deadline ?? a) : now;
-  const segs = (hasBar && t ? t.segments : []).map((sg, i, all) => ({
-    stage: sg.stage, w: Math.max(i === all.length - 1 ? TAIL : 0, x(sg.to) - x(sg.from)),
-  }));
-  if (segs.length && segs[segs.length - 1].stage !== live) segs.push({ stage: live, w: TAIL });
+  const a = t ? t.start : now;
+  const b = t ? t.end : now + 86_400_000;
   const left = x(a);
-  const width = Math.max(MIN_BAR, segs.length ? segs.reduce((n, sg) => n + sg.w, 0) : x(b) - left);
-  // Короче MIN_BAR — последний отрезок растягиваем до конца плашки, чтобы не было пустого места.
-  if (segs.length) segs[segs.length - 1].w += width - segs.reduce((n, sg) => n + sg.w, 0);
+  const width = Math.max(MIN_BAR, x(b) - left);
+  // Отрезки статусов — с момента каждой смены, последний не уже TAIL (статус, сменённый только что, виден хвостиком).
+  const segs = (t?.segments ?? []).map((sg, i, all) => ({
+    stage: sg.stage, w: Math.max(i === all.length - 1 ? TAIL : 0, x(sg.to) - x(sg.from)), faded: false,
+  }));
+  if (segs.length && segs[segs.length - 1].stage !== live) segs.push({ stage: live, w: TAIL, faded: false });
+  // Остаток плана после «сейчас» (или вся плашка, если план ещё не начался) — пунктирной границей цвета нынешнего статуса,
+  // пока задачу не закроют.
+  const used = segs.reduce((n, sg) => n + sg.w, 0);
+  if (width - used > 0.5) segs.push({ stage: live, w: width - used, faded: true });
   const barTop = top + (LANE - BAR_H) / 2;
   const shift = Math.max(0, Math.min(viewLeft - left, width - MIN_BAR));
+  const strong = segs.some(sg => !sg.faded && sg.w > 30);
   return (
     <>
-      {t && t.planStart != null && t.deadline != null && (
-        <div className="absolute rounded-md border border-dashed border-text-muted/60 pointer-events-none"
-          style={{ left: x(t.planStart), width: Math.max(2, x(t.deadline) - x(t.planStart)), top: barTop - 3, height: BAR_H + 6 }} />
-      )}
       <button type="button" onClick={onChrono} onMouseMove={e => onTip(issue, e)} onMouseLeave={onLeave}
         aria-label={`${issue.key} ${summary}: хронология, статус и даты`}
+        title={t?.noDates ? "Плановых дат нет — стоит на сегодня, длиной в сутки" : undefined}
         className="absolute rounded-md overflow-hidden focus-visible:ring-2 focus-visible:ring-primary/50 hover:ring-2 hover:ring-primary/40"
         style={{ left, width, top: barTop, height: BAR_H }}>
-        {/* Отрезки — каждый своим статусом с момента смены. Последний не уже TAIL: статус, сменённый только что, виден хвостиком.
-            Расчёт списка показывает другой статус, чем последний отрезок (старый ручной без отметки времени), — хвостик этим
-            статусом. Без отрезков (не начата, план впереди) — бледная плашка плана нынешним статусом; серая — без статуса. */}
         <span className="absolute inset-0 flex">
-          {segs.length
-            ? segs.map((sg, i) => <span key={i} className="h-full flex-shrink-0" style={{ width: sg.w, backgroundColor: colorOf(sg.stage) }} />)
-            : <span className="h-full w-full opacity-60" style={{ backgroundColor: colorOf(live) }} />}
+          {segs.map((sg, i) => sg.faded ? (
+            <span key={i} className={`relative h-full flex-shrink-0 border-[1.5px] border-dashed ${i === 0 ? "rounded-md" : "rounded-r-md border-l-0"}`}
+              style={{ width: sg.w, borderColor: colorOf(sg.stage) }}>
+              <span className="absolute inset-0 opacity-20" style={{ backgroundColor: colorOf(sg.stage) }} />
+            </span>
+          ) : (
+            <span key={i} className="h-full flex-shrink-0" style={{ width: sg.w, backgroundColor: colorOf(sg.stage) }} />
+          ))}
         </span>
         <span style={{ paddingLeft: shift + 3 }} className={`relative flex h-full items-center gap-1 pr-[3px] min-w-0 text-[11px] leading-none whitespace-nowrap
-          ${noStage(live) ? "text-text-main" : "text-white [text-shadow:0_0_3px_rgb(0_0_0/.55)]"}`}>
+          ${noStage(live) || !strong ? "text-text-main" : "text-white [text-shadow:0_0_3px_rgb(0_0_0/.55)]"}`}>
           <IssueTypeIcon type={type} />
           <span className="font-mono text-[10px] opacity-90 flex-shrink-0">{issue.key}</span>
           <span className="truncate min-w-0">{summary || "без названия"}</span>
@@ -338,6 +343,12 @@ function HoverCard({ issue, at, t, info }: { issue: Issue; at: { x: number; y: n
         <StageBadge info={info} />{manual && <Hand className="w-3 h-3 text-text-muted" aria-label="вручную" />}
         <span className="text-text-muted">{last != null ? `с ${fmtDateTime(last)}` : ""}</span>
       </div>
+      {t && (
+        <p className="text-text-muted">
+          {t.noDates ? "Плановых дат нет — стоит на сегодня, сутки"
+            : `План: ${fmtDate(t.planStart)}${t.planFromCreated ? " (создана)" : ""} – ${t.deadline != null ? fmtDate(t.deadline) : "—"}`}
+        </p>
+      )}
       {t?.overdueAt != null && <p className="text-red-600 font-medium">Срок нарушен {fmtDate(t.overdueAt)}</p>}
     </div>
   );
@@ -438,7 +449,9 @@ function ChronoModal({ issue, t, info, team, onClose, onOpenIssue, onStage, onPl
 function Legend() {
   return (
     <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-muted">
-      <span className="inline-flex items-center gap-1.5"><span className="w-5 h-2.5 rounded-sm border border-dashed border-text-muted/70" /> плановые даты</span>
+      <span>Плашка — от планового начала до планового окончания</span>
+      <span className="inline-flex items-center gap-1.5"><span className="w-5 h-2.5 rounded-sm border-[1.5px] border-dashed border-primary bg-primary/20" /> план впереди — пока не закрыта</span>
+      <span>дат нет — сегодня, сутки</span>
       <span className="inline-flex items-center gap-1.5"><span className="w-0.5 h-3 bg-red-600" /> срок нарушен</span>
       <span className="inline-flex items-center gap-1.5"><span className="w-px h-3 bg-primary" /> сейчас</span>
       <span>Цвет — статус (st) с момента смены · щелчок по задаче — статус, даты и хронология · Ctrl/Cmd + колесо — масштаб · перетаскивание — прокрутка</span>

@@ -5,9 +5,10 @@
  *   по таблице сопоставления (stageForStatus). Эпик — минимальный этап его сторей в каждый момент, как в списке.
  * - Ручные смены статуса (st) — из журнала Shark (ToolState.stageLog): ручной держится, пока этап по Jira тот же,
  *   что был при установке; Jira сдвинулась — ручной снят. Правило то же, что в makeStageResolver.
- * - Плашка — от планового начала (нет или раньше создания — от создания; статус сменили раньше плана — по Jira или
- *   руками — от первой смены) до
- *   момента, когда задача стала «Готово к релизу» и дальше (или «Исключено»), а не стала — до сейчас.
+ * - Плашка — от планового начала до планового окончания (11.11.2026, решение Стефана); нет дат — сегодня на сутки.
+ *   Есть только окончание — от даты создания; только начало — сутки от него. Внутри — отрезки статусов с момента каждой
+ *   смены (до планового начала не рисуются — они в хронологии); часть плана после «сейчас» — пунктирной границей, пока задачу
+ *   не закроют. Закрыта — плашка кончается в момент закрытия; вышла за плановое окончание — тянется до сейчас (срок нарушен).
  * - Срок нарушен: к концу дня планового окончания задача не «Готово к релизу» / «Готово» (и не «Исключено») — красная
  *   отметка в этот момент и запись «Срок нарушен» в хронологии; дальше плашка красится по статусам как обычно.
  */
@@ -36,15 +37,25 @@ export interface ChronoEntry {
 
 export interface TaskTimeline {
   key: string;
-  /** Начало и конец плашки, мс. end ≤ start — фактической плашки нет (план в будущем). */
+  /**
+   * Плашка — по плановым датам: start — плановое начало, planEnd — конец дня планового окончания. Нет обеих дат — сегодня,
+   * длиной в сутки; есть только начало — сутки от него; только окончание — от даты создания (не позже дня окончания).
+   * end — правый край плашки: закрыта — момент закрытия; не закрыта — плановое окончание (остаток после «сейчас» —
+   * пунктиром), а вышла за него — сейчас (срок нарушен).
+   */
   start: number;
+  planEnd: number;
   end: number;
-  /** Плановое начало; не задано в Jira — дата создания (planFromCreated). */
-  planStart: number | null;
+  /** До какого момента плашка окрашена по статусам (сейчас или закрытие); дальше — бледный остаток плана. */
+  actualEnd: number;
+  /** Плановое начало для подписей; не задано в Jira — дата создания (planFromCreated) или сегодня (noDates). */
+  planStart: number;
   planFromCreated: boolean;
+  /** В Jira нет ни планового начала, ни окончания — плашка «сегодня, сутки». */
+  noDates: boolean;
   /** Статус (st) сейчас — по последнему событию. */
   current: StageVal;
-  /** Конец дня планового окончания, мс. */
+  /** Конец дня планового окончания из Jira (только заданное), мс — от него считается срок. */
   deadline: number | null;
   segments: Segment[];
   /** Момент нарушения срока (= deadline) или null. */
@@ -202,34 +213,42 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
   const pts = withMarks(base, log[issue.key] ?? []);
 
   const created = pts[0]?.at ?? now;
-  // Даты начала нет — считаем от создания задачи (у дефектов и у всех остальных).
-  const planGiven = dayAt(h?.planStart ?? "");
-  const planStart = planGiven ?? created;
-  const planFromCreated = planGiven === null;
+  const DAY = 86_400_000;
+  const givenStart = dayAt(h?.planStart ?? "");
   const deadline = dayAt(h?.planEnd ?? "", true);
-  const firstChange = pts.length > 1 ? pts[1].at : null;
-  // До создания задачи работы не было: плановое начало раньше создания — плашка с создания.
-  // Смена статуса — по Jira или руками — значит, работа идёт: плашка с первой смены, даже если план позже.
-  let start = Math.max(planStart, created);
-  if (firstChange !== null && firstChange < start) start = firstChange;
+  const noDates = givenStart === null && deadline === null;
+  const dayOf = (ms: number) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const todayLocal = dayOf(now);
+  // Плашка — по плановым датам. Нет обеих — сегодня на сутки; нет начала — от создания; нет окончания — сутки от начала.
+  const createdDay = dayOf(created);
+  const start = givenStart ?? (deadline !== null ? Math.min(createdDay, deadline - DAY + 1000) : todayLocal);
+  const planEnd = deadline ?? start + DAY;
+  const planStart = start;
+  const planFromCreated = givenStart === null && deadline !== null;
 
   const current = pts[pts.length - 1]?.stage ?? "no-stories";
   const final = isFinalStage(current);
-  let end = now;
+  let actualEnd = now;
   if (final) {
     // Момент, с которого задача непрерывно «финальная».
     let i = pts.length - 1;
     while (i > 0 && isFinalStage(pts[i - 1].stage)) i--;
-    end = pts[i].at;
+    actualEnd = pts[i].at;
   }
+  // Закрыта — плашка кончается в момент закрытия (раньше плана — короче плана). Не закрыта — до планового окончания
+  // (остаток плана рисуется пунктиром), а вышла за него — до сейчас: срок нарушен, видно насколько.
+  const end = final ? Math.max(actualEnd, start) : Math.max(planEnd, actualEnd);
 
+  // Отрезки статусов — внутри плашки, с момента каждой смены; до планового начала не рисуем (видно в хронологии).
+  const paintTo = Math.min(actualEnd, end);
   const segments: Segment[] = [];
-  for (let i = 0; i < pts.length; i++) {
-    const from = Math.max(pts[i].at, start);
-    const to = Math.min(i + 1 < pts.length ? pts[i + 1].at : end, end);
-    // Последний отрезок оставляем и нулевой длины: статус только что сменили (руками или в Jira) — на плашке он виден
-    // хвостиком с момента смены, а не перекрашивает всю плашку.
-    if (to > from || (i === pts.length - 1 && to >= from)) segments.push({ from, to, stage: pts[i].stage });
+  if (paintTo >= start) {
+    for (let i = 0; i < pts.length; i++) {
+      const from = Math.max(pts[i].at, start);
+      const to = Math.min(i + 1 < pts.length ? pts[i + 1].at : paintTo, paintTo);
+      // Последний отрезок оставляем и нулевой длины: статус только что сменили — на плашке он виден хвостиком.
+      if (to > from || (i === pts.length - 1 && to >= from)) segments.push({ from, to, stage: pts[i].stage });
+    }
   }
 
   const chrono: ChronoEntry[] = pts.flatMap(p => p.chrono ?? []);
@@ -242,5 +261,6 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
     }
   }
   chrono.sort((a, b) => a.at - b.at || (a.kind === "overdue" ? 1 : b.kind === "overdue" ? -1 : 0));
-  return { key: issue.key, start, end, planStart, planFromCreated, current, deadline, segments, overdueAt, chrono, final };
+  return { key: issue.key, start, planEnd, end, actualEnd: paintTo, planStart, planFromCreated, noDates, current, deadline,
+           segments, overdueAt, chrono, final };
 }

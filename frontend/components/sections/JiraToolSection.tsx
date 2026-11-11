@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import {
   AlertTriangle, ChevronDown, Info, ClipboardCheck, FileSpreadsheet, Columns3, Loader2, MessageSquareShare, FilePlus2, FolderTree,
   GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose, ListFilter, PanelLeftOpen, Plus, Search, Trash2,
-  Users, X,
+  Users, X, CalendarRange, List as ListIcon,
 } from "lucide-react";
 
 import FieldPicker, { type PickOption } from "@/components/jiratool/FieldPicker";
@@ -45,15 +45,17 @@ import {
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, liveLists, setArchived, startList, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
-  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, DIRECTION_ROLE, DIRECTIONS, directionLoad, directionAssignment, isCommonReserve, ownStageInfo,
+  projectKeyOfIssue, saveState, migratePeople, nextColor, inDirection, calendarDays, TESTING, ROLE_FIELDS, DIRECTION_ROLE, DIRECTIONS, directionLoad, directionAssignment, isCommonReserve, ownStageInfo,
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
-import { applyStageStyles, blockingDefects, makeStageResolver, storiesByEpic, type Stage } from "@/lib/jiraStages";
-import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields } from "@/lib/jiraToolApi";
+import { applyStageStyles, blockingDefects, jiraStageOf, makeStageResolver, stageKeyOf, storiesByEpic, type Stage } from "@/lib/jiraStages";
+import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issueHistory, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields, type IssueHistory } from "@/lib/jiraToolApi";
+import JiraTimeline, { TL_ZOOMS, type TeamMember } from "@/components/jiratool/JiraTimeline";
+import { taskTimeline, type TaskTimeline } from "@/lib/jiraTimeline";
 import { describeNotes, dropSent, peopleFieldChanges, peopleSnapshot, queuePeopleChanges } from "@/lib/jiraPeopleSync";
 import { FIELD_BY_ID } from "@/lib/jiraModel";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
-import { usePanelRefresh } from "@/components/ui/RefreshButton";
+import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
@@ -78,6 +80,11 @@ const ASIDE_KEY = "st_jira_tool_aside";
 /** Раскрыта ли «Настройка списка» вверху колонки — тоже удобство одного браузера. */
 /** Раскрыт ли виджет «Команда» в левой колонке. */
 const TEAM_OPEN_KEY = "st_jira_tool_team_open";
+/** Вид списка: таблица или график (как роадмап «Трекинга AQA») и масштаб графика, px на сутки. */
+const VIEW_KEY = "st_jira_view";
+const ZOOM_KEY = "st_jira_zoom";
+/** История статусов из Jira для графика — в памяти модуля на сессию вкладки: переходы между разделами её не теряют. */
+const historyCache: { items: Record<string, IssueHistory> } = { items: {} };
 /** Последний открытый список — с него раздел и открывается (не с первого в колонке). */
 const LAST_LIST_KEY = "st_jira_last_list";
 
@@ -100,6 +107,12 @@ const updateAnywhere = (fn: StateChange) => { if (liveUpdate) liveUpdate(fn); el
 
 export default function JiraToolSection() {
   const [state, setState] = useState<ToolState | null>(null);
+  const [view, setView] = useState<"list" | "chart">("list");
+  const [tlZoom, setTlZoom] = useState<number>(48);
+  const [hist, setHist] = useState<Record<string, IssueHistory>>(() => historyCache.items);
+  const [histBusy, setHistBusy] = useState(false);
+  const [histErr, setHistErr] = useState("");
+  const histAsked = useRef<Set<string>>(new Set(Object.keys(historyCache.items)));
   const [activeId, setActiveId] = useState<string | null>(null);
   const [newList, setNewList] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
@@ -190,6 +203,11 @@ export default function JiraToolSection() {
     relatedDone.current = c.related;
     try { setCollapsed(localStorage.getItem(ASIDE_KEY) === "1"); } catch { /* развёрнута по умолчанию */ }
     try { setTeamOpen(localStorage.getItem(TEAM_OPEN_KEY) === "1"); } catch { /* свёрнуто по умолчанию */ }
+    try {
+      setView(localStorage.getItem(VIEW_KEY) === "chart" ? "chart" : "list");
+      const z = Number(localStorage.getItem(ZOOM_KEY));
+      if (z > 0) setTlZoom(z);
+    } catch { /* по умолчанию — список */ }
   }, []);
 
   const connect = (refresh = false) => {
@@ -372,8 +390,8 @@ export default function JiraToolSection() {
   const customStages = state?.customStages;
   const stageOf = useMemo(() => {
     applyStageStyles(stageStyles ?? {}, customStages ?? []);
-    return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx, state?.stageManual ?? {});
-  }, [allIssues, state?.mapping, defectIdx, stageStyles, customStages, state?.stageManual]);
+    return makeStageResolver(allIssues, state?.mapping ?? {}, defectIdx, state?.stageManual ?? {}, state?.stageLog ?? {});
+  }, [allIssues, state?.mapping, defectIdx, stageStyles, customStages, state?.stageManual, state?.stageLog]);
   /**
    * Дефекты задачи — свои (Epic Link и связи) плюс блокирующие, которые она наследует: у эпика —
    * от его сторей, у стори — от её эпика. Так дефект, из-за которого задача «Заблокирована»,
@@ -511,6 +529,64 @@ export default function JiraToolSection() {
     busy: busy > 0, disabled: jira.state !== "ok", badge: pendingPeople || undefined,
     title: pendingPeople ? `Отправить в Jira людей (изменений: ${pendingPeople}) и перечитать задачи списка` : "Перечитать задачи списка из Jira",
   });
+
+  /* ── Вид «График»: история статусов задач списка (и сторей его эпиков — по ним считается эпик) ── */
+  const pickView = (v: "list" | "chart") => { setView(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* не запомнится */ } };
+  const pickZoom = useCallback((w: number) => { setTlZoom(w); try { localStorage.setItem(ZOOM_KEY, String(w)); } catch { /* не запомнится */ } }, []);
+  const chartKeys = useMemo(() => {
+    if (!list || view !== "chart") return [];
+    const ks = new Set<string>();
+    for (const k of list.keys) {
+      const i = byKey.get(k);
+      if (!i || i.local) continue;
+      ks.add(k);
+      if (categoryOf(i) === "epic") for (const st of byEpic.get(k) ?? []) ks.add(st.key);
+    }
+    return Array.from(ks);
+  }, [list, view, byKey, byEpic]);
+  const loadHistory = useCallback(async (keys: string[]) => {
+    if (!keys.length) return;
+    keys.forEach(k => histAsked.current.add(k));
+    setHistBusy(true); setHistErr("");
+    try {
+      const r = await issueHistory(keys);
+      historyCache.items = { ...historyCache.items, ...r.items };
+      setHist(historyCache.items);
+    } catch (e) {
+      keys.forEach(k => histAsked.current.delete(k));
+      setHistErr((e as Error).message);
+    }
+    setHistBusy(false);
+  }, []);
+  useEffect(() => {
+    if (jira.state !== "ok") return;
+    void loadHistory(chartKeys.filter(k => !histAsked.current.has(k)));
+  }, [chartKeys, jira.state, loadHistory, hist]);
+  const timelines = useMemo(() => {
+    const out = new Map<string, TaskTimeline>();
+    if (view !== "chart" || !list || !state) return out;
+    for (const k of list.keys) {
+      const issue = byKey.get(k);
+      if (!issue) continue;
+      out.set(k, taskTimeline({ issue, history: hist, mapping: state.mapping, log: state.stageLog, stories: byEpic.get(k) ?? [] }));
+    }
+    return out;
+  }, [view, list, byKey, byEpic, hist, state?.mapping, state?.stageLog, stageOf]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** Команда задачи: направления по порядку — от аналитики до поддержки, затем тестирование. */
+  const teamOf = useCallback((issue: Issue): TeamMember[] => {
+    if (!list || !state) return [];
+    const byId = new Map(state.participants.map(p => [p.id, p]));
+    const out: TeamMember[] = [];
+    for (const f of ROLE_FIELDS) {
+      const rv = list.roles?.[issue.key]?.[f.id];
+      const p = rv?.pid ? byId.get(rv.pid) : undefined;
+      const name = p?.name ?? rv?.name;
+      if (name) out.push({ dir: f.label, name, role: p?.role ?? "", color: p?.color });
+    }
+    const tester = byId.get(list.assignees[issue.key] ?? "");
+    if (tester) out.push({ dir: "Testing", name: tester.name, role: tester.role, color: tester.color });
+    return out;
+  }, [list, state]);
 
   if (!state) return <Shell><div className="p-6 text-sm text-text-muted">Загрузка…</div></Shell>;
 
@@ -902,15 +978,28 @@ export default function JiraToolSection() {
   };
 
   /** Статусы сменены в Jira — перечитываем эти задачи (и связанные: этап эпика мог сдвинуться). */
-  /** Статус (st) руками; null — вернуть расчёт по Jira. */
-  const setStageManual = (key: string, st: Stage | null) => update(s => {
-    const m = { ...s.stageManual };
-    if (st) m[key] = st; else delete m[key];
-    return { ...s, stageManual: m };
-  });
+  /**
+   * Статус (st) руками в любую сторону; null — вернуть расчёт по Jira. Каждая смена — отметка в журнале (время и этап
+   * по Jira в этот момент): ручной держится, пока Jira не сдвинется, а журнал — хронология на графике.
+   */
+  const setStageManual = (key: string, st: Stage | null) => {
+    const issue = cache[key] ?? state?.created.find(i => i.key === key);
+    const base = issue ? stageKeyOf(jiraStageOf(stageOf(issue))) : "";
+    update(s => {
+      const m = { ...s.stageManual };
+      if (st) m[key] = st; else delete m[key];
+      const mark = { at: new Date().toISOString(), stage: st, base };
+      return { ...s, stageManual: m, stageLog: { ...s.stageLog, [key]: [...(s.stageLog[key] ?? []), mark].slice(-200) } };
+    });
+  };
 
   // Выбор не сбрасываем: окно остаётся открытым для следующего шага. Сброс — при закрытии окна.
-  const afterTransitions = (keys: string[]) => { void sync(keys, []); };
+  const afterTransitions = (keys: string[]) => {
+    void sync(keys, []);
+    // История этих задач изменилась — на графике перечитаем.
+    keys.forEach(k => { histAsked.current.delete(k); delete historyCache.items[k]; });
+    setHist({ ...historyCache.items });
+  };
 
   const saveOwn = (f: OwnField) => updateList(l => {
     const exists = l.ownFields.some(x => x.id === f.id);
@@ -1214,6 +1303,31 @@ export default function JiraToolSection() {
                           title="Вернуть ручной порядок — тогда строки можно перетаскивать">сбросить</button></>
                     )}</p>
                 </div>
+                {/* Вид: список или график (как роадмап «Трекинга AQA»); у графика — масштаб и перечитать историю */}
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {view === "chart" && (
+                    <>
+                      <div role="group" aria-label="Масштаб графика" className="flex rounded-lg border border-border-main p-0.5">
+                        {TL_ZOOMS.map(z => (
+                          <button key={z.id} type="button" onClick={() => pickZoom(z.w)} aria-pressed={tlZoom === z.w}
+                            className={`px-2.5 py-1 text-xs rounded-md transition-colors ${tlZoom === z.w ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>{z.label}</button>
+                        ))}
+                      </div>
+                      <button type="button" onClick={() => { histAsked.current.clear(); historyCache.items = {}; setHist({}); }} disabled={histBusy || jira.state !== "ok"}
+                        title="Перечитать историю статусов из Jira" aria-label="Перечитать историю статусов из Jira"
+                        className="p-1.5 rounded-md text-text-muted hover:text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                        <RefreshIcon busy={histBusy} className="h-3.5 w-3.5" /></button>
+                    </>
+                  )}
+                  <div role="group" aria-label="Вид списка" className="flex rounded-lg border border-border-main p-0.5">
+                    <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"}
+                      className={`px-2.5 py-1 text-xs rounded-md inline-flex items-center gap-1 transition-colors ${view === "list" ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
+                      <ListIcon className="h-3.5 w-3.5" /> Список</button>
+                    <button type="button" onClick={() => pickView("chart")} aria-pressed={view === "chart"}
+                      className={`px-2.5 py-1 text-xs rounded-md inline-flex items-center gap-1 transition-colors ${view === "chart" ? "bg-primary/10 text-primary font-semibold" : "text-text-muted hover:text-text-main"}`}>
+                      <CalendarRange className="h-3.5 w-3.5" /> График</button>
+                  </div>
+                </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {/* Поиск по списку */}
                   <label className="flex items-center gap-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 focus-within:ring-2 focus-within:ring-primary/30">
@@ -1336,6 +1450,11 @@ export default function JiraToolSection() {
                   </p>
                 ) : searched.length === 0 ? (
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
+                ) : view === "chart" ? (
+                  <JiraTimeline sections={folderSections(list, listIssues)} timelines={timelines} stageOf={stageOf} teamOf={teamOf}
+                    dayW={tlZoom} onDayW={pickZoom} onOpenIssue={issue => setModal({ issueFor: issue })} onStageManual={setStageManual}
+                    onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }}
+                    loading={histBusy} error={histErr} />
                 ) : (
                   <ListTable key={list.id} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
                     timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
@@ -1525,7 +1644,8 @@ export default function JiraToolSection() {
           } : undefined} />
       )}
       {modal && typeof modal === "object" && "issueFor" in modal && (
-        <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)} />
+        <IssueModal open issue={modal.issueFor} onClose={() => setModal(null)}
+          onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }} />
       )}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} chat={chat}

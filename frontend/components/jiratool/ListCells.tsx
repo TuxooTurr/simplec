@@ -14,7 +14,7 @@ import {
   FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, linkHref, tagColor, blockersOf, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RuleResult, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
-import { STAGES, STAGE_LABEL, jiraRankOf, jiraStageOf, stageRankOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
+import { STAGES, STAGE_LABEL, jiraStageOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
 
 /* Ячейки таблицы Jira tool. Ширину задаёт колонка (её можно растягивать), поэтому
    у содержимого нет своих минимальных ширин — текст переносится или обрезается. */
@@ -90,8 +90,8 @@ export function BlockCell({ defects, onOpen }: { defects: Issue[] | null; onOpen
 
 /** Статус (st). onOpen есть только у эпика: клик — окно со сторями эпика. */
 /**
- * Статус (st) в строке. Клик по статусу эпика — его стори. Стрелка рядом — поставить статус руками:
- * он держится, пока этап по Jira не станет выше (ниже Jira выбрать нельзя — ничего бы не изменилось).
+ * Статус (st) в строке. Клик по статусу эпика — его стори. Стрелка рядом — поставить статус руками в любую сторону,
+ * в том числе назад: он держится, пока статус по Jira не сменится.
  */
 export function StageCell({ info, onOpen, manual, onManual }: {
   info: StageInfo;
@@ -104,8 +104,10 @@ export function StageCell({ info, onOpen, manual, onManual }: {
   const btn = useRef<HTMLButtonElement>(null);
 
   const jira = jiraStageOf(info);
-  const jiraRank = jiraRankOf(info);
-  const progress = STAGES.filter(st => st !== "excluded");
+  const base = info.kind === "blocked" ? info.base : info;
+  /** Ручной действует (Jira с момента установки не сдвигалась). */
+  const active = (base.kind === "stage" || base.kind === "epic") && !!base.manual;
+  const current = base.kind === "stage" || base.kind === "epic" ? base.stage : null;
   const set = (st: Stage | null) => { onManual(st); setPos(false); };
   const open = () => setPos(p => !p);
 
@@ -126,21 +128,22 @@ export function StageCell({ info, onOpen, manual, onManual }: {
       {pos && (
         <Floating anchor={btn} onClose={() => setPos(false)} width={240} role="menu" ariaLabel="Статус (st) вручную" className="p-1">
           <p className="px-2 pt-1 pb-1.5 text-[11px] text-text-muted leading-snug">
-            По Jira: <b className="text-text-main font-medium">{stageText(jira)}</b>. Ручной держится, пока Jira не покажет статус выше.
+            По Jira: <b className="text-text-main font-medium">{stageText(jira)}</b>. Можно в любую сторону — ручной держится,
+            пока статус по Jira не сменится.
+            {manual && !active && <span className="block mt-1 text-amber-700 dark:text-amber-300">Ручной «{STAGE_LABEL[manual]}» снят: Jira сменила статус.</span>}
           </p>
-          {progress.map(st => {
-            const below = stageRankOf(st) <= jiraRank;
-            const on = manual === st;
+          {STAGES.map(st => {
+            const on = active && manual === st;
             return (
-              <button key={st} type="button" role="menuitemradio" aria-checked={on} disabled={below} onClick={() => set(st)}
-                title={below ? "Не выше статуса по Jira — ручной ничего бы не изменил" : undefined}
+              <button key={st} type="button" role="menuitemradio" aria-checked={on} disabled={st === current} onClick={() => set(st)}
+                title={st === current ? "Уже этот статус" : undefined}
                 className="w-full flex items-center gap-2 px-2 py-1 rounded text-sm text-left hover:bg-bg-subtle disabled:opacity-40 disabled:hover:bg-transparent">
                 <span className="px-1.5 py-0.5 rounded text-[11px] font-medium" style={stageStyle(st)}>{STAGE_LABEL[st]}</span>
                 {on && <Check className="ml-auto w-3.5 h-3.5 text-primary" />}
               </button>
             );
           })}
-          {manual && (
+          {manual && active && (
             <button type="button" onClick={() => set(null)}
               className="w-full mt-1 pt-1.5 border-t border-border-main px-2 pb-1 text-left text-sm text-text-muted hover:text-text-main">
               Сбросить — как в Jira
@@ -786,6 +789,18 @@ const TYPE_STYLE: { re: RegExp; color: string; Icon: typeof Bug }[] = [
   { re: /подзадач|sub-?task/i,               color: "#4bade8", Icon: Layers },     // голубой
   { re: /задач|task/i,                       color: "#2684ff", Icon: CheckSquare },// синий
 ];
+
+/** Только значок типа (эпик, стори, баг…) — для строк графика. */
+export function IssueTypeIcon({ type }: { type: string }) {
+  const st = TYPE_STYLE.find(t => t.re.test(type)) ?? { color: "#6b778c", Icon: CheckSquare };
+  const { Icon } = st;
+  return (
+    <span className="w-4 h-4 rounded-[3px] inline-flex items-center justify-center flex-shrink-0" style={{ backgroundColor: st.color }}
+      title={type || "Тип не указан"} aria-label={type}>
+      <Icon className="w-2.5 h-2.5 text-white" strokeWidth={3} />
+    </span>
+  );
+}
 
 /** Тип задачи: иконка в цветном квадрате + название — дефект красный, стори зелёная, эпик фиолетовый, задача синяя. */
 export function IssueTypeBadge({ type }: { type: string }) {

@@ -17,7 +17,7 @@ import {
   type FieldValue, type Issue, type JiraFieldDef,
 } from "./jiraModel";
 import type { PersonFieldChange } from "./jiraToolApi";
-import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type Stage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
+import { STAGES, STAGE_LABEL, isReleaseOrLater, stageDot, stageText, type CustomStage, type ManualMark, type Stage, type StageInfo, type StageMapping, type StageStyles } from "./jiraStages";
 
 export * from "./jiraModel";
 
@@ -618,6 +618,11 @@ export interface ToolState {
    * этап выше (см. makeStageResolver). На уровне Shark: реальность у задачи одна во всех списках.
    */
   stageManual: Record<string, Stage>;
+  /**
+   * Журнал ручных смен статуса (st): ключ → отметки по времени (когда, на что, каким был этап по Jira). По последней
+   * отметке ручной статус держится, пока Jira не сдвинется (см. makeStageResolver); весь журнал — хронология на графике.
+   */
+  stageLog: Record<string, ManualMark[]>;
   /** Норма дня и резервы для нагрузки — общие для всех списков. */
   loadSettings: LoadSettings;
   /**
@@ -721,7 +726,7 @@ export function emptyList(name: string, project = DEFAULT_PROJECT): TaskList {
 
 /** Стартовое состояние: пусто — списки человек собирает сам из задач Jira. */
 function initialState(): ToolState {
-  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, reqUrls: {}, msLinks: {}, stageManual: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
+  return { version: 3, lists: [], participants: [], created: [], nextKey: 1, mapping: {}, roleNames: {}, stageStyles: {}, customStages: [], templates: [], reqLinks: {}, reqUrls: {}, msLinks: {}, stageManual: {}, stageLog: {}, loadSettings: DEFAULT_LOAD_SETTINGS };
 }
 
 /** Ключ черновика: с проектом (по нему берутся поля), но не похож на ключ Jira — не спутать и не столкнуться. */
@@ -752,6 +757,7 @@ export function loadState(): ToolState {
           reqUrls: s.reqUrls ?? {},
           msLinks: s.msLinks ?? {},
           stageManual: s.stageManual ?? {},
+          stageLog: s.stageLog && typeof s.stageLog === "object" ? s.stageLog : {},
           loadSettings: normLoadSettings(s.loadSettings),
           jiraPending: Array.isArray(s.jiraPending) ? s.jiraPending : [],
         };
@@ -832,6 +838,7 @@ export function replaceDraft(s: ToolState, draftKey: string, issue: Issue): Tool
     reqUrls: remap(s.reqUrls) ?? {},
     msLinks: remap(s.msLinks) ?? {},
     stageManual: remap(s.stageManual) ?? {},
+    stageLog: remap(s.stageLog) ?? {},
     created: s.created.map(i => (i.key === draftKey ? issue : i)),
     lists: s.lists.map(l => ({
       ...l,

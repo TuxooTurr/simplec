@@ -352,3 +352,19 @@ def test_релиз_по_названию_версии(jira):
     with pytest.raises(HTTPException) as e:
         JT.release("Нет такого", project="SBER911", db=None)
     assert e.value.status_code == 404
+
+
+def test_status_history_keeps_only_status_changes_sorted():
+    from backend.api.jira_tool import status_history
+    raw = {"changelog": {"histories": [
+        {"created": "2026-11-11T11:15:00.000+0300", "author": {"displayName": "Иванов"},
+         "items": [{"field": "status", "fromString": "В работе", "toString": "Тестирование"}]},
+        {"created": "2026-11-10T09:00:00.000+0300", "author": {},
+         "items": [{"field": "assignee", "fromString": "a", "toString": "b"},
+                   {"field": "status", "fromString": "Открыт", "toString": "В работе"}]},
+    ]}}
+    assert status_history(raw) == [
+        {"at": "2026-11-10T09:00:00.000+0300", "from": "Открыт", "to": "В работе", "author": ""},
+        {"at": "2026-11-11T11:15:00.000+0300", "from": "В работе", "to": "Тестирование", "author": "Иванов"},
+    ]
+    assert status_history({}) == []

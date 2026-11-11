@@ -44,7 +44,7 @@ export function useFeatureStage(v: StandView | null): FeatureStage {
     let st: ReturnType<typeof loadState> | null = null;
     try { st = loadState(); } catch { /* настроек Jira tool нет */ }
     applyStageStyles(st?.stageStyles ?? {}, st?.customStages ?? []);
-    const stageOf = makeStageResolver(all, st?.mapping ?? {}, defectIndex(all), st?.stageManual ?? {});
+    const stageOf = makeStageResolver(all, st?.mapping ?? {}, defectIndex(all), st?.stageManual ?? {}, st?.stageLog ?? {});
     return key => {
       const issue = byKey.get(key.trim().toUpperCase());
       if (!issue) return null;

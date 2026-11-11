@@ -18,6 +18,7 @@ import {
   addLabelPresets, attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
+import { updateAqaIssue } from "@/lib/aqaApi";
 import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, type Participant } from "@/lib/jiraTool";
 import { RefreshIcon } from "@/components/ui/RefreshButton";
 
@@ -128,6 +129,9 @@ export default function IssueFormModal({ control, project, participants, listNam
   const [standType, setStandType] = useState(initial?.standType ?? "");
   const [epicKey, setEpicKey] = useState(initial?.epicKey ?? prefill?.epicKey ?? "");
   const [participantId, setParticipantId] = useState(initial?.participantId ?? "");
+  /** Плановые даты — необязательны, уходят в Jira сразу после создания (как в окне задачи). */
+  const [planStart, setPlanStart] = useState("");
+  const [planEnd, setPlanEnd] = useState("");
 
   /* ── Jira ── */
   const [settings, setSettings] = useState<JiraSettings | null>(null);
@@ -235,6 +239,14 @@ export default function IssueFormModal({ control, project, participants, listNam
           warnings.push(...att.warnings);
         } catch (e) {
           warnings.push(`${res.key} создана, но вложения не приложились: ${(e as Error).message}. Приложите их в Jira вручную.`);
+        }
+      }
+      if (planStart || planEnd) {
+        try {
+          const r = await updateAqaIssue(res.key, { ...(planStart ? { planStart } : {}), ...(planEnd ? { planEnd } : {}) });
+          warnings.push(...r.warnings);
+        } catch (e) {
+          warnings.push(`${res.key} создана, но плановые даты не записались: ${(e as Error).message}. Укажите их в окне задачи.`);
         }
       }
       if (afterCreate) {
@@ -451,6 +463,19 @@ export default function IssueFormModal({ control, project, participants, listNam
                   </select>
                 </div>
               ) : <div />}
+              <div>
+                <label htmlFor="if-plan-start" className={LBL}>Дата начала работ</label>
+                <input id="if-plan-start" type="date" value={planStart} onChange={e => setPlanStart(e.target.value)} className={INPUT}
+                  title="Необязательно. Пишется в поле Jira «Плановое начало» при создании в Jira" />
+              </div>
+              <div>
+                <label htmlFor="if-plan-end" className={LBL}>Дата завершения</label>
+                <input id="if-plan-end" type="date" value={planEnd} min={planStart || undefined} onChange={e => setPlanEnd(e.target.value)} className={INPUT}
+                  title="Необязательно. Пишется в поле Jira «Плановое окончание» при создании в Jira; по ней считается срок на графике" />
+              </div>
+              {planStart && planEnd && planStart > planEnd && (
+                <p className="col-span-2 -mt-1 text-[11px] text-red-600 dark:text-red-400">Дата начала позже даты завершения</p>
+              )}
               <div className="col-span-2">
                 <div className="flex items-center justify-between mb-1.5">
                   <label htmlFor="if-epic" className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Эпик</label>
@@ -536,7 +561,7 @@ export default function IssueFormModal({ control, project, participants, listNam
               title={!initial && !addToList ? "Черновик живёт только в списке — включите «Добавить в список»" : "Черновик в списке — в Jira не уходит"}
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
               {initial ? "Сохранить черновик" : "Создать в Shark"}</button>}
-            <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked || (!!epicChoices && !epicKey)} onClick={sendToJira}
+            <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked || (!!epicChoices && !epicKey) || (!!planStart && !!planEnd && planStart > planEnd)} onClick={sendToJira}
               title={jiraReady ? `Создать ${type.toLowerCase()} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {initial ? "Отправить в Jira" : "Создать в Jira"}

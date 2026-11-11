@@ -374,6 +374,58 @@ def related(body: RelatedBody, db: Session = Depends(get_db)) -> dict:
     return {"issues": list(out.values()), "truncated": len(out) >= MAX_ISSUES}
 
 
+# ── История статусов и плановые даты (вид «График») ─────────────────────────
+
+_HISTORY_KEYS_PER_QUERY = 50          # changelog тяжёлый: пачки меньше, чем для обычного поиска
+
+
+def status_history(raw: dict) -> list[dict]:
+    """Смены статуса из changelog задачи → [{at, from, to, author}] по времени. at — как в Jira (с часовым поясом)."""
+    out = []
+    for h in ((raw.get("changelog") or {}).get("histories") or []):
+        for it in h.get("items") or []:
+            if it.get("field") == "status":
+                out.append({"at": str(h.get("created") or ""), "from": str(it.get("fromString") or ""),
+                            "to": str(it.get("toString") or ""),
+                            "author": str((h.get("author") or {}).get("displayName") or "")})
+    return sorted(out, key=lambda x: x["at"])
+
+
+@router.post("/api/jira/tool/history")
+def history(body: KeysBody, db: Session = Depends(get_db)) -> dict:
+    """Для графика Jira tool: по каждой задаче — создание, смены статуса из changelog (с точностью до минут) и плановые
+    даты. Плановые поля ищутся по названию — так же, как в «Трекинге AQA» (aqa_tracking.plan_fields), а значение берётся
+    из первого непустого кандидата."""
+    from backend.api import aqa_tracking as AQA
+    keys = _clean_keys(body.keys)
+    if len(keys) > MAX_KEYS:
+        raise HTTPException(422, f"За раз — не больше {MAX_KEYS} задач")
+    cfg = _load_cfg(db)
+    plan = AQA.plan_fields(catalog(db=db).get("fields") or [])
+    if not keys:
+        return {"items": {}, "planFields": {k: (v[0]["name"] if v else None) for k, v in plan.items()}}
+    fields = "status,created,resolutiondate" + "".join(f",{c['id']}" for cands in plan.values() for c in cands)
+
+    def chunk(ks: list[str]) -> list[dict]:
+        data = _jira_request(cfg, "GET", "/rest/api/2/search", params={
+            "jql": f"key in ({', '.join(ks)})", "fields": fields, "expand": "changelog",
+            "maxResults": len(ks), "validateQuery": "false"})
+        return data.get("issues") or []
+
+    items: dict[str, dict] = {}
+    for found in _parallel(chunk, _chunks(keys, _HISTORY_KEYS_PER_QUERY)):
+        for raw in found:
+            f = raw.get("fields") or {}
+            items[raw.get("key", "")] = {
+                "created": str(f.get("created") or ""),
+                "status": str((f.get("status") or {}).get("name") or ""),
+                "planStart": AQA._plan_value(f, plan.get("start") or [], None),
+                "planEnd": AQA._plan_value(f, plan.get("end") or [], None),
+                "history": status_history(raw),
+            }
+    return {"items": items, "planFields": {k: (v[0]["name"] if v else None) for k, v in plan.items()}}
+
+
 @router.get("/api/jira/tool/statuses")
 def project_statuses(project: str, refresh: bool = False, db: Session = Depends(get_db)) -> dict:
     """Статусы проекта по типам задач — для сопоставления со статусом (st)."""

@@ -120,3 +120,22 @@ export interface PersonFieldResult { key: string; field: string; ok?: boolean; s
 export function writePeopleFields(changes: PersonFieldChange[]): Promise<{ results: PersonFieldResult[]; done: number }> {
   return post("/api/jira/tool/people-fields", { changes });
 }
+
+/* ── График: история статусов и плановые даты ─────────────────────────────── */
+
+/** Смена статуса Jira из changelog: at — время Jira с часовым поясом (точность — минуты). */
+export interface StatusChange { at: string; from: string; to: string; author: string }
+export interface IssueHistory { created: string; status: string; planStart: string; planEnd: string; history: StatusChange[] }
+export interface HistoryReply { items: Record<string, IssueHistory>; planFields: { start: string | null; end: string | null } }
+
+/** История статусов по пачкам в 1000 ключей (бэкенд сам дробит запросы к Jira). */
+export async function issueHistory(keys: string[]): Promise<HistoryReply> {
+  const out: HistoryReply = { items: {}, planFields: { start: null, end: null } };
+  for (let i = 0; i < keys.length || i === 0; i += 1000) {
+    const r = await post<HistoryReply>("/api/jira/tool/history", { keys: keys.slice(i, i + 1000) });
+    Object.assign(out.items, r.items);
+    out.planFields = r.planFields;
+    if (!keys.length) break;
+  }
+  return out;
+}

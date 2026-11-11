@@ -69,3 +69,19 @@ def test_app_in_mock_mode_uses_own_data_dir(tmp_path):
     assert all(p["status"] == "green" for p in out["providers"])
     assert out["commits"] == 200
     assert len(out["search"]["issues"]) == 5
+
+
+def test_changelog_walks_to_current_status_and_records_transitions():
+    """История статусов для графика Jira tool: выдуманный путь кончается нынешним статусом, переход через API — дописан."""
+    r = route("GET", "https://jira.example/rest/api/2/search", {"jql": "key in (SBER911-1001)", "expand": "changelog"}, None)
+    raw = r.body["issues"][0]
+    hist = raw["changelog"]["histories"]
+    if hist:
+        assert hist[-1]["items"][0]["toString"] == raw["fields"]["status"]["name"]
+        assert [h["created"] for h in hist] == sorted(h["created"] for h in hist)
+    route("POST", "https://jira.example/rest/api/2/issue/SBER911-1001/transitions", {}, {"transition": {"id": "3"}})
+    hist = jira.issue("SBER911-1001") and route("GET", "https://jira.example/rest/api/2/issue/SBER911-1001",
+                                                  {"expand": "changelog"}, None).body["changelog"]["histories"]
+    assert hist[-1]["items"][0]["toString"] == "В работе"
+    # без expand changelog не отдаётся
+    assert "changelog" not in route("GET", "https://jira.example/rest/api/2/issue/SBER911-1001", {}, None).body

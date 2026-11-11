@@ -20,6 +20,7 @@ _overrides: dict[str, dict] = {}          # key → поля, изменённы
 _created: dict[str, dict] = {}            # новые задачи
 _ids: dict[str, str] = {}                 # id → key
 _next_new = [9000]
+_history: dict[str, list[dict]] = {}      # key → смены статуса через API (поверх выдуманной истории)
 
 PROJECTS = [
     {"id": "10100", "key": "SBER911", "name": "СберБанк 911"},
@@ -218,6 +219,54 @@ def issue(key: str) -> dict:
     return {"id": _num_id(key), "key": key, "self": f"https://jira.mock/rest/api/2/issue/{key}", "fields": fields}
 
 
+# Путь статусов для выдуманной истории: от «Открыт» к текущему; иногда — возврат из тестирования в работу.
+_PATH = ["Открыт", "В работе", "На ревью", "Тестирование", "Готово"]
+_PATH_TO = {"Закрыт": _PATH + ["Закрыт"], "Подтверждение исправления": _PATH[:4] + ["Подтверждение исправления"],
+            "Отклонен": ["Открыт", "Отклонен"]}
+
+
+def _status_item(frm: str, to: str, at, who: dict) -> dict:
+    return {"id": f"h{abs(hash((frm, to, str(at)))) % 10**8}", "author": who, "created": jira_dt(at),
+            "items": [{"field": "status", "fieldtype": "jira", "from": _ST[frm]["id"], "fromString": frm,
+                       "to": _ST[to]["id"], "toString": to}]}
+
+
+def changelog(key: str, fields: dict) -> dict:
+    """История задачи: выдуманный путь от создания к нынешнему статусу (детерминированно по ключу) и настоящие
+    переходы через API этого мока. Время — с точностью до минут, как в Jira."""
+    from datetime import datetime
+    r = rng("changelog", key)
+    with _lock:
+        real = list(_history.get(key, []))
+    first_real = real[0]["items"][0]["fromString"] if real else None
+    status = first_real or str((fields.get("status") or {}).get("name") or "Открыт")
+    if status in _PATH_TO:
+        path = list(_PATH_TO[status])
+    elif status in _PATH:
+        path = _PATH[:_PATH.index(status) + 1]
+    else:
+        path = ["Открыт"]
+    if len(path) >= 4 and r.random() < 0.35:            # вернули из тестирования на доработку
+        i = path.index("Тестирование")
+        path = path[:i + 1] + ["В работе", "Тестирование"] + path[i + 1:]
+    created = datetime.strptime(str(fields.get("created")), "%Y-%m-%dT%H:%M:%S.000%z")
+    end = min(now(), created + timedelta(days=r.randint(5, 50)))
+    if real:
+        end = min(end, datetime.strptime(real[0]["created"], "%Y-%m-%dT%H:%M:%S.000%z"))
+    steps = len(path) - 1
+    out, at = [], created
+    for i in range(steps):
+        left = (end - at).total_seconds()
+        at = at + timedelta(seconds=max(60, left * r.uniform(0.2, 0.6) if i < steps - 1 else left * r.uniform(0.5, 0.95)))
+        at = at.replace(second=0, microsecond=0)
+        out.append(_status_item(path[i], path[i + 1], at, jira_user(r.choice(PEOPLE))))
+    return {"startAt": 0, "maxResults": len(out) + len(real), "total": len(out) + len(real), "histories": out + real}
+
+
+def _with_changelog(iss: dict, params: dict) -> dict:
+    return {**iss, "changelog": changelog(iss["key"], iss["fields"])} if "changelog" in str(params.get("expand", "")) else iss
+
+
 def _project_keys(project: str) -> list[str]:
     return [f"{project}-{n}" for n in range(1, BASE_COUNT + 1)] + [k for k in _created if k.startswith(project + "-")]
 
@@ -276,7 +325,7 @@ def jql_keys(jql: str) -> list[str]:
 def search(params: dict) -> Reply:
     keys = list(dict.fromkeys(jql_keys(str(params.get("jql", "")))))
     start, size = int(params.get("startAt", 0) or 0), int(params.get("maxResults", 50) or 50)
-    page = [issue(k) for k in keys[start:start + size]]
+    page = [_with_changelog(issue(k), params) for k in keys[start:start + size]]
     return ok({"startAt": start, "maxResults": size, "total": len(keys), "issues": page})
 
 
@@ -317,6 +366,10 @@ def _do_transition(key: str, body: dict) -> Reply:
     if not name:
         return Reply(400, {"errorMessages": [f"Мок: переход {tid} не найден"]})
     values: dict[str, Any] = {"status": _ST[name]}
+    prev = str((issue(key)["fields"].get("status") or {}).get("name") or "Открыт")
+    if prev != name:
+        with _lock:
+            _history.setdefault(key, []).append(_status_item(prev, name, now().replace(microsecond=0), {**ME}))
     res = (body.get("fields") or {}).get("resolution")
     if res:
         values["resolution"] = res
@@ -492,7 +545,7 @@ def handle(method: str, path: str, params: dict, body: Any) -> Optional[Reply]:
         rest = parts[2:]
         if not rest:
             if method == "GET":
-                return ok(issue(key))
+                return ok(_with_changelog(issue(key), params))
             if method == "PUT":
                 return _put_issue(key, body or {})
             if method == "DELETE":

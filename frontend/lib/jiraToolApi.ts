@@ -139,3 +139,12 @@ export async function issueHistory(keys: string[]): Promise<HistoryReply> {
   }
   return out;
 }
+
+/* ── Привязка задач: к эпику (Epic Link) или связью «Relates» ─────────────── */
+
+export interface LinkResult { key: string; ok?: boolean; error?: string }
+
+/** keys → target: epic — Epic Link = target (стори и дефекты эпика), relates — связь «Relates» (дефекты стори и задач). */
+export function linkIssues(target: string, keys: string[], mode: "epic" | "relates"): Promise<{ results: LinkResult[]; done: number }> {
+  return post("/api/jira/tool/link", { target, keys, mode });
+}

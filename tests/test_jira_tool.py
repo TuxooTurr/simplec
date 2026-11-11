@@ -368,3 +368,38 @@ def test_status_history_keeps_only_status_changes_sorted():
         {"at": "2026-11-11T11:15:00.000+0300", "from": "В работе", "to": "Тестирование", "author": "Иванов"},
     ]
     assert status_history({}) == []
+
+
+# ── Привязка задач к эпику и связью ──────────────────────────────────────────
+
+def test_привязка_к_эпику_ставит_epic_link_каждой(jira, monkeypatch):
+    monkeypatch.setattr(JT, "catalog", lambda db=None, refresh=False: {"epic_link": "customfield_10006"})
+
+    def put(m, path, params, body):
+        if "SBER911-2" in path:
+            raise HTTPException(400, "Эпику нельзя Epic Link")
+        return {}
+
+    fake = jira({"/rest/api/2/issue/": put})
+    res = JT.link_issues(JT.LinkBody(target="sber911-17", keys=["SBER911-1", "SBER911-2", "SBER911-17"], mode="epic"), db=None)
+    assert res["done"] == 1
+    assert [r["key"] for r in res["results"]] == ["SBER911-1", "SBER911-2"]     # сам эпик — не к себе
+    assert "нельзя" in res["results"][1]["error"]
+    call = next(c for c in fake.calls if "SBER911-1" in c[1])
+    assert call[0] == "PUT" and call[3] == {"fields": {"customfield_10006": "SBER911-17"}}
+
+
+def test_связь_relates_с_задачей(jira, monkeypatch):
+    import backend.api.jira_defects as JD
+    monkeypatch.setattr(JD, "link_type_name", lambda cfg: "Relates")
+    fake = jira({"/rest/api/2/issueLink": lambda m, p, q, b: {}})
+    res = JT.link_issues(JT.LinkBody(target="SBER911-5", keys=["SBER911-9"], mode="relates"), db=None)
+    assert res["done"] == 1
+    assert fake.calls[0][3] == {"type": {"name": "Relates"}, "inwardIssue": {"key": "SBER911-9"}, "outwardIssue": {"key": "SBER911-5"}}
+
+
+def test_привязка_неверный_режим_и_номер():
+    with pytest.raises(Exception):
+        JT.LinkBody(target="SBER911-5", keys=[], mode="parent")
+    with pytest.raises(HTTPException):
+        JT.link_issues(JT.LinkBody(target="не ключ", keys=["SBER911-1"]), db=None)

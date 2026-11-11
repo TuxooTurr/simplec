@@ -870,17 +870,22 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 _LINK_TYPE_HINTS = ("relates", "relate", "связ")
 
 
-def link_issue(cfg: dict, key: str, other: str, warnings: list[str]) -> bool:
-    """Связь key ↔ other типом «Relates» (или подходящим из типов этой Jira). Не вышло — предупреждение, не ошибка."""
+def link_type_name(cfg: dict) -> str:
+    """Тип связи «Relates» этой Jira (или подходящий по названию / направлениям; нет — первый из списка)."""
     try:
         types = _jira_request(cfg, "GET", "/rest/api/2/issueLinkType").get("issueLinkTypes") or []
     except HTTPException as e:
         types = []
         logger.warning("Jira link: типы связей недоступны: %s", e.detail)
     names = [t.get("name", "") for t in types if t.get("name")]
-    pick = next((n for n in names if any(h in n.lower() for h in _LINK_TYPE_HINTS)), None) \
+    return next((n for n in names if any(h in n.lower() for h in _LINK_TYPE_HINTS)), None) \
         or next((t.get("name") for t in types if any(h in (t.get("inward", "") + t.get("outward", "")).lower() for h in _LINK_TYPE_HINTS)), None) \
         or (names[0] if names else "Relates")
+
+
+def link_issue(cfg: dict, key: str, other: str, warnings: list[str]) -> bool:
+    """Связь key ↔ other типом «Relates» (или подходящим из типов этой Jira). Не вышло — предупреждение, не ошибка."""
+    pick = link_type_name(cfg)
     try:
         _jira_request(cfg, "POST", "/rest/api/2/issueLink",
                       json_body={"type": {"name": pick}, "inwardIssue": {"key": key}, "outwardIssue": {"key": other}})

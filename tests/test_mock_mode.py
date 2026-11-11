@@ -85,3 +85,10 @@ def test_changelog_walks_to_current_status_and_records_transitions():
     assert hist[-1]["items"][0]["toString"] == "В работе"
     # без expand changelog не отдаётся
     assert "changelog" not in route("GET", "https://jira.example/rest/api/2/issue/SBER911-1001", {}, None).body
+
+
+def test_issue_link_is_recorded_on_both_sides():
+    route("POST", "https://jira.example/rest/api/2/issueLink", {},
+          {"type": {"name": "Relates"}, "inwardIssue": {"key": "SBER911-40"}, "outwardIssue": {"key": "SBER911-41"}})
+    keys = lambda k: [(x.get("outwardIssue") or x.get("inwardIssue"))["key"] for x in jira.issue(k)["fields"]["issuelinks"]]
+    assert "SBER911-41" in keys("SBER911-40") and "SBER911-40" in keys("SBER911-41")

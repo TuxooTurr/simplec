@@ -449,6 +449,54 @@ def _parallel(fn, items: list) -> list:
         return list(pool.map(fn, items))
 
 
+class LinkBody(BaseModel):
+    """Привязать задачи keys к задаче target: epic — проставить им Epic Link = target (стори и дефекты эпика),
+    relates — связать с target типом «Relates» (дефекты стори и прочих задач)."""
+    target: str
+    keys: list[str] = Field(default_factory=list)
+    mode: str = Field("relates", pattern="^(epic|relates)$")
+
+
+@router.post("/api/jira/tool/link")
+def link_issues(body: LinkBody, db: Session = Depends(get_db)) -> dict:
+    """Привязка выбранных задач к эпику (Epic Link) или связью «Relates». По каждой — ok или ответ Jira: одна неудачная
+    (нет прав, у эпика нельзя Epic Link) не мешает остальным."""
+    from backend.api.jira_defects import link_type_name
+    target = (_clean_keys([body.target]) or [""])[0]
+    if not target:
+        raise HTTPException(422, f"Некорректный номер задачи: {body.target}")
+    keys = [k for k in _clean_keys(body.keys) if k != target]
+    if len(keys) > MAX_TRANSITION_KEYS:
+        raise HTTPException(422, f"За раз — не больше {MAX_TRANSITION_KEYS} задач")
+    if not keys:
+        return {"results": [], "done": 0}
+    cfg = _load_cfg(db)
+    if body.mode == "epic":
+        field = catalog(db=db).get("epic_link", _DEFAULT_EPIC_LINK)
+
+        def call(k: str) -> None:
+            _jira_request(cfg, "PUT", f"/rest/api/2/issue/{k}", json_body={"fields": {field: target}})
+    else:
+        kind = link_type_name(cfg)
+
+        def call(k: str) -> None:
+            _jira_request(cfg, "POST", "/rest/api/2/issueLink",
+                          json_body={"type": {"name": kind}, "inwardIssue": {"key": k}, "outwardIssue": {"key": target}})
+
+    def one(k: str) -> dict:
+        try:
+            call(k)
+            return {"key": k, "ok": True}
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
+            return {"key": k, "error": str(e.detail)[:300]}
+
+    results = _parallel(one, keys)
+    logger.info("Jira tool: привязка к %s (%s) — %d из %d", target, body.mode, sum(1 for r in results if r.get("ok")), len(keys))
+    return {"results": results, "done": sum(1 for r in results if r.get("ok"))}
+
+
 @router.post("/api/jira/tool/transitions")
 def transitions(body: KeysBody, db: Session = Depends(get_db)) -> dict:
     """Переходы workflow, доступные каждой задаче сейчас (с учётом прав пользователя токена)."""

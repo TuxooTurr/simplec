@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowRightLeft, Bug, Check, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Bug, Check, Link2, MessageSquareShare } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
@@ -26,10 +26,12 @@ function stageRank(info: StageInfo): number {
  * «Скопировать в чат» — отмеченные галочками показанные дефекты (по умолчанию все) в порядке таблицы:
  * статус (st), номер, название; под дефектом — поля, выбранные в «Поля в чат» (пустые не пишутся).
  * «Создать дефект» — форма дефекта: у эпика эпик подставлен, у стори дефект после создания связывается с ней.
+ * «Добавить» — существующие дефекты из Jira (то же окно, что «Добавить задачи в список»): у эпика им проставляется Epic Link,
+ * у стори и прочих задач — связь «Relates».
  * «Сменить статус» — отмеченные дефекты переводятся в Jira тем же окном, что и в списке (переходы workflow).
  * Поиск и фильтры колонок сужают таблицу; в чат и в смену статуса уходят только видимые отмеченные дефекты.
  */
-export default function DefectsModal({ open, issue, defects, stageOf, chat, onCreate, onTransitions, onClose }: {
+export default function DefectsModal({ open, issue, defects, stageOf, chat, onCreate, onAdd, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   defects: Issue[];
@@ -38,6 +40,8 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
   chat?: ChatFieldsCfg;
   /** Создать дефект к этой задаче; нет — кнопки нет (задача — черновик, её нет в Jira). */
   onCreate?: () => void;
+  /** Привязать существующие дефекты: у эпика — Epic Link, у остальных — связь «Relates»; нет — кнопки нет (черновик). */
+  onAdd?: () => void;
   /** Переходы выполнены — перечитать эти задачи из Jira. */
   onTransitions?: (keys: string[]) => void;
   onClose: () => void;
@@ -84,6 +88,12 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
           </label>
           <span className="ml-auto flex items-center gap-2">
             {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
+            {onAdd && (
+              <button type="button" onClick={onAdd}
+                title={categoryOf(issue) === "epic" ? `Найти дефекты в Jira и проставить им Epic Link ${issue.key}` : `Найти дефекты в Jira и связать их с ${issue.key}`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                <Link2 className="w-4 h-4" /> Добавить</button>
+            )}
             {onCreate && (
               <button type="button" onClick={onCreate}
                 title={categoryOf(issue) === "epic" ? "Новый дефект с эпиком " + issue.key : "Новый дефект, связанный с " + issue.key}

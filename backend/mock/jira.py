@@ -356,6 +356,21 @@ def _put_issue(key: str, body: dict) -> Reply:
     return Reply(204, None)
 
 
+def _add_link(body: dict) -> None:
+    """Связь двух задач — в обе стороны, как её показывает Jira (issuelinks у каждой)."""
+    a = str((body.get("inwardIssue") or {}).get("key") or "").upper()
+    b = str((body.get("outwardIssue") or {}).get("key") or "").upper()
+    kind = (body.get("type") or {}).get("name") or "Relates"
+    if not a or not b:
+        return
+    t = {"name": kind, "inward": "relates to", "outward": "relates to"}
+    for me, other, side in ((a, b, "outwardIssue"), (b, a, "inwardIssue")):
+        links = list(issue(me)["fields"].get("issuelinks") or [])
+        if not any((x.get("outwardIssue") or x.get("inwardIssue") or {}).get("key") == other for x in links):
+            links.append({"id": str(len(links) + 1), "type": t, side: {"key": other}})
+            _apply(me, {"issuelinks": links})
+
+
 def _transitions(key: str) -> Reply:
     return ok({"transitions": [{"id": sid, "name": name, "to": _ST[name], "fields": {}} for sid, name, _ in STATUSES]})
 
@@ -526,6 +541,7 @@ def handle(method: str, path: str, params: dict, body: Any) -> Optional[Reply]:
         users = [jira_user(x) for x in PEOPLE if not q or q in x["name"] or q in x["displayName"].lower()]
         return ok({"users": users} if t == "user/picker" else users)
     if t == "issueLink" and method == "POST":
+        _add_link(body or {})
         return Reply(201, None)
     if t == "issue" and method == "POST":
         return _create(body or {})

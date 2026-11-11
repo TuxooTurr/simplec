@@ -49,7 +49,8 @@ import {
   type ColCtx, type Issue, type LoadSettings, type OwnField, type Participant, type TaskList, type ToolState,
 } from "@/lib/jiraTool";
 import { applyStageStyles, blockingDefects, jiraStageOf, makeStageResolver, stageKeyOf, storiesByEpic, type Stage } from "@/lib/jiraStages";
-import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issueHistory, issuesByKeys, relatedIssues, searchIssues, taskChecklist, writePeopleFields, type IssueHistory } from "@/lib/jiraToolApi";
+import { notify } from "@/lib/notifications";
+import { getCatalog, getProjectFields, getProjects, getRelease, getStructureTree, issueHistory, issuesByKeys, linkIssues, relatedIssues, searchIssues, taskChecklist, writePeopleFields, type IssueHistory } from "@/lib/jiraToolApi";
 import JiraTimeline, { TL_ZOOMS, type TeamMember } from "@/components/jiratool/JiraTimeline";
 import { taskTimeline, type TaskTimeline } from "@/lib/jiraTimeline";
 import { describeNotes, dropSent, peopleFieldChanges, peopleSnapshot, queuePeopleChanges } from "@/lib/jiraPeopleSync";
@@ -110,6 +111,8 @@ export default function JiraToolSection() {
   const [view, setView] = useState<"list" | "chart">("list");
   /** Окна задач (описание, плановые даты) — несколько сразу: каждое сворачивается на полку независимо от других. */
   const [issueWins, setIssueWins] = useState<Issue[]>([]);
+  /** Окно «Добавить» в дефектах и сторях: какие задачи привязать к issue (то же окно, что «Добавить задачи в список»). */
+  const [linkFor, setLinkFor] = useState<{ issue: Issue; kind: "defects" | "stories" } | null>(null);
   const openIssueWin = (i: Issue) => setIssueWins(list => (list.some(x => x.key === i.key) ? list : [...list, i]));
   const [tlZoom, setTlZoom] = useState<number>(48);
   const [hist, setHist] = useState<Record<string, IssueHistory>>(() => historyCache.items);
@@ -996,6 +999,30 @@ export default function JiraToolSection() {
     });
   };
 
+  /**
+   * Привязать выбранные задачи к target: у эпика — Epic Link (дефекты и стори), у остальных — связь «Relates» (дефекты).
+   * Идёт фоном, итог — уведомлением; затем задачи и target перечитываются из Jira — окна дефектов и сторей обновляются сами.
+   */
+  const linkTo = async (target: Issue, kind: "defects" | "stories", issues: Issue[]) => {
+    const keys = issues.map(i => i.key);
+    if (!keys.length) return;
+    mergeIssues(issues);
+    const mode = categoryOf(target) === "epic" ? "epic" : "relates";
+    const what = kind === "stories" ? "Стори" : "Дефекты";
+    try {
+      const r = await linkIssues(target.key, keys, mode);
+      const bad = r.results.filter(x => !x.ok);
+      notify({
+        kind: bad.length ? (r.done ? "info" : "error") : "success",
+        title: `${what} → ${target.key}: ${mode === "epic" ? "Epic Link проставлен" : "связаны"} у ${r.done} из ${keys.length}`,
+        text: bad.length ? bad.map(b => `${b.key}: ${b.error}`).join(" · ") : keys.join(", "),
+      });
+    } catch (e) {
+      notify({ kind: "error", title: `${what} не привязаны к ${target.key}`, text: (e as Error).message });
+    }
+    await sync([...keys, target.key], []);
+  };
+
   // Выбор не сбрасываем: окно остаётся открытым для следующего шага. Сброс — при закрытии окна.
   const afterTransitions = (keys: string[]) => {
     void sync(keys, []);
@@ -1574,6 +1601,21 @@ export default function JiraToolSection() {
         </main>
       </div>
 
+      {linkFor && list && (() => {
+        const t = linkFor.issue;
+        const epic = categoryOf(t) === "epic";
+        const linked = linkFor.kind === "stories" ? (byEpic.get(t.key) ?? []) : (defectsOf(t) ?? []);
+        return (
+          <AddIssuesModal open project={projectKeyOfIssue(t.key)} onClose={() => setLinkFor(null)}
+            inList={new Set([t.key, ...linked.map(i => i.key)])} already="уже привязаны"
+            title={`${linkFor.kind === "stories" ? "Добавить стори к" : "Добавить дефекты к"} ${t.key}`}
+            saveLabel={epic ? "Проставить Epic Link" : "Связать"}
+            intro={epic
+              ? `Выбранным задачам в Jira проставится Epic Link → ${t.key}. Прежний эпик у них заменится.`
+              : `Выбранные задачи свяжутся с ${t.key} в Jira связью «Relates».`}
+            onAdd={issues => { void linkTo(t, linkFor.kind, issues); }} />
+        );
+      })()}
       {modal === "add" && list && (
         <AddIssuesModal open project={list.project} onClose={() => setModal(null)} inList={new Set(list.keys)}
           onAdd={(issues, sources: PickedSource[], extra) => {
@@ -1588,7 +1630,8 @@ export default function JiraToolSection() {
       )}
       {modal && typeof modal === "object" && "stageFor" in modal && (
         <StageModal open issue={modal.stageFor} stories={byEpic.get(modal.stageFor.key) ?? []} stageOf={stageOf} defectsOf={defectsOf} chat={chat}
-          ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onTransitions={afterTransitions} onClose={() => setModal(null)} />
+          ownStageOf={i => ownStageInfo(stageOf(i), defectIdx.get(i.key))} onTransitions={afterTransitions} onClose={() => setModal(null)}
+          onAdd={modal.stageFor.local ? undefined : () => setLinkFor({ issue: modal.stageFor, kind: "stories" })} />
       )}
       {STRUCTURE_ENABLED && modal === "import" && list && (
         <ImportStructureModal open listName={list.name} onImport={importStructure} onClose={() => setModal(null)} />
@@ -1654,7 +1697,8 @@ export default function JiraToolSection() {
       ))}
       {modal && typeof modal === "object" && "defectsFor" in modal && (
         <DefectsModal open issue={modal.defectsFor} defects={defectsOf(modal.defectsFor) ?? []} stageOf={stageOf} chat={chat}
-          onCreate={modal.defectsFor.local ? undefined : () => openDefect(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)} />
+          onCreate={modal.defectsFor.local ? undefined : () => openDefect(modal.defectsFor)} onTransitions={afterTransitions} onClose={() => setModal(null)}
+          onAdd={modal.defectsFor.local ? undefined : () => setLinkFor({ issue: modal.defectsFor, kind: "defects" })} />
       )}
       {modal && typeof modal === "object" && "own" in modal && (
         <OwnFieldModal open initial={modal.own} typeLocked={!!modal.own && ownUsed(modal.own.id)} onClose={() => setModal(null)}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowRightLeft, Check, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Check, Link2, MessageSquareShare } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { categoryOf, storiesChatReport, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
@@ -26,9 +26,10 @@ function stageRank(info: StageInfo): number {
  * «Скопировать в чат» — отмеченные галочками стори (по умолчанию все) в порядке таблицы, как отчёт общего списка:
  * статус (st), номер и название стори, под ней — «Поля в чат» и её активные дефекты.
  * «Сменить статус» — отмеченные стори переводятся в Jira тем же окном, что и в списке (переходы workflow).
+ * «Добавить» — существующие стори из Jira (то же окно, что «Добавить задачи в список»): им проставляется Epic Link эпика.
  * Поиск и фильтры колонок сужают таблицу; в чат и в смену статуса уходят только видимые отмеченные стори.
  */
-export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, chat, onTransitions, onClose }: {
+export default function StageModal({ open, issue, stories, stageOf, ownStageOf, defectsOf, chat, onAdd, onTransitions, onClose }: {
   open: boolean;
   issue: Issue;
   /** Стори эпика (через Epic Link). */
@@ -40,6 +41,8 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   defectsOf: (i: Issue) => Issue[] | null;
   /** «Поля в чат» списка; нет — выбора нет, в чат только статус, номер и название. */
   chat?: ChatFieldsCfg;
+  /** Привязать существующие стори к эпику (Epic Link); нет — кнопки нет (черновик). */
+  onAdd?: () => void;
   /** Переходы выполнены — перечитать эти задачи из Jira. */
   onTransitions?: (keys: string[]) => void;
   onClose: () => void;
@@ -81,8 +84,14 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
           <section className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold text-text-main">Стори эпика · {stories.length}</h3>
+              <span className="ml-auto flex items-center gap-2">
+                {onAdd && (
+                  <button type="button" onClick={onAdd} title={`Найти стори в Jira и проставить им Epic Link ${issue.key}`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                    <Link2 className="w-4 h-4" /> Добавить</button>
+                )}
               {stories.length > 0 && (
-                <span className="ml-auto flex items-center gap-2">
+                <>
                   {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
                   {onTransitions && (
                     <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
@@ -95,8 +104,9 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                     title="Статус (st), номер и название стори, «Поля в чат» и активные дефекты — как отчёт списка; галочками выберите, что отправить"
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                     <MessageSquareShare className="w-4 h-4" /> Скопировать в чат ({toSend.length} из {visible.length})</button>
-                </span>
+                </>
               )}
+              </span>
             </div>
             {stories.length === 0 ? (
               <p className="text-sm text-text-muted p-4 border border-dashed border-border-main rounded-xl text-center">

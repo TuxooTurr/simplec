@@ -20,8 +20,16 @@ const JQL_LIMIT = 1000;
  * Поиск идёт в настоящую Jira; найденные задачи уходят в список вместе с их полями.
  * Задачи из JQL-фильтра и релиза запоминают источник: при обновлении его состав сверяется со списком.
  */
-export default function AddIssuesModal({ open, project, onClose, inList, onAdd }: {
+export default function AddIssuesModal({ open, project, onClose, inList, onAdd, title = "Добавить задачи в список",
+  saveLabel = "Сохранить", intro, already = "уже в списке" }: {
   open: boolean;
+  /** Заголовок окна; то же окно привязывает дефекты и стори к задаче (DefectsModal / StageModal → «Добавить»). */
+  title?: string;
+  saveLabel?: string;
+  /** Пояснение над вкладками: что будет с выбранными задачами. */
+  intro?: string;
+  /** Подпись задач из inList, которые нельзя выбрать: «уже в списке», «уже привязаны». */
+  already?: string;
   /** Проект списка: голый номер задачи и примеры JQL — из него. */
   project: string;
   onClose: () => void;
@@ -105,8 +113,9 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
     "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 font-mono";
 
   return (
-    <Modal open={open} onClose={onClose} title="Добавить задачи в список" size="max-w-4xl">
+    <Modal open={open} onClose={onClose} title={title} size="max-w-4xl">
       <div className="space-y-3">
+        {intro && <p className="text-sm text-text-muted">{intro}</p>}
         <div className="flex gap-1" role="tablist">
           <button type="button" role="tab" aria-selected={tab === "keys"} onClick={() => { setTab("keys"); setFound(null); setErr(""); setNote(""); }}
             className={tabCls(tab === "keys")}><Hash className="w-4 h-4" /> По номеру или ссылке</button>
@@ -172,7 +181,7 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
                 <input type="checkbox" checked={allOn} disabled={!fresh.length}
                   onChange={() => (allOn ? setBasket(b => b.filter(x => !fresh.some(f => f.key === x.key))) : put(fresh, jqlSource()))} />
                 Найдено: {total > found.length ? `${total}, показаны первые ${found.length}` : found.length}
-                {found.length - fresh.length > 0 && ` · уже в списке: ${found.length - fresh.length}`}
+                {found.length - fresh.length > 0 && ` · ${already}: ${found.length - fresh.length}`}
               </label>
               <span className="ml-auto text-[11px]" title="При обновлении из Jira фильтр перезапускается: новые задачи придут с «n», выпавшие пометятся «У»">
                 {jqlRun?.truncated ? `больше ${JQL_LIMIT} — состав фильтра не отслеживается` : "состав фильтра будет сверяться при обновлении"}
@@ -232,7 +241,7 @@ export default function AddIssuesModal({ open, project, onClose, inList, onAdd }
               onClose();
             }}
             className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
-            Сохранить{basket.length ? ` (${basket.length})` : ""}
+            {saveLabel}{basket.length ? ` (${basket.length})` : ""}
           </button>
         </div>
       </div>

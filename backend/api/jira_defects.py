@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -729,6 +730,32 @@ def _ensure_reference_fields(cfg: dict, key: str, resolved: dict,
             )
 
 
+# «Field 'customfield_22400' cannot be set. It is not on the appropriate screen, or unknown.» — поле есть в запросе, но не на
+# экране создания этого типа задачи (у SBER911 ИТ-услуга и КЭ есть у «Дефекта» и нет у «Задачи»).
+_OFFSCREEN_RE = re.compile(r"Field '([\w.-]+)' cannot be set")
+# Без этих полей задачу создавать нельзя — их не выкидываем, а показываем ошибку как есть.
+_KEEP_FIELDS = {"project", "issuetype", "summary"}
+
+
+def _create_skipping_offscreen(cfg: dict, fields: dict) -> tuple[dict, list[str]]:
+    """Создать задачу; поля, которых нет на экране создания, Jira отвергает всем запросом — убираем их и пробуем ещё раз
+    (до трёх повторов: обычно Jira перечисляет все такие поля сразу). Возвращает ответ Jira и убранные поля."""
+    dropped: list[str] = []
+    body = dict(fields)
+    for _ in range(3):
+        try:
+            return _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": body}), dropped
+        except HTTPException as e:
+            bad = [f for f in _OFFSCREEN_RE.findall(str(e.detail)) if f in body and f not in _KEEP_FIELDS]
+            if e.status_code != 400 or not bad:
+                raise
+            for f in bad:
+                body.pop(f, None)
+                dropped.append(f)
+            logger.warning("Jira create: полей нет на экране создания — повтор без них: %s", bad)
+    return _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": body}), dropped
+
+
 @router.post("/api/jira/create")
 def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict:
     if not body.project.strip():
@@ -828,7 +855,13 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     logger.info("Jira create: project=%s issuetype=%s итоговые fields=%s",
                 body.project, fields.get("issuetype"), fields)
 
-    created = _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": fields})
+    created, dropped = _create_skipping_offscreen(cfg, fields)
+    if dropped:
+        names = {JC.FIELD_IT_SERVICE: "ИТ-услуга", JC.FIELD_KE: "КЭ", JC.FIELD_STAND_TYPE: "Тип стенда",
+                 JC.FIELD_EPIC_LINK: "Эпик (Epic Link)"}
+        warnings.append(
+            f"Поля нет на экране создания «{resolved.get('_issuetype', issuetype)}» в Jira — не заполнено: "
+            + ", ".join(f"{names.get(f, f)} ({f})" for f in dropped))
     key = created.get("key", "")
     logger.info("Jira create: создан %s", key)
 
@@ -851,13 +884,13 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 
     # ИТ-услуга и КЭ обязательны по процессу, но Jira может принять создание и
     # молча их проигнорировать — проверяем факт и дозаполняем.
-    if is_sber911 and key:
-        _ensure_reference_fields(
-            cfg, key, resolved,
-            [(JC.FIELD_IT_SERVICE, "ИТ-услуга", JC.IT_SERVICE),
-             (resolved.get("ke", {}).get("id") or JC.FIELD_KE, "КЭ", JC.KE)],
-            warnings,
-        )
+    # Поля, которых нет на экране этого типа задачи (у «Задачи» — ИТ-услуги и КЭ), не дозаполняем: Jira их не примет.
+    refs = [(f, label, value) for f, label, value in (
+        (JC.FIELD_IT_SERVICE, "ИТ-услуга", JC.IT_SERVICE),
+        (resolved.get("ke", {}).get("id") or JC.FIELD_KE, "КЭ", JC.KE),
+    ) if f not in dropped]
+    if is_sber911 and key and refs:
+        _ensure_reference_fields(cfg, key, resolved, refs, warnings)
 
     if key and body.link_key.strip():
         link_issue(cfg, key, body.link_key.strip().upper(), warnings)

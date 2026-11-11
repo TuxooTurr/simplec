@@ -392,9 +392,18 @@ def _do_transition(key: str, body: dict) -> Reply:
     return Reply(204, None)
 
 
+# Поля, которых нет на экране создания «Задачи» в SBER911 (ИТ-услуга, КЭ): Jira отвергает весь запрос.
+_TASK_OFFSCREEN = ("customfield_22400", "customfield_18300")
+
+
 def _create(body: dict) -> Reply:
     f = dict(body.get("fields") or {})
     project = str((f.get("project") or {}).get("key") or "SBER911")
+    if (f.get("issuetype") or {}).get("name") == "Задача":
+        bad = [x for x in _TASK_OFFSCREEN if x in f]
+        if bad:
+            return Reply(400, {"errorMessages": [], "errors": {
+                x: f"Field '{x}' cannot be set. It is not on the appropriate screen, or unknown." for x in bad}})
     with _lock:
         _next_new[0] += 1
         key = f"{project}-{_next_new[0]}"

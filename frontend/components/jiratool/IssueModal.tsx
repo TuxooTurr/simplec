@@ -44,7 +44,7 @@ const DATE_INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 b
   "focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50";
 
 /**
- * Плановые даты задачи — «Дата начала работ» и «Дата завершения», необязательные. Читаются и пишутся в Jira тем же
+ * Плановые даты задачи — «Плановое начало» и «Плановое окончание», необязательные. Читаются и пишутся в Jira тем же
  * кодом, что окно задачи «Трекинга AQA» (/api/aqa/issue/{key}): поля «Плановое начало/окончание» ищутся по названию,
  * поле для записи — по экрану редактирования (editmeta). Поля нет на экране — дата только для чтения.
  */
@@ -87,13 +87,13 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
   return (
     <div className="flex flex-wrap items-end gap-3 pb-3 border-b border-border-main">
       <label className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-        <span className="block mb-1">Дата начала работ</span>
+        <span className="block mb-1">Плановое начало</span>
         <input type="date" value={start} onChange={e => setStart(e.target.value)} disabled={!loaded || !loaded.canStart || busy}
           title={loaded && !loaded.canStart ? "Поля плановой даты нет на экране редактирования задачи в Jira" : loaded?.canStart ?? undefined}
           className={DATE_INPUT} />
       </label>
       <label className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
-        <span className="block mb-1">Дата завершения</span>
+        <span className="block mb-1">Плановое окончание</span>
         <input type="date" value={end} onChange={e => setEnd(e.target.value)} disabled={!loaded || !loaded.canEnd || busy}
           title={loaded && !loaded.canEnd ? "Поля плановой даты нет на экране редактирования задачи в Jira" : loaded?.canEnd ?? undefined}
           className={DATE_INPUT} />
@@ -105,10 +105,10 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
           {busy ? "Записываю…" : "Записать в Jira"}</button>
       )}
       <p className={`basis-full text-[11px] ${note?.kind === "err" || bad ? "text-red-600 dark:text-red-400" : note?.kind === "warn" ? "text-amber-700 dark:text-amber-300" : "text-text-muted"}`}>
-        {bad ? "Дата начала позже даты завершения" : note ? note.text
+        {bad ? "Плановое начало позже планового окончания" : note ? note.text
           : "Необязательно. Из полей Jira «Плановое начало» и «Плановое окончание» — по ним задача стоит на графике и считается срок."}
         {!bad && loaded && !start && loaded.created && (
-          <span className="block">Дата начала не задана — на графике считается от создания задачи: {fmtIso(loaded.created)}.</span>
+          <span className="block">Плановое начало не задано — на графике считается от создания задачи: {fmtIso(loaded.created)}.</span>
         )}
       </p>
     </div>

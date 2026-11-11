@@ -289,3 +289,38 @@ def test_подбирается_форма_название_с_id(fake_jira):
     res = JD.create_defect(_create(), db=None)
     assert jira.stored[IT_SERVICE_FIELD] == labelled
     assert not [w for w in res["warnings"] if "ИТ-услуга" in w]
+
+
+def test_задача_без_полей_экрана_создаётся_с_предупреждением(fake_jira, monkeypatch):
+    """Регистрация «Задачи» на SBER911: ИТ-услуги и КЭ нет на её экране — Jira отвергала весь запрос (11.11.2026)."""
+    jira = fake_jira()
+    posts: list[dict] = []
+    base = jira.__call__
+
+    def call(cfg, method, path, json_body=None, params=None, **kw):
+        if method == "POST" and path == "/rest/api/2/issue":
+            posts.append(dict(json_body["fields"]))
+            if IT_SERVICE_FIELD in json_body["fields"] or KE_FIELD in json_body["fields"]:
+                raise JD.HTTPException(400, f"Jira: {IT_SERVICE_FIELD}: Field '{IT_SERVICE_FIELD}' cannot be set. It is not on the "
+                                            f"appropriate screen, or unknown.; {KE_FIELD}: Field '{KE_FIELD}' cannot be set. It is "
+                                            "not on the appropriate screen, or unknown. [ID запроса для админа Jira: 1x2x3]")
+        return base(cfg, method, path, json_body=json_body, params=params, **kw)
+
+    monkeypatch.setattr(JD, "_jira_request", call)
+    res = JD.create_defect(JD.CreateDefectBody(project="SBER911", summary="Задача", issuetype="Задача"), db=None)
+    assert res["key"] == "SBER911-1"
+    assert len(posts) == 2 and IT_SERVICE_FIELD not in posts[1] and KE_FIELD not in posts[1]
+    texts = " ".join(res["warnings"])
+    assert "ИТ-услуга" in texts and "КЭ" in texts and "нет на экране" in texts
+    assert not jira.edit_attempts          # дозаполнять убранные поля не пытаемся
+
+
+def test_прочие_ошибки_создания_не_глотаются(fake_jira, monkeypatch):
+    fake_jira()
+
+    def call(cfg, method, path, json_body=None, params=None, **kw):
+        raise JD.HTTPException(400, "Jira: summary: обязательно")
+
+    monkeypatch.setattr(JD, "_jira_request", call)
+    with pytest.raises(JD.HTTPException):
+        JD.create_defect(JD.CreateDefectBody(project="SBER911", summary="x", issuetype="Задача"), db=None)

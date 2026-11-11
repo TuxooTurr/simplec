@@ -19,6 +19,7 @@ import {
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
 import { updateAqaIssue } from "@/lib/aqaApi";
+import JiraUserField from "./JiraUserField";
 import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, type Participant } from "@/lib/jiraTool";
 import { RefreshIcon } from "@/components/ui/RefreshButton";
 
@@ -129,9 +130,14 @@ export default function IssueFormModal({ control, project, participants, listNam
   const [standType, setStandType] = useState(initial?.standType ?? "");
   const [epicKey, setEpicKey] = useState(initial?.epicKey ?? prefill?.epicKey ?? "");
   const [participantId, setParticipantId] = useState(initial?.participantId ?? "");
-  /** Плановые даты — необязательны, уходят в Jira сразу после создания (как в окне задачи). */
+  /**
+   * Плановое начало и окончание (поля Jira «Плановое начало / окончание», как в «Трекинге AQA») и исполнитель из Jira —
+   * необязательны, пишутся в задачу сразу после создания тем же кодом, что окно задачи (/api/aqa/issue/{key}):
+   * поля плановых дат у каждого сервера свои, а createmeta корп. Jira закрыт.
+   */
   const [planStart, setPlanStart] = useState("");
   const [planEnd, setPlanEnd] = useState("");
+  const [assignee, setAssignee] = useState({ jiraName: "", jiraDisplay: "" });
 
   /* ── Jira ── */
   const [settings, setSettings] = useState<JiraSettings | null>(null);
@@ -241,12 +247,15 @@ export default function IssueFormModal({ control, project, participants, listNam
           warnings.push(`${res.key} создана, но вложения не приложились: ${(e as Error).message}. Приложите их в Jira вручную.`);
         }
       }
-      if (planStart || planEnd) {
+      if (planStart || planEnd || assignee.jiraName) {
         try {
-          const r = await updateAqaIssue(res.key, { ...(planStart ? { planStart } : {}), ...(planEnd ? { planEnd } : {}) });
+          const r = await updateAqaIssue(res.key, {
+            ...(planStart ? { planStart } : {}), ...(planEnd ? { planEnd } : {}),
+            ...(assignee.jiraName ? { assignee: assignee.jiraName } : {}),
+          });
           warnings.push(...r.warnings);
         } catch (e) {
-          warnings.push(`${res.key} создана, но плановые даты не записались: ${(e as Error).message}. Укажите их в окне задачи.`);
+          warnings.push(`${res.key} создана, но плановые даты и исполнитель не записались: ${(e as Error).message}. Укажите их в окне задачи.`);
         }
       }
       if (afterCreate) {
@@ -299,8 +308,8 @@ export default function IssueFormModal({ control, project, participants, listNam
       <Modal open={open} onClose={onClose} title="Создано в Jira" size="max-w-lg" minimizable={false}>
         <div className="space-y-3">
           <p className="flex items-center gap-2 text-sm text-text-main">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {type} <b>{created.key}</b> создан
-            {jiraOnly ? "." : initial ? <> — черновик {initial.key} заменён на него в списке.</> : addToList ? " и добавлен в список." : " (в список не добавлен)."}
+            <CheckCircle2 className="w-5 h-5 text-emerald-500" /> {type} <b>{created.key}</b> создан{isDefect ? "" : "а"}
+            {jiraOnly ? "." : initial ? <> — черновик {initial.key} заменён на {isDefect ? "него" : "неё"} в списке.</> : addToList ? ` и добавлен${isDefect ? "" : "а"} в список.` : ` (в список не добавлен${isDefect ? "" : "а"}).`}
           </p>
           <a href={created.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
             Открыть в Jira <ExternalLink className="w-3.5 h-3.5" />
@@ -464,18 +473,22 @@ export default function IssueFormModal({ control, project, participants, listNam
                 </div>
               ) : <div />}
               <div>
-                <label htmlFor="if-plan-start" className={LBL}>Дата начала работ</label>
+                <label htmlFor="if-plan-start" className={LBL}>Плановое начало</label>
                 <input id="if-plan-start" type="date" value={planStart} onChange={e => setPlanStart(e.target.value)} className={INPUT}
-                  title="Необязательно. Пишется в поле Jira «Плановое начало» при создании в Jira" />
+                  title="Необязательно. Поле Jira «Плановое начало»: с него задача стоит на графике. Нет — от даты создания" />
               </div>
               <div>
-                <label htmlFor="if-plan-end" className={LBL}>Дата завершения</label>
+                <label htmlFor="if-plan-end" className={LBL}>Плановое окончание</label>
                 <input id="if-plan-end" type="date" value={planEnd} min={planStart || undefined} onChange={e => setPlanEnd(e.target.value)} className={INPUT}
-                  title="Необязательно. Пишется в поле Jira «Плановое окончание» при создании в Jira; по ней считается срок на графике" />
+                  title="Необязательно. Поле Jira «Плановое окончание»: по нему считается срок на графике" />
               </div>
               {planStart && planEnd && planStart > planEnd && (
-                <p className="col-span-2 -mt-1 text-[11px] text-red-600 dark:text-red-400">Дата начала позже даты завершения</p>
+                <p className="col-span-2 -mt-1 text-[11px] text-red-600 dark:text-red-400">Плановое начало позже планового окончания</p>
               )}
+              <div className="col-span-2">
+                <span className={LBL}>Исполнитель</span>
+                <JiraUserField label="" jiraOk={jiraReady} name={assignee.jiraName} display={assignee.jiraDisplay} onChange={setAssignee} />
+              </div>
               <div className="col-span-2">
                 <div className="flex items-center justify-between mb-1.5">
                   <label htmlFor="if-epic" className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Эпик</label>
@@ -562,7 +575,7 @@ export default function IssueFormModal({ control, project, participants, listNam
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
               {initial ? "Сохранить черновик" : "Создать в Shark"}</button>}
             <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked || (!!epicChoices && !epicKey) || (!!planStart && !!planEnd && planStart > planEnd)} onClick={sendToJira}
-              title={jiraReady ? `Создать ${type.toLowerCase()} в Jira (${project})` : "Сначала подключите Jira"}
+              title={jiraReady ? `Создать ${isDefect ? "дефект" : "задачу"} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {initial ? "Отправить в Jira" : "Создать в Jira"}
             </button>

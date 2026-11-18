@@ -393,13 +393,13 @@ def _do_transition(key: str, body: dict) -> Reply:
 
 
 # Поля, которых нет на экране создания «Задачи» в SBER911 (ИТ-услуга, КЭ): Jira отвергает весь запрос.
-_TASK_OFFSCREEN = ("customfield_22400", "customfield_18300")
+_TASK_OFFSCREEN = ("customfield_22400", "customfield_18300", F_KE)
 
 
 def _create(body: dict) -> Reply:
     f = dict(body.get("fields") or {})
     project = str((f.get("project") or {}).get("key") or "SBER911")
-    if (f.get("issuetype") or {}).get("name") == "Задача":
+    if project == "SBER911" and (f.get("issuetype") or {}).get("name") == "Задача":
         bad = [x for x in _TASK_OFFSCREEN if x in f]
         if bad:
             return Reply(400, {"errorMessages": [], "errors": {
@@ -435,6 +435,8 @@ def _createmeta_types(project: str) -> Reply:
 def _createmeta_fields(project: str, type_id: str) -> Reply:
     keep = {"summary", "description", "assignee", "priority", "labels", "components", "fixVersions", "duedate",
             F_EPIC_LINK, F_KE, F_ENV, F_TEAM}
+    if project == "SBER911" and type_id == TYPES["Задача"]["id"]:
+        keep.difference_update(_TASK_OFFSCREEN)
     vals = [{"fieldId": f["id"], "name": f["name"], "schema": f["schema"], "required": f["id"] == "summary",
              "operations": ["set"]} for f in FIELDS if f["id"] in keep]
     return ok({"values": vals, "total": len(vals), "isLast": True, "maxResults": 50, "startAt": 0})

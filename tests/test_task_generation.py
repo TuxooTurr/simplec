@@ -64,7 +64,7 @@ def test_задача_уходит_своим_типом_без_полей_де�
             assert fid not in sent, f"поле дефекта {fid} ушло в задачу"
     assert JC.FIELD_STAND_TYPE not in sent
     assert sent["security"] == JC.DEFAULT_FIELDS["security"]
-    assert JC.FIELD_IT_SERVICE in sent                       # ИТ-услуга — общая для проекта
+    assert {JC.FIELD_IT_SERVICE, JC.FIELD_KE}.isdisjoint(sent)
 
 
 def test_дефект_по_прежнему_с_полями_дефекта(sent):
@@ -73,3 +73,4 @@ def test_дефект_по_прежнему_с_полями_дефекта(sent)
     for fid in JC.DEFAULT_FIELDS:
         assert fid in sent
     assert JC.FIELD_STAND_TYPE in sent
+    assert {JC.FIELD_IT_SERVICE, JC.FIELD_KE} <= sent.keys()

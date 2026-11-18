@@ -148,6 +148,12 @@ def _resolve_token(cfg: dict) -> str:
     raise HTTPException(400, "Jira-токен не настроен: получите его по логину/паролю Сигмы или укажите путь к файлу (Настройки → Jira)")
 
 
+class _JiraResponseError(HTTPException):
+    def __init__(self, status_code: int, detail: str, jira_detail: str):
+        super().__init__(status_code, detail)
+        self.jira_detail = jira_detail
+
+
 def _jira_request(cfg: dict, method: str, path: str,
                   json_body: Optional[dict] = None,
                   params: Optional[dict] = None,
@@ -204,19 +210,20 @@ def _jira_request(cfg: dict, method: str, path: str,
     if resp.status_code == 403:
         raise HTTPException(403, "Jira: нет прав на операцию (403)")
     if resp.status_code >= 400:
-        detail = resp.text[:500]
+        jira_detail = resp.text
         try:
             j = resp.json()
             msgs = j.get("errorMessages", []) or []
             errs = j.get("errors", {}) or {}
             parts = list(msgs) + [f"{k}: {v}" for k, v in errs.items()]
             if parts:
-                detail = "; ".join(parts)[:500]
+                jira_detail = "; ".join(parts)
         except Exception:
             pass
+        detail = jira_detail[:500]
         if request_id:
             detail += f" [ID запроса для админа Jira: {request_id}]"
-        raise HTTPException(resp.status_code, f"Jira: {detail}")
+        raise _JiraResponseError(resp.status_code, f"Jira: {detail}", jira_detail)
 
     if resp.status_code == 204 or not resp.content:
         return {}
@@ -235,11 +242,7 @@ _FIELDS_ERROR_TTL = 20   # провал резолва — почти не ке�
 
 
 def _pick_issuetype(issuetypes: list[dict], wanted: str) -> Optional[dict]:
-    it = next((t for t in issuetypes if t.get("name", "").lower() == wanted.lower()), None)
-    if it is None:
-        it = next((t for t in issuetypes if t.get("name", "").lower() in ("bug", "баг", "ошибка", "дефект")),
-                  issuetypes[0] if issuetypes else None)
-    return it
+    return next((t for t in issuetypes if t.get("name", "").casefold() == wanted.casefold()), None)
 
 
 def _match_fields(field_items: list[tuple[str, dict]], issuetype_name: str) -> dict:
@@ -302,7 +305,7 @@ def _resolve_fields(cfg: dict, project: str, issuetype: str) -> dict:
       1) классический createmeta с expand (Jira ≤ 8.x);
       2) постраничный createmeta Jira 8.4+/9 (/createmeta/{key}/issuetypes/{id}) —
          старый эндпоинт там отключён и отдаёт 403/404/405.
-    При полном провале возвращаем {"_error": ...} — создание работает без кастомных полей.
+    При полном провале возвращаем {"_error": ...} и сохраняем запрошенный тип задачи.
     """
     cache_key = f"{cfg['base_url']}|{project}|{issuetype}"
     now = time.time()
@@ -732,7 +735,10 @@ def _ensure_reference_fields(cfg: dict, key: str, resolved: dict,
 
 # «Field 'customfield_22400' cannot be set. It is not on the appropriate screen, or unknown.» — поле есть в запросе, но не на
 # экране создания этого типа задачи (у SBER911 ИТ-услуга и КЭ есть у «Дефекта» и нет у «Задачи»).
-_OFFSCREEN_RE = re.compile(r"Field '([\w.-]+)' cannot be set")
+_OFFSCREEN_RE = re.compile(
+    r"Field '([\w.-]+)' cannot be set\.\s+It is not on the appropriate screen, or unknown",
+    re.IGNORECASE,
+)
 # Без этих полей задачу создавать нельзя — их не выкидываем, а показываем ошибку как есть.
 _KEEP_FIELDS = {"project", "issuetype", "summary"}
 
@@ -746,8 +752,11 @@ def _create_skipping_offscreen(cfg: dict, fields: dict) -> tuple[dict, list[str]
         try:
             return _jira_request(cfg, "POST", "/rest/api/2/issue", json_body={"fields": body}), dropped
         except HTTPException as e:
-            bad = [f for f in _OFFSCREEN_RE.findall(str(e.detail)) if f in body and f not in _KEEP_FIELDS]
-            if e.status_code != 400 or not bad:
+            if e.status_code != 400:
+                raise
+            detail = e.jira_detail if isinstance(e, _JiraResponseError) else str(e.detail)
+            bad = [f for f in dict.fromkeys(_OFFSCREEN_RE.findall(detail)) if f in body and f not in _KEEP_FIELDS]
+            if not bad:
                 raise
             for f in bad:
                 body.pop(f, None)
@@ -768,7 +777,10 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 
     cfg = _load_cfg(db)
     issuetype = body.issuetype.strip() or cfg["issuetype"]
-    is_defect = issuetype.lower() in ("дефект", "bug", "баг", "ошибка") or issuetype == cfg["issuetype"]
+    type_name = issuetype.casefold()
+    is_defect = type_name in ("дефект", "bug", "баг", "ошибка") or (
+        type_name not in ("задача", "task") and type_name == cfg["issuetype"].casefold()
+    )
     resolved = _resolve_fields(cfg, body.project.strip(), issuetype)
 
     description = body.description
@@ -799,16 +811,19 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
         fields["assignee"] = {"name": body.assignee.strip()}
 
     # ── SBER911: ИТ-услуга и КЭ + дефолты справочных полей ──
+    refs: list[tuple[str, str, dict]] = []
     if is_sber911:
-        # ИТ-услуга и КЭ фиксированы для проекта и уходят ВСЕГДА, независимо от
-        # выбранного компонента. Раньше КЭ бралась из справочника по компоненту,
-        # и при незнакомом (или невыбранном) компоненте обязательное поле
-        # не уходило вовсе.
         ke_field = resolved.get("ke", {}).get("id") or JC.FIELD_KE
-        fields[ke_field] = _reference_value(resolved, ke_field, JC.KE)
-        fields[JC.FIELD_IT_SERVICE] = _reference_value(
-            resolved, JC.FIELD_IT_SERVICE, JC.IT_SERVICE,
-        )
+        # Для дефекта эти значения обязательны по процессу. Для остальных типов
+        # отправляем их только при подтверждении от Jira для экрана создания.
+        available = resolved.get("_by_id", {})
+        for fid, label, value in (
+            (JC.FIELD_IT_SERVICE, "ИТ-услуга", JC.IT_SERVICE),
+            (ke_field, "КЭ", JC.KE),
+        ):
+            if is_defect or fid in available:
+                fields[fid] = _reference_value(resolved, fid, value)
+                refs.append((fid, label, value))
 
         if is_defect:
             for fid, value in JC.DEFAULT_FIELDS.items():
@@ -841,16 +856,15 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
             fields[JC.FIELD_EPIC_LINK] = body.epic_key.strip()
         else:
             warnings.append("«Эпик» не установлен — поле Epic Link не найдено в проекте")
-    # На SBER911 КЭ задана процессом и уже проставлена выше — извне её не меняем.
+    # На SBER911 КЭ задаётся процессом — извне её не меняем.
     if body.ke.strip() and not is_sber911:
         _set_custom("ke", body.ke, "КЭ")
     _set_custom("environment", body.environment, "Среда обнаружения")
 
     if resolved.get("_error"):
         logger.warning(
-            "Jira create: createmeta недоступен (%s) — КЭ/эпик/среда для project=%s "
-            "уходят по захардкоженным customfield id без проверки реальной схемы поля",
-            resolved["_error"], body.project,
+            "Jira create: createmeta недоступен для project=%s issuetype=%s (%s)",
+            body.project, issuetype, resolved["_error"],
         )
     logger.info("Jira create: project=%s issuetype=%s итоговые fields=%s",
                 body.project, fields.get("issuetype"), fields)
@@ -884,12 +898,9 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
 
     # ИТ-услуга и КЭ обязательны по процессу, но Jira может принять создание и
     # молча их проигнорировать — проверяем факт и дозаполняем.
-    # Поля, которых нет на экране этого типа задачи (у «Задачи» — ИТ-услуги и КЭ), не дозаполняем: Jira их не примет.
-    refs = [(f, label, value) for f, label, value in (
-        (JC.FIELD_IT_SERVICE, "ИТ-услуга", JC.IT_SERVICE),
-        (resolved.get("ke", {}).get("id") or JC.FIELD_KE, "КЭ", JC.KE),
-    ) if f not in dropped]
-    if is_sber911 and key and refs:
+    # Дозаполняем только справочные поля, которые Jira приняла при создании.
+    refs = [ref for ref in refs if ref[0] not in dropped]
+    if key and refs:
         _ensure_reference_fields(cfg, key, resolved, refs, warnings)
 
     if key and body.link_key.strip():

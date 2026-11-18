@@ -5,6 +5,7 @@
 """
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -291,28 +292,72 @@ def test_подбирается_форма_название_с_id(fake_jira):
     assert not [w for w in res["warnings"] if "ИТ-услуга" in w]
 
 
-def test_задача_без_полей_экрана_создаётся_с_предупреждением(fake_jira, monkeypatch):
-    """Регистрация «Задачи» на SBER911: ИТ-услуги и КЭ нет на её экране — Jira отвергала весь запрос (11.11.2026)."""
+@pytest.mark.parametrize("available_refs", [None, (), (KE_FIELD,)])
+def test_задача_отправляет_только_разрешённые_справочные_поля(fake_jira, monkeypatch, available_refs):
+    """Первый POST должен создавать задачу и при закрытом доступе к createmeta."""
     jira = fake_jira()
+    expected_refs = set(available_refs or ())
+    for fid in expected_refs:
+        jira.stored[fid] = [dict(JC.KE)]
+    monkeypatch.setattr(JD, "_resolve_fields", lambda *args: (
+        _schema("array", "summary", *available_refs) if available_refs is not None else {"_error": "403"}
+    ))
     posts: list[dict] = []
-    base = jira.__call__
 
     def call(cfg, method, path, json_body=None, params=None, **kw):
         if method == "POST" and path == "/rest/api/2/issue":
             posts.append(dict(json_body["fields"]))
-            if IT_SERVICE_FIELD in json_body["fields"] or KE_FIELD in json_body["fields"]:
-                raise JD.HTTPException(400, f"Jira: {IT_SERVICE_FIELD}: Field '{IT_SERVICE_FIELD}' cannot be set. It is not on the "
-                                            f"appropriate screen, or unknown.; {KE_FIELD}: Field '{KE_FIELD}' cannot be set. It is "
-                                            "not on the appropriate screen, or unknown. [ID запроса для админа Jira: 1x2x3]")
-        return base(cfg, method, path, json_body=json_body, params=params, **kw)
+        return jira(cfg, method, path, json_body=json_body, params=params, **kw)
 
     monkeypatch.setattr(JD, "_jira_request", call)
-    res = JD.create_defect(JD.CreateDefectBody(project="SBER911", summary="Задача", issuetype="Задача"), db=None)
+    res = JD.create_defect(_create(issuetype="Задача", epic_key="SBER911-100"), db=None)
+
     assert res["key"] == "SBER911-1"
-    assert len(posts) == 2 and IT_SERVICE_FIELD not in posts[1] and KE_FIELD not in posts[1]
-    texts = " ".join(res["warnings"])
-    assert "ИТ-услуга" in texts and "КЭ" in texts and "нет на экране" in texts
-    assert not jira.edit_attempts          # дозаполнять убранные поля не пытаемся
+    assert len(posts) == 1
+    assert posts[0]["issuetype"] == {"name": "Задача"}
+    assert posts[0][JC.FIELD_EPIC_LINK] == "SBER911-100"
+    assert posts[0].keys() & {IT_SERVICE_FIELD, KE_FIELD} == expected_refs
+    assert not res["warnings"] and not jira.edit_attempts
+
+
+def test_createmeta_не_подменяет_задачу_дефектом(monkeypatch):
+    def jira(cfg, method, path, **kw):
+        if path == "/rest/api/2/issue/createmeta":
+            return {"projects": [{"issuetypes": [{"name": "Дефект", "fields": {KE_FIELD: {"name": "КЭ"}}}]}]}
+        raise JD.HTTPException(403, "createmeta недоступен")
+
+    monkeypatch.setattr(JD, "_fields_cache", {})
+    monkeypatch.setattr(JD, "_jira_request", jira)
+    resolved = JD._resolve_fields({"base_url": "https://jira.example"}, "SBER911", "Задача")
+    assert resolved["_issuetype"] == "Задача"
+    assert "ke" not in resolved
+
+
+def test_повтор_учитывает_поля_за_пределами_сообщения_интерфейса(monkeypatch):
+    posts = []
+
+    def request(method, url, *, json, **kw):
+        posts.append(dict(json["fields"]))
+        rejected = posts[-1].keys() & {IT_SERVICE_FIELD, KE_FIELD}
+        payload = {"errorMessages": ["Диагностика Jira " * 40], "errors": {
+            fid: f"Field '{fid}' cannot be set. It is not on the appropriate screen, or unknown."
+            for fid in rejected
+        }} if rejected else {"key": "SBER911-1"}
+        return _jira_response(400 if rejected else 201, payload)
+
+    monkeypatch.setattr("requests.request", request)
+    cfg = {"base_url": "https://jira.example", "token": "t", "ssl_verify": False}
+    fields = {"project": {"key": "SBER911"}, "issuetype": {"name": "Задача"}, "summary": "Задача"}
+    created, dropped = JD._create_skipping_offscreen(cfg, {**fields, IT_SERVICE_FIELD: "ИТ-услуга", KE_FIELD: "КЭ"})
+
+    assert created["key"] == "SBER911-1"
+    assert set(dropped) == {IT_SERVICE_FIELD, KE_FIELD}
+    assert posts[1:] == [fields]
+
+
+def _jira_response(status, payload):
+    body = json.dumps(payload)
+    return SimpleNamespace(status_code=status, headers={}, text=body, content=body.encode(), json=lambda: payload)
 
 
 def test_прочие_ошибки_создания_не_глотаются(fake_jira, monkeypatch):

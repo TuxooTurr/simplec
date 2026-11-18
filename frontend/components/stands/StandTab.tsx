@@ -14,6 +14,8 @@ import ImportFromList, { type PickedFeature } from "./ImportFromList";
 import ServicePicker from "./ServicePicker";
 import { useFeatureStage } from "./useFeatureStage";
 import { usePanelRefresh } from "@/components/ui/RefreshButton";
+import type { StandName } from "@/lib/standPlan";
+import { useStandPlan } from "./useStandPlan";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 const STATUS_CLS: Record<string, string> = {
@@ -43,12 +45,14 @@ function Status({ s }: { s: string }) {
  * со статусом (st) и удалением по одной), заявки из комментариев Confluence, заморозки, настройки окна, релизов
  * и справочника микросервисов. Любое изменение сохраняется в свойство страницы и пересобирает её текст.
  */
-export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }: {
-  stand: string; pageId: string; onPageBound: () => void;
+export default function StandTab({ stand, pageId, canBind, onPageBound, defaultUrl = "" }: {
+  stand: StandName; pageId: string; canBind: boolean; onPageBound: () => void;
   /** Постоянная страница стенда — в форме привязки кнопкой «По умолчанию». */
   defaultUrl?: string;
 }) {
-  const [v, setV] = useState<StandView | null>(null);
+  const [base, setV] = useState<StandView | null>(null);
+  const [planRefresh, setPlanRefresh] = useState(0);
+  const { view: v, error: planError } = useStandPlan(stand, base, planRefresh);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [width, setWidth] = useState<number>(ZOOM.week);
@@ -84,7 +88,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
           // Свежий график за 3 месяца, а итог изменения (добавлено, не встали, ошибки публикации) — из ответа.
           const { days, range, ...rest } = r;
           void days; void range;
-          const fresh = await getStand(stand, q);
+          const fresh = await getStand(stand, q, !r.pageId);
           r = { ...rest, days: fresh.days, range: fresh.range };
         }
       }
@@ -96,7 +100,14 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
     } catch (e) { setMsg({ ok: false, text: (e as Error).message }); return false; }
     finally { setBusy(false); }
   };
-  useEffect(() => { if (pageId) void run(() => getStand(stand)); else setV(null); }, [stand, pageId]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const read = () => run(() => getStand(stand, null, !pageId));
+  useEffect(() => {
+    let alive = true;
+    void read().then(ok => {
+      if (!ok && pageId && alive) getStand(stand, null, true).then(r => { if (alive) setV(r); }, () => {});
+    });
+    return () => { alive = false; };
+  }, [stand, pageId]);   // eslint-disable-line react-hooks/exhaustive-deps
   const featureStage = useFeatureStage(v);
   /** Новый микросервис из формы брони — в справочник (файл на сервере); список в форме обновляется сразу. */
   const createMs = async (names: string[]) => {
@@ -111,7 +122,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
   const showPeriod = (p: "window" | "quarter", w?: number) => {
     if (!v) return;
     setPeriod(p); periodRef.current = p;
-    void run(() => getStand(stand, p === "quarter" ? quarterRange(v) : null)).then(ok => { if (ok && w) setWidth(w); });
+    void run(() => getStand(stand, p === "quarter" ? quarterRange(v) : null, !v.pageId)).then(ok => { if (ok && w) setWidth(w); });
   };
   // Выбранная установка — пересчитывается из свежих данных (удалили фичу — карточка обновилась, удалили все — закрылась).
   const picked = useMemo<StandBlock | null>(() => {
@@ -120,11 +131,17 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
   }, [v, pickedKey]);
 
   // «Обновить» — в шапке панели, как у всех разделов.
-  usePanelRefresh(() => run(() => getStand(stand)), { busy, title: "Перечитать график из Confluence" });
+  usePanelRefresh(() => { setPlanRefresh(n => n + 1); return read(); }, { busy, title: "Обновить график и плановые даты Jira" });
 
-  if (!pageId) return <BindPage stand={stand} onBound={onPageBound} defaultUrl={defaultUrl} />;
-  if (!v) return <p className="flex items-center gap-2 text-sm text-text-muted">{busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Читаю график из Confluence…</> : msg?.text}</p>;
+  const bindPage = !pageId && canBind ? <BindPage stand={stand} onBound={onPageBound} defaultUrl={defaultUrl} /> : null;
+  if (!v) return <>{bindPage}<p className="flex items-center gap-2 text-sm text-text-muted">{busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Загружаю график…</> : msg?.text}</p></>;
 
+  const bookableTeams = base?.pageId ? base.teams : [];
+  const nextBookable = v.days.find(d => d.inWindow && !d.weekend && d.date >= v.today.date)?.date;
+  const canAdd = bookableTeams.length > 0 && !!nextBookable;
+  const openBooking = (date: string, team: string, minute: number | null = null) => {
+    setEditing(null); setPickedKey(null); setCell({ date, team, minute }); setCellEnd(null);
+  };
   const teamCls = (t: string) => TEAM_CLS[Math.max(0, v.teams.indexOf(t)) % TEAM_CLS.length];
   const conflicts = v.days.filter(d => d.inWindow).reduce((n, d) => n + d.conflicts.length, 0);
   const cellDay = cell ? v.days.find(d => d.date === cell.date) : undefined;
@@ -136,12 +153,13 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
 
   return (
     <div className="space-y-3">
+      {bindPage}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-semibold text-text-main">Сегодня, {ddmm(v.today.date)}:</span>
         <Status s={v.today.status} />
         <span className="text-sm text-text-muted">установок {v.today.count}</span>
         {conflicts > 0 && <span className="text-sm font-semibold text-red-600 dark:text-red-400">конфликтов в окне: {conflicts}</span>}
-        <span className="ml-auto flex flex-wrap gap-2">
+        {v.pageId && <span className="ml-auto flex flex-wrap gap-2">
           <button type="button" onClick={() => run(() => pullStandRequests(stand), r => `Заявок: принято ${r.pulled?.accepted ?? 0}, на рассмотрении ${r.pulled?.pending ?? 0}`)}
             disabled={busy} title="Прочитать новые комментарии-заявки на странице стенда и ответить на них итогом"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
@@ -154,8 +172,9 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
           <a href={v.url} target="_blank" rel="noopener noreferrer" title="Страница стенда в Confluence"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
             <ExternalLink className="w-4 h-4" /> Confluence</a>
-        </span>
+        </span>}
       </div>
+      {planError && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Плановые даты Jira не обновились. {planError}</p>}
       {msg && (
         <p className={`flex items-start gap-1.5 text-sm ${msg.ok ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
           {msg.ok ? <Check className="w-4 h-4 mt-0.5" /> : <AlertTriangle className="w-4 h-4 mt-0.5" />}{msg.text}</p>
@@ -179,7 +198,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
         <section className="rounded-xl border border-amber-400/60 bg-amber-50/60 dark:bg-amber-950/20 p-3 space-y-2">
           <p className="text-sm font-semibold text-text-main">На рассмотрении: {v.pending.length}</p>
           <datalist id="stand-ms-catalog">{v.msCatalog.map(k => <option key={k} value={k} />)}</datalist>
-          {v.pending.map(p => <PendingRow key={p.cid} p={p} teams={v.teams} busy={busy}
+          {v.pending.map(p => <PendingRow key={p.cid} p={p} teams={bookableTeams} busy={busy}
             onDecide={d => run(() => decideStandPending(stand, p.cid, d), () => d.accept ? "Заявка принята" : "Заявка отклонена")} />)}
         </section>
       )}
@@ -195,6 +214,14 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+          <button type="button" disabled={!canAdd || busy}
+            onClick={() => { if (nextBookable && bookableTeams[0]) openBooking(nextBookable, bookableTeams[0]); }}
+            title={!v.pageId ? "Для ручной брони привяжите страницу Confluence" : !canAdd ? "В окне планирования нет доступных рабочих дней или команд" : "Добавить ручную бронь"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold disabled:opacity-50">
+            <Plus className="w-4 h-4" /> Добавить
+          </button>
+          {!v.pageId && <span>План Jira tool · для ручной брони нужно подключение к странице Confluence</span>}
+          {v.pageId && v !== base && <span className="rounded border border-dashed border-current px-1.5 py-0.5">План Jira tool</span>}
           <span>Окно {ddmm(v.window.from)}.{v.window.from.slice(0, 4)} — {ddmm(v.window.to)}.{v.window.to.slice(0, 4)}
             {period === "quarter" && <> · показано {ddmm(v.range.from)}.{v.range.from.slice(0, 4)} — {ddmm(v.range.to)}.{v.range.to.slice(0, 4)}</>}</span>
           {v.releases.map(r => <span key={r.id} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-400">{r.name} · {ddmm(r.date)}</span>)}
@@ -220,16 +247,17 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
         </div>
 
         <StandTimeline v={v} width={width} onWidth={setWidth} selected={picked?.key ?? null} featureStage={featureStage}
+          bookableTeams={bookableTeams}
           onPickCell={(date, team, minute) => {
             setPickedKey(null);
             // Форма уже открыта для этой команды — щелчок по другому дню задаёт период.
             if (cell && cell.team === team && date !== cell.date) setCellEnd({ date, n: Date.now() });
-            else { setCell({ date, team, minute }); setCellEnd(null); }
+            else openBooking(date, team, minute);
           }}
           onPickBlock={b => { setCell(null); setPickedKey(b.key); }} />
 
-        {cell && cellDay && (
-          <BookingForm key={`${cell.date}|${cell.team}`} date={cell.date} minute={cell.minute} end={cellEnd} team={cell.team} teams={v.teams}
+        {cell && cellDay && v.pageId && (
+          <BookingForm key={`${cell.date}|${cell.team}`} date={cell.date} minute={cell.minute} end={cellEnd} team={cell.team} teams={bookableTeams}
             freezes={v.freezes} window={v.window} catalog={v.msCatalog} info={v.msInfo ?? {}} onCreate={createMs} featureStage={featureStage} busy={busy}
             onCancel={() => { setCell(null); setCellEnd(null); }}
             onPublish={items => run(() => addStandBookings(stand, items), r => {
@@ -247,8 +275,6 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
                 : text;
             }).then(ok => { if (ok) { setCell(null); setCellEnd(null); } })} />
         )}
-      </div>
-      ); return full ? createPortal(block, document.body) : block; })()}
       {picked && (
         <div className="rounded-xl border border-border-main bg-bg-card p-3 text-sm space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -264,7 +290,7 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
               if (editing === it.id) {
                 return (
                   <li key={it.id} className="px-2.5 py-2">
-                    <BookingEdit b={it} teams={v.teams} catalog={v.msCatalog} busy={busy} onCancel={() => setEditing(null)}
+                    <BookingEdit b={it} teams={bookableTeams} catalog={v.msCatalog} busy={busy} onCancel={() => setEditing(null)}
                       onSave={nb => run(() => editStandBooking(stand, it.id, nb), () => `Бронь ${nb.task || nb.service} изменена`)
                         .then(ok => { if (ok) { setEditing(null); setPickedKey(null); } })} />
                   </li>
@@ -276,20 +302,26 @@ export default function StandTab({ stand, pageId, onPageBound, defaultUrl = "" }
                   <span className="min-w-0 flex-1 text-text-main">{it.features || <span className="text-text-muted">без названия</span>}
                     <span className="text-xs text-text-muted"> · {bookingWhen(it)}</span></span>
                   <span className="text-xs text-text-muted whitespace-nowrap">{st ? `${st.dot} ${st.text}` : "статус (st) неизвестен"}</span>
-                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "comment" ? `заявка: ${it.by}` : "Shark"}</span>
+                  <span className="text-[11px] text-text-muted whitespace-nowrap" title={it.createdAt}>{it.source === "jira-plan" ? "План Jira tool" : it.source === "comment" ? `заявка: ${it.by}` : "Shark"}</span>
+                  {it.source !== "jira-plan" && <>
                   <button type="button" onClick={() => setEditing(it.id)} disabled={busy} aria-label={`Изменить ${it.task || "бронь"}`}
                     title="Изменить: дни, время, команду, микросервис, фичу" className="p-1 text-text-muted hover:text-primary disabled:opacity-50"><Pencil className="w-3.5 h-3.5" /></button>
                   <button type="button" onClick={() => run(() => deleteStandBooking(stand, it.id), () => `Фича ${it.task || ""} снята с ${picked.service}`)} disabled={busy}
                     aria-label={`Удалить ${it.task || "бронь"}`} title={it.dateTo ? "Снять эту фичу с установки — со всего диапазона" : "Снять эту фичу с установки"}
                     className="p-1 text-text-muted hover:text-red-600 disabled:opacity-50"><Trash2 className="w-3.5 h-3.5" /></button>
+                  </>}
                 </li>
               );
             })}
           </ul>
-          <button type="button" onClick={() => { setPickedKey(null); setCell({ date: picked.date, team: picked.team, minute: null }); setCellEnd(null); }}
-            className="flex items-center gap-1 text-xs text-primary hover:underline"><Plus className="w-3.5 h-3.5" /> фичу или микросервис на этот день</button>
+          {bookableTeams.includes(picked.team) && v.days.some(d => d.date === picked.date && d.inWindow && !d.weekend && d.date >= v.today.date) && (
+            <button type="button" onClick={() => openBooking(picked.date, picked.team)}
+              className="flex items-center gap-1 text-xs text-primary hover:underline"><Plus className="w-3.5 h-3.5" /> фичу или микросервис на этот день</button>
+          )}
         </div>
       )}
+      </div>
+      ); return full ? createPortal(block, document.body) : block; })()}
     </div>
   );
 }

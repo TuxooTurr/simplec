@@ -772,7 +772,7 @@ def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None, rng: Optio
                      "bookings": [{**b, "conflict": b["id"] in ids} for b in bookings_on(data, d)],
                      "conflicts": [{"service": k, "teams": v} for k, v in conf.items()]})
     t_label, t_colour = day_status(data, now, now)
-    return {"stand": data["stand"], "pageId": pid, "url": f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}",
+    return {"stand": data["stand"], "pageId": pid, "url": f"{cfg['base_url']}/pages/viewpage.action?pageId={pid}" if pid else "",
             "limit": int(data.get("limit") or 0), "window": data["window"], "releases": sorted(data["releases"], key=lambda r: r["date"]),
             "teams": data["teams"], "msCatalog": ms_store.load(), "msInfo": ms_store.info(),
             "range": {"from": days[0]["date"], "to": days[-1]["date"]} if days else data["window"],
@@ -786,15 +786,17 @@ def _ctx(db: Session, stand: str) -> tuple[dict, str, str]:
 
 
 @router.get("/api/stands/{stand}")
-def get_stand(stand: str, start: str = "", end: str = "", db: Session = Depends(get_db)) -> dict:
+def get_stand(stand: str, start: str = "", end: str = "", db: Session = Depends(get_db), planningOnly: bool = False) -> dict:
     """График стенда; start/end (ГГГГ-ММ-ДД) — другой период вместо окна планирования (например, последние 3 месяца)."""
-    cfg, pid, stand = _ctx(db, stand)
     rng = None
     if start or end:
         try:
             rng = (date.fromisoformat(start or end), date.fromisoformat(end or start))
         except ValueError:
             raise HTTPException(422, "Период — ГГГГ-ММ-ДД")
+    if planningOnly:
+        return view(default_data(_stand(stand)), {}, "", rng=rng)
+    cfg, pid, stand = _ctx(db, stand)
     data, _ = _read(cfg, pid, stand)
     return view(data, cfg, pid, rng=rng)
 

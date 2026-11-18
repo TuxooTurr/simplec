@@ -178,20 +178,20 @@ def _chunks(items: list[str], n: int) -> list[list[str]]:
     return [items[i:i + n] for i in range(0, len(items), n)]
 
 
-def _by_keys(cfg: dict, keys: list[str]) -> list[dict]:
+def _by_keys(cfg: dict, keys: list[str], fields: str = "*navigable") -> list[dict]:
     """Задачи по ключам пачками. Если Jira всё же отвергла пачку (старый сервер валидирует
     ключи), добираем по одной — чтобы одна удалённая задача не прятала остальные."""
     out: list[dict] = []
     for chunk in _chunks(keys, _KEYS_PER_QUERY):
         try:
-            found, _ = _search(cfg, f"key in ({', '.join(chunk)})", limit=len(chunk))
+            found, _ = _search(cfg, f"key in ({', '.join(chunk)})", limit=len(chunk), fields=fields)
             out.extend(found)
         except HTTPException as e:
             if e.status_code != 400:
                 raise
             for k in chunk:
                 try:
-                    out.append(_jira_request(cfg, "GET", f"/rest/api/2/issue/{k}", params={"fields": "*navigable"}))
+                    out.append(_jira_request(cfg, "GET", f"/rest/api/2/issue/{k}", params={"fields": fields}))
                 except HTTPException as e2:
                     if e2.status_code not in (400, 404):
                         raise
@@ -424,6 +424,25 @@ def history(body: KeysBody, db: Session = Depends(get_db)) -> dict:
                 "history": status_history(raw),
             }
     return {"items": items, "planFields": {k: (v[0]["name"] if v else None) for k, v in plan.items()}}
+
+
+@router.post("/api/jira/tool/stand-plan")
+def stand_plan(body: KeysBody, db: Session = Depends(get_db)) -> dict:
+    """Название и плановое окончание для полос графика стендов. Jira только читается."""
+    from backend.api import aqa_tracking as AQA
+
+    keys = _clean_keys(body.keys)
+    if len(keys) > MAX_KEYS:
+        raise HTTPException(422, f"За раз — не больше {MAX_KEYS} задач")
+    if not keys:
+        return {"items": {}}
+    end_candidates = AQA.plan_fields(catalog(db=db)["fields"])["end"]
+    fields = ",".join(["summary", *(f["id"] for f in end_candidates)])
+    items = {}
+    for issue in _by_keys(_load_cfg(db), keys, fields=fields):
+        f = issue.get("fields") or {}
+        items[issue["key"]] = {"summary": str(f.get("summary") or ""), "planEnd": AQA._plan_value(f, end_candidates, None)}
+    return {"items": items}
 
 
 @router.get("/api/jira/tool/statuses")

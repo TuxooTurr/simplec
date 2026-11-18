@@ -10,8 +10,9 @@ import { getStandsConfig, saveStandsConfig, type StandsConfig } from "@/lib/stan
 import StandTab from "@/components/stands/StandTab";
 import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
 import Modal from "@/components/ui/Modal";
+import type { StandName } from "@/lib/standPlan";
 
-const STANDS = ["Major-Check", "Major-GO"];
+const STANDS: StandName[] = ["Major-Check", "Major-GO"];
 
 const INPUT = "w-full text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 
@@ -25,7 +26,7 @@ const INPUT = "w-full text-sm border border-border-main rounded-lg px-2.5 py-1.5
 type Conn = { state: "loading" } | { state: "ok"; user: string; baseUrl: string } | { state: "error"; message: string };
 
 export default function StandScheduleSection() {
-  const [tab, setTab] = useState<string>(STANDS[0]);
+  const [tab, setTab] = useState<StandName>(STANDS[0]);
   const [cfg, setCfg] = useState<StandsConfig | null>(null);
   const pages = cfg?.pages ?? null;
   const [conn, setConn] = useState<Conn>({ state: "loading" });
@@ -34,9 +35,14 @@ export default function StandScheduleSection() {
 
   const connect = () => {
     setConn({ state: "loading" });
-    Promise.all([testConfluence(), getConfluenceSettings(), getStandsConfig()])
-      .then(([me, st, c]) => { setConn({ state: "ok", user: me.user || me.name, baseUrl: st.base_url }); setCfg(c); })
-      .catch(e => setConn({ state: "error", message: (e as Error).message }));
+    Promise.allSettled([Promise.all([testConfluence(), getConfluenceSettings()]), getStandsConfig()])
+      .then(([connection, config]) => {
+        setCfg(config.status === "fulfilled" ? config.value : null);
+        if (connection.status === "rejected") { setConn({ state: "error", message: (connection.reason as Error).message }); return; }
+        if (config.status === "rejected") { setConn({ state: "error", message: (config.reason as Error).message }); return; }
+        const [me, st] = connection.value;
+        setConn({ state: "ok", user: me.user || me.name, baseUrl: st.base_url });
+      });
   };
   useEffect(connect, []);
 
@@ -77,7 +83,7 @@ export default function StandScheduleSection() {
         )}
         {conn.state === "loading" && <p className="flex items-center gap-2 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Подключение к Confluence…</p>}
 
-        {conn.state === "ok" && pages && (
+        {conn.state !== "loading" && (
           <>
             <div role="tablist" aria-label="Стенды" className="flex gap-1 border-b border-border-main">
               {STANDS.map(t => (
@@ -86,8 +92,9 @@ export default function StandScheduleSection() {
                   {t}</button>
               ))}
             </div>
-            {cfg && <PageLink stand={tab} cfg={cfg} onSaved={setCfg} />}
-            <StandTab key={`${tab}:${pages[tab] ?? ""}`} stand={tab} pageId={pages[tab] ?? ""} onPageBound={connect} defaultUrl={cfg?.defaults?.[tab] ?? ""} />
+            {conn.state === "ok" && cfg && <PageLink stand={tab} cfg={cfg} onSaved={setCfg} />}
+            <StandTab key={`${tab}:${pages?.[tab] ?? ""}:${conn.state}`} stand={tab} pageId={conn.state === "ok" ? pages?.[tab] ?? "" : ""}
+              canBind={conn.state === "ok"} onPageBound={connect} defaultUrl={cfg?.defaults?.[tab] ?? ""} />
           </>
         )}
       </div>

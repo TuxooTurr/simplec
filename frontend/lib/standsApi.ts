@@ -8,7 +8,7 @@ import { fetchJson } from "./jiraApi";
 export interface StandBooking {
   /** dateTo — конец периода (включительно); нет — один день. timeFrom/timeTo — время установки каждый день; нет — весь день. */
   id: string; date: string; dateTo?: string; timeFrom?: string; timeTo?: string; team: string; service: string; features: string; task: string; by: string;
-  source: "simpletest" | "comment"; createdAt: string;
+  source: "simpletest" | "comment" | "jira-plan"; createdAt: string;
   /** Тот же микросервис в это время ставит и другая команда. */
   conflict: boolean;
 }
@@ -68,8 +68,12 @@ export const getStandsConfig = () => fetchJson<StandsConfig>("/api/stands/config
 export const saveStandsConfig = (pages: Record<string, string>) => send<StandsConfig>("/api/stands/config", "PUT", { pages });
 export const createStandPage = (stand: string, parent: string) => send<StandView>(`/api/stands/${enc(stand)}/create-page`, "POST", { parent });
 /** График стенда: окно планирования или период range (например, последние 3 месяца). */
-export const getStand = (stand: string, range?: { from: string; to: string } | null) =>
-  fetchJson<StandView>(`/api/stands/${enc(stand)}${range ? `?start=${range.from}&end=${range.to}` : ""}`);
+export const getStand = (stand: string, range?: { from: string; to: string } | null, planningOnly = false) => {
+  const params = new URLSearchParams();
+  if (range) { params.set("start", range.from); params.set("end", range.to); }
+  if (planningOnly) params.set("planningOnly", "true");
+  return fetchJson<StandView>(`/api/stands/${enc(stand)}${params.size ? `?${params}` : ""}`);
+};
 export const saveStandSettings = (stand: string, s: StandSettings) => send<StandView>(`/api/stands/${enc(stand)}/settings`, "PUT", s);
 export const addStandBooking = (stand: string, b: NewBooking) => send<StandView>(`/api/stands/${enc(stand)}/bookings`, "POST", b);
 /** Пачка броней одной записью (импорт задач из списка Jira tool); не прошедшие правила — с причиной. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { msChipStyle, msGroup } from "@/lib/msColor";
 import { keKey, type StandBooking, type StandView } from "@/lib/standsApi";
@@ -102,7 +102,8 @@ export function barsOf(v: StandView): StandBlock[] {
     if (e <= s) { s = dayIdxOf(base, b.date) * DAY; e = dayIdxOf(base, last) * DAY + DAY; }   // как на бэкенде: весь день
     s = Math.max(0, s); e = Math.min(total, e);
     if (e <= s) continue;
-    const k = `${b.team}|${keKey(b.service)}`;
+    // План задачи рисуем целым диапазоном, даже когда рядом есть другая задача или опубликованная бронь.
+    const k = b.source === "jira-plan" ? b.id : JSON.stringify([b.team, keKey(b.service)]);
     groups.set(k, [...(groups.get(k) ?? []), { b, s, e }]);
   }
   const bars: Omit<StandBlock, "lane">[] = [];
@@ -127,7 +128,7 @@ export function barsOf(v: StandView): StandBlock[] {
     b.dateTo = isoAt(base, Math.floor((b.end - 1) / DAY));
     const d0 = Math.floor(b.start / DAY), d1 = Math.floor((b.end - 1) / DAY);
     b.conflict = b.items.some(it => [...(conflictDays.get(it.id) ?? [])].some(d => d >= d0 && d <= d1));
-    b.key = `${b.team}|${keKey(b.service)}|${b.date}T${hhmm(b.start % DAY)}`;
+    b.key = b.items[0].source === "jira-plan" ? b.items[0].id : `${b.team}|${keKey(b.service)}|${b.date}T${hhmm(b.start % DAY)}`;
   }
   // Строки внутри команды: одновременные полосы — друг под другом; продолжение того же микросервиса — в его строке.
   const out: StandBlock[] = [];
@@ -187,8 +188,9 @@ const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "и�
  * дата релиза — пунктир; выходные — серые. Щелчок по пустому месту строки — новая бронь этой команде на этот день
  * (в часах — с этого часа), по брони — она сама.
  */
-export default function StandTimeline({ v, width: zoom, onWidth, selected, onPickCell, onPickBlock, featureStage }: {
+export default function StandTimeline({ v, width: zoom, onWidth, selected, onPickCell, onPickBlock, featureStage, bookableTeams }: {
   v: StandView; width: number; onWidth: (w: number) => void; selected: string | null;
+  bookableTeams: string[];
   /** Щелчок по пустому месту: день, команда и (в часовом масштабе) час, на который пришёлся щелчок, в минутах. */
   onPickCell: (date: string, team: string, minute: number | null) => void; onPickBlock: (b: StandBlock) => void; featureStage: FeatureStage;
 }) {
@@ -242,10 +244,13 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
 
   const idx = new Map(v.days.map((d, i) => [d.date, i]));
   // Полосы: команда + микросервис, непрерывно от начала до конца; одновременные — друг под другом.
-  const bars = barsOf(v);
+  const bars = useMemo(() => barsOf(v), [v]);
   const lanes = v.teams.map(t => Math.max(1, ...bars.filter(b => b.team === t).map(b => b.lane + 1)));
   // Установок за день — как считает бэкенд: команда + микросервис в рабочий день.
-  const blocks = v.days.map(d => v.teams.map(t => blocksOf(d.bookings, t, d.date)));
+  const blocks = useMemo(() => v.days.map(d => {
+    const bookings = d.bookings.filter(b => b.source !== "jira-plan");
+    return v.teams.map(t => blocksOf(bookings, t, d.date));
+  }), [v]);
   const tops: number[] = [];
   lanes.reduce((y, n, i) => { tops[i] = y; return y + n * LANE + 10; }, HEAD);
   const bodyH = tops.length ? tops[tops.length - 1] + lanes[lanes.length - 1] * LANE + 10 : HEAD;
@@ -265,7 +270,7 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
         <div style={{ height: HEAD }} className="border-b border-border-main" />
         {v.teams.map((t, i) => (
           <div key={t} style={{ height: lanes[i] * LANE + 10 }} className="flex items-center gap-2 px-3 border-b border-border-main">
-            <span className={`w-2.5 h-2.5 rounded-full ${teamCls(t)}`} /><span className="truncate text-text-main">{t}</span>
+            <span className={`w-2.5 h-2.5 rounded-full ${teamCls(t)}`} /><span className="truncate text-text-main" title={t}>{t}</span>
           </div>
         ))}
         <div style={{ height: FOOT }} className="flex items-center px-3 text-xs text-text-muted">Установок</div>
@@ -365,7 +370,7 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
           {v.teams.map((t, ti) => (
             <div key={t} className="absolute left-0 right-0 border-b border-border-main/60" style={{ top: tops[ti], height: lanes[ti] * LANE + 10 }}
               onClick={e => {
-                if (drag.current?.moved) return;
+                if (drag.current?.moved || !bookableTeams.includes(t)) return;
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 const x = e.clientX - r.left;
                 const day = v.days[Math.floor(x / width)];
@@ -381,18 +386,20 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
             const left = (b.start / DAY) * width + 1;
             const w = Math.max(6, ((b.end - b.start) / DAY) * width - 2);
             const when = barWhen(v.range.from, b);
+            const planned = b.items.every(it => it.source === "jira-plan");
             // Цвет — группа микросервиса, как лейблы в Jira tool и форме брони (lib/msColor.ts); команда — это строка.
             const chip = msChipStyle(b.service);
             return (
               <button key={b.key} type="button"
                 onClick={() => { if (!drag.current?.moved) onPickBlock(b); }}
                 onMouseEnter={e => setHover({ b, x: e.clientX, y: e.clientY })} onMouseLeave={() => setHover(null)}
-                aria-label={`${b.team}: ${b.service}, ${when}, фич ${b.items.length}${b.conflict ? ", конфликт" : ""}`}
+                aria-label={`${b.team}: ${b.service}, ${when}, фич ${b.items.length}${planned ? ", план Jira tool" : ""}${b.conflict ? ", конфликт" : ""}`}
                 className={`${chip.className} absolute rounded-md px-1 text-left text-[11px] font-medium flex items-center gap-1 overflow-hidden ${b.conflict ? CONFLICT_CLS : ""}
-                  ${selected === b.key ? "outline outline-2 outline-primary" : ""}`}
+                  ${planned ? "border border-dashed border-current" : ""} ${selected === b.key ? "outline outline-2 outline-primary" : ""}`}
                 style={{ ...chip.style, left, width: w, top: tops[ti] + 5 + b.lane * LANE, height: LANE - 4 }}>
                 {b.conflict && w >= 18 && <AlertTriangle className="w-3 h-3 flex-shrink-0 text-red-600 dark:text-red-400" aria-hidden />}
                 {w >= 30 && <span className="truncate">{b.service}</span>}
+                {planned && w >= 150 && <span className="flex-shrink-0 text-[10px] opacity-75">{b.items[0].task}</span>}
                 {w >= 200 && <span className="flex-shrink-0 text-[10px] opacity-75 tabular-nums">{when}</span>}
                 {b.items.length > 1 && w >= 52 && <span className="ml-auto flex-shrink-0 px-1 rounded bg-black/10 dark:bg-white/15 text-[10px]">×{b.items.length}</span>}
               </button>
@@ -425,7 +432,7 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
                 <li key={it.id} className="flex gap-1.5 text-text-main">
                   <span className="font-mono text-primary whitespace-nowrap">{it.task || "—"}</span>
                   <span className="min-w-0 flex-1">{it.features || <span className="text-text-muted">без названия</span>}
-                    <span className="text-text-muted"> · {bookingWhen(it)}</span></span>
+                    <span className="text-text-muted"> · {bookingWhen(it)}{it.source === "jira-plan" && " · План Jira tool"}</span></span>
                   <span className="whitespace-nowrap text-text-muted">{st ? `${st.dot} ${st.text}` : ""}</span>
                 </li>
               );

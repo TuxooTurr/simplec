@@ -5,6 +5,7 @@
 
 import { fetchJson } from "./jiraApi";
 import type { Issue, JiraCatalog, StructNode, StructureInfo } from "./jiraModel";
+import type { StandIssue } from "./standPlan";
 
 const post = <T,>(path: string, body: unknown) => fetchJson<T>(path, {
   method: "POST",
@@ -138,6 +139,15 @@ export async function issueHistory(keys: string[]): Promise<HistoryReply> {
     if (!keys.length) break;
   }
   return out;
+}
+
+export async function getStandPlanIssues(keys: string[]): Promise<Record<string, StandIssue>> {
+  const items: Record<string, StandIssue> = {};
+  for (let i = 0; i < keys.length; i += 1000) {
+    const r = await post<{ items: Record<string, StandIssue> }>("/api/jira/tool/stand-plan", { keys: keys.slice(i, i + 1000) });
+    Object.assign(items, r.items);
+  }
+  return items;
 }
 
 /* ── Привязка задач: к эпику (Epic Link) или связью «Relates» ─────────────── */

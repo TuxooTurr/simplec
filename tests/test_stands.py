@@ -59,6 +59,18 @@ def _comment(cid, text, author="Иванов"):
     return {"id": cid, "body": {"storage": {"value": "<p>" + text.replace("\n", "<br/>") + "</p>"}}, "history": {"createdBy": {"displayName": author}}}
 
 
+def test_календарь_плана_доступен_до_привязки_страницы(conf):
+    with pytest.raises(HTTPException) as err:
+        st.get_stand("Major-GO", db=None)
+    assert err.value.status_code == 409
+
+    view = st.get_stand("Major-GO", start="2026-10-18", planningOnly=True, db=None)
+    assert (view["stand"], view["pageId"], view["url"]) == ("Major-GO", "", "")
+    assert view["days"][0]["date"] == "2026-10-18"
+    assert all(not day["bookings"] for day in view["days"])
+    assert conf["prop"] is None
+
+
 def _settings(frm="2026-10-19", to="2026-11-13", limit=0, releases=()):
     st.put_settings("Major-Check", st.SettingsBody(windowFrom=frm, windowTo=to, limit=limit,
                                                    releases=[st.ReleaseMark(name=n, date=d) for n, d in releases]), db=None)

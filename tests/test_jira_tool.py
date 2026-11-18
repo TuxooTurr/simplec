@@ -122,6 +122,27 @@ def test_задачи_по_ключам_и_ненайденные(jira):
     assert params["validateQuery"] == "false"
 
 
+def test_план_стендов_читает_название_и_первое_заполненное_окончание(jira):
+    fake = jira({
+        "/rest/api/2/field": lambda *a: [
+            {"id": "customfield_1", "name": "Плановое окончание", "schema": {"type": "date"}},
+            {"id": "customfield_2", "name": "План. окончание", "schema": {"type": "string"}},
+        ],
+        "/rest/api/2/search": lambda *a: {"total": 2, "issues": [
+            _issue("SBER911-1", summary="Есть дата", customfield_2="26.11.2026"),
+            _issue("SBER911-2", summary="Нет даты"),
+        ]},
+    })
+    res = JT.stand_plan(JT.KeysBody(keys=["SBER911-1", "SBER911-2"]), db=None)
+    assert res == {"items": {
+        "SBER911-1": {"summary": "Есть дата", "planEnd": "2026-11-26"},
+        "SBER911-2": {"summary": "Нет даты", "planEnd": ""},
+    }}
+    assert all(method == "GET" for method, *_ in fake.calls)
+    params = next(params for _, path, params, _ in fake.calls if path == "/rest/api/2/search")
+    assert params["fields"] == "summary,customfield_1,customfield_2" and "expand" not in params
+
+
 def test_пачка_отвергнута_добираем_по_одной(jira):
     def search(*a):
         raise HTTPException(400, "An issue with key 'SBER911-11' does not exist")

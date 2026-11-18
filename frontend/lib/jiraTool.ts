@@ -734,11 +734,11 @@ export function draftKey(project: string, n: number): string {
   return `${project}-ЧЕРНОВИК-${n}`;
 }
 
-const STORAGE_KEY = "st_jira_tool";
+export const JIRA_TOOL_STORAGE_KEY = "st_jira_tool";
 
 export function loadState(): ToolState {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(JIRA_TOOL_STORAGE_KEY);
     if (raw) {
       const s = JSON.parse(raw) as Partial<ToolState> & { version: number };
       if (s && s.version === 3 && Array.isArray(s.lists)) {
@@ -819,7 +819,11 @@ function migrateList(l: TaskList): TaskList {
 }
 
 export function saveState(s: ToolState): void {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch { /* нет места — живём в памяти */ }
+  try {
+    localStorage.setItem(JIRA_TOOL_STORAGE_KEY, JSON.stringify(s));
+    // saveState вызывается и внутри обновления React, уведомляем соседнюю панель после него.
+    queueMicrotask(() => window.dispatchEvent(new Event(JIRA_TOOL_STORAGE_KEY)));
+  } catch { /* нет места — живём в памяти */ }
 }
 
 /**

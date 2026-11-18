@@ -223,8 +223,16 @@ export interface AqaIssueDetails extends AqaIssue {
 export type AqaIssueChange = Partial<Record<"summary" | "description" | "priority" | "assignee" | "planStart" | "planEnd", string>>;
 
 export const getAqaIssue = (key: string) => fetchJson<AqaIssueDetails>(`/api/aqa/issue/${encodeURIComponent(key)}`);
-export const updateAqaIssue = (key: string, change: AqaIssueChange) =>
-  fetchJson<{ status: string; warnings: string[] }>(`/api/aqa/issue/${encodeURIComponent(key)}`, { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(change) });
+export const JIRA_PLAN_CHANGED = "st_jira_plan_changed";
+export const updateAqaIssue = async (key: string, change: AqaIssueChange) => {
+  const result = await fetchJson<{ status: string; warnings: string[] }>(`/api/aqa/issue/${encodeURIComponent(key)}`, {
+    method: "PUT", headers: JSON_HEADERS, body: JSON.stringify(change),
+  });
+  if (typeof window !== "undefined" && (change.planEnd !== undefined || change.summary !== undefined)) {
+    window.dispatchEvent(new Event(JIRA_PLAN_CHANGED));
+  }
+  return result;
+};
 
 /* ── Запуск автотестов (Jenkins) ──────────────────────────────────────────── */
 

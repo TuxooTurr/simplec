@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import type { Issue } from "@/lib/jiraTool";
 import { getAqaIssue, updateAqaIssue } from "@/lib/aqaApi";
+import { EMPTY_TRANSFERS, loadStandTransfers, saveStandTransfers, STAND_TRANSFERS_KEY } from "@/lib/standPlan";
 
 /** Служебные теги вики-разметки Jira ({color:red}, {code}, {noformat}, {panel:…}, {quote}) — читать мешают, смысла не несут. */
 const WIKI_TAG_RE = /\{(?:color|code|noformat|panel|quote)(?::[^}]*)?\}/g;
@@ -42,6 +43,56 @@ const fmtIso = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.sl
 
 const DATE_INPUT = "text-sm border border-border-main rounded-lg px-2.5 py-1.5 bg-[var(--color-input-bg)] text-text-main " +
   "focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-50";
+
+function TransferDates({ issueKey, planEnd }: { issueKey: string; planEnd: string }) {
+  const [saved, setSaved] = useState(EMPTY_TRANSFERS);
+  const [dates, setDates] = useState(EMPTY_TRANSFERS);
+  const [note, setNote] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    const load = () => {
+      const stored = loadStandTransfers()[issueKey];
+      const value = { ift: stored?.ift ?? "", psi: stored?.psi ?? "" };
+      setSaved(value); setDates(value);
+    };
+    const onStorage = (e: StorageEvent) => { if (!e.key || e.key === STAND_TRANSFERS_KEY) load(); };
+    load();
+    window.addEventListener(STAND_TRANSFERS_KEY, load);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener(STAND_TRANSFERS_KEY, load);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, [issueKey]);
+
+  const changed = saved.ift !== dates.ift || saved.psi !== dates.psi;
+  const bad = !!planEnd && (dates.ift > planEnd || dates.psi > planEnd);
+  return (
+    <div className="flex flex-wrap items-end gap-3 pb-3 border-b border-border-main">
+      {([["ift", "ИФТ"], ["psi", "ПСИ"]] as const).map(([field, label]) => (
+        <label key={field} className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+          <span className="block mb-1">Передача на стенд {label}</span>
+          <input type="date" value={dates[field]} max={planEnd || undefined} className={DATE_INPUT}
+            onChange={e => { setDates({ ...dates, [field]: e.target.value }); setNote(""); setFailed(false); }} />
+        </label>
+      ))}
+      {changed && (
+        <button type="button" disabled={bad} onClick={() => {
+          try {
+            saveStandTransfers(issueKey, dates);
+            setFailed(false); setNote("Даты передачи сохранены в Shark");
+          } catch { setFailed(true); setNote("Не удалось сохранить даты передачи в браузере"); }
+        }} className="px-3 py-1.5 rounded-lg border border-primary text-primary text-sm font-semibold disabled:opacity-40">
+          Сохранить в Shark
+        </button>
+      )}
+      <p role="status" className={`basis-full text-[11px] ${bad || failed ? "text-red-600 dark:text-red-400" : "text-text-muted"}`}>
+        {bad ? "Дата передачи позже планового окончания" : note || "Для полосы на графике заполните плановое окончание и микросервисы задачи."}
+      </p>
+    </div>
+  );
+}
 
 /**
  * Плановые даты задачи — «Плановое начало» и «Плановое окончание», необязательные. Читаются и пишутся в Jira тем же
@@ -85,6 +136,7 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
   };
 
   return (
+    <>
     <div className="flex flex-wrap items-end gap-3 pb-3 border-b border-border-main">
       <label className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
         <span className="block mb-1">Плановое начало</span>
@@ -106,12 +158,14 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
       )}
       <p className={`basis-full text-[11px] ${note?.kind === "err" || bad ? "text-red-600 dark:text-red-400" : note?.kind === "warn" ? "text-amber-700 dark:text-amber-300" : "text-text-muted"}`}>
         {bad ? "Плановое начало позже планового окончания" : note ? note.text
-          : "Необязательно. Из полей Jira «Плановое начало» и «Плановое окончание» — по ним задача стоит на графике и считается срок."}
+          : "Плановые даты используются на графике Jira tool и при расчёте срока задачи."}
         {!bad && loaded && !start && loaded.created && (
           <span className="block">Плановое начало не задано — на графике считается от создания задачи: {fmtIso(loaded.created)}.</span>
         )}
       </p>
     </div>
+    <TransferDates issueKey={issueKey} planEnd={loaded?.end ?? ""} />
+    </>
   );
 }
 

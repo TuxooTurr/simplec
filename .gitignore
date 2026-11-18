@@ -36,6 +36,7 @@ data/aqa_roadmap.tmp
 data/jira_views.json
 data/web_connectors.json
 data/log_services.json
+data/pvs_credentials.json
 data/webconnect_recordings/
 data/hub_tiles.json
 data/zephyr_index/

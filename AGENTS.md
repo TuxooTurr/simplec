@@ -35,6 +35,8 @@ npm run dev --prefix frontend -- --hostname 127.0.0.1 --port 3000
 
 > На macOS с несколькими Python всегда запускай uvicorn через `python -m uvicorn`.
 
+При установке или обновлении Shark на ИФТ подключай PVS MCP по [инструкции для ГигаКод и Shark](docs/pvs-mcp.md).
+
 ## Настройки и секреты
 
 - Основные настройки редактируются в UI: `/settings`.

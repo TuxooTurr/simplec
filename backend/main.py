@@ -57,11 +57,11 @@ from backend.api import (
     auth, generation, etalons, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
-    testdata, jobs, logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
+    testdata, jobs, logs, mcp_logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
     datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen,
 )
 
-# Веб-коннекторы (Playwright), анализатор логов на них и MCP-сервер для GigaCode временно отключены
+# Веб-коннекторы (Playwright) и MCP-сервер для GigaCode временно отключены.
 # (13.10.2026): тяжёлые зависимости, функционал пока не нужен. Код сохранён в webconnect/, mcp_server/,
 # backend/api/webconnect.py. Вернуть: True здесь, зависимости в requirements.txt, флаг во frontend/lib/features.ts.
 WEB_CONNECTORS_ENABLED = False
@@ -100,6 +100,7 @@ async def lifespan(app_: FastAPI):
         warnings.warn(f"Autotest autorun monitor failed to start: {_e}")
     yield
     # Shutdown: остановить все задачи
+    await mcp_logs.stop_log_jobs()
     try:
         from agents.metrics_scheduler import scheduler
         await scheduler.stop_all()
@@ -202,6 +203,7 @@ app.include_router(hub_tiles.router)
 app.include_router(testdata.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
+app.include_router(mcp_logs.router)
 app.include_router(kafka_explorer.router)
 app.include_router(model_bench.router)
 app.include_router(zephyr.router)

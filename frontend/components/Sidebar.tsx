@@ -10,7 +10,6 @@ import LLMStatusBar from "./LLMStatusBar";
 import RunningAlertsIndicator from "./RunningAlertsIndicator";
 import { useWorkspace, type SectionId } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 
 const NAV: {
   id: SectionId;
@@ -40,9 +39,6 @@ const NAV: {
   { id: "etalons",     href: "/etalons",     label: "Данные",                  Icon: BookOpen,    superuserOnly: true },
   { id: "model_bench", href: "/model-bench", label: "Тестирование моделей LLM", Icon: SplitSquareHorizontal, ai: true },
 ];
-
-/** Раздел «Логи» работает только через веб-коннекторы — пока они отключены, раздела в меню нет. */
-const NAV_VISIBLE = NAV.filter(n => n.id !== "logs" || WEB_CONNECTORS_ENABLED);
 
 const ORDER_KEY = "st_nav_order";
 const HIDDEN_KEY = "st_nav_hidden";
@@ -96,7 +92,7 @@ export default function Sidebar() {
   };
 
   const baseNav = useMemo(
-    () => NAV_VISIBLE.filter((item) => !(item.superuserOnly && !isSuperuser)),
+    () => NAV.filter((item) => !(item.superuserOnly && !isSuperuser)),
     [isSuperuser],
   );
 

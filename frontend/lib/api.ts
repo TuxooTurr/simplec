@@ -6,6 +6,12 @@ import { authHeaders } from "./authApi";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
 export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const ah = authHeaders();
   const headers = new Headers(init?.headers);
@@ -26,7 +32,7 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
       if (typeof parsed.detail === "string") detail = parsed.detail;
       else if (parsed.detail && typeof parsed.detail === "object" && parsed.detail.message) detail = parsed.detail.message;
     } catch { /* не JSON — оставляем как есть */ }
-    throw new Error(detail);
+    throw new ApiRequestError(detail, res.status);
   }
   return res.json() as Promise<T>;
 }

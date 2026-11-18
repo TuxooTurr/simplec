@@ -15,8 +15,6 @@ import SettingsSection from "./sections/SettingsSection";
 import KafkaSection from "./sections/KafkaSection";
 import ModelBenchSection from "./sections/ModelBenchSection";
 import LogAnalyzerSection from "./sections/LogAnalyzerSection";
-import FeatureDisabled from "./sections/FeatureDisabled";
-import { WEB_CONNECTORS_ENABLED } from "@/lib/features";
 
 export default function SectionRenderer() {
   const { rightSection, dragging } = useWorkspace();
@@ -57,8 +55,7 @@ export default function SectionRenderer() {
     zephyr:     <ZephyrSection />,
     stands:     <StandScheduleSection />,
     aqa:        <AqaTrackingSection />,
-    logs:       WEB_CONNECTORS_ENABLED ? <LogAnalyzerSection /> : <FeatureDisabled title="Логи временно отключены"
-      text="Анализатор логов работает через веб-коннекторы, а они пока выключены. Код сохранён — раздел вернётся вместе с коннекторами." />,
+    logs:       <LogAnalyzerSection />,
     kafka:      <KafkaSection />,
     metrics:    <MetricsSection />,
     event_generators: <EventGeneratorsSection />,

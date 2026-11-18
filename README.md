@@ -238,6 +238,35 @@ REVISOR_MAJORGO_URL=
 REVISOR_MAJORGO_TOKEN=
 ```
 
+### Логи через MCP
+
+**PVS на ИФТ.** [Инструкция для ГигаКод и Shark](docs/pvs-mcp.md) покрывает установку из AI-market, настройки stdio, проверку индекса и подключение при обновлении Shark.
+
+Для удалённого MCP укажите `LOGS_MCP_TRANSPORT=http`, `LOGS_MCP_URL`, `LOGS_MCP_TOOL` и при необходимости `LOGS_MCP_TOKEN` и `LOGS_MCP_CA_FILE`. `LOGS_MCP_URL` указывает на **сам MCP-сервер**. Сервер PVS подключается к API хранилища на порту `19200`. Веб-интерфейс для ручной проверки работает отдельно на `15601`.
+
+Для локального MCP задайте `LOGS_MCP_TRANSPORT=stdio`, `LOGS_MCP_COMMAND`, `LOGS_MCP_STDIO_ARGS` и список передаваемых переменных `LOGS_MCP_STDIO_ENV`. Профиль `LOGS_MCP_PROFILE=pvs` строит OpenSearch DSL для `SearchIndexTool` по индексу и карте полей. На ИФТ все запросы ограничены namespace `sber911-sigma-back`.
+
+Для других источников адаптер передаёт `namespace`, `service`, `start`, `end` и `limit`. Аргументы `errorsOnly` и `traceId` передаются, если их объявляет инструмент. Для поиска по всем сервисам `service` опускается. Карту аргументов можно задать через `LOGS_MCP_ARGS`. Адаптер читает JSON со списком событий или текст логов. Для демонстрации используйте `SHARK_MOCK=1`.
+
+Для Python-автотестов есть `fetch_logs` и `wait_for_logs` в `agents.log_assertions`. Пример после действия, которое пишет событие с идентификатором операции:
+
+```python
+from agents.log_assertions import LogFilter, fetch_logs, wait_for_logs
+
+# test_started_at и test_finished_at — datetime с часовым поясом.
+scope = dict(namespace="sber911-sigma-back", service=service_name, request_id=request_id)
+observed = await wait_for_logs(
+    test_started_at, test_finished_at, LogFilter(**scope, text="операция записана"),
+    timeout=45, interval=2,
+)
+assert observed.records
+errors = await fetch_logs(test_started_at, test_finished_at, LogFilter(**scope, levels=("ERROR",)))
+assert not errors.truncated
+assert not errors.records
+```
+
+Выберите сообщение, которое пишет завершающий шаг операции. При задержке доставки ошибок по сравнению с завершающим событием учитывайте дополнительное время наблюдения. Можно искать точное значение JSON-поля через `field="context.result", value="SUCCESS"`. Если MCP вернул ограниченную выборку, сузьте период или добавьте идентификатор. Проверка по ИФТ запускается отдельно через `PVS_SMOKE=1`; требуемые переменные описаны в `tests/test_pvs_ift_smoke.py`.
+
 ---
 
 ## Деплой на VPS

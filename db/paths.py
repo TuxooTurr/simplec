@@ -28,7 +28,7 @@ def _prepare_mock_dir() -> None:
         return
     real = ROOT / "data"
     if real.is_dir():
-        shutil.copytree(real, DATA_DIR, ignore=shutil.ignore_patterns("backups", "*.tmp"))
+        shutil.copytree(real, DATA_DIR, ignore=shutil.ignore_patterns("backups", "pvs_credentials.json", "*.tmp"))
     else:
         DATA_DIR.mkdir(parents=True)
     url = os.getenv("DATABASE_URL", "")

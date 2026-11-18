@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ComponentType, type ReactNode } from "react";
-import { BookOpen, ChevronRight, Cpu, Database, GitBranch, HardDrive, Network, Play, Rocket, Ticket } from "lucide-react";
+import { BookOpen, ChevronRight, Cpu, Database, FileSearch, GitBranch, HardDrive, Network, Play, Rocket, Ticket } from "lucide-react";
 
 import { Modal, Tabs } from "@/components/ui";
 import { LlmProvidersPanel, SystemStoresPanel } from "@/components/settings/LlmSettings";
@@ -9,6 +9,7 @@ import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsModal";
 import KafkaMetricsSettingsModal from "@/components/settings/KafkaMetricsSettingsModal";
 import TestDataSettingsModal from "@/components/settings/TestDataSettingsModal";
+import PvsSettingsModal from "@/components/settings/PvsSettingsModal";
 import AqaSettingsModal from "@/components/aqa/AqaSettingsModal";
 import { BackupPanel } from "@/components/BackupModal";
 import { getCorpAuthStatus, getProviders, listTestDataConnections } from "@/lib/api";
@@ -25,8 +26,8 @@ import { getAqaSettings } from "@/lib/aqaApi";
  * (запрос в модель, в базу) — по кнопке внутри окна.
  */
 
-type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores";
-const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores"];
+type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores" | "pvs";
+const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores", "pvs"];
 
 type TabId = "integrations" | "connections" | "backup";
 const TABS: { id: TabId; label: string }[] = [
@@ -55,6 +56,7 @@ const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
       { id: "llm", icon: Cpu, title: "LLM-провайдеры", description: "GigaChat и совместимые модели: ключи, сертификаты, выбор модели" },
   ],
   connections: [
+      { id: "pvs", icon: FileSearch, title: "PVS MCP", description: "Логи ИФТ, сервисная учётная запись и проверка подключения" },
       { id: "kafka", icon: Network, title: "Kafka", description: "Поток для «Метрик ОД»: SASL, SSL, сертификаты" },
       { id: "testdata", icon: Database, title: "Базы для тестовых данных", description: "Подключения к внешним БД и JDBC-драйверы" },
       { id: "stores", icon: HardDrive, title: "Служебные хранилища", description: "ChromaDB и PostgreSQL самого приложения" },
@@ -256,6 +258,7 @@ export default function SettingsSection() {
       <JiraSettingsModal open={panel === "jira"} onClose={close} />
       <ConfluenceSettingsModal open={panel === "confluence"} onClose={close} />
       <KafkaMetricsSettingsModal open={panel === "kafka"} onClose={close} onSaved={refreshChips} />
+      <PvsSettingsModal open={panel === "pvs"} onClose={close} />
       <TestDataSettingsModal open={panel === "testdata"} onClose={close} onChanged={refreshChips} />
       <AqaSettingsModal open={panel === "testops"} only="testops" onClose={close} onSaved={refreshChips} />
       <AqaSettingsModal open={panel === "bitbucket"} only="bitbucket" onClose={close} onSaved={refreshChips} />

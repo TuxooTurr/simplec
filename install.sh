@@ -114,3 +114,4 @@ else
     echo "  python -m uvicorn backend.main:app --port 8000"
 fi
 echo ""
+echo "PVS MCP на ИФТ — инструкция по установке и обновлению для ГигаКод: docs/pvs-mcp.md"

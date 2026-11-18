@@ -154,7 +154,7 @@ export function barsOf(v: StandView): StandBlock[] {
  * Ширина дня по масштабу, px. Ctrl (Cmd) + колесо — плавно до MAX_W и обратно до трёх кварталов на экран. С HOURS_FROM px день делится на часы:
  * сетка по часам, бронь со временем стоит на своих часах; «Часы» — 40 px на час.
  */
-export const ZOOM = { hours: 960, day: 120, week: 44, fit: 0 } as const;
+export const ZOOM = { hours: 960, day: 120, week: 44, month: 12, fit: 0 } as const;
 /** Самое крупное отдаление (width = 0 — «3 квартала»): неделя до сегодня и три квартала вперёд на экран. */
 const MAX_W = 1440, HOURS_FROM = 192, BACK_DAYS = 7, FIT_DAYS = BACK_DAYS + 274;
 const LANE = 26;          // высота одной брони в строке команды
@@ -176,7 +176,7 @@ const MONTHS = ["янв", "фев", "мар", "апр", "май", "июн", "и�
 
 /**
  * График стенда: строки — команды, по горизонтали — дни показанного периода (окно планирования или, например,
- * последние 3 месяца; дни вне окна заштрихованы — только просмотр). Полоса — установка: команда + микросервис,
+ * последние 3 месяца; прошедшие дни заштрихованы). Полоса — установка: команда + микросервис,
  * сплошная от начала до конца брони (13.11 09:00 — 17.11 18:00 — одна линия через выходные; barsOf), цвет — группа
  * микросервиса (lib/msColor.ts), как у лейблов в Jira tool. Несколько фич
  * в одном микросервисе — одна полоса со счётчиком; добавилась фича в другой день — полоса обрывается, дальше новая. При наведении —
@@ -248,8 +248,7 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
   const lanes = v.teams.map(t => Math.max(1, ...bars.filter(b => b.team === t).map(b => b.lane + 1)));
   // Установок за день — как считает бэкенд: команда + микросервис в рабочий день.
   const blocks = useMemo(() => v.days.map(d => {
-    const bookings = d.bookings.filter(b => b.source !== "jira-plan");
-    return v.teams.map(t => blocksOf(bookings, t, d.date));
+    return v.teams.map(t => blocksOf(d.bookings, t, d.date));
   }), [v]);
   const tops: number[] = [];
   lanes.reduce((y, n, i) => { tops[i] = y; return y + n * LANE + 10; }, HEAD);
@@ -295,7 +294,7 @@ export default function StandTimeline({ v, width: zoom, onWidth, selected, onPic
               <div key={d.date} className={`absolute top-0 bottom-0 border-l ${hourMode ? "border-border-main" : width < 6 && !first ? "border-transparent" : "border-border-main/60"}
                 ${d.weekend ? "bg-bg-subtle/70" : ""} ${!d.inWindow ? "bg-bg-subtle/50 [background-image:repeating-linear-gradient(135deg,transparent_0,transparent_6px,rgba(127,127,127,.08)_6px,rgba(127,127,127,.08)_12px)]" : ""}
                 ${d.today ? "bg-primary/5" : ""}`}
-                style={{ left: i * width, width }} title={d.inWindow ? undefined : "Вне окна планирования — только просмотр"}>
+                style={{ left: i * width, width }} title={d.inWindow ? undefined : "Прошедшая дата — только просмотр"}>
                 {hourMode ? (
                   <div className="h-[44px] border-b border-border-main leading-tight overflow-hidden">
                     <div className={`text-[11px] px-1 pt-0.5 whitespace-nowrap ${d.today ? "text-primary font-bold" : d.weekend ? "text-text-muted" : "text-text-main"}`}>

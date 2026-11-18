@@ -7,6 +7,7 @@ import {
   addStandBookings, addStandFreeze, createStandPage, decideStandPending, deleteStandBooking, deleteStandFreeze, editStandBooking, getStand,
   pullStandRequests, saveStandSettings, saveStandsConfig, addMs, saveMsCatalog,
   keKey, type NewBooking, type StandBooking, type StandPending, type StandSettings, type StandView,
+  getStandSyncStatus, startStandSync, type StandSyncStatus,
 } from "@/lib/standsApi";
 import { msChipStyle } from "@/lib/msColor";
 import StandTimeline, { barWhen, barsOf, bookingWhen, TEAM_CLS, ZOOM, type FeatureStage, type StandBlock } from "./StandTimeline";
@@ -16,6 +17,7 @@ import { useFeatureStage } from "./useFeatureStage";
 import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import type { StandName } from "@/lib/standPlan";
 import { useStandPlan } from "./useStandPlan";
+import { syncStandPlanSource, STAND_PLAN_SYNC_ERROR } from "./StandPlanSync";
 
 const INPUT = "text-sm border border-border-main rounded-lg px-2 py-1 bg-[var(--color-input-bg)] text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 const STATUS_CLS: Record<string, string> = {
@@ -54,6 +56,8 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
   const [planRefresh, setPlanRefresh] = useState(0);
   const { view: v, error: planError } = useStandPlan(stand, base, planRefresh);
   const [busy, setBusy] = useState(false);
+  const [sync, setSync] = useState<StandSyncStatus | null>(null);
+  const [saveError, setSaveError] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [width, setWidth] = useState<number>(ZOOM.week);
   const [cell, setCell] = useState<{ date: string; team: string; minute: number | null } | null>(null);
@@ -62,7 +66,7 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
   const [pickedKey, setPickedKey] = useState<string | null>(null);   // установка: дата|команда|микросервис
   /** Бронь, которую правят в карточке установки (id). */
   const [editing, setEditing] = useState<string | null>(null);
-  /** Период графика: окно планирования или последние 3 месяца (только просмотр того, что вне окна). */
+  /** Период графика: план или последние 3 месяца; прошедшие дни доступны для просмотра. */
   const [period, setPeriod] = useState<"window" | "quarter">("window");
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -102,6 +106,14 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
   };
   const read = () => run(() => getStand(stand, null, !pageId));
   useEffect(() => {
+    const update = () => { void getStandSyncStatus().then(setSync, () => {}); };
+    const onError = (event: Event) => setSaveError((event as CustomEvent<string>).detail);
+    update();
+    const timer = setInterval(update, 5000);
+    window.addEventListener(STAND_PLAN_SYNC_ERROR, onError);
+    return () => { clearInterval(timer); window.removeEventListener(STAND_PLAN_SYNC_ERROR, onError); };
+  }, []);
+  useEffect(() => {
     let alive = true;
     void read().then(ok => {
       if (!ok && pageId && alive) getStand(stand, null, true).then(r => { if (alive) setV(r); }, () => {});
@@ -131,12 +143,25 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
   }, [v, pickedKey]);
 
   // «Обновить» — в шапке панели, как у всех разделов.
-  usePanelRefresh(() => { setPlanRefresh(n => n + 1); return read(); }, { busy, title: "Обновить график и плановые даты Jira" });
+  usePanelRefresh(() => run(async () => {
+    await syncStandPlanSource();
+    setSync(await startStandSync());
+    return getStand(stand, null, !pageId);
+  }, () => { setPlanRefresh(n => n + 1); return "Публикация графиков ИФТ и ПСИ запущена. Результат появится здесь."; }),
+  { busy: busy || !!sync?.running, title: "Обновить графики ИФТ и ПСИ и опубликовать в Confluence" });
+
+  const finishedSync = useRef("");
+  useEffect(() => {
+    if (!sync?.finishedAt || sync.running || sync.finishedAt === finishedSync.current) return;
+    finishedSync.current = sync.finishedAt;
+    setPlanRefresh(n => n + 1);
+    void read();
+  }, [sync?.finishedAt, sync?.running]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const bindPage = !pageId && canBind ? <BindPage stand={stand} onBound={onPageBound} defaultUrl={defaultUrl} /> : null;
   if (!v) return <>{bindPage}<p className="flex items-center gap-2 text-sm text-text-muted">{busy ? <><Loader2 className="w-4 h-4 animate-spin" /> Загружаю график…</> : msg?.text}</p></>;
 
-  const bookableTeams = base?.pageId ? base.teams : [];
+  const bookableTeams = base?.pageId ? v.teams : [];
   const nextBookable = v.days.find(d => d.inWindow && !d.weekend && d.date >= v.today.date)?.date;
   const canAdd = bookableTeams.length > 0 && !!nextBookable;
   const openBooking = (date: string, team: string, minute: number | null = null) => {
@@ -175,6 +200,13 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
         </span>}
       </div>
       {planError && <p role="status" className="text-sm text-amber-700 dark:text-amber-300">Плановые даты Jira не обновились. {planError}</p>}
+      {(saveError || v.planError) && <p role="alert" className="text-sm text-amber-700 dark:text-amber-300">{saveError || v.planError}</p>}
+      <p role="status" className="text-xs text-text-muted">
+        {sync?.running ? "Обновляю Jira и публикую оба графика в Confluence…" : "Публикация в Confluence каждый час и по кнопке обновления в шапке."}
+        {sync?.lastSuccessAt && ` Последняя успешная публикация: ${new Date(sync.lastSuccessAt).toLocaleString("ru-RU")}.`}
+        {!pageId && " Для публикации этого стенда привяжите страницу Confluence."}
+      </p>
+      {sync?.errors && Object.entries(sync.errors).map(([name, error]) => <p key={name} role="alert" className="text-sm text-red-600 dark:text-red-400">{name}: {error}</p>)}
       {msg && (
         <p className={`flex items-start gap-1.5 text-sm ${msg.ok ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
           {msg.ok ? <Check className="w-4 h-4 mt-0.5" /> : <AlertTriangle className="w-4 h-4 mt-0.5" />}{msg.text}</p>
@@ -226,7 +258,7 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
             {period === "quarter" && <> · показано {ddmm(v.range.from)}.{v.range.from.slice(0, 4)} — {ddmm(v.range.to)}.{v.range.to.slice(0, 4)}</>}</span>
           {v.releases.map(r => <span key={r.id} className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-700 dark:text-red-400">{r.name} · {ddmm(r.date)}</span>)}
           <span className="ml-auto flex items-center gap-1" role="group" aria-label="Масштаб">
-            {([["Часы", ZOOM.hours], ["День", ZOOM.day], ["Неделя", ZOOM.week], ["3 квартала", ZOOM.fit]] as const).map(([label, w]) => (
+            {([["Часы", ZOOM.hours], ["День", ZOOM.day], ["Неделя", ZOOM.week], ["Месяц", ZOOM.month], ["3 квартала", ZOOM.fit]] as const).map(([label, w]) => (
               <button key={label} type="button" onClick={() => setWidth(w)} aria-pressed={width === w}
                 title={label === "Часы" ? "День по часам: бронь со временем — на своих часах" : label === "3 квартала" ? "Неделя до сегодня и три квартала вперёд на экране" : undefined}
                 className={`px-2.5 py-1 rounded-md border text-xs ${width === w ? "border-primary text-primary bg-primary/10" : "border-border-main text-text-muted hover:text-text-main"}`}>{label}</button>
@@ -236,7 +268,7 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
               aria-pressed={period === "window" && width === fitOf(winDays)} title="Всё окно планирования на экране"
               className={`px-2.5 py-1 rounded-md border text-xs ${period === "window" && width === fitOf(winDays) ? "border-primary text-primary bg-primary/10" : "border-border-main text-text-muted hover:text-text-main"}`}>Окно</button>
             <button type="button" onClick={() => showPeriod("quarter", fitOf(qDays))} aria-pressed={period === "quarter"}
-              title="Последние 3 месяца от сегодня и всё окно планирования; дни вне окна — только просмотр"
+              title="Последние 3 месяца от сегодня и будущий план; прошедшие дни — только просмотр"
               className={`px-2.5 py-1 rounded-md border text-xs ${period === "quarter" ? "border-primary text-primary bg-primary/10" : "border-border-main text-text-muted hover:text-text-main"}`}>3 месяца</button>
             <span className="ml-1">Ctrl (Cmd) + колесо — масштаб, дальше всего — три квартала от сегодня · тянуть — прокрутка</span>
             <button type="button" onClick={() => setFull(f => !f)} title={full ? "Свернуть (Esc)" : "График во весь экран"}
@@ -258,9 +290,9 @@ export default function StandTab({ stand, pageId, canBind, onPageBound, defaultU
 
         {cell && cellDay && v.pageId && (
           <BookingForm key={`${cell.date}|${cell.team}`} date={cell.date} minute={cell.minute} end={cellEnd} team={cell.team} teams={bookableTeams}
-            freezes={v.freezes} window={v.window} catalog={v.msCatalog} info={v.msInfo ?? {}} onCreate={createMs} featureStage={featureStage} busy={busy}
+            freezes={v.freezes} today={v.today.date} catalog={v.msCatalog} info={v.msInfo ?? {}} onCreate={createMs} featureStage={featureStage} busy={busy}
             onCancel={() => { setCell(null); setCellEnd(null); }}
-            onPublish={items => run(() => addStandBookings(stand, items), r => {
+            onPublish={items => run(async () => { await syncStandPlanSource(); return addStandBookings(stand, items); }, r => {
               const x = r as StandView & { added?: number; rejected?: { service: string; task: string; reason: string }[] };
               const rejected = x.rejected ?? [];
               const text = `Опубликовано броней: ${x.added ?? items.length - rejected.length}` + (rejected.length
@@ -396,9 +428,9 @@ const hm = (min: number) => `${String(Math.floor(min / 60) % 24).padStart(2, "0"
  * «Из списка Jira tool» (номер и название подставляются). «Микросервисы для всех фич» добавляются к каждой.
  * В Confluence ничего не уходит, пока не нажата «Опубликовать»: бронь на пару фича × микросервис, одна на весь период.
  */
-function BookingForm({ date, minute, end, team: team0, teams, freezes, window: win, catalog, info, onCreate, featureStage, busy, onPublish, onCancel }: {
+function BookingForm({ date, minute, end, team: team0, teams, freezes, today, catalog, info, onCreate, featureStage, busy, onPublish, onCancel }: {
   date: string; minute: number | null; end: { date: string; n: number } | null; team: string; teams: string[];
-  freezes: StandView["freezes"]; window: StandView["window"]; catalog: string[]; info: Record<string, string>;
+  freezes: StandView["freezes"]; today: string; catalog: string[]; info: Record<string, string>;
   onCreate: (names: string[]) => Promise<void>; featureStage: FeatureStage; busy: boolean;
   onPublish: (items: NewBooking[]) => void; onCancel: () => void;
 }) {
@@ -452,10 +484,10 @@ function BookingForm({ date, minute, end, team: team0, teams, freezes, window: w
           {teams.map(t => <option key={t} value={t}>{t}</option>)}
         </select>
         <label className="flex items-center gap-1.5 text-xs text-text-muted">с
-          <input type="date" value={from} min={win.from} max={win.to} aria-label="С даты"
+          <input type="date" value={from} min={today} aria-label="С даты"
             onChange={e => { const x = e.target.value; setFrom(x); if (x && to < x) setTo(x); }} className={INPUT} /></label>
         <label className="flex items-center gap-1.5 text-xs text-text-muted">по
-          <input type="date" value={to} min={from} max={win.to} aria-label="По дату" onChange={e => { if (e.target.value) setTo(e.target.value); }} className={INPUT} /></label>
+          <input type="date" value={to} min={from} aria-label="По дату" onChange={e => { if (e.target.value) setTo(e.target.value); }} className={INPUT} /></label>
         <span className="text-xs text-text-muted" title="Конец периода можно задать и щелчком по другому дню в этой же строке графика">
           рабочих дней: {days.length}{days.length > 1 ? ` (${dd(days[0])}–${dd(days[days.length - 1])})` : " · щёлкните другой день в строке — будет период"}</span>
         {frozen.length > 0 && (

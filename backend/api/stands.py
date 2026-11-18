@@ -46,10 +46,11 @@ import copy
 import html
 import json
 import re
+import threading
 import time
 import uuid
-from datetime import date, datetime, timedelta
-from typing import Any, Callable, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -66,6 +67,11 @@ router = APIRouter()
 STANDS = ("Major-Check", "Major-GO")
 PROPERTY = "simpletest-stand"
 _K_CONFIG = "stands_config"
+_K_PLAN = "stands_jira_plan_sources"
+_K_PLAN_ISSUES = "stands_jira_plan_issues"
+_K_SYNC = "stands_publish_status"
+_PLAN_LOCK = threading.RLock()
+_PUBLISH_LOCK = threading.RLock()
 # Постоянные страницы по умолчанию — пока привязку не меняли. Стёртая привязка хранится пустой строкой и остаётся
 # пустой; «По умолчанию» в интерфейсе возвращает эту.
 DEFAULT_PAGES = {"Major-Check": "25529949354"}
@@ -82,6 +88,100 @@ def _stand(stand: str) -> str:
 
 def today() -> date:
     return date.today()
+
+
+def _stored(db: Session | None, key: str) -> dict:
+    if db is None:
+        return {}
+    try:
+        value = json.loads(_get(db, key, "{}") or "{}")
+        return value if isinstance(value, dict) else {}
+    except ValueError:
+        return {}
+
+
+class PlanCandidate(BaseModel):
+    stand: Literal["Major-Check", "Major-GO"]
+    task: str = Field(pattern=r"^[A-Z][A-Z0-9_]*-\d+$", max_length=80)
+    team: str = Field(min_length=1, max_length=300)
+    service: str = Field(min_length=1, max_length=300)
+    start: date = Field(alias="from")
+
+
+class PlanList(BaseModel):
+    id: str = Field(min_length=1, max_length=200)
+    items: list[PlanCandidate] = Field(default_factory=list, max_length=20000)
+
+
+class PlanSnapshot(BaseModel):
+    source: str = Field(min_length=1, max_length=100)
+    lists: list[PlanList] = Field(default_factory=list, max_length=2000)
+
+
+def _plan_candidates(db: Session | None) -> list[dict]:
+    # A list copied between browsers is represented by its most recently saved snapshot.
+    lists: dict[str, tuple[int, list[dict]]] = {}
+    for source in _stored(db, _K_PLAN).values():
+        if not isinstance(source, dict):
+            continue
+        stamp = source.get("stamp", 0)
+        for item in source.get("lists", []):
+            previous = lists.get(item["id"])
+            if previous is None or stamp >= previous[0]:
+                lists[item["id"]] = stamp, item["items"]
+    unique = {}
+    for _, items in lists.values():
+        for item in items:
+            key = (item["stand"], item["task"], item["team"], ke_store.ke_key(item["service"]))
+            unique[key] = item
+    return list(unique.values())
+
+
+@router.put("/api/stands/plan")
+def save_plan(body: PlanSnapshot, db: Session = Depends(get_db)) -> dict:
+    with _PLAN_LOCK:
+        sources = _stored(db, _K_PLAN)
+        snapshots = [item.model_dump(mode="json", by_alias=True) for item in body.lists]
+        current_ids = {item["id"] for item in snapshots}
+        # Keep a tombstone so deleting a shared list does not revive an older browser's copy.
+        for previous in (sources.get(body.source) or {}).get("lists", []):
+            if previous["id"] not in current_ids:
+                snapshots.append({"id": previous["id"], "items": []})
+        sources[body.source] = {"stamp": time.time_ns(), "lists": snapshots}
+        _set(db, _K_PLAN, json.dumps(sources, ensure_ascii=False), "Сводный план стендов из списков Jira tool")
+        db.commit()
+    return {"saved": True}
+
+
+def _with_plan(data: dict, db: Session | None) -> dict:
+    candidates = [item for item in _plan_candidates(db) if item["stand"] == data["stand"]]
+    cache = _stored(db, _K_PLAN_ISSUES)
+    issues = cache.get("items") or {}
+    combined = copy.deepcopy(data)
+    teams = dict.fromkeys(combined["teams"])
+    existing = {b["id"] for b in combined["bookings"]}
+    for item in candidates:
+        teams[item["team"]] = None
+        issue = issues.get(item["task"]) or {}
+        end = str(issue.get("planEnd") or "")[:10]
+        try:
+            if date.fromisoformat(end) < date.fromisoformat(item["from"]):
+                continue
+        except ValueError:
+            continue
+        identifier = "plan:" + json.dumps([item["task"], item["team"], ke_store.ke_key(item["service"])],
+                                          ensure_ascii=False, separators=(",", ":"))
+        if identifier not in existing:
+            combined["bookings"].append({
+                "id": identifier, "date": item["from"], "dateTo": end, "team": item["team"],
+                "service": item["service"], "features": issue.get("summary", ""), "task": item["task"],
+                "by": "", "createdAt": "", "source": "jira-plan",
+            })
+            existing.add(identifier)
+    combined["teams"] = list(teams)
+    if cache.get("error"):
+        combined["planError"] = cache["error"]
+    return combined
 
 
 # ── Привязка страниц (локально) ──────────────────────────────────────────────
@@ -212,7 +312,8 @@ def bookings_on(data: dict, d: date) -> list[dict]:
     """Брони дня. Бронь на диапазон (date — dateTo) стоит в каждый его рабочий день; в выходные броней нет."""
     iso = d.isoformat()
     if d.weekday() >= 5:
-        return [b for b in data["bookings"] if b["date"] == iso]
+        return [b for b in data["bookings"] if b["date"] == iso or
+                (b.get("source") == "jira-plan" and b["date"] <= iso <= (b.get("dateTo") or b["date"]))]
     return [b for b in data["bookings"] if b["date"] <= iso <= (b.get("dateTo") or b["date"])]
 
 
@@ -323,6 +424,18 @@ def match_team(data: dict, text: str) -> Optional[str]:
     return starts[0] if len(starts) == 1 else None
 
 
+def _booking_team(data: dict, text: str, db: Session | None) -> Optional[str]:
+    existing = match_team(data, text)
+    if existing:
+        return existing
+    teams = list(dict.fromkeys([*data["teams"], *(item["team"] for item in _plan_candidates(db)
+                                                if item["stand"] == data["stand"])]))
+    team = match_team({"teams": teams}, text)
+    if team and team not in data["teams"]:
+        data["teams"].append(team)
+    return team
+
+
 def check(data: dict, d: date, hotfix: bool = False, now: Optional[date] = None) -> Optional[str]:
     """Почему нельзя поставить в этот день; None — можно. Конфликт по КЭ не запрещает — он красится."""
     now = now or today()
@@ -330,9 +443,6 @@ def check(data: dict, d: date, hotfix: bool = False, now: Optional[date] = None)
         return "выходной"
     if d < now:
         return "день уже прошёл"
-    if d not in window_days(data):
-        w = data["window"]
-        return f"вне окна планирования {date.fromisoformat(w['from']).strftime('%d.%m')}–{date.fromisoformat(w['to']).strftime('%d.%m')}"
     fz = freeze_on(data, d)
     if fz and not hotfix:
         return f"заморозка до {date.fromisoformat(fz['to']).strftime('%d.%m')}" + (f" ({fz['reason']})" if fz.get("reason") else "")
@@ -652,6 +762,50 @@ def render_chart(data: dict, now: date) -> str:
     return "".join(out)
 
 
+def render_installations(data: dict, now: date) -> str:
+    """One row per installation period, suitable for readers outside Shark."""
+    e = html.escape
+    bookings = sorted(data["bookings"], key=lambda b: (b["team"].casefold(), b["date"], _ke(b["service"]), b.get("task", "")))
+    conflicts: set[str] = set()
+    by_service: dict[str, list[dict]] = {}
+    for booking in bookings:
+        by_service.setdefault(_ke(booking["service"]), []).append(booking)
+    for items in by_service.values():
+        for index, first in enumerate(items):
+            for second in items[index + 1:]:
+                if first["team"] == second["team"]:
+                    continue
+                a = max(date.fromisoformat(first["date"]), date.fromisoformat(second["date"]))
+                b = min(date.fromisoformat(first.get("dateTo") or first["date"]),
+                        date.fromisoformat(second.get("dateTo") or second["date"]))
+                if a <= b:
+                    x, y = interval(first, a), interval(second, a)
+                    if a < b or (x[0] < y[1] and y[0] < x[1]):
+                        conflicts.update((first["id"], second["id"]))
+    out = ["<h2>План установок</h2>",
+           "<p>Одна строка — микросервис и задача на весь период установки. "
+           "Папка Jira tool задаёт строку команды. Начало плана Jira tool — дата передачи на ИФТ или ПСИ, "
+           "окончание — плановое окончание задачи. План объединяет все списки Jira tool и ручные брони.</p>",
+           "<table><tbody><tr><th>Команда / папка</th><th>Микросервис</th><th>Задача</th><th>Фича</th>"
+           "<th>Начало</th><th>Окончание</th><th>Источник</th><th>Состояние</th></tr>"]
+    if not bookings:
+        out.append('<tr><td colspan="8">Установок пока нет.</td></tr>')
+    for item in bookings:
+        end = item.get("dateTo") or item["date"]
+        label = "Период завершён" if end < now.isoformat() else "Идёт установка" if item["date"] <= now.isoformat() else "Запланировано"
+        state = _status_macro("КОНФЛИКТ", "Red") if item["id"] in conflicts else e(label)
+        task = item.get("task") or ""
+        source = "План Jira tool" if item.get("source") == "jira-plan" else "Заявка Confluence" if item.get("source") == "comment" else "Ручная бронь"
+        values = [e(item["team"]), e(item["service"]), e(task) or "—", e(item.get("features") or "") or "—",
+                  date.fromisoformat(item["date"]).strftime("%d.%m.%Y") + (" " + e(item["timeFrom"]) if item.get("timeFrom") else ""),
+                  date.fromisoformat(end).strftime("%d.%m.%Y") + (" " + e(item["timeTo"]) if item.get("timeTo") else ""),
+                  source, state]
+        colour = ' data-highlight-colour="#ffbdad"' if item["id"] in conflicts else ""
+        out.append("<tr>" + "".join(f"<td{colour}>{value}</td>" for value in values) + "</tr>")
+    out.append("</tbody></table>")
+    return "".join(out)
+
+
 def render_page(data: dict, now: Optional[date] = None) -> str:
     """Текст страницы (storage format): памятка, сегодня, шаблон заявки, релизы, заморозки, таблица рабочих дней окна."""
     now = now or today()
@@ -661,7 +815,7 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
     rels = sorted(data["releases"], key=lambda r: r["date"])
     parts = [
         '<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Страница собирается из Shark — таблицу руками '
-        f'не правьте. Обновлено {datetime.now().strftime("%d.%m.%Y %H:%M")}.</p></ac:rich-text-body></ac:structured-macro>',
+        f'не правьте. Обновление каждый час и по кнопке в Shark. Обновлено {datetime.now(timezone.utc).strftime("%d.%m.%Y %H:%M")} UTC.</p></ac:rich-text-body></ac:structured-macro>',
         f"<h2>Сегодня, {now.strftime('%d.%m')}</h2><p>{e(data['stand'])}: {_status_macro(title, colour)} "
         f"установок {installs_on(data, now)}</p>",
         "<h2>Как подать заявку</h2><p>Оставьте комментарий к этой странице — каждая строка «Название: значение»:</p>"
@@ -682,6 +836,11 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
         parts.append("<p>Заморозки: " + "; ".join(
             f"{date.fromisoformat(f['from']).strftime('%d.%m')}–{date.fromisoformat(f['to']).strftime('%d.%m')}"
             f"{' (' + e(f['reason']) + ')' if f.get('reason') else ''}" for f in fz_list) + "</p>")
+    if data.get("planError"):
+        parts.append('<ac:structured-macro ac:name="warning"><ac:rich-text-body><p>'
+                     + e(data["planError"]) + "</p></ac:rich-text-body></ac:structured-macro>")
+    parts.append(render_installations(data, now))
+    parts.append('<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Календарь и детализация по дням</ac:parameter><ac:rich-text-body>')
     parts.append(render_chart(data, now))
     parts.append("<h2>По дням</h2><table><tbody><tr><th>День</th><th>Статус</th><th>Команда</th><th>Микросервис</th><th>Фичи</th></tr>")
     rel_on = {r["date"]: r["name"] for r in rels}
@@ -717,19 +876,26 @@ def render_page(data: dict, now: Optional[date] = None) -> str:
                 for b in items)
             lead = f"<td rowspan=\"{len(groups)}\">{day}</td><td rowspan=\"{len(groups)}\">{_status_macro(label, col)}</td>" if n == 0 else ""
             parts.append(f"<tr>{lead}<td>{e(team)}</td><td>{ke}</td><td>{feats}</td></tr>")
-    parts.append("</tbody></table>")
+    parts.append("</tbody></table></ac:rich-text-body></ac:structured-macro>")
     return "".join(parts)
 
 
-def publish(cfg: dict, pid: str, data: dict) -> Optional[str]:
+def publish(cfg: dict, pid: str, data: dict, db: Session | None = None) -> Optional[str]:
     """Пересобрать текст страницы. Не вышло — ошибка текстом (данные уже сохранены в свойстве)."""
+    with _PUBLISH_LOCK:
+        return _publish(cfg, pid, data, db)
+
+
+def _publish(cfg: dict, pid: str, data: dict, db: Session | None) -> Optional[str]:
     for _ in range(2):
         try:
+            fresh, _ = _read(cfg, pid, data["stand"])
+            fresh = _with_plan(fresh, db)
             page = _request(cfg, "GET", f"/rest/api/content/{pid}", {"expand": "version"})
             _request(cfg, "PUT", f"/rest/api/content/{pid}", json_body={
                 "id": pid, "type": "page", "title": page.get("title") or f"График стенда {data['stand']}",
                 "version": {"number": int((page.get("version") or {}).get("number") or 0) + 1},
-                "body": {"storage": {"value": render_page(data), "representation": "storage"}}})
+                "body": {"storage": {"value": render_page(fresh), "representation": "storage"}}})
             return None
         except HTTPException as e:
             if e.status_code != 409:
@@ -745,7 +911,7 @@ YEAR_AHEAD = 365
 
 def view_days(data: dict, rng: Optional[tuple[date, date]] = None, now: Optional[date] = None) -> list[date]:
     """Дни графика: окно планирования или выбранный период (например, последние 3 месяца). Календарь размечен
-    на год вперёд от сегодня: конец дотягивается до now + YEAR_AHEAD (дни вне окна — только просмотр).
+    на год вперёд от сегодня: конец дотягивается до now + YEAR_AHEAD. Прошедшие дни — только просмотр.
     Всего — не длиннее MAX_VIEW_DAYS."""
     if rng:
         a, b = min(rng), max(rng)
@@ -753,6 +919,9 @@ def view_days(data: dict, rng: Optional[tuple[date, date]] = None, now: Optional
         a, b = date.fromisoformat(data["window"]["from"]), date.fromisoformat(data["window"]["to"])
         if b < a:
             return []
+        a = max(min(a, now or today()), (now or today()) - timedelta(days=120))
+        for booking in data["bookings"]:
+            b = max(b, date.fromisoformat(booking.get("dateTo") or booking["date"]))
     b = max(b, (now or today()) + timedelta(days=YEAR_AHEAD))
     b = min(b, a + timedelta(days=MAX_VIEW_DAYS - 1))
     return [a + timedelta(days=i) for i in range((b - a).days + 1)]
@@ -760,14 +929,13 @@ def view_days(data: dict, rng: Optional[tuple[date, date]] = None, now: Optional
 
 def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None, rng: Optional[tuple[date, date]] = None) -> dict:
     now = now or today()
-    win = set(window_days(data))
     days = []
     for d in view_days(data, rng, now):
         label, colour = day_status(data, d, now)
         conf = conflicts_on(data, d)
         ids = conflict_ids(data, d)
         days.append({"date": d.isoformat(), "weekday": WEEKDAYS[d.weekday()], "weekend": d.weekday() >= 5, "today": d == now,
-                     "inWindow": d in win,
+                     "inWindow": d >= now,
                      "status": label, "colour": colour, "freeze": freeze_on(data, d),
                      "bookings": [{**b, "conflict": b["id"] in ids} for b in bookings_on(data, d)],
                      "conflicts": [{"service": k, "teams": v} for k, v in conf.items()]})
@@ -777,12 +945,28 @@ def view(data: dict, cfg: dict, pid: str, now: Optional[date] = None, rng: Optio
             "teams": data["teams"], "msCatalog": ms_store.load(), "msInfo": ms_store.info(),
             "range": {"from": days[0]["date"], "to": days[-1]["date"]} if days else data["window"],
             "today": {"date": now.isoformat(), "status": t_label, "colour": t_colour, "count": installs_on(data, now)},
-            "days": days, "freezes": data["freezes"], "pending": data["pending"]}
+            "days": days, "freezes": data["freezes"], "pending": data["pending"],
+            **({"planError": data["planError"]} if data.get("planError") else {})}
 
 
 def _ctx(db: Session, stand: str) -> tuple[dict, str, str]:
     stand = _stand(stand)
     return _load_cfg(db), _page_id(db, stand), stand
+
+
+@router.get("/api/stands/sync-status")
+def sync_status(db: Session = Depends(get_db)) -> dict:
+    from agents import stand_sync
+
+    return {**_stored(db, _K_SYNC), "running": stand_sync.running()}
+
+
+@router.post("/api/stands/sync", status_code=202)
+async def sync_now() -> dict:
+    from agents import stand_sync
+
+    stand_sync.request_sync()
+    return {"running": True}
 
 
 @router.get("/api/stands/{stand}")
@@ -795,15 +979,15 @@ def get_stand(stand: str, start: str = "", end: str = "", db: Session = Depends(
         except ValueError:
             raise HTTPException(422, "Период — ГГГГ-ММ-ДД")
     if planningOnly:
-        return view(default_data(_stand(stand)), {}, "", rng=rng)
+        return view(_with_plan(default_data(_stand(stand)), db), {}, "", rng=rng)
     cfg, pid, stand = _ctx(db, stand)
     data, _ = _read(cfg, pid, stand)
-    return view(data, cfg, pid, rng=rng)
+    return view(_with_plan(data, db), cfg, pid, rng=rng)
 
 
-def _done(cfg: dict, pid: str, data: dict, extra: Optional[dict] = None) -> dict:
-    err = publish(cfg, pid, data)
-    return {**view(data, cfg, pid), **(extra or {}), **({"publishError": err} if err else {})}
+def _done(cfg: dict, pid: str, data: dict, extra: Optional[dict] = None, *, db: Session | None = None) -> dict:
+    err = publish(cfg, pid, data, db)
+    return {**view(_with_plan(data, db), cfg, pid), **(extra or {}), **({"publishError": err} if err else {})}
 
 
 class CreatePage(BaseModel):
@@ -818,7 +1002,7 @@ def create_page(stand: str, body: CreatePage, db: Session = Depends(get_db)) -> 
         raise HTTPException(409, "Укажите пространство Confluence в подключении")
     data = default_data(stand)
     new: dict[str, Any] = {"type": "page", "title": f"График стенда {stand}", "space": {"key": cfg["space"]},
-                           "body": {"storage": {"value": render_page(data), "representation": "storage"}}}
+                           "body": {"storage": {"value": render_page(_with_plan(data, db)), "representation": "storage"}}}
     if body.parent.strip():
         kind, ref = page_ref(body.parent)
         if kind == "id":
@@ -863,7 +1047,7 @@ def put_settings(stand: str, body: SettingsBody, db: Session = Depends(get_db)) 
     def fn(d: dict) -> None:
         d.update(window={"from": a.isoformat(), "to": b.isoformat()}, releases=rels, teams=teams, limit=body.limit)
     data, _ = mutate(cfg, pid, stand, fn)
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 # ── Справочник КЭ (файл на сервере, один на оба стенда) ─────────────────────
@@ -934,7 +1118,7 @@ def add_booking(stand: str, body: BookingBody, db: Session = Depends(get_db)) ->
         raise HTTPException(422, "Дата — ГГГГ-ММ-ДД")
 
     def fn(data: dict) -> None:
-        team = match_team(data, body.team)
+        team = _booking_team(data, body.team, db)
         if not team:
             raise HTTPException(422, f"Нет команды «{body.team}»")
         why = check_times(body.timeFrom, body.timeTo) or check(data, d, body.hotfix)
@@ -944,7 +1128,7 @@ def add_booking(stand: str, body: BookingBody, db: Session = Depends(get_db)) ->
         data["bookings"].append(_new_booking(d, team, body.service, body.task, "Shark", "simpletest", features=body.features,
                                              t_from=body.timeFrom, t_to=body.timeTo))
     data, _ = mutate(cfg, pid, stand, fn)
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 class BulkBookings(BaseModel):
@@ -973,7 +1157,7 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
             except ValueError:
                 rejected.append({"service": it.service, "task": it.task, "reason": "дата не ГГГГ-ММ-ДД"})
                 continue
-            team = match_team(data, it.team)
+            team = _booking_team(data, it.team, db)
             why = None if team else f"нет команды «{it.team}»"
             why = why or check_times(it.timeFrom, it.timeTo, single=to == d)
             why = why or (check(data, d, it.hotfix) if to == d else check_range(data, d, to, it.hotfix))
@@ -984,7 +1168,7 @@ def add_bookings(stand: str, body: BulkBookings, db: Session = Depends(get_db)) 
                                                  t_from=it.timeFrom, t_to=it.timeTo))
         return rejected
     data, rejected = mutate(cfg, pid, stand, fn)
-    return _done(cfg, pid, data, {"added": len(body.items) - len(rejected), "rejected": rejected})
+    return _done(cfg, pid, data, {"added": len(body.items) - len(rejected), "rejected": rejected}, db=db)
 
 
 @router.put("/api/stands/{stand}/bookings/{bid}")
@@ -1011,7 +1195,7 @@ def edit_booking(stand: str, bid: str, body: BookingBody, db: Session = Depends(
         cur = next((b for b in data["bookings"] if b["id"] == bid), None)
         if cur is None:
             raise HTTPException(404, "Брони уже нет — её удалили")
-        team = match_team(data, body.team)
+        team = _booking_team(data, body.team, db)
         if not team:
             raise HTTPException(422, f"Нет команды «{body.team}»")
         why = check_times(body.timeFrom, body.timeTo, single=to == d)
@@ -1027,14 +1211,14 @@ def edit_booking(stand: str, bid: str, body: BookingBody, db: Session = Depends(
         cur.clear()
         cur.update({**new, "id": bid, "createdAt": created, "editedAt": new["createdAt"]})
     data, _ = mutate(cfg, pid, stand, fn)
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 @router.delete("/api/stands/{stand}/bookings/{bid}")
 def delete_booking(stand: str, bid: str, db: Session = Depends(get_db)) -> dict:
     cfg, pid, stand = _ctx(db, stand)
     data, _ = mutate(cfg, pid, stand, lambda d: d.update(bookings=[b for b in d["bookings"] if b["id"] != bid]))
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 class FreezeBody(BaseModel):
@@ -1054,14 +1238,14 @@ def add_freeze(stand: str, body: FreezeBody, db: Session = Depends(get_db)) -> d
         raise HTTPException(422, "Конец заморозки раньше начала")
     fz = {"id": "fz-" + uuid.uuid4().hex[:8], "from": a.isoformat(), "to": b.isoformat(), "reason": body.reason.strip()}
     data, _ = mutate(cfg, pid, stand, lambda d: d["freezes"].append(fz))
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 @router.delete("/api/stands/{stand}/freezes/{fid}")
 def delete_freeze(stand: str, fid: str, db: Session = Depends(get_db)) -> dict:
     cfg, pid, stand = _ctx(db, stand)
     data, _ = mutate(cfg, pid, stand, lambda d: d.update(freezes=[f for f in d["freezes"] if f["id"] != fid]))
-    return _done(cfg, pid, data)
+    return _done(cfg, pid, data, db=db)
 
 
 @router.post("/api/stands/{stand}/pull")
@@ -1072,7 +1256,7 @@ def pull(stand: str, db: Session = Depends(get_db)) -> dict:
     data, decisions = mutate(cfg, pid, stand, lambda d: apply_requests(d, comments))
     failed = [f"{x['cid']}: {err}" for x in decisions if (err := _reply(cfg, pid, x["cid"], x["text"]))]
     return _done(cfg, pid, data, {"pulled": {"accepted": sum(1 for x in decisions if x["ok"]),
-                                             "pending": sum(1 for x in decisions if not x["ok"]), "replyErrors": failed}})
+                                             "pending": sum(1 for x in decisions if not x["ok"]), "replyErrors": failed}}, db=db)
 
 
 class PendingDecision(BaseModel):
@@ -1126,4 +1310,4 @@ def decide(stand: str, cid: str, body: PendingDecision, db: Session = Depends(ge
         data["pending"] = [p for p in data["pending"] if p["cid"] != cid]
     data, _ = mutate(cfg, pid, stand, fn)
     err = _reply(cfg, pid, cid, reply["text"])
-    return _done(cfg, pid, data, {"replyErrors": [err] if err else []})
+    return _done(cfg, pid, data, {"replyErrors": [err] if err else []}, db=db)

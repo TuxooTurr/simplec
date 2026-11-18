@@ -1,14 +1,38 @@
 """График стендов: правила, заявки из комментариев Confluence, защита от одновременной записи, сборка страницы."""
 
 from datetime import date, timedelta
+import asyncio
+import json
 
 import pytest
 from fastapi import HTTPException
 
 import backend.api.stands as st
+from agents import stand_sync
 
 TODAY = date(2026, 10, 21)          # среда
 CFG = {"base_url": "https://confluence.example", "token": "t", "token_path": "", "ssl_verify": False, "space": "~qa"}
+
+
+@pytest.fixture
+def plan_db(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from db.metrics_models import MetricsSettings
+    engine = create_engine(f"sqlite:///{tmp_path / 'plan.db'}")
+    MetricsSettings.__table__.create(engine)
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(stand_sync, "SessionLocal", sessions)
+    with sessions() as db:
+        yield db
+    engine.dispose()
+
+
+def _plan(source="browser", lists=None):
+    return st.PlanSnapshot(source=source, lists=lists or [{"id": "one", "items": [
+        {"stand": "Major-Check", "task": "SBER911-1", "team": "Новая папка", "service": "notify", "from": "2026-11-19"},
+        {"stand": "Major-GO", "task": "SBER911-1", "team": "Новая папка", "service": "notify", "from": "2026-11-25"},
+    ]}])
 
 
 @pytest.fixture
@@ -57,6 +81,146 @@ def conf(monkeypatch, tmp_path):
 
 def _comment(cid, text, author="Иванов"):
     return {"id": cid, "body": {"storage": {"value": "<p>" + text.replace("\n", "<br/>") + "</p>"}}, "history": {"createdBy": {"displayName": author}}}
+
+
+def test_future_after_november_18_is_bookable(conf, monkeypatch):
+    monkeypatch.setattr(st, "today", lambda: date(2026, 11, 19))
+    _settings(frm="2026-10-19", to="2026-11-18")
+    v = _book("2026-12-01", "SC", "notify")
+    december = next(d for d in v["days"] if d["date"] == "2026-12-01")
+    assert december["inWindow"] and december["status"] == "МОЖНО"
+    assert december["bookings"][0]["service"] == "notify"
+    assert not next(d for d in v["days"] if d["date"] == "2026-11-18")["inWindow"]
+
+
+def test_saved_lists_union_new_folder_dedup_and_deletion(plan_db):
+    first = _plan()
+    st.save_plan(first, plan_db)
+    second_list = first.lists[0].model_dump(mode="json", by_alias=True)
+    second_list["id"] = "second"
+    st.save_plan(_plan("other-browser", [second_list]), plan_db)
+    assert len(st._plan_candidates(plan_db)) == 2
+    # A new folder appears before Jira has returned a completion date.
+    before = st._with_plan(st.default_data("Major-Check"), plan_db)
+    assert "Новая папка" in before["teams"] and not before["bookings"]
+    # Removing a list's contents removes that list's contribution; another list still contributes.
+    st.save_plan(_plan(lists=[{"id": "one", "items": []}]), plan_db)
+    assert len(st._plan_candidates(plan_db)) == 2
+    st.save_plan(_plan("other-browser", [{"id": "second", "items": []}]), plan_db)
+    assert st._plan_candidates(plan_db) == []
+
+
+def test_latest_shared_list_and_readonly_plans(plan_db):
+    st.save_plan(_plan(), plan_db)
+    changed = _plan("new-browser")
+    changed.lists[0].items[0].team = "Переименованная папка"
+    st.save_plan(changed, plan_db)
+    st._set(plan_db, st._K_PLAN_ISSUES, json.dumps({"items": {"SBER911-1": {
+        "summary": "Фича & проверка", "planEnd": "2026-12-04"}}}), "")
+    plan_db.commit()
+    raw = st.default_data("Major-Check")
+    combined = st._with_plan(raw, plan_db)
+    assert raw["bookings"] == [] and "Переименованная папка" not in raw["teams"]
+    assert len(combined["bookings"]) == 1
+    assert combined["bookings"][0]["dateTo"] == "2026-12-04"
+    assert combined["bookings"][0]["team"] == "Переименованная папка"
+    assert st.bookings_on(combined, date(2026, 11, 21))[0]["source"] == "jira-plan"
+
+
+def test_deleting_a_shared_list_does_not_revive_an_older_snapshot(plan_db):
+    st.save_plan(_plan(), plan_db)
+    st.save_plan(_plan("second-browser"), plan_db)
+    st.save_plan(st.PlanSnapshot(source="browser", lists=[]), plan_db)
+    assert st._plan_candidates(plan_db) == []
+
+
+def test_manual_booking_in_a_new_jira_folder(plan_db, conf):
+    st.save_plan(_plan(), plan_db)
+    result = st.add_booking("Major-Check", st.BookingBody(
+        date="2026-11-19", team="Новая папка", service="gateway"), db=plan_db)
+    assert "Новая папка" in result["teams"]
+    assert conf["prop"]["bookings"][0]["team"] == "Новая папка"
+    assert conf["prop"]["bookings"][0]["source"] == "simpletest"
+
+
+def test_external_period_table_escapes_and_marks_conflicts():
+    raw = st.default_data("Major-Check")
+    raw["bookings"] = [
+        st._new_booking(date(2026, 11, 19), "Папка <A>", "notify", "SBER911-1", "", "jira-plan",
+                        features="Фича <script> & текст", to=date(2026, 12, 4)),
+        st._new_booking(date(2026, 11, 20), "Другая папка", "Notify", "SBER911-2", "", "simpletest"),
+    ]
+    body = st.render_page(raw, now=date(2026, 11, 19))
+    assert "План установок" in body and "19.11.2026" in body and "04.12.2026" in body
+    assert "Фича &lt;script&gt; &amp; текст" in body and "Папка &lt;A&gt;" in body
+    assert '<script>' not in body and 'data-highlight-colour="#ffbdad"' in body
+    assert body.index("План установок") < body.index('ac:name="expand"')
+    assert "План Jira tool" in body and "Ручная бронь" in body
+
+
+def test_background_sync_reads_saved_plan_and_publishes_both_pages(plan_db, conf, monkeypatch):
+    from backend.api import jira_tool
+    st.save_plan(_plan(), plan_db)
+    monkeypatch.setattr(st, "_config", lambda db: {"pages": {"Major-Check": "42", "Major-GO": "43"}})
+    seen = []
+    monkeypatch.setattr(jira_tool, "stand_plan", lambda body, db: {"items": {
+        "SBER911-1": {"summary": "Установка", "planEnd": "2026-12-04"}}})
+    def publish(cfg, pid, data, db):
+        combined = st._with_plan(st.default_data(data["stand"]), db)
+        seen.append((pid, combined["bookings"][0]["date"]))
+    monkeypatch.setattr(st, "publish", publish)
+    stand_sync._sync()
+    assert seen == [("42", "2026-11-19"), ("43", "2026-11-25")]
+    status = st._stored(plan_db, st._K_SYNC)
+    assert status["lastSuccessAt"] and status["errors"] == {}
+    assert not stand_sync.due(status, now=status["attemptEpoch"] + 3599)
+    assert stand_sync.due(status, now=status["attemptEpoch"] + 3600)
+
+
+def test_sync_keeps_cached_dates_and_continues_after_one_page_fails(plan_db, conf, monkeypatch):
+    from backend.api import jira_tool
+    st.save_plan(_plan(), plan_db)
+    st._set(plan_db, st._K_PLAN_ISSUES, json.dumps({"items": {"SBER911-1": {"summary": "Последние данные", "planEnd": "2026-12-01"}}}), "")
+    plan_db.commit()
+    monkeypatch.setattr(st, "_config", lambda db: {"pages": {"Major-Check": "42", "Major-GO": "43"}})
+    def unavailable(*args, **kwargs):
+        raise HTTPException(504, "Jira timeout")
+    monkeypatch.setattr(jira_tool, "stand_plan", unavailable)
+    seen = []
+    def publish(cfg, pid, data, db):
+        seen.append(pid)
+        combined = st._with_plan(st.default_data(data["stand"]), db)
+        assert combined["bookings"][0]["dateTo"] == "2026-12-01" and combined["planError"]
+        return "Нет доступа" if pid == "42" else None
+    monkeypatch.setattr(st, "publish", publish)
+    stand_sync._sync()
+    status = st._stored(plan_db, st._K_SYNC)
+    assert seen == ["42", "43"] and status["pages"] == {"Major-GO": "43"}
+    assert "Jira" in status["errors"] and status["errors"]["Major-Check"] == "Нет доступа"
+    assert "lastSuccessAt" not in status
+
+
+def test_sync_single_flight_does_not_block_request(monkeypatch):
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def work():
+        calls.append(1)
+        entered.set()
+        release.wait(timeout=5)
+    monkeypatch.setattr(stand_sync, "_sync", work)
+    async def scenario():
+        stand_sync.request_sync()
+        try:
+            await asyncio.to_thread(entered.wait, 2)
+            assert stand_sync.running()
+            stand_sync.request_sync()
+            assert len(calls) == 1
+        finally:
+            release.set()
+            await stand_sync.stop()
+        assert not stand_sync.running()
+    asyncio.run(scenario())
 
 
 def test_календарь_плана_доступен_до_привязки_страницы(conf):
@@ -118,9 +282,9 @@ def test_правила_выходной_заморозка_окно_и_лими
     with pytest.raises(HTTPException) as e:
         _book("2026-10-24", "B2C", "rms")
     assert "выходной" in e.value.detail
-    with pytest.raises(HTTPException) as e:
-        _book("2026-12-01", "B2C", "rms")
-    assert "вне окна планирования 19.10–13.11" in e.value.detail
+    future = _book("2026-12-01", "B2C", "rms")
+    december = next(day for day in future["days"] if day["date"] == "2026-12-01")
+    assert december["inWindow"] and december["bookings"][0]["service"] == "rms"
     st.add_freeze("Major-Check", st.FreezeBody(start="2026-10-27", end="2026-10-28", reason="регресс"), db=None)
     with pytest.raises(HTTPException) as e:
         _book("2026-10-27", "B2C", "rms")

@@ -98,9 +98,12 @@ async def lifespan(app_: FastAPI):
         await autotest_runs.start_autorun_monitor()
     except Exception as _e:
         warnings.warn(f"Autotest autorun monitor failed to start: {_e}")
+    from agents import stand_sync
+    await stand_sync.start()
     yield
     # Shutdown: остановить все задачи
     await mcp_logs.stop_log_jobs()
+    await stand_sync.stop()
     try:
         from agents.metrics_scheduler import scheduler
         await scheduler.stop_all()

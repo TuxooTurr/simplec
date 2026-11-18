@@ -20,7 +20,7 @@ export interface StandPending {
 }
 export interface StandDay {
   date: string; weekday: string; weekend: boolean; today: boolean;
-  /** День входит в окно планирования (вне окна — только просмотр, например при «3 месяца»). */
+  /** Будущий день доступен для планирования; прошедшие даты — просмотр. */
   inWindow: boolean;
   status: "МОЖНО" | "КОНФЛИКТ" | "ЛИМИТ" | "ЗАМОРОЗКА" | "ПРОШЁЛ" | "ВЫХОДНОЙ"; colour: string; freeze: StandFreeze | null;
   bookings: StandBooking[]; conflicts: { service: string; teams: string[] }[];
@@ -39,6 +39,7 @@ export interface StandView {
   publishError?: string;
   pulled?: { accepted: number; pending: number; replyErrors: string[] };
   replyErrors?: string[];
+  planError?: string;
 }
 /** Привязка стендов к страницам Confluence; defaults — постоянная ссылка стенда («По умолчанию»), пусто — нет такой. */
 export interface StandsConfig { stands: string[]; pages: Record<string, string>; urls: Record<string, string>; defaults?: Record<string, string> }
@@ -65,6 +66,17 @@ const send = <T,>(path: string, method: string, body?: unknown) =>
   fetchJson<T>(path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
 
 export const getStandsConfig = () => fetchJson<StandsConfig>("/api/stands/config");
+export interface StandPlanSnapshot {
+  source: string;
+  lists: { id: string; items: { stand: string; task: string; team: string; service: string; from: string }[] }[];
+}
+export interface StandSyncStatus {
+  running: boolean; lastAttemptAt?: string; lastSuccessAt?: string; finishedAt?: string;
+  errors?: Record<string, string>; pages?: Record<string, string>;
+}
+export const saveStandPlan = (snapshot: StandPlanSnapshot) => send<{ saved: boolean }>("/api/stands/plan", "PUT", snapshot);
+export const getStandSyncStatus = () => fetchJson<StandSyncStatus>("/api/stands/sync-status");
+export const startStandSync = () => send<StandSyncStatus>("/api/stands/sync", "POST");
 export const saveStandsConfig = (pages: Record<string, string>) => send<StandsConfig>("/api/stands/config", "PUT", { pages });
 export const createStandPage = (stand: string, parent: string) => send<StandView>(`/api/stands/${enc(stand)}/create-page`, "POST", { parent });
 /** График стенда: окно планирования или период range (например, последние 3 месяца). */

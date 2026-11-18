@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import WorkspaceShell from "@/components/WorkspaceShell";
 import LoginNote from "@/components/LoginNote";
 import { SharkLoader } from "@/components/ui/RefreshButton";
+import StandPlanSync from "@/components/stands/StandPlanSync";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -27,5 +28,5 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   if (!user) return null;
 
-  return <WorkspaceShell>{children}<LoginNote /></WorkspaceShell>;
+  return <WorkspaceShell><StandPlanSync />{children}<LoginNote /></WorkspaceShell>;
 }

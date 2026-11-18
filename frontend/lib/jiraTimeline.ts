@@ -195,11 +195,13 @@ export interface TimelineInput {
   log: Record<string, ManualMark[]>;
   /** Стори эпика (для эпика). */
   stories: Issue[];
+  /** Shared planned dates inherited from a displayed story's epic. */
+  plan?: { start: string; end: string };
   now?: number;
 }
 
 /** Хронология и плашка задачи. Без истории (не загружена, черновик) — по текущему статусу с момента создания. */
-export function taskTimeline({ issue, history, mapping, log, stories, now = Date.now() }: TimelineInput): TaskTimeline {
+export function taskTimeline({ issue, history, mapping, log, stories, plan, now = Date.now() }: TimelineInput): TaskTimeline {
   const h = history[issue.key];
   let base: Point[];
   const createdAt = parseAt(h?.created ?? String(issue.fields.created ?? ""));
@@ -214,8 +216,8 @@ export function taskTimeline({ issue, history, mapping, log, stories, now = Date
 
   const created = pts[0]?.at ?? now;
   const DAY = 86_400_000;
-  const givenStart = dayAt(h?.planStart ?? "");
-  const deadline = dayAt(h?.planEnd ?? "", true);
+  const givenStart = dayAt(plan?.start ?? h?.planStart ?? "");
+  const deadline = dayAt(plan?.end ?? h?.planEnd ?? "", true);
   const noDates = givenStart === null && deadline === null;
   const dayOf = (ms: number) => { const d = new Date(ms); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
   const todayLocal = dayOf(now);

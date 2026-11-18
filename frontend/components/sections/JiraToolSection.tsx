@@ -17,7 +17,8 @@ import MsAssignModal from "@/components/jiratool/MsAssignModal";
 import MsOverlapModal from "@/components/jiratool/MsOverlapModal";
 import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import ListsNav, { ArchivedLists } from "@/components/jiratool/ListsNav";
-import type { ReqOption } from "@/components/jiratool/ListCells";
+import { IssueTypeIcon, type ReqOption } from "@/components/jiratool/ListCells";
+import { isStoryColumn, storyBlocks, type IssueLevel } from "@/lib/jiraStoryView";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
 import AddIssuesModal, { type PickedSource } from "@/components/jiratool/AddIssuesModal";
@@ -83,6 +84,7 @@ const ASIDE_KEY = "st_jira_tool_aside";
 const TEAM_OPEN_KEY = "st_jira_tool_team_open";
 /** Вид списка: таблица или график (как роадмап «Трекинга AQA») и масштаб графика, px на сутки. */
 const VIEW_KEY = "st_jira_view";
+const ISSUE_LEVEL_KEY = "st_jira_issue_level";
 const ZOOM_KEY = "st_jira_zoom";
 /** История статусов из Jira для графика — в памяти модуля на сессию вкладки: переходы между разделами её не теряют. */
 const historyCache: { items: Record<string, IssueHistory> } = { items: {} };
@@ -109,6 +111,7 @@ const updateAnywhere = (fn: StateChange) => { if (liveUpdate) liveUpdate(fn); el
 export default function JiraToolSection() {
   const [state, setState] = useState<ToolState | null>(null);
   const [view, setView] = useState<"list" | "chart">("list");
+  const [issueLevel, setIssueLevel] = useState<IssueLevel>("epic");
   /** Окна задач (описание, плановые даты) — несколько сразу: каждое сворачивается на полку независимо от других. */
   const [issueWins, setIssueWins] = useState<Issue[]>([]);
   /** Окно «Добавить» в дефектах и сторях: какие задачи привязать к issue (то же окно, что «Добавить задачи в список»). */
@@ -213,6 +216,7 @@ export default function JiraToolSection() {
     try { setTeamOpen(localStorage.getItem(TEAM_OPEN_KEY) === "1"); } catch { /* свёрнуто по умолчанию */ }
     try {
       setView(localStorage.getItem(VIEW_KEY) === "chart" ? "chart" : "list");
+      setIssueLevel(localStorage.getItem(ISSUE_LEVEL_KEY) === "story" ? "story" : "epic");
       const z = Number(localStorage.getItem(ZOOM_KEY));
       if (z > 0) setTlZoom(z);
     } catch { /* по умолчанию — список */ }
@@ -573,13 +577,17 @@ export default function JiraToolSection() {
   const timelines = useMemo(() => {
     const out = new Map<string, TaskTimeline>();
     if (view !== "chart" || !list || !state) return out;
-    for (const k of list.keys) {
-      const issue = byKey.get(k);
-      if (!issue) continue;
-      out.set(k, taskTimeline({ issue, history: hist, mapping: state.mapping, log: state.stageLog, stories: byEpic.get(k) ?? [] }));
+    const items = list.keys.map(k => byKey.get(k)).filter((issue): issue is Issue => !!issue);
+    const rows = issueLevel === "story" ? storyBlocks(items, byEpic).flatMap(block => block.rows) : items;
+    for (const issue of rows) {
+      const k = issue.key;
+      const parent = issueLevel === "story" ? byKey.get(String(issue.fields[epicLinkId()] ?? "")) : undefined;
+      const sharedPlan = parent && list.keys.includes(parent.key) ? hist[parent.key] : undefined;
+      out.set(k, taskTimeline({ issue, history: hist, mapping: state.mapping, log: state.stageLog, stories: byEpic.get(k) ?? [],
+        plan: sharedPlan ? { start: sharedPlan.planStart, end: sharedPlan.planEnd } : undefined }));
     }
     return out;
-  }, [view, list, byKey, byEpic, hist, state?.mapping, state?.stageLog, stageOf]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [view, issueLevel, list, byKey, byEpic, hist, state?.mapping, state?.stageLog, stageOf]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** Команда задачи: направления по порядку — от аналитики до поддержки, затем тестирование. */
   const teamOf = useCallback((issue: Issue): TeamMember[] => {
     if (!list || !state) return [];
@@ -639,27 +647,40 @@ export default function JiraToolSection() {
 
   /* ── Задачи текущего списка с фильтром ── */
   const q = filter.trim().toLowerCase();
-  const searched: Issue[] = list && ctx
-    ? list.keys.map(k => byKey.get(k)).filter((i): i is Issue => !!i)
-        .filter(i => !q || i.key.toLowerCase().includes(q) || list.columns.some(c => colValues(c, i, ctx).some(v =>
-          v.toLowerCase().includes(q) || (jiraDateKind(c) !== null && fmtJiraDate(v).includes(q)))))
-    : [];
+  const baseIssues = list ? list.keys.map(k => byKey.get(k)).filter((i): i is Issue => !!i) : [];
+  const blocks = issueLevel === "story" ? storyBlocks(baseIssues, byEpic) : baseIssues.map(issue => ({ issue, rows: [issue] }));
+  const valuesOf = (c: string, owner: Issue, row: Issue) => ctx ? colValues(c, isStoryColumn(c) ? row : owner, ctx) : [];
+  const searchMatches = (owner: Issue, row: Issue) => !q || owner.key.toLowerCase().includes(q)
+    || (owner !== row && String(owner.fields.summary ?? "").toLowerCase().includes(q))
+    || row.key.toLowerCase().includes(q)
+    || !!list?.columns.some(c => valuesOf(c, owner, row).some(v =>
+      v.toLowerCase().includes(q) || (jiraDateKind(c) !== null && fmtJiraDate(v).includes(q))));
+  const searchedBlocks = blocks.map(block => ({ ...block, rows: block.rows.filter(row => searchMatches(block.issue, row)) }))
+    .filter(block => block.rows.length > 0);
+  const searched = searchedBlocks.map(block => block.issue);
   // Фильтр колонки, которой больше нет в списке (убрали из колонок), не действует.
   const activeFilters = Object.entries(colFilters).filter(([c]) => list?.columns.includes(c));
-  const passes = (i: Issue, except?: string) => !ctx || activeFilters.every(([c, vals]) => {
+  const passes = (owner: Issue, row: Issue, except?: string) => !ctx || activeFilters.every(([c, vals]) => {
     if (c === except) return true;
-    const v = colValues(c, i, ctx);
+    const v = valuesOf(c, owner, row);
     return v.length ? v.some(x => vals.includes(x)) : vals.includes("");
   });
-  const listIssues: Issue[] = searched.filter(i => passes(i));
+  const filteredBlocks = searchedBlocks.map(block => ({ ...block, rows: block.rows.filter(row => passes(block.issue, row)) }))
+    .filter(block => block.rows.length > 0);
+  const listIssues = filteredBlocks.map(block => block.issue);
+  const storyRows = issueLevel === "story" ? new Map(filteredBlocks.filter(block => block.rows[0] !== block.issue)
+    .map(block => [block.issue.key, block.rows])) : undefined;
+  const displayOwners = new Map(filteredBlocks.flatMap(block => block.rows.map(row => [row.key, block.issue] as const)));
   /** Варианты фильтра колонки — по задачам, прошедшим остальные фильтры (как в Excel). */
   const filterOptions = (c: string): FilterOption[] => {
     if (!ctx) return [];
     const counts = new Map<string, number>();
-    for (const i of searched) {
-      if (!passes(i, c)) continue;
-      const vals = colValues(c, i, ctx);
-      for (const v of vals.length ? new Set(vals) : [""]) counts.set(v, (counts.get(v) ?? 0) + 1);
+    for (const block of searchedBlocks) {
+      for (const row of block.rows) {
+        if (!passes(block.issue, row, c)) continue;
+        const vals = valuesOf(c, block.issue, row);
+        for (const v of vals.length ? new Set(vals) : [""]) counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
     }
     const kind = jiraDateKind(c);
     return [...counts.entries()]
@@ -913,7 +934,7 @@ export default function JiraToolSection() {
   /** Отмеченные строки в том порядке, в котором они видны в открытой таблице. */
   const exportExcel = async () => {
     if (!ctx || !excelTable.current || excelBusy) return;
-    const sheet = jiraViewSheet(excelTable.current, listIssues, ctx, selected, state.reqUrls);
+    const sheet = jiraViewSheet(excelTable.current, allIssues, ctx, selected, state.reqUrls);
     setExcelBusy(true);
     try {
       const name = await downloadJiraView(sheet);
@@ -1326,7 +1347,9 @@ export default function JiraToolSection() {
                       {list.name}
                       {list.archivedAt && <span className="ml-2 rounded bg-bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-text-muted">в архиве</span>}
                     </p>
-                    <p className="text-[11px] text-text-muted truncate">задач: {list.keys.length}
+                    <p className="text-[11px] text-text-muted truncate">{issueLevel === "story"
+                      ? `строк: ${filteredBlocks.reduce((sum, block) => sum + block.rows.length, 0)} · блоков: ${listIssues.length}`
+                      : `задач: ${list.keys.length}`}
                       {foreign > 0 && <span title="Поля этих задач берутся из их проектов"> · из других проектов: {foreign}</span>}
                       {pending > 0 && busy > 0 && <> · загружаю из Jira: {pending}</>}
                       {refreshedAt > 0 && (
@@ -1334,11 +1357,11 @@ export default function JiraToolSection() {
                           {" "}· данные Jira: {new Date(refreshedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
                         </span>
                       )}
-                      {q && <> · найдено: {listIssues.length}</>}
+                      {q && <> · найдено: {filteredBlocks.reduce((sum, block) => sum + block.rows.length, 0)}</>}
                       {sort && (
                         <> · сортировка: {colLabel(sort.col, list)} {sort.dir === 1 ? "↑" : "↓"}{" "}
                           <button type="button" onClick={() => setSort(null)} className="text-primary hover:underline"
-                            title="Вернуть ручной порядок — тогда строки можно перетаскивать">сбросить</button></>
+                            title={issueLevel === "story" ? "Вернуть исходный порядок блоков эпиков" : "Вернуть ручной порядок — тогда строки можно перетаскивать"}>сбросить</button></>
                       )}</p>
                   </div>
                   {view === "chart" && (
@@ -1355,6 +1378,30 @@ export default function JiraToolSection() {
                         <RefreshIcon busy={histBusy} className="h-3.5 w-3.5" /></button>
                     </div>
                   )}
+                  <div role="group" aria-label="Уровень задач" className="flex flex-shrink-0 rounded-lg border border-border-main p-0.5">
+                    {(["epic", "story"] as const).map(level => (
+                      <button key={level} type="button" aria-label={level === "epic" ? "Режим EPIC" : "Режим STORY"}
+                        aria-pressed={issueLevel === level}
+                        title={level === "epic"
+                          ? "EPIC — задачи списка как есть"
+                          : "STORY — стори вместо эпиков. Свои ключ, тип, тема и статус (st); остальные поля общие. Сортировка переставляет эпики целиком"}
+                        onClick={() => {
+                          if (issueLevel === level) return;
+                          setIssueLevel(level);
+                          setColFilters({});
+                          const owners = new Set((level === "story" ? storyBlocks(baseIssues, byEpic).map(block => block.issue) : baseIssues)
+                            .map(issue => issue.key));
+                          setSelected(previous => new Set([...previous].filter(key => owners.has(key))));
+                          try { localStorage.setItem(ISSUE_LEVEL_KEY, level); } catch { /* выбор останется до закрытия */ }
+                        }}
+                        className={`rounded-md p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
+                          ${issueLevel === level ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
+                        <span className="pointer-events-none flex" aria-hidden>
+                          <IssueTypeIcon type={level === "epic" ? "Epic" : "Story"} />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                   <div role="group" aria-label="Вид списка" className="flex flex-shrink-0 rounded-lg border border-border-main p-0.5">
                     <button type="button" onClick={() => pickView("list")} aria-pressed={view === "list"} aria-label="Список" title="Список"
                       className={`p-1.5 rounded-md transition-colors ${view === "list" ? "bg-primary/10 text-primary" : "text-text-muted hover:text-text-main"}`}>
@@ -1489,12 +1536,14 @@ export default function JiraToolSection() {
                 ) : searched.length === 0 ? (
                   <p className="text-sm text-text-muted p-4">По «{filter}» в списке ничего нет.</p>
                 ) : view === "chart" ? (
-                  <JiraTimeline sections={folderSections(list, listIssues)} timelines={timelines} stageOf={stageOf} teamOf={teamOf}
+                  <JiraTimeline sections={folderSections(list, listIssues).map(section => ({ ...section,
+                    issues: sortIssues(section.issues, sort, ctx).flatMap(issue => storyRows?.get(issue.key) ?? [issue]),
+                  }))} timelines={timelines} stageOf={stageOf} teamOf={issue => teamOf(displayOwners.get(issue.key) ?? issue)}
                     dayW={tlZoom} onDayW={pickZoom} onOpenIssue={openIssueWin} onStageManual={setStageManual}
                     onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }}
                     loading={histBusy} error={histErr} />
                 ) : (
-                  <ListTable key={list.id} tableRef={excelTable} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
+                  <ListTable key={list.id} tableRef={excelTable} ctx={ctx} issues={listIssues} storyRows={storyRows} sort={sort} onSort={setSort}
                     timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
                     selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
                     selected={selected}

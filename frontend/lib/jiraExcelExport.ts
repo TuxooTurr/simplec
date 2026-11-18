@@ -10,7 +10,7 @@ const CHIP = "[data-xlsx-chip]";
 type RGB = [number, number, number];
 type Tone = { fill: string; ink: string };
 type Format = "duration" | "date" | "datetime";
-type Cell = { v: string | number; link?: string; format?: Format; bold?: boolean;
+type Cell = { v: string | number; link?: string; format?: Format; bold?: boolean; rowSpan?: number;
   runs?: { text: string; ink?: string }[] } & Partial<Tone>;
 type Column = { title: string; width: number; group?: string };
 
@@ -137,6 +137,7 @@ export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: Col
   const sections: { depth: number; cell: Cell; written: boolean }[] = [];
   const byKey = new Map(issues.map(issue => [issue.key, issue]));
   const exported = new Set<string>();
+  const inheritedCells = new Map<string, Map<string, HTMLTableCellElement>>();
   for (const row of Array.from(table.tBodies[0]?.rows ?? [])) {
     const section = row.dataset.xlsxSection;
     if (section !== undefined) {
@@ -147,15 +148,29 @@ export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: Col
       continue;
     }
     const key = row.dataset.xlsxIssue;
-    const issue = key && selected.has(key) ? byKey.get(key) : undefined;
+    const owner = row.dataset.xlsxOwner ?? key;
+    const issue = key && owner && selected.has(owner) ? byKey.get(key) : undefined;
     if (!issue) continue;
+    const shared = inheritedCells.get(owner!) ?? new Map<string, HTMLTableCellElement>();
+    inheritedCells.set(owner!, shared);
+    const cells = new Map(Array.from(row.cells).filter(td => td.dataset.xlsxCell)
+      .map(td => [td.dataset.xlsxCell!, td]));
     for (const item of sections) {
       if (item.written) continue;
       sectionRows.push(rows.length); rows.push([item.cell]); item.written = true;
     }
     exported.add(issue.key);
-    rows.push(fields.flatMap(f => readCell(f.ref, issue, row.cells[f.index], ctx, base, reqUrls)
-      .map(cell => ({ ...bodyTone, ...cell, ...(cell.link && !cell.ink && { ink: "" }) }))));
+    rows.push(fields.flatMap<Cell>(f => {
+      const ownCell = cells.get(f.ref);
+      if (ownCell && ownCell.rowSpan > 1) shared.set(f.ref, ownCell);
+      const td = ownCell ?? shared.get(f.ref) ?? row.cells[f.index];
+      if (!ownCell && shared.has(f.ref)) return f.columns.map(() => ({ ...bodyTone, v: "" }));
+      const source = td.dataset.xlsxValueKey ? byKey.get(td.dataset.xlsxValueKey) ?? issue : issue;
+      return readCell(f.ref, source, td, ctx, base, reqUrls).map(cell => ({
+        ...bodyTone, ...cell, ...(td.rowSpan > 1 && { rowSpan: td.rowSpan }),
+        ...(cell.link && !cell.ink && { ink: "" }),
+      }));
+    }));
   }
   return { name: ctx.list.name, columns, rows, sectionRows, frozenCols, headerFill: header.fill, headerInk: header.ink, count: exported.size };
 }

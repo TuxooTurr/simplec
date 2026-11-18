@@ -29,6 +29,7 @@ class Cell:
     format: str = ""
     runs: list[tuple[str, str]] = field(default_factory=list)   # текст и цвет каждой метки в одной ячейке
     bold: bool = False
+    row_span: int = 1
 
 
 @dataclass
@@ -184,6 +185,10 @@ def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tup
         cells = []
         for i, c in enumerate([row[0]] * ncol if section else row[:ncol]):
             ref = f"{_col(i)}{r}"
+            if not section and c.row_span > 1:
+                end = min(r + c.row_span - 1, nrows)
+                if end > r:
+                    merges.append(f"{ref}:{_col(i)}{end}")
             val = "" if section and i else c.v
             link = _link(c) if not section else ""
             s_ = style_ids[_style(c)]
@@ -314,6 +319,7 @@ def _payload_cell(raw: dict) -> Cell:
         format=fmt if isinstance(fmt, str) and fmt in _FORMATS else "",
         runs=[(str(r.get("text") or ""), str(r.get("ink") or "")) for r in runs if isinstance(r, dict)] if isinstance(runs, list) else [],
         bold=raw.get("bold") is True,
+        row_span=max(1, min(20000, raw["rowSpan"])) if type(raw.get("rowSpan")) is int else 1,
     )
 
 

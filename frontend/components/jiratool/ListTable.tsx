@@ -8,6 +8,7 @@ import {
   type ColCtx, type ColRef, type GroupLevel, type GroupNode, type Issue, type Participant, type RoleValue, type TimeFmt,
 } from "@/lib/jiraTool";
 import { stageText, type Stage } from "@/lib/jiraStages";
+import { isStoryColumn } from "@/lib/jiraStoryView";
 import type { ReqOption } from "./ListCells";
 import ColumnFilter, { type FilterOption } from "./ColumnFilter";
 import { BlockCell, DefectsCell, JiraCell, MsCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, StageCell, Tag } from "./ListCells";
@@ -71,13 +72,15 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  tableRef, ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  tableRef, ctx, issues, storyRows, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, timeFmt, onTimeFmt, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, msShared, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
   tableRef?: Ref<HTMLTableElement>;
   ctx: ColCtx;
   issues: Issue[];
+  /** STORY mode keeps parent issues as blocks and expands their visible story rows here. */
+  storyRows?: Map<string, Issue[]>;
   /** Формат трудозатрат и его смена — переключатель в шапке колонок со временем (нагрузка, направления). */
   timeFmt?: TimeFmt;
   onTimeFmt?: (f: TimeFmt) => void;
@@ -229,7 +232,7 @@ export default function ListTable({
      в той же группе — порядок; в другой группе — только если все отличающиеся уровни —
      записываемые поля Shark (участник, свои поля): у задачи меняется значение.
      При сортировке по колонке ручной порядок не виден — перетаскивание строк выключено. */
-  const rowsMovable = !sort;
+  const rowsMovable = !sort && !storyRows;
   /**
    * Строку тянут только за ручку ⋮⋮ (иначе нельзя выделить текст в ячейках). Строка становится
    * перетаскиваемой прямо в обработчике нажатия на ручку — атрибутом в DOM, без перерисовки React:
@@ -346,16 +349,21 @@ export default function ListTable({
     else if (target && target !== src.key) onMoveRow(src.key, target, place);
   };
 
-  const row = (issue: Issue, depth: number, path: string, levels: GroupLevel[], folder: FolderKey, prev?: string, next?: string) => {
-    const on = selected.has(issue.key);
+  const row = (issue: Issue, depth: number, path: string, levels: GroupLevel[], folder: FolderKey, prev?: string, next?: string,
+               block?: { owner: Issue; index: number; total: number }) => {
+    const owner = block?.owner ?? issue;
+    const first = !block || block.index === 0;
+    const span = block?.total ?? 1;
+    const on = selected.has(owner.key);
     const id = `${issue.key}|${path}`;
     const over = overRow?.key === issue.key && overRow.path === path && dragRow && !(dragRow.key === issue.key && dragRow.path === path)
       ? overRow.place : null;
     return (
-      <tr key={id} data-xlsx-issue={issue.key}
+      <tr key={id} data-xlsx-issue={issue.key} data-xlsx-owner={owner.key}
+        aria-label={block ? `${issue.key} · эпик ${owner.key}` : undefined}
         onDragStart={e => {
           if (dragFolderRef.current || dragCol) return;            // тянут папку или колонку — не строку
-          if (armedRef.current?.id !== id) { e.preventDefault(); return; }
+          if (!rowsMovable || armedRef.current?.id !== id) { e.preventDefault(); return; }
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", issue.key);
           // Для переноса в другой список (бросить на список слева): отмеченные вместе со строкой — все отмеченные.
           e.dataTransfer.setData(DRAG_ISSUES, JSON.stringify(on ? [...selected] : [issue.key]));
@@ -381,10 +389,10 @@ export default function ListTable({
           ${dragRow?.key === issue.key && dragRow.path === path ? "opacity-40" : ""}
           ${over === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
           ${over === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
-        <td className={`pl-1 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
+        {first && <td rowSpan={span} className={`pl-1 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
           {/* span, а не button: с кнопки Firefox и Safari перенос не начинают (у папок ручка — тоже span) */}
           <span role="button" tabIndex={rowsMovable ? 0 : -1} aria-label={`Переместить ${issue.key}`} aria-disabled={!rowsMovable}
-            title={rowsMovable ? "Перетащите, чтобы поменять порядок или папку (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
+            title={storyRows ? "В режиме STORY порядок стори закреплён внутри эпика" : rowsMovable ? "Перетащите, чтобы поменять порядок или папку (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
             onMouseDown={e => { if (rowsMovable && e.button === 0) arm(id, e.currentTarget); }}
             onMouseUp={() => { if (!dragRef.current) disarm(); }}
             onKeyDown={e => {
@@ -397,21 +405,22 @@ export default function ListTable({
             <GripVertical className="w-3.5 h-3.5" />
           </span>
           {selecting && (
-            <input type="checkbox" checked={on} onChange={() => onSelect([issue.key], !on)} aria-label={`Выбрать ${issue.key}`}
+            <input type="checkbox" checked={on} onChange={() => onSelect([owner.key], !on)} aria-label={`Выбрать ${owner.key}`}
+              title={block ? `Выбрать блок эпика ${owner.key} со всеми показанными стори` : undefined}
               className="align-middle ml-0.5" />
           )}
-        </td>
-        <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
+        </td>}
+        <td data-xlsx-cell="__key" className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
           style={{ ...stick(SELECT_W), paddingLeft: 12 + indent(depth, folder) }}>
-          {list.marks?.[issue.key] === "removed" && (
+          {first && list.marks?.[owner.key] === "removed" && (
             <span data-xlsx-chip role="img" aria-label="Выпала из источника" title="Задачи больше нет в источнике (JQL-фильтр или релиз) — решите, оставить ли её в списке"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-red-600 text-white text-[9px] font-bold align-middle">У</span>
           )}
-          {list.marks?.[issue.key] === "new" && (sections ? (
+          {first && list.marks?.[owner.key] === "new" && (sections ? (
             <span data-xlsx-chip role="img" aria-label="Новая из источника" title="Новая задача из источника (JQL-фильтр или релиз). Переложите в папку — отметка исчезнет"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle">n</span>
           ) : (
-            <button data-xlsx-chip type="button" onClick={() => onClearMark(issue.key)} aria-label="Новая из источника — отметить просмотренной"
+            <button data-xlsx-chip type="button" onClick={() => onClearMark(owner.key)} aria-label="Новая из источника — отметить просмотренной"
               title="Новая задача из источника (JQL-фильтр или релиз). Папок в списке нет — нажмите, чтобы снять отметку"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle hover:ring-2 hover:ring-blue-300">n</button>
           ))}
@@ -427,61 +436,74 @@ export default function ListTable({
               черновик → Jira</button>
           )}
         </td>
-        {cols.map(c => (
-          <td key={c} className={`px-3 py-1.5 align-top text-sm text-text-main overflow-hidden
+        {cols.map(c => {
+          const inherited = !!block && !isStoryColumn(c);
+          if (inherited && !first) return null;
+          const cellIssue = inherited ? owner : issue;
+          return (
+          <td key={c} data-xlsx-cell={c} data-xlsx-value-key={cellIssue.key} rowSpan={inherited ? span : 1}
+            title={inherited ? `Общее поле эпика ${owner.key}` : undefined}
+            className={`px-3 py-1.5 align-top text-sm text-text-main overflow-hidden
             ${pinned.has(c) ? rowBg(on) : ""} ${c === lastPinned ? EDGE : ""}`}
             style={pinned.has(c) ? stick(leftOf(c)) : undefined}>
             {c === PARTICIPANT_COL ? (
               <span className="flex items-center gap-1 min-w-0">
                 <span className="min-w-0 flex-1">
-                  <ParticipantCell value={list.assignees[issue.key] ?? ""} onChange={pid => onParticipant(issue.key, pid)}
-                    participants={participants.filter(p => inDirection(p, TESTING) || p.id === list.assignees[issue.key])} />
+                  <ParticipantCell value={list.assignees[cellIssue.key] ?? ""} onChange={pid => onParticipant(cellIssue.key, pid)}
+                    participants={participants.filter(p => inDirection(p, TESTING) || p.id === list.assignees[cellIssue.key])} />
                 </span>
-                <span className="flex-shrink-0"><PlanCell compact value={list.spend?.[issue.key]?.plan} onChange={m => onSpend(issue.key, { plan: m })} /></span>
+                <span className="flex-shrink-0"><PlanCell compact value={list.spend?.[cellIssue.key]?.plan} onChange={m => onSpend(cellIssue.key, { plan: m })} /></span>
               </span>
             ) : c === STAGE_COL ? (
-              <StageCell info={ctx.stageOf(issue)} onOpen={categoryOf(issue) === "epic" ? () => onOpenStage(issue) : undefined}
-                manual={stageManual[issue.key]} onManual={st => onStageManual(issue.key, st)} />
+              <StageCell info={ctx.stageOf(cellIssue)} onOpen={categoryOf(cellIssue) === "epic" ? () => onOpenStage(cellIssue) : undefined}
+                manual={stageManual[cellIssue.key]} onManual={st => onStageManual(cellIssue.key, st)} />
             ) : c === DEFECTS_COL ? (
-              <DefectsCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
+              <DefectsCell defects={ctx.defectsOf(cellIssue)} onOpen={() => onOpenDefects(cellIssue)} />
             ) : c === BLOCK_COL ? (
-              <BlockCell defects={ctx.defectsOf(issue)} onOpen={() => onOpenDefects(issue)} />
+              <BlockCell defects={ctx.defectsOf(cellIssue)} onOpen={() => onOpenDefects(cellIssue)} />
             ) : c === REQ_COL ? (
-              <ReqCell value={reqLinks[issue.key] ?? []} url={reqUrls[issue.key] ?? ""} options={reqOptions}
-                onChange={ids => onReqs(issue.key, ids)} onUrl={u => onReqUrl(issue.key, u)} />
+              <ReqCell value={reqLinks[cellIssue.key] ?? []} url={reqUrls[cellIssue.key] ?? ""} options={reqOptions}
+                onChange={ids => onReqs(cellIssue.key, ids)} onUrl={u => onReqUrl(cellIssue.key, u)} />
             ) : c === MS_COL ? (
-              <MsCell value={msLinks[issue.key] ?? []} catalog={msCatalog} info={msInfo} shared={msShared} self={issue.key}
-                onChange={names => onMs(issue.key, names)} onCreate={onCreateMs} />
+              <MsCell value={msLinks[cellIssue.key] ?? []} catalog={msCatalog} info={msInfo} shared={msShared} self={cellIssue.key}
+                onChange={names => onMs(cellIssue.key, names)} onCreate={onCreateMs} />
             ) : c === LOAD_COL ? (
-              <LoadCell skip={loadSkip(list, issue, ctx.stageOf)} stage={stageText(ctx.stageOf(issue))} onChange={v => onNoLoad(issue.key, v)} />
+              <LoadCell skip={loadSkip(list, cellIssue, ctx.stageOf)} stage={stageText(ctx.stageOf(cellIssue))} onChange={v => onNoLoad(cellIssue.key, v)} />
             ) : isRoleCol(c) ? (
-              <RoleCell label={colLabel(c, list)} dir={c.slice(5)} value={list.roles?.[issue.key]?.[c.slice(5)]} people={participants}
-                onChange={patch => onRole(issue.key, c.slice(5), patch)} onAddPerson={name => onAddPerson(c.slice(5), name)}
+              <RoleCell label={colLabel(c, list)} dir={c.slice(5)} value={list.roles?.[cellIssue.key]?.[c.slice(5)]} people={participants}
+                onChange={patch => onRole(cellIssue.key, c.slice(5), patch)} onAddPerson={name => onAddPerson(c.slice(5), name)}
                 onLeave={pid => onLeaveDirection(c.slice(5), pid)} />
             ) : c === FOLDER_COL ? (
-              <span className="block truncate text-xs text-text-muted">{list.folders?.[issue.key] ?? "—"}</span>
-            ) : c === "jira:summary" && !issue.local ? (
-              <button type="button" onClick={() => onOpenIssue(issue)} title="Открыть описание задачи"
+              <span className="block truncate text-xs text-text-muted">{list.folders?.[cellIssue.key] ?? "—"}</span>
+            ) : c === "jira:summary" && !cellIssue.local ? (
+              <button type="button" onClick={() => onOpenIssue(cellIssue)} title="Открыть описание задачи"
                 className="block w-full text-left break-words hover:text-primary hover:underline">
-                {String(issue.fields.summary ?? "—")}
+                {String(cellIssue.fields.summary ?? "—")}
               </button>
             ) : c.startsWith("jira:") ? (
-              <JiraCell id={c.slice(5)} issue={issue} />
+              <JiraCell id={c.slice(5)} issue={cellIssue} />
             ) : ownById[c.slice(4)] ? (
-              <OwnCell field={ownById[c.slice(4)]} value={list.values[issue.key]?.[c.slice(4)]} icon={list.icons?.[issue.key]?.[c.slice(4)]}
-                computed={ownById[c.slice(4)].type === "rules" ? ruleResult(ownById[c.slice(4)], issue, ctx) : undefined}
-                onChange={v => onValue(issue.key, c.slice(4), v)} onIcon={code => onIcon(issue.key, c.slice(4), code)} />
+              <OwnCell field={ownById[c.slice(4)]} value={list.values[cellIssue.key]?.[c.slice(4)]} icon={list.icons?.[cellIssue.key]?.[c.slice(4)]}
+                computed={ownById[c.slice(4)].type === "rules" ? ruleResult(ownById[c.slice(4)], cellIssue, ctx) : undefined}
+                onChange={v => onValue(cellIssue.key, c.slice(4), v)} onIcon={code => onIcon(cellIssue.key, c.slice(4), code)} />
             ) : <span className="text-text-muted/50">—</span>}
           </td>
-        ))}
-        <td className="px-1 py-1.5 align-top">
-          <button type="button" onClick={() => onRemove(issue.key)} aria-label={`Убрать ${issue.key} из списка`} title="Убрать из списка"
+        ); })}
+        {first && <td rowSpan={span} className="px-1 py-1.5 align-top">
+          <button type="button" onClick={() => onRemove(owner.key)} aria-label={`Убрать ${owner.key} из списка`}
+            title={block ? `Убрать блок эпика ${owner.key} из списка` : "Убрать из списка"}
             className="p-1 rounded text-text-muted opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-red-500">
             <X className="w-3.5 h-3.5" />
           </button>
-        </td>
+        </td>}
       </tr>
     );
+  };
+
+  const issueRows = (issue: Issue, depth: number, path: string, levels: GroupLevel[], folder: FolderKey, prev?: string, next?: string) => {
+    const rows = storyRows?.get(issue.key);
+    return rows ? rows.map((story, index) => row(story, depth, path, levels, folder, undefined, undefined,
+      { owner: issue, index, total: rows.length })) : row(issue, depth, path, levels, folder, prev, next);
   };
 
   const group = (node: GroupNode, depth: number, parent: GroupLevel[], folder: FolderKey): React.ReactNode => {
@@ -540,7 +562,7 @@ export default function ListTable({
             ? <tr className="border-t border-border-main"><td colSpan={width} className="py-1.5 text-[11px] text-text-muted/70"
                 style={{ paddingLeft: 40 + indent(depth, folder) }}>пусто — перетащите сюда задачу</td></tr>
             : sortIssues(node.issues, sort, ctx).map((i, n, arr) =>
-                row(i, depth + 1, node.path, levels, folder, arr[n - 1]?.key, arr[n + 1]?.key)))}
+                issueRows(i, depth + 1, node.path, levels, folder, arr[n - 1]?.key, arr[n + 1]?.key)))}
       </Fragment>
     );
   };
@@ -549,7 +571,7 @@ export default function ListTable({
   const content = (items: Issue[], prefix: string, folder: FolderKey, depth: number) =>
     list.groupBy.length
       ? groupIssues(items, list.groupBy, ctx, prefix).map(g => group(g, depth, [], folder))
-      : sortIssues(items, sort, ctx).map((i, n, arr) => row(i, depth, prefix, [], folder, arr[n - 1]?.key, arr[n + 1]?.key));
+      : sortIssues(items, sort, ctx).map((i, n, arr) => issueRows(i, depth, prefix, [], folder, arr[n - 1]?.key, arr[n + 1]?.key));
 
   /** Заголовок папки: перенос задач внутрь, перестановка папок, переименование, удаление. */
   const folderHeader = (name: string | null, items: Issue[]) => {
@@ -693,6 +715,7 @@ export default function ListTable({
                   <span className="flex items-center gap-0.5 min-w-0">
                     <GripVertical className="w-3 h-3 -ml-2 flex-shrink-0 opacity-0 group-hover/th:opacity-60" />
                     <button type="button" onClick={() => clickSort(c)}
+                      title={storyRows ? "Сортировать блоки эпиков; порядок стори внутри эпика сохраняется" : undefined}
                       onKeyDown={e => {
                         // Alt+←/→ — переставить колонку с клавиатуры.
                         if (!e.altKey) return;

@@ -84,3 +84,21 @@ def test_несколько_листов():
         xlsx_export.XlsxSheet(name="Фамилии", columns=[{"title": "A"}], rows=[[{"v": "1"}]]),
         xlsx_export.XlsxSheet(name="Нагрузка", columns=[{"title": "A"}], rows=[[{"v": "2 ч"}]])]))
     assert r.body[:2] == b"PK"
+
+
+def test_общие_ячейки_эпика_объединены_по_строкам_сторей():
+    result = xlsx_export.export_xlsx(xlsx_export.XlsxBody(sheets=[xlsx_export.XlsxSheet(
+        name="Story",
+        columns=[{"title": "Ключ"}, {"title": "ФИО", "group": "Тестирование"}, {"title": "Часы", "group": "Тестирование"}],
+        rows=[
+            [{"v": "STORY-1"}, {"v": "Иван", "rowSpan": 3}, {"v": 0.25, "format": "duration", "rowSpan": 3}],
+            [{"v": "STORY-2"}, {"v": ""}, {"v": ""}],
+            [{"v": "STORY-3"}, {"v": ""}, {"v": ""}],
+        ],
+    )]))
+    ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(result.body)) as z:
+        sheet = ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+    merged = [el.get("ref") for el in sheet.findall("s:mergeCells/s:mergeCell", ns)]
+    assert merged == ["B1:C1", "B3:B5", "C3:C5"]
+    assert sheet.find("s:sheetData/s:row/s:c[@r='C3']/s:v", ns).text == "0.25"

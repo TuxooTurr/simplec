@@ -34,6 +34,7 @@ COMPONENT_KEYWORDS: dict[str, list[str]] = {
     "Android":   ["android", "андроид"],
     "iOS":       ["ios", "иос"],
     "Дизайн":    ["дизайн", "design"],
+    "DevOps":    ["devops", "dev ops", "девопс"],
 }
 
 

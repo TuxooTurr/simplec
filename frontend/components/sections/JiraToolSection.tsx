@@ -777,10 +777,12 @@ export default function JiraToolSection() {
   };
   const openDefect = (issue: Issue) => {
     if (!state) return;
+    const epic = categoryOf(issue) === "epic";
+    const epicKey = epic ? issue.key : String(issue.fields[epicLinkId()] ?? "");
     openForm(control => (
       <IssueFormModal control={control} jiraOnly project={projectKeyOfIssue(issue.key)} participants={state.participants}
-        prefill={categoryOf(issue) === "epic" ? { type: "Дефект", epicKey: issue.key } : { type: "Дефект" }}
-        linkTo={categoryOf(issue) === "epic" ? undefined : { key: issue.key, summary: String(issue.fields.summary ?? "") }}
+        prefill={{ type: "Дефект", epicKey }}
+        linkTo={epic ? undefined : { key: issue.key, summary: String(issue.fields.summary ?? "") }}
         // Новый дефект — сразу в кэш (с Epic Link и связями), чтобы окно «Дефекты» и маркер в списке его показали.
         onSave={d => { if (d.jira) void sync([d.jira.key], []); }} />
     ));

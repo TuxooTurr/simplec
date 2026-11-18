@@ -4,11 +4,12 @@
 """
 
 import io
+import subprocess
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_EXTENSIONS = {
     ".pdf", ".docx", ".doc", ".xlsx", ".xls",
-    ".xml", ".png", ".jpg", ".jpeg", ".txt", ".log", ".md", ".markdown"
+    ".xml", ".png", ".jpg", ".jpeg", ".txt", ".log", ".json", ".md", ".markdown"
 }
 
 
@@ -53,7 +54,7 @@ def parse_file(data: bytes, filename: str, markdown: bool = False) -> str:
         return _parse_xml(data)
     elif ext in ("png", "jpg", "jpeg"):
         return _parse_image(data)
-    elif ext in ("txt", "log", "md", "markdown"):   # Markdown — как есть: разметку отрисует интерфейс
+    elif ext in ("txt", "log", "json", "md", "markdown"):   # Markdown — как есть: разметку отрисует интерфейс
         return _parse_txt(data)
     else:
         return data.decode("utf-8", errors="ignore")
@@ -207,26 +208,21 @@ def _parse_xml(data: bytes) -> str:
 
 
 def _parse_image(data: bytes) -> str:
-    # Ошибки поднимаем, а не возвращаем заглушкой: раньше при отсутствии
-    # tesseract в LLM молча уходило «[OCR недоступен]» и модель «не видела» картинку.
     try:
-        from PIL import Image
-        import pytesseract
-    except ImportError:
-        raise ValueError(
-            "Распознавание изображений недоступно: не установлены Pillow/pytesseract "
-            "(pip install Pillow pytesseract)"
+        result = subprocess.run(
+            ["tesseract", "stdin", "stdout", "-l", "rus+eng"],
+            input=data, capture_output=True, check=True, timeout=30,
         )
-    try:
-        img = Image.open(io.BytesIO(data))
-        text = pytesseract.image_to_string(img, lang="rus+eng")
-    except pytesseract.TesseractNotFoundError:
+    except FileNotFoundError as e:
         raise ValueError(
             "Распознавание изображений недоступно: не установлен движок Tesseract. "
             "macOS: brew install tesseract tesseract-lang · Linux: apt install tesseract-ocr tesseract-ocr-rus"
-        )
-    except Exception as e:
-        raise ValueError("Не удалось распознать изображение: " + str(e)[:200])
+        ) from e
+    except subprocess.TimeoutExpired as e:
+        raise ValueError("Распознавание изображения заняло больше 30 секунд") from e
+    except subprocess.CalledProcessError as e:
+        raise ValueError("Не удалось распознать изображение: " + e.stderr.decode("utf-8", errors="replace")[:200]) from e
+    text = result.stdout.decode("utf-8", errors="replace")
     if not text.strip():
         raise ValueError(
             "На изображении не распознан текст. Проверьте качество скриншота "

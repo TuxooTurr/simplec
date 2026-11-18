@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, BookOpen, Bug, CheckCircle2, CheckSquare, ChevronUp, ExternalLink, Loader2, Minus, Search, Send, Settings2, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Bug, CheckCircle2, CheckSquare, ChevronUp, ExternalLink, Loader2, Minus, Send, Settings2, Sparkles } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { FORM_DOCK_ID } from "@/components/FormHost";
 import type { FormControl } from "@/lib/backgroundForms";
@@ -13,14 +13,15 @@ import { PARSEABLE_RE, withUniqueNames } from "@/lib/attachments";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import { formatLoadedAt, matchPriority, readEpicsCache, writeEpicsCache, type EpicsCache } from "@/components/JiraRegisterPanel";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
-import { formatBug, formatTask, listRequirements, type Requirement } from "@/lib/api";
+import { formatBug, formatTask } from "@/lib/api";
 import {
   addLabelPresets, attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
 import { updateAqaIssue } from "@/lib/aqaApi";
 import JiraUserField from "./JiraUserField";
-import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, type Participant } from "@/lib/jiraTool";
+import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, loadState, type Participant } from "@/lib/jiraTool";
+import { issueCache } from "@/lib/jiraToolCache";
 import { RefreshIcon } from "@/components/ui/RefreshButton";
 
 /** Что уходит в список: черновик Shark или созданная в Jira задача (тогда есть jiraKey/url). */
@@ -39,9 +40,14 @@ export interface IssueDraft {
   addToList?: boolean;
 }
 
-const PLATFORMS = ["Back", "Front", "Mobile", "Analytics", "Design", "DevOps"];
-/** Картинки, по которым генерация пишет в описании !имя! (bugs._IMAGE_EXTS) — в том же порядке, что она их получила. */
 const GEN_IMAGE_RE = /\.(png|jpe?g)$/i;
+// В «Требованиях (st)» бывают и ссылки на другие системы, например Figma.
+const CONFLUENCE_REF_RE = /(?:[?&]pageId=\d+|\/pages\/\d+|\/display\/[^/]+\/)/i;
+
+function withoutScreenshot(description: string, name: string): string {
+  return description.replace(`![${name}](${name})`, "")
+    .replace(/^## Скриншоты[ \t]*\n(?:[ \t]*\n)*(?=## |\s*$)/m, "").trimEnd();
+}
 
 const INPUT = "w-full text-sm border border-border-main rounded-lg px-3 py-2 bg-[var(--color-input-bg)] text-text-main " +
   "placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30";
@@ -50,8 +56,7 @@ const LBL = "block text-[11px] font-semibold uppercase tracking-wide text-text-m
 /**
  * Создание задачи из списка — бывший «Генератор дефектов» + регистрация в Jira в одной форме.
  * Все поля видны сразу: можно заполнить руками, а можно описать своими словами и нажать
- * «Сгенерировать» — ИИ заполнит название и описание (для дефекта — и критичность).
- * Источник для ИИ — документы из раздела «Данные» (требования): контент подстраивается под них.
+ * кнопку рядом с названием — ИИ оформит задачу по описанию, вложениям и требованиям эпика.
  * Дальше выбор: «Создать в Shark» (черновик в списке) или сразу «Создать в Jira».
  * С initial — это уже черновик из списка: его можно поправить и сохранить или отправить в Jira.
  *
@@ -102,23 +107,19 @@ export default function IssueFormModal({ control, project, participants, listNam
    */
   const [addToList, setAddToList] = useState(true);
 
-  /* ── Исходные данные для ИИ ── */
-  const [platform, setPlatform] = useState("Back");
-  const [feature, setFeature] = useState("");
-  const [raw, setRaw] = useState("");
-  const [files, setFiles] = useState<File[]>(initialFiles ?? []);
+  const [files, setFiles] = useState<File[]>(() => withUniqueNames([], initialFiles ?? []));
   /**
    * Имена, под которыми генерация сослалась на скриншоты в описании (!имя!): файл → имя.
    * Привязка к самому файлу, а не к порядку — добавили или убрали файл после генерации, имена не съедут.
    */
   const [shotNames, setShotNames] = useState<Map<File, string>>(new Map());
-  const addFiles = (added: File[]) => { if (added.length) setFiles(f => [...f, ...withUniqueNames(f, added)]); };
-  const [reqs, setReqs] = useState<Requirement[]>([]);
-  const [reqIds, setReqIds] = useState<string[]>([]);
-  const [reqQuery, setReqQuery] = useState("");
-  const [reqOpen, setReqOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [genNote, setGenNote] = useState("");
+  const [generated, setGenerated] = useState(false);
+  const [genError, setGenError] = useState("");
+  const [componentMissing, setComponentMissing] = useState(false);
+  const [requestSources, setRequestSources] = useState(false);
+  const [sourceRef, setSourceRef] = useState("");
+  const [sourceFile, setSourceFile] = useState<File>();
 
   /* ── Поля задачи ── */
   const [summary, setSummary] = useState(initial?.summary ?? prefill?.summary ?? "");
@@ -127,6 +128,7 @@ export default function IssueFormModal({ control, project, participants, listNam
   const [labels, setLabels] = useState<string[]>(initial?.labels ?? prefill?.labels ?? []);
   const [newLabel, setNewLabel] = useState("");
   const [components, setComponents] = useState<string[]>(initial?.components ?? []);
+  const [componentGenerated, setComponentGenerated] = useState(false);
   const [standType, setStandType] = useState(initial?.standType ?? "");
   const [epicKey, setEpicKey] = useState(initial?.epicKey ?? prefill?.epicKey ?? "");
   const [participantId, setParticipantId] = useState(initial?.participantId ?? "");
@@ -143,6 +145,7 @@ export default function IssueFormModal({ control, project, participants, listNam
   const [settings, setSettings] = useState<JiraSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [meta, setMeta] = useState<JiraProjectMeta | null>(null);
+  const metaRequest = useRef<Promise<JiraProjectMeta | null> | null>(null);
   const [epicsCache, setEpicsCache] = useState<EpicsCache | null>(() => readEpicsCache(project));
   const [epicsLoading, setEpicsLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -151,10 +154,18 @@ export default function IssueFormModal({ control, project, participants, listNam
 
   const jiraReady = Boolean(settings && (settings.token || settings.token_path));
   const reloadSettings = () => getJiraSettings().then(setSettings).catch(() => setSettings(null));
-  useEffect(() => { reloadSettings(); listRequirements().then(setReqs).catch(() => setReqs([])); }, []);
+  useEffect(() => { reloadSettings(); }, []);
   useEffect(() => {
+    setMeta(null);
     if (!jiraReady) return;
-    getJiraMeta(project).then(m => { setMeta(m); setStandType(s => s || m.default_stand_type); }).catch(() => setMeta(null));
+    const request = getJiraMeta(project).catch(() => null);
+    metaRequest.current = request;
+    void request.then(m => {
+      if (metaRequest.current !== request || !m) return;
+      setMeta(m);
+      setStandType(s => s || m.default_stand_type);
+    });
+    return () => { metaRequest.current = null; };
   }, [jiraReady, project]);
   // Эпики выгружаем сами один раз за сессию — при первом открытии формы; дальше — из сессии, обновление по кнопке.
   useEffect(() => {
@@ -183,45 +194,114 @@ export default function IssueFormModal({ control, project, participants, listNam
   const standTypes = meta?.stand_types ?? [];
   const epicOptions = (epicsCache?.epics ?? []).map(e => ({ key: e.key, summary: e.summary }));
   const mobiles = new Set(meta?.mobile_components ?? ["iOS", "Android"]);
+  const busy = generating || sending;
 
-  const toggleComponent = (c: string) => setComponents(prev => {
-    if (prev.includes(c)) return prev.filter(x => x !== c);
-    if (!isDefect) return [...prev, c];
-    // Дефект: до 2 компонентов, второй — только если среди них мобильный (правило регистрации SBER911).
-    if (prev.length === 0) return [c];
-    const anyMobile = prev.some(x => mobiles.has(x)) || mobiles.has(c);
-    return prev.length === 1 && anyMobile ? [...prev, c] : [c];
-  });
+  const toggleComponent = (c: string) => {
+    setComponentMissing(false);
+    setComponentGenerated(false);
+    setGenerated(false);
+    setComponents(prev => {
+      if (prev.includes(c)) return prev.filter(x => x !== c);
+      if (!isDefect) return [...prev, c];
+      // Для дефекта второй компонент допустим, если один из них мобильный.
+      const anyMobile = prev.some(x => mobiles.has(x)) || mobiles.has(c);
+      return prev.length === 1 && anyMobile ? [...prev, c] : [c];
+    });
+  };
 
-  const filteredReqs = useMemo(() => {
-    const q = reqQuery.trim().toLowerCase();
-    return reqs.filter(r => !q || r.name.toLowerCase().includes(q) || (r.feature ?? "").toLowerCase().includes(q));
-  }, [reqs, reqQuery]);
+  const changeEpic = (key: string) => {
+    setEpicKey(key);
+    setRequestSources(false);
+    setSourceRef("");
+    setSourceFile(undefined);
+    setGenError("");
+    setGenerated(false);
+  };
 
-  /* ── Генерация: заполняет название и описание (необязательна) ── */
-  const generate = async () => {
-    setGenerating(true); setGenNote("");
+  const addFiles = (added: File[]) => {
+    if (busy || !added.length) return;
+    setFiles(current => [...current, ...withUniqueNames(current, added)]);
+    setGenerated(false);
+  };
+
+  const removeFile = (index: number) => {
+    if (busy) return;
+    const file = files[index];
+    const name = shotNames.get(file);
+    if (name) {
+      setDescription(text => withoutScreenshot(text, name));
+      setShotNames(current => {
+        const next = new Map(current);
+        next.delete(file);
+        return next;
+      });
+    }
+    setFiles(current => current.filter((_, i) => i !== index));
+    setGenerated(false);
+  };
+
+  const canGenerate = Boolean(summary.trim() || description.trim() || files.some(f => PARSEABLE_RE.test(f.name)));
+  const generate = async (withoutRequirements = false) => {
+    if (busy || !canGenerate) return;
+    setGenerating(true);
+    setGenerated(false);
+    setGenError("");
+    const key = epicKey.trim().toUpperCase();
+    const { lists, reqLinks, reqUrls } = loadState();
+    const storedRef = reqUrls[key]?.trim() ?? "";
+    const linkedRef = CONFLUENCE_REF_RE.test(storedRef) ? storedRef : "";
+    const confluenceRef = withoutRequirements ? "" : sourceRef.trim() || linkedRef;
     try {
-      // Своими словами не написано — генерируем из названия: кнопка активна и в этом случае.
-      const text = raw.trim() || summary.trim();
-      // ИИ получает только то, что умеет прочитать; видео, архивы и прочее уйдут лишь вложениями в Jira.
+      const listedEpic = lists.some(list => list.keys.includes(key)) ? issueCache().issues[key] : undefined;
+      const epicSummary = String(listedEpic?.fields.summary ??
+        (epicChoices ?? epicOptions).find(e => e.key === key)?.summary ?? "");
+      const generationMeta = meta ?? await metaRequest.current;
+      const availableComponents = generationMeta?.components ?? [];
+      const availablePriorities = generationMeta?.priorities?.length ? generationMeta.priorities : PRIORITIES;
+      const selectedComponents = componentGenerated ? [] : components;
       const readable = files.filter(f => PARSEABLE_RE.test(f.name));
-      const res = isDefect
-        ? await formatBug({ platform, feature, description: text, provider, files: readable, requirementIds: reqIds })
-        : await formatTask({ feature, description: text, provider, files: readable, requirementIds: reqIds });
-      setSummary(res.title || summary);
-      setDescription(res.description || res.report);
-      if (isDefect && res.priority) setPriority(p => matchPriority(res.priority, priorities) || p);
+      const text = [...shotNames.values()].reduce(withoutScreenshot, description).trim();
+      const res = await (isDefect ? formatBug : formatTask)({
+        feature: "", description: text, provider, files: readable,
+        requirementIds: reqLinks[key] ?? [],
+        requirementFile: withoutRequirements ? undefined : sourceFile,
+        jiraContext: {
+          summary: summary.trim().slice(0, 250), epic: key, epic_summary: epicSummary.slice(0, 500),
+          components: availableComponents, selected_components: selectedComponents,
+          attachment_names: files.filter(f => !PARSEABLE_RE.test(f.name)).map(f => f.name),
+          confluence_ref: confluenceRef, allow_without_requirements: withoutRequirements,
+        },
+      });
+      if (res.needs_requirements) {
+        setRequestSources(true);
+        setSourceRef(confluenceRef);
+        if (minimizedRef.current) notify({ kind: "info", title: "Нужны требования для генерации", text: "Разверните форму, чтобы указать источник или продолжить без него." });
+        return;
+      }
+      setSummary(res.title);
+      setDescription(res.description);
+      if (isDefect && res.priority) setPriority(p => matchPriority(res.priority, availablePriorities) || p);
+      const matchedComponent = availableComponents.includes(res.component);
+      if (!selectedComponents.length) {
+        setComponents(matchedComponent ? [res.component] : []);
+        setComponentGenerated(matchedComponent);
+        setComponentMissing(availableComponents.length > 0 && !matchedComponent);
+      }
       const shots = readable.filter(f => GEN_IMAGE_RE.test(f.name));
       setShotNames(new Map(shots.map((f, i) => [f, res.screenshots?.[i] ?? f.name])));
-      setGenNote(`Сгенерировано${reqIds.length ? ` с учётом требований: ${reqIds.length}` : ""}. Проверьте название и описание.`);
+      setRequestSources(false);
+      setGenerated(true);
       if (minimizedRef.current) notify({ kind: "success", title: "Название и описание готовы", text: "Разверните форму внизу справа, проверьте и отправьте." });
     } catch (e) {
-      // Без подстановки шаблона: выдуманный текст легко отправить в Jira, не заметив.
-      setGenNote(`Генерация не удалась: ${(e as Error).message.slice(0, 200)}. Заполните поля руками или повторите.`);
+      setGenError(`Генерация не удалась: ${(e as Error).message.slice(0, 300)}`);
+      if (confluenceRef || (!withoutRequirements && sourceFile)) {
+        setRequestSources(true);
+        setSourceRef(confluenceRef);
+      }
       if (minimizedRef.current) notify({ kind: "error", title: "Генерация описания не удалась", text: (e as Error).message.slice(0, 200) });
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   };
 
   const draft = (): IssueDraft => ({
@@ -351,7 +431,7 @@ export default function IssueFormModal({ control, project, participants, listNam
           {CREATE_TYPES.map(({ type: t, hint }) => {
             const Icon = t === "Дефект" ? Bug : CheckSquare;
             return (
-              <button key={t} type="button" role="radio" aria-checked={type === t} onClick={() => setType(t)} title={hint}
+              <button key={t} type="button" role="radio" aria-checked={type === t} disabled={busy} onClick={() => { setType(t); setGenerated(false); }} title={hint}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm transition-colors
                   ${type === t ? "border-primary bg-primary/10 text-primary font-semibold" : "border-border-main text-text-main hover:bg-bg-subtle"}`}>
                 <Icon className={`w-4 h-4 ${t === "Дефект" ? "text-red-500" : ""}`} /> {t}
@@ -360,102 +440,77 @@ export default function IssueFormModal({ control, project, participants, listNam
           })}
         </div>
 
-        <div className="grid grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-5">
-          {/* ── Слева: исходные данные для ИИ ── */}
-          <section className="space-y-3 rounded-xl bg-bg-subtle/60 border border-border-main p-4" aria-label="Данные для генерации">
-            <p className="text-xs font-semibold text-text-main flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-violet-500" /> Генерация (по желанию)</p>
-            {isDefect && (
-              <div>
-                <span className={LBL}>Слой</span>
-                <div className="flex flex-wrap gap-1">
-                  {PLATFORMS.map(p => (
-                    <button key={p} type="button" onClick={() => setPlatform(p)} aria-pressed={platform === p}
-                      className={`px-2.5 py-1 rounded-md text-xs border ${platform === p ? "border-primary bg-primary/10 text-primary font-semibold" : "border-border-main text-text-muted hover:text-text-main"}`}>{p}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <div>
-              <label htmlFor="if-feature" className={LBL}>Фича / модуль</label>
-              <input id="if-feature" value={feature} onChange={e => setFeature(e.target.value)} placeholder="Например, Карточка инцидента" className={INPUT} />
-            </div>
-            <div>
-              <label htmlFor="if-raw" className={LBL}>{isDefect ? "Что случилось — своими словами" : "Что нужно сделать — своими словами"}</label>
-              <textarea id="if-raw" value={raw} onChange={e => setRaw(e.target.value)} rows={6} className={`${INPUT} resize-y`}
-                placeholder={isDefect ? "Что делали, что получили, что ожидали. Можно кусок лога или JSON." : "Цель, что сделать, к какому сроку."} />
-            </div>
-            <div>
-              <span className={LBL}>Источник для ИИ — документы из «Данных»</span>
-              <button type="button" onClick={() => setReqOpen(o => !o)} aria-expanded={reqOpen}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border-main text-xs text-text-main hover:bg-bg-card">
-                <BookOpen className="w-3.5 h-3.5" /> {reqIds.length ? `Требования: ${reqIds.length}` : "Выбрать требования"}
-              </button>
-              {reqIds.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {reqIds.map(id => {
-                    const r = reqs.find(x => x.id === id);
-                    return (
-                      <span key={id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-md bg-primary/10 text-xs text-text-main max-w-[220px]">
-                        <span className="truncate">{r?.name ?? id}</span>
-                        <button type="button" onClick={() => setReqIds(x => x.filter(y => y !== id))} aria-label="Убрать требование"><X className="w-3 h-3" /></button>
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-              {reqOpen && (
-                <div className="mt-2 rounded-lg border border-border-main bg-bg-card p-2">
-                  <label className="flex items-center gap-2 px-2 py-1 mb-1 rounded-md border border-border-main bg-[var(--color-input-bg)]">
-                    <Search className="w-3.5 h-3.5 text-text-muted" />
-                    <input value={reqQuery} onChange={e => setReqQuery(e.target.value)} placeholder="Поиск по названию или фиче" aria-label="Поиск требований"
-                      className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
-                  </label>
-                  <div className="max-h-40 overflow-y-auto scrollbar-thin">
-                    {filteredReqs.length === 0 && <p className="text-xs text-text-muted p-2">{reqs.length ? "Ничего не нашлось" : "В разделе «Данные» пока нет требований"}</p>}
-                    {filteredReqs.map(r => (
-                      <label key={r.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-bg-subtle text-sm cursor-pointer">
-                        <input type="checkbox" checked={reqIds.includes(r.id)}
-                          onChange={() => setReqIds(x => (x.includes(r.id) ? x.filter(y => y !== r.id) : [...x, r.id]))} />
-                        <span className="truncate flex-1 text-text-main">{r.name}</span>
-                        {r.feature && <span className="text-[10px] text-text-muted">{r.feature}</span>}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            <button type="button" onClick={generate} disabled={generating || !(raw.trim() || summary.trim())}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-violet-500 to-indigo-500 text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
-              {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              {generating ? "Генерирую…" : "Сгенерировать название и описание"}
-            </button>
-            {genNote && <p className="text-[11px] text-text-muted">{genNote}</p>}
-          </section>
-
-          {/* ── Справа: поля задачи ── */}
-          <section className="space-y-3" aria-label="Поля задачи">
+        <fieldset disabled={busy} className="grid min-w-0 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
+          <section className="space-y-3" aria-label="Название, описание и вложения">
             <div>
               <label htmlFor="if-summary" className={LBL}>Название *</label>
-              <input id="if-summary" value={summary} onChange={e => setSummary(e.target.value)} maxLength={250} className={INPUT}
-                placeholder={isDefect ? "[Back][Модуль] Краткая суть" : "Проверить… / Подготовить…"} />
+              <div className="flex items-stretch gap-2">
+                <input id="if-summary" value={summary} onChange={e => { setSummary(e.target.value); setGenerated(false); }}
+                  maxLength={250} className={`${INPUT} min-w-0`}
+                  placeholder={isDefect ? "[Bc][Название фичи] Краткая суть" : "Проверить… / Подготовить…"} />
+                <button type="button" onClick={() => void generate()} disabled={busy || !canGenerate}
+                  aria-label={generated ? "Готово — сгенерировать заново" : "Сгенерировать с ИИ"}
+                  title={canGenerate ? "Оформить название и описание по полям формы и вложениям" : "Добавьте описание, название или файл"}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold disabled:opacity-50
+                    ${generated ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "border-primary/30 bg-primary/10 text-primary hover:bg-primary/20"}`}>
+                  {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : generated ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                  <span role="status">{generating ? "Генерирую…" : generated ? "Готово" : "ИИ"}</span>
+                </button>
+              </div>
             </div>
+            {requestSources && (
+              <section className="space-y-2 rounded-lg border border-border-main bg-bg-subtle p-3 text-xs text-text-main" aria-label="Требования для генерации">
+                <p>{epicKey ? `Для эпика ${epicKey} нет доступного текста требований.` : "Эпик не выбран."} Укажите ссылку на Confluence или приложите файл требований.</p>
+                <input type="text" value={sourceRef} onChange={e => setSourceRef(e.target.value)}
+                  aria-label="Ссылка на требования в Confluence" placeholder="Ссылка на страницу Confluence" className={INPUT} />
+                <label className="block">
+                  <span className={LBL}>Файл требований</span>
+                  <input type="file" accept=".pdf,.doc,.docx,.xlsx,.xls,.xml,.png,.jpg,.jpeg,.txt,.log,.json,.md,.markdown"
+                    onChange={e => setSourceFile(e.target.files?.[0])} className="max-w-full text-xs text-text-main" />
+                  {sourceFile && <span className="ml-2 break-all">{sourceFile.name}</span>}
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => void generate()} disabled={!canGenerate || !(sourceRef.trim() || sourceFile)}
+                    className="rounded-lg bg-primary px-2.5 py-1.5 font-semibold text-white disabled:opacity-50">Использовать требования</button>
+                  <button type="button" onClick={() => void generate(true)} disabled={!canGenerate}
+                    className="rounded-lg border border-border-main px-2.5 py-1.5 hover:bg-bg-card disabled:opacity-50">Продолжить без требований</button>
+                </div>
+              </section>
+            )}
+            {genError && <p role="alert" className="text-xs text-red-600 dark:text-red-400">{genError}</p>}
             <div>
               <label htmlFor="if-desc" className={LBL}>Описание</label>
-              <textarea id="if-desc" value={description} onChange={e => setDescription(e.target.value)} rows={9}
-                className={`${INPUT} resize-y font-mono text-[13px]`} placeholder="Заполните сами или нажмите «Сгенерировать» слева" />
+              <textarea id="if-desc" value={description} onChange={e => { setDescription(e.target.value); setGenerated(false); }} rows={12}
+                className={`${INPUT} resize-y font-mono text-[13px]`}
+                placeholder={isDefect ? "Опишите, что произошло и какого результата ожидали" : "Опишите, что нужно сделать и зачем"} />
             </div>
             <div>
               <span className={LBL}>Вложения{files.length ? ` · ${files.length}` : ""}</span>
-              <AttachmentsField files={files} onAdd={addFiles}
-                onRemove={i => setFiles(x => x.filter((_, j) => j !== i))} />
+              <AttachmentsField files={files} onAdd={addFiles} onRemove={removeFile} />
               {files.length > 0 && (
-                <p className="text-[11px] text-text-muted mt-1">
-                  Уйдут вложениями в Jira при создании. Документы и скриншоты ещё и читает генерация.
-                  {(initial || addToList) && " В черновике Shark вложения не сохраняются."}
+                <p className="mt-1 text-[11px] text-text-muted">
+                  Файлы прикрепятся при создании в Jira.
+                  {!jiraOnly && (initial || addToList) && " В черновике Shark вложения не сохраняются."}
                 </p>
               )}
             </div>
+          </section>
+
+          <section className="space-y-3" aria-label="Поля Jira">
             <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2">
+                <span className={LBL}>Компоненты{isDefect ? " (до 2; второй — только мобильный)" : ""}</span>
+                {componentMissing && <p className="mb-1 text-xs text-amber-700 dark:text-amber-300">ИИ не подобрал компонент. Выберите его вручную.</p>}
+                <div className="flex flex-wrap gap-1">
+                  {componentList.length === 0 && (
+                    <span className="text-[11px] text-text-muted">{jiraReady ? "У проекта нет компонентов или они не загрузились" : "Подключите Jira — подтянутся компоненты проекта"}</span>
+                  )}
+                  {componentList.map(c => (
+                    <button key={c} type="button" onClick={() => toggleComponent(c)} aria-pressed={components.includes(c)}
+                      className={`px-2.5 py-1 rounded-md text-xs border ${components.includes(c) ? "border-primary bg-primary/10 text-primary font-semibold" : "border-border-main text-text-muted hover:text-text-main"}`}>{c}</button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label htmlFor="if-prio" className={LBL}>Критичность</label>
                 <select id="if-prio" value={priority} onChange={e => setPriority(e.target.value)} className={INPUT}>
@@ -502,27 +557,15 @@ export default function IssueFormModal({ control, project, participants, listNam
                   )}
                 </div>
                 {epicChoices ? (
-                  <select id="if-epic" value={epicKey} onChange={e => setEpicKey(e.target.value)} className={INPUT}>
+                  <select id="if-epic" value={epicKey} onChange={e => changeEpic(e.target.value)} className={INPUT}>
                     <option value="">— выберите эпик —</option>
                     {epicChoices.map(e => <option key={e.key} value={e.key}>{e.summary ? `${e.key} · ${e.summary}` : e.key}</option>)}
                   </select>
                 ) : (
-                  <EpicPicker id="if-epic" value={epicKey} options={epicOptions} onChange={setEpicKey}
+                  <EpicPicker id="if-epic" value={epicKey} options={epicOptions} onChange={changeEpic}
                     loading={epicsLoading} loadedAt={epicsCache ? formatLoadedAt(epicsCache.loadedAt) : null}
                     canLoad={jiraReady} onReload={loadEpics} />
                 )}
-              </div>
-              <div className="col-span-2">
-                <span className={LBL}>Компоненты{isDefect ? " (до 2; второй — только мобильный)" : ""}</span>
-                <div className="flex flex-wrap gap-1">
-                  {componentList.length === 0 && (
-                    <span className="text-[11px] text-text-muted">{jiraReady ? "У проекта нет компонентов или они не загрузились" : "Подключите Jira — подтянутся компоненты проекта"}</span>
-                  )}
-                  {componentList.map(c => (
-                    <button key={c} type="button" onClick={() => toggleComponent(c)} aria-pressed={components.includes(c)}
-                      className={`px-2.5 py-1 rounded-md text-xs border ${components.includes(c) ? "border-primary bg-primary/10 text-primary font-semibold" : "border-border-main text-text-muted hover:text-text-main"}`}>{c}</button>
-                  ))}
-                </div>
               </div>
               <div className="col-span-2">
                 <span className={LBL}>Лейблы</span>
@@ -548,7 +591,7 @@ export default function IssueFormModal({ control, project, participants, listNam
               )}
             </div>
           </section>
-        </div>
+        </fieldset>
 
         {sendErr && <p className="text-sm text-red-600 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-lg p-2.5">{sendErr}</p>}
 
@@ -570,11 +613,11 @@ export default function IssueFormModal({ control, project, participants, listNam
           <div className="ml-auto flex gap-2 flex-shrink-0">
             <button type="button" onClick={requestClose} className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-muted hover:text-text-main">
               {sending || generating ? "Свернуть" : "Отмена"}</button>
-            {!jiraOnly && <button type="button" disabled={!summary.trim() || sending || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
+            {!jiraOnly && <button type="button" disabled={!summary.trim() || busy || (!initial && !addToList)} onClick={() => { onSave(draft()); onClose(); }}
               title={!initial && !addToList ? "Черновик живёт только в списке — включите «Добавить в список»" : "Черновик в списке — в Jira не уходит"}
               className="px-3 py-2 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
               {initial ? "Сохранить черновик" : "Создать в Shark"}</button>}
-            <button type="button" disabled={!summary.trim() || !jiraReady || sending || createBlocked || (!!epicChoices && !epicKey) || (!!planStart && !!planEnd && planStart > planEnd)} onClick={sendToJira}
+            <button type="button" disabled={!summary.trim() || !jiraReady || busy || createBlocked || (!!epicChoices && !epicKey) || (!!planStart && !!planEnd && planStart > planEnd)} onClick={sendToJira}
               title={jiraReady ? `Создать ${isDefect ? "дефект" : "задачу"} в Jira (${project})` : "Сначала подключите Jira"}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">
               {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {initial ? "Отправить в Jira" : "Создать в Jira"}

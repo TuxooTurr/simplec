@@ -11,12 +11,43 @@ import asyncio
 import re
 from typing import List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, Json
 from backend.schemas import BugFormatResponse
 
 router = APIRouter()
 
 _PRIORITIES = ("Критический", "Высокий", "Средний", "Низкий")
+_LAYER_CODES = "Bc — бэкенд, Fn — фронтенд, Mb — мобильное приложение, An — аналитика, Ds — дизайн, Dv — DevOps/инфраструктура"
+_DEFECT_TITLE = re.compile(r"\[(Bc|Fn|Mb|An|Ds|Dv)\]\[([^\[\]\n]+)\]\s+(.+)", re.I)
+_COMPONENT_LINE = re.compile(r"^Компонент Jira:[ \t]*(\d+)[ \t]*$", re.M)
+_REQUIREMENTS_LIMIT = 24000
+
+
+class JiraFormatContext(BaseModel):
+    summary: str = Field("", max_length=250)
+    epic: str = Field("", max_length=40)
+    epic_summary: str = Field("", max_length=500)
+    components: list[str] = Field(default_factory=list)
+    selected_components: list[str] = Field(default_factory=list)
+    attachment_names: list[str] = Field(default_factory=list)
+    confluence_ref: str = Field("", max_length=2000)
+    allow_without_requirements: bool = False
+
+    def instructions(self) -> tuple[str, str]:
+        context = f"\nЭПИК: {self.epic} {self.epic_summary}" if self.epic else ""
+        if self.summary:
+            context += f"\nЧЕРНОВОЕ НАЗВАНИЕ: {self.summary}"
+        if self.attachment_names:
+            context += "\nВЛОЖЕНИЯ БЕЗ ТЕКСТА (только имена): " + ", ".join(self.attachment_names)
+        if self.selected_components:
+            context += "\nКОМПОНЕНТЫ, ВЫБРАННЫЕ ПОЛЬЗОВАТЕЛЕМ: " + ", ".join(self.selected_components)
+        if self.selected_components or not self.components:
+            return context, ""
+        context += ("\nПо фиче и слою выбери наиболее подходящий компонент из списка Jira ниже. "
+                    "Сразу после заголовка напиши отдельную строку «Компонент Jira: N», где N — номер из списка "
+                    "или 0, если подходящего нет. Это служебная строка, не раздел отчёта.\n")
+        context += "\n".join(f"{i}. {name}" for i, name in enumerate(self.components, 1))
+        return context, "\nКомпонент Jira: <номер или 0>"
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg")
 
@@ -65,17 +96,25 @@ def with_screenshots(report: str, names: list[str]) -> str:
     return report[:last.start()].rstrip() + "\n" + block + "\n\n" + report[last.start():]
 
 
-def _format_bug_sync(platform: str, feature: str, description: str, provider: str, requirements_context: str = "") -> str:
+def _format_bug_sync(platform: str, feature: str, description: str, provider: str, requirements_context: str = "",
+                     jira: JiraFormatContext | None = None) -> str:
     from agents.llm_client import LLMClient, Message
 
     llm = LLMClient(provider=provider)
 
     feature_hint = f"\nФИЧА / МОДУЛЬ (подсказка): {feature.strip()}" if feature.strip() else ""
     requirements_block = f"\n\n═══════════════════════════════════════════════════\nКОНТЕКСТ ИЗ ТРЕБОВАНИЙ (для справки — реальные поля БД, методы API, бизнес-правила; используй, чтобы точнее и конкретнее описать дефект, но не выдумывай то, чего нет во входных данных)\n═══════════════════════════════════════════════════\n{requirements_context}" if requirements_context.strip() else ""
+    jira_context, component_line = jira.instructions() if jira else ("", "")
+    layer = (
+        f"Выбери по входным данным один код слоя: {_LAYER_CODES}. Учитывай выбранный компонент как подсказку. "
+        "При неоднозначности выбери наиболее вероятный слой."
+        if jira else f"КОМПОНЕНТ/СЛОЙ (выбран пользователем, не меняй): {platform}"
+    )
+    title_prefix = "[КодСлоя][НазваниеМодуля]" if jira else f"[{platform}][НазваниеМодуля]"
 
     prompt = f"""Ты — опытный QA-инженер. Ты превращаешь краткие, неформальные описания проблем (часто с ошибками, без структуры, с фрагментами JSON, логов, скринов) в чёткий структурированный дефект для Jira.
 
-КОМПОНЕНТ/СЛОЙ (выбран пользователем, не меняй): {platform}{feature_hint}
+{layer}{feature_hint}{jira_context}
 
 ВХОДНЫЕ ДАННЫЕ (могут быть неполными, с ошибками; вложения приложены ниже текстом):
 {description}{requirements_block}
@@ -89,7 +128,7 @@ def _format_bug_sync(platform: str, feature: str, description: str, provider: st
 4. ВЛОЖЕНИЯ ИЗУЧИ ВСЕ:
    - Скриншоты приходят распознанным текстом (блок «[имя_файла]») — используй, чтобы точно описать, что не так.
    - Из логов/JSON/ответов API бери ТОЛЬКО ключевую строку (ошибка, код ответа) — в code-блок ``` как есть. Не весь лог.
-5. Название строго: `[{platform}][НазваниеМодуля] Краткая суть` (до 100 символов). [НазваниеМодуля] — экран/операция/модуль; если пользователь указал фичу — используй её.
+5. Название строго: `{title_prefix} Краткая суть` (до 100 символов). [НазваниеМодуля] — экран/операция/модуль; если пользователь указал фичу — используй её.
 6. Шаги — минимум, нужный для воспроизведения, как их выполнит тестировщик.
 7. Отвечай на языке входных данных. Только Markdown. Разделы — ровно из шаблона, в том же порядке; других разделов не добавляй.
 8. САМАЯ ПОСЛЕДНЯЯ строка ответа — ВСЕГДА отдельная строка ровно вида «Приоритет: X», где X — одно слово: Критический, Высокий, Средний, Низкий. Критический — ключевой функционал недоступен, обхода нет; Высокий — важный функционал заблокирован; Средний — есть обходной путь; Низкий — косметика.
@@ -98,7 +137,7 @@ def _format_bug_sync(platform: str, feature: str, description: str, provider: st
 СТРОГИЙ ШАБЛОН ОТВЕТА (ровно эта структура)
 ═══════════════════════════════════════════════════
 
-# [{platform}][НазваниеМодуля] Краткая суть дефекта
+# {title_prefix} Краткая суть дефекта{component_line}
 
 ## Описание
 1–2 предложения: что сломано и где.
@@ -161,10 +200,9 @@ def _parse_report(report: str) -> dict:
     return {"title": title, "description": desc, "priority": priority}
 
 
-async def _collect_context(attachments: List[UploadFile], requirement_ids: List[str]) -> tuple[str, list[str], str]:
-    """Текст вложений, имена скриншотов и контекст из требований (раздел «Данные»)."""
+async def _collect_attachments(attachments: List[UploadFile]) -> tuple[str, list[str]]:
+    """Текст вложений и имена скриншотов."""
     from agents.file_parser import parse_file
-    from db.requirements_store import RequirementsStore
 
     attachment_texts = []
     screenshot_names: list[str] = []
@@ -175,22 +213,73 @@ async def _collect_context(attachments: List[UploadFile], requirement_ids: List[
             screenshot_names.append(safe_attachment_name(f.filename, idx))
         try:
             data = await f.read()
-            text = parse_file(data, f.filename)
+            text = await asyncio.to_thread(parse_file, data, f.filename)
             attachment_texts.append(f"[{f.filename}]:\n{text}")
         except Exception as e:
             attachment_texts.append(f"[{f.filename}]: не удалось прочитать — {e}")
 
-    requirements_context = ""
-    if requirement_ids:
-        reqs = [RequirementsStore.get_requirement(rid) for rid in requirement_ids]
-        blocks = [f"### {r['name']}\n{r['text']}" for r in reqs if r]
-        requirements_context = "\n\n".join(blocks)
-
     attachments_block = ("\n\n─── ВЛОЖЕНИЯ ───\n" + "\n\n".join(attachment_texts)) if attachment_texts else ""
-    return attachments_block, screenshot_names, requirements_context
+    return attachments_block, screenshot_names
 
 
-def _format_task_sync(feature: str, description: str, provider: str, requirements_context: str = "") -> str:
+def _linked_requirements(requirement_ids: list[str]) -> str:
+    from db.requirements_store import RequirementsStore
+
+    reqs = [RequirementsStore.get_requirement(rid) for rid in requirement_ids]
+    return "\n\n".join(f"### {r['name']}\n{r['text']}" for r in reqs if r and (r.get("text") or "").strip())
+
+
+async def _requirements_context(requirement_ids: list[str], jira: JiraFormatContext | None,
+                                source_file: UploadFile | None) -> str | None:
+    """None — форма Jira должна предложить указать источник требований."""
+    linked = _linked_requirements(requirement_ids)
+    if not jira or linked:
+        return linked[:_REQUIREMENTS_LIMIT] if jira else linked
+    if source_file and source_file.filename:
+        from agents.file_parser import parse_file
+
+        try:
+            data = await source_file.read()
+            text = await asyncio.to_thread(parse_file, data, source_file.filename, True)
+        except ValueError as e:
+            raise HTTPException(422, f"Не удалось прочитать файл требований: {e}") from e
+        if text.strip():
+            return f"### {source_file.filename}\n{text}"[:_REQUIREMENTS_LIMIT]
+    if jira.confluence_ref.strip():
+        from backend.api.requirements import fetch_page
+
+        page = await asyncio.to_thread(fetch_page, jira.confluence_ref.strip())
+        if page["markdown"].strip():
+            return f"### {page['title']}\n{page['markdown']}"[:_REQUIREMENTS_LIMIT]
+    return "" if jira.allow_without_requirements else None
+
+
+def _jira_report(report: str, screenshots: list[str], jira: JiraFormatContext, *, defect: bool) -> dict:
+    component = ""
+    report = report.replace("\r\n", "\n")
+    if not jira.selected_components and jira.components:
+        match = _COMPONENT_LINE.search(report)
+        if match:
+            index = int(match.group(1))
+            if 1 <= index <= len(jira.components):
+                component = jira.components[index - 1]
+            report = _COMPONENT_LINE.sub("", report, count=1)
+    parsed = _parse_report(report)
+    title = parsed["title"]
+    if defect and (match := _DEFECT_TITLE.fullmatch(title)):
+        code, feature, summary = match.groups()
+        title = f"[{code.capitalize()}][{feature.strip()}] {summary.strip()}" if feature.strip() else ""
+        report = re.sub(r"^#\s+.+$", lambda _: f"# {title}", report, count=1, flags=re.M)
+    elif defect:
+        title = ""
+    if not title or not parsed["description"]:
+        raise HTTPException(502, detail={"message": "Модель не вернула название и описание в нужном формате", "llm_error": True})
+    report = with_screenshots(report, screenshots)
+    return {**_parse_report(report), "report": report, "screenshots": screenshots, "component": component}
+
+
+def _format_task_sync(feature: str, description: str, provider: str, requirements_context: str = "",
+                      jira: JiraFormatContext | None = None) -> str:
     """Задача (не дефект): название и описание по свободному тексту + требованиям."""
     from agents.llm_client import LLMClient, Message
 
@@ -200,8 +289,9 @@ def _format_task_sync(feature: str, description: str, provider: str, requirement
         "\n\n═══ КОНТЕКСТ ИЗ ТРЕБОВАНИЙ (используй, чтобы задача была конкретной и соответствовала требованиям; "
         f"не выдумывай того, чего нет) ═══\n{requirements_context}"
     ) if requirements_context.strip() else ""
+    jira_context, component_line = jira.instructions() if jira else ("", "")
 
-    prompt = f"""Ты — опытный QA-лид. Оформи задачу для Jira по неформальному описанию.{feature_hint}
+    prompt = f"""Ты — опытный QA-лид. Оформи задачу для Jira по неформальному описанию.{feature_hint}{jira_context}
 
 ВХОДНЫЕ ДАННЫЕ:
 {description}{requirements_block}
@@ -214,7 +304,7 @@ def _format_task_sync(feature: str, description: str, provider: str, requirement
 
 ШАБЛОН ОТВЕТА:
 
-# Название задачи
+# Название задачи{component_line}
 
 ## Цель
 1–2 предложения: зачем задача.
@@ -244,18 +334,27 @@ async def format_task(
     provider: str = Form(...),
     attachments: List[UploadFile] = File(default=[]),
     requirement_ids: List[str] = Form(default=[]),
+    jira_context: Json[JiraFormatContext] | None = Form(None),
+    requirement_file: UploadFile | None = File(None),
 ):
     """Генерация задачи: название + описание. Источник для ИИ — требования из раздела «Данные»."""
-    attachments_block, _shots, requirements_context = await _collect_context(attachments, requirement_ids)
     provider = provider.strip()
     if not provider:
         raise HTTPException(status_code=400, detail={"message": "LLM-провайдер не выбран", "llm_error": False})
+    requirements_context = await _requirements_context(requirement_ids, jira_context, requirement_file)
+    if requirements_context is None:
+        return {"report": "", "needs_requirements": True}
+    attachments_block, screenshots = await _collect_attachments(attachments)
     try:
         report = await asyncio.to_thread(
-            _format_task_sync, feature, description + attachments_block, provider, requirements_context,
+            _format_task_sync, feature, description + attachments_block, provider, requirements_context, jira_context,
         )
+        if jira_context:
+            return {**_jira_report(report, screenshots, jira_context, defect=False), "priority": ""}
         parsed = _parse_report(report)
         return {"report": report, "screenshots": [], **parsed, "priority": ""}
+    except HTTPException:
+        raise
     except Exception as e:
         from agents.llm_client import LLMClient
         is_llm, friendly = LLMClient.classify_error(e)
@@ -314,13 +413,9 @@ def _checklist_sync(summary: str, requirements_context: str, provider: str) -> s
 @router.post("/api/tasks/checklist")
 async def task_checklist(body: ChecklistBody) -> dict:
     """Критически важные базовые проверки фичи по её требованиям из раздела «Данные»."""
-    from db.requirements_store import RequirementsStore
-
-    reqs = [RequirementsStore.get_requirement(rid) for rid in body.requirement_ids]
-    blocks = [f"### {r['name']}\n{r['text']}" for r in reqs if r and (r.get("text") or "").strip()]
-    if not blocks:
+    context = _linked_requirements(body.requirement_ids)[:_CHECKLIST_CONTEXT_LIMIT]
+    if not context:
         raise HTTPException(status_code=400, detail={"message": "У фичи нет требований с текстом", "llm_error": False})
-    context = "\n\n".join(blocks)[:_CHECKLIST_CONTEXT_LIMIT]
     try:
         text = await asyncio.to_thread(_checklist_sync, body.summary, context, body.provider.strip())
     except Exception as e:
@@ -335,32 +430,41 @@ async def task_checklist(body: ChecklistBody) -> dict:
 
 @router.post("/api/bugs/format", response_model=BugFormatResponse)
 async def format_bug(
-    platform: str = Form(...),
+    platform: str = Form(""),
     feature: str = Form(""),
     description: str = Form(...),
     provider: str = Form(...),
     attachments: List[UploadFile] = File(default=[]),
     requirement_ids: List[str] = Form(default=[]),
+    jira_context: Json[JiraFormatContext] | None = Form(None),
+    requirement_file: UploadFile | None = File(None),
 ):
     # Вложения: текст — в контекст, скриншоты — ещё и картинками в описание (раздел «Скриншоты»).
     # Требования — контекст из раздела «Данные» (фича/API/поля БД — для точности дефекта).
-    attachments_block, screenshot_names, requirements_context = await _collect_context(attachments, requirement_ids)
-    full_description = description + attachments_block
-
     provider = provider.strip()
     if not provider:
         raise HTTPException(
             status_code=400,
             detail={"message": "LLM-провайдер не выбран", "llm_error": False},
         )
+    if not jira_context and not platform.strip():
+        raise HTTPException(422, "Укажите платформу")
+    requirements_context = await _requirements_context(requirement_ids, jira_context, requirement_file)
+    if requirements_context is None:
+        return {"report": "", "needs_requirements": True}
+    attachments_block, screenshot_names = await _collect_attachments(attachments)
 
     try:
         report = await asyncio.to_thread(
             _format_bug_sync,
-            platform, feature, full_description, provider, requirements_context,
+            platform, feature, description + attachments_block, provider, requirements_context, jira_context,
         )
+        if jira_context:
+            return _jira_report(report, screenshot_names, jira_context, defect=True)
         report = with_screenshots(report, screenshot_names)
         return {"report": report, "screenshots": screenshot_names, **_parse_report(report)}
+    except HTTPException:
+        raise
     except Exception as e:
         from agents.llm_client import LLMClient
         is_llm, friendly = LLMClient.classify_error(e)

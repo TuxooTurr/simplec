@@ -365,48 +365,54 @@ export async function kernelAudit(limit = 30): Promise<KernelAuditEntry[]> {
 
 // ─── Bugs ──────────────────────────────────────────────────────────────────
 
-export async function formatBug(params: {
-  platform: string;
+interface FormatIssueParams {
   feature: string;
   description: string;
   provider: string;
   files?: File[];
   requirementIds?: string[];
-}): Promise<{ report: string; title: string; description: string; priority: string;
-              screenshots: string[] }> {
-  const body = new FormData();
-  body.append("platform", params.platform);
-  body.append("feature", params.feature);
-  body.append("description", params.description);
-  body.append("provider", params.provider);
-  if (params.files) {
-    for (const f of params.files) {
-      body.append("attachments", f);
-    }
-  }
-  if (params.requirementIds) {
-    for (const id of params.requirementIds) {
-      body.append("requirement_ids", id);
-    }
-  }
-  return fetchJson("/api/bugs/format", { method: "POST", body });
+  requirementFile?: File;
+  jiraContext?: {
+    summary: string;
+    epic: string;
+    epic_summary: string;
+    components: string[];
+    selected_components: string[];
+    attachment_names: string[];
+    confluence_ref: string;
+    allow_without_requirements: boolean;
+  };
 }
 
-/** Генерация задачи (не дефекта): название и описание; требования — источник для ИИ. */
-export async function formatTask(params: {
-  feature: string;
+interface FormattedIssue {
+  report: string;
+  title: string;
   description: string;
-  provider: string;
-  files?: File[];
-  requirementIds?: string[];
-}): Promise<{ report: string; title: string; description: string; priority: string; screenshots: string[] }> {
+  priority: string;
+  screenshots: string[];
+  component: string;
+  needs_requirements: boolean;
+}
+
+function formatIssue(path: string, params: FormatIssueParams & { platform?: string }): Promise<FormattedIssue> {
   const body = new FormData();
+  if (params.platform !== undefined) body.append("platform", params.platform);
   body.append("feature", params.feature);
-  body.append("description", params.description);
+  body.append("description", params.description || " ");
   body.append("provider", params.provider);
   for (const f of params.files ?? []) body.append("attachments", f);
   for (const id of params.requirementIds ?? []) body.append("requirement_ids", id);
-  return fetchJson("/api/tasks/format", { method: "POST", body });
+  if (params.jiraContext) body.append("jira_context", JSON.stringify(params.jiraContext));
+  if (params.requirementFile) body.append("requirement_file", params.requirementFile);
+  return fetchJson(path, { method: "POST", body });
+}
+
+export function formatBug(params: FormatIssueParams & { platform?: string }): Promise<FormattedIssue> {
+  return formatIssue("/api/bugs/format", params);
+}
+
+export function formatTask(params: FormatIssueParams): Promise<FormattedIssue> {
+  return formatIssue("/api/tasks/format", params);
 }
 
 // ─── Autotest generation ────────────────────────────────────────────────────

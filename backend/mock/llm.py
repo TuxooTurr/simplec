@@ -87,7 +87,20 @@ def answer(messages) -> str:
     tm = _tm(str(getattr(messages[0], "content", ""))) if messages else None
     if tm is not None:
         return tm
-    text = " ".join(str(getattr(m, "content", "")) for m in messages).lower()
+    prompt = " ".join(str(getattr(m, "content", "")) for m in messages)
+    component = "\nКомпонент Jira: 1" if "Компонент Jira: <номер или 0>" in prompt else ""
+    if "Выбери по входным данным один код слоя" in prompt:
+        return (f"# [Fn][Карточка инцидента] Ошибка при сохранении{component}\n\n"
+                "## Описание\nКарточка не сохраняется.\n\n"
+                "## Шаги воспроизведения\n1. Открыть карточку.\n2. Нажать «Сохранить».\n\n"
+                "## Фактический результат\nОшибка 500.\n\n"
+                "## Ожидаемый результат\nКарточка сохранена.\n\nПриоритет: Высокий")
+    if "Оформи задачу для Jira по неформальному описанию" in prompt:
+        return (f"# Проверить сохранение карточки инцидента{component}\n\n"
+                "## Цель\nПроверить работу карточки инцидента.\n\n"
+                "## Что сделать\n1. Изменить и сохранить карточку.\n\n"
+                "## Критерии готовности\n- Карточка сохраняется с изменениями.")
+    text = prompt.lower()
     if text.strip() in ("ping", "привет"):
         return "pong"
     if "баг" in text or "дефект" in text or "bug" in text:

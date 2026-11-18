@@ -7,7 +7,7 @@
  */
 
 /** Что умеет прочитать ИИ при генерации (agents/file_parser.ALLOWED_EXTENSIONS). Остальное — только в Jira. */
-export const PARSEABLE_RE = /\.(pdf|docx?|xlsx?|xml|png|jpe?g|txt|log|md|markdown)$/i;
+export const PARSEABLE_RE = /\.(pdf|docx?|xlsx?|xml|png|jpe?g|txt|log|json|md|markdown)$/i;
 export const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 
 /** Всё, кроме латиницы, цифр, «.», «_», «-», — как bugs._SAFE_NAME_RE: имя должно совпасть с тем, что даст генерация. */

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type Ref } from "react";
 import { ArrowDown, ArrowUp, ChevronRight, Folder, GripVertical, MoreHorizontal, Pencil, Pin, PinOff, Trash2, WrapText, X } from "lucide-react";
 import {
   BLOCK_COL, DEFECTS_COL, EMPTY_GROUP, fmtJiraDate, fmtMinutes, jiraDateKind, FIELD_BY_ID, FOLDER_COL, NO_FOLDER, PARTICIPANT_COL, STAGE_COL, colLabel, colValues, folderSections,
@@ -71,10 +71,11 @@ type DropPlan = { kind: "folder"; folder: string | null } | { kind: "group"; cha
 type FolderKey = string | null | undefined;
 
 export default function ListTable({
-  ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
+  tableRef, ctx, issues, sort, onSort, selecting, onToggleSelecting, selected, onSelect, onValue, onIcon, colFilters, filterOptions, onColFilter, onResetFilters, stageManual, onStageManual, onParticipant, onRemove, onOpenDefects, onOpenIssue,
   onMoveRow, onMoveColumn, onMoveToGroup, onMoveToFolder, onResizeColumn, onRenameFolder, onDeleteFolder, onMoveFolder, onToggleWrap,
   onOpenDraft, onSpend, onTogglePin, onOpenStage, onRole, timeFmt, onTimeFmt, onAddPerson, onLeaveDirection, onNoLoad, reqLinks, reqUrls, msLinks, msCatalog, msInfo, onMs, onCreateMs, msShared, reqOptions, onReqs, onReqUrl, onClearMark,
 }: {
+  tableRef?: Ref<HTMLTableElement>;
   ctx: ColCtx;
   issues: Issue[];
   /** Формат трудозатрат и его смена — переключатель в шапке колонок со временем (нагрузка, направления). */
@@ -351,7 +352,7 @@ export default function ListTable({
     const over = overRow?.key === issue.key && overRow.path === path && dragRow && !(dragRow.key === issue.key && dragRow.path === path)
       ? overRow.place : null;
     return (
-      <tr key={id}
+      <tr key={id} data-xlsx-issue={issue.key}
         onDragStart={e => {
           if (dragFolderRef.current || dragCol) return;            // тянут папку или колонку — не строку
           if (armedRef.current?.id !== id) { e.preventDefault(); return; }
@@ -403,14 +404,14 @@ export default function ListTable({
         <td className={`px-3 py-1.5 whitespace-nowrap align-top overflow-hidden text-ellipsis ${rowBg(on)} ${lastPinned ? "" : EDGE}`}
           style={{ ...stick(SELECT_W), paddingLeft: 12 + indent(depth, folder) }}>
           {list.marks?.[issue.key] === "removed" && (
-            <span role="img" aria-label="Выпала из источника" title="Задачи больше нет в источнике (JQL-фильтр или релиз) — решите, оставить ли её в списке"
+            <span data-xlsx-chip role="img" aria-label="Выпала из источника" title="Задачи больше нет в источнике (JQL-фильтр или релиз) — решите, оставить ли её в списке"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-red-600 text-white text-[9px] font-bold align-middle">У</span>
           )}
           {list.marks?.[issue.key] === "new" && (sections ? (
-            <span role="img" aria-label="Новая из источника" title="Новая задача из источника (JQL-фильтр или релиз). Переложите в папку — отметка исчезнет"
+            <span data-xlsx-chip role="img" aria-label="Новая из источника" title="Новая задача из источника (JQL-фильтр или релиз). Переложите в папку — отметка исчезнет"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle">n</span>
           ) : (
-            <button type="button" onClick={() => onClearMark(issue.key)} aria-label="Новая из источника — отметить просмотренной"
+            <button data-xlsx-chip type="button" onClick={() => onClearMark(issue.key)} aria-label="Новая из источника — отметить просмотренной"
               title="Новая задача из источника (JQL-фильтр или релиз). Папок в списке нет — нажмите, чтобы снять отметку"
               className="inline-flex items-center justify-center w-4 h-4 mr-1.5 rounded-full bg-blue-600 text-white text-[9px] font-bold align-middle hover:ring-2 hover:ring-blue-300">n</button>
           ))}
@@ -492,7 +493,8 @@ export default function ListTable({
     const leaf = !node.children.length;
     return (
       <Fragment key={node.path}>
-        <tr className={`border-t border-border-main bg-bg-subtle/70 ${overGroup === node.path ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}
+        <tr data-xlsx-section={`${node.field}: ${jiraDateKind(node.ref) && node.label !== EMPTY_GROUP ? fmtJiraDate(node.label, jiraDateKind(node.ref) === "datetime") : node.label}`}
+          data-xlsx-depth={depth} className={`border-t border-border-main bg-bg-subtle/70 ${overGroup === node.path ? "outline outline-2 -outline-offset-2 outline-primary" : ""}`}
           onDragOver={e => {
             const plan = dropPlan(node.path, levels, folder);
             const ok = plan && (plan.kind === "folder" || (leaf && plan.changes.length > 0));
@@ -558,7 +560,7 @@ export default function ListTable({
     const isOver = overGroup === path;
     const fOver = name && overFolder?.name === name ? overFolder.place : null;
     return (
-      <tr key={`fh-${path}`} draggable={!!name && renaming?.name !== name}
+      <tr key={`fh-${path}`} data-xlsx-section={name ?? NO_FOLDER} data-xlsx-depth={0} draggable={!!name && renaming?.name !== name}
         onDragStart={e => {
           if (!name) return;
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", name);
@@ -642,7 +644,7 @@ export default function ListTable({
   return (
     <div ref={scrollBox} className="border border-border-main rounded-xl overflow-auto scrollbar-thin bg-bg-card"
       onDragOverCapture={autoScroll} onDragOver={refuse}>
-      <table className="border-collapse" style={{ tableLayout: "fixed", width: tableW }}>
+      <table ref={tableRef} className="border-collapse" style={{ tableLayout: "fixed", width: tableW }}>
         <colgroup>
           <col style={{ width: SELECT_W }} />
           <col style={{ width: KEY_W }} />
@@ -664,12 +666,12 @@ export default function ListTable({
                   className="align-middle ml-0.5" />
               )}
             </th>
-            <th className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap bg-bg-card ${lastPinned ? "" : EDGE}`}
+            <th data-xlsx-col="__key" className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-text-muted whitespace-nowrap bg-bg-card ${lastPinned ? "" : EDGE}`}
               style={stick(SELECT_W, 4)} title="Ключ закреплён всегда">Ключ</th>
             {cols.map((c, n) => {
               const over = overCol?.col === c && dragCol && dragCol !== c ? overCol.place : null;
               return (
-                <th key={c} draggable={!live}
+                <th key={c} data-xlsx-col={c} draggable={!live}
                   onDragStart={e => {
                     if (resizing.current) { e.preventDefault(); return; }
                     e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", c); setDragCol(c);

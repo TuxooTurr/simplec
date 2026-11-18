@@ -39,8 +39,8 @@ const PRIO_DOT: Record<string, string> = {
 export function JiraCell({ id, issue }: { id: string; issue: Issue }) {
   const v = issue.fields[id];
   if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return <span className="text-text-muted/50">—</span>;
-  if (id === "status") return <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[String(v)] ?? "bg-bg-subtle text-text-main"}`}>{String(v)}</span>;
-  if (id === "priority") return <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><span className={`w-2 h-2 rounded-full ${PRIO_DOT[String(v)] ?? "bg-slate-400"}`} />{String(v)}</span>;
+  if (id === "status") return <span data-xlsx-chip className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[String(v)] ?? "bg-bg-subtle text-text-main"}`}>{String(v)}</span>;
+  if (id === "priority") return <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><span data-xlsx-chip="dot" className={`w-2 h-2 rounded-full ${PRIO_DOT[String(v)] ?? "bg-slate-400"}`} />{String(v)}</span>;
   if (id === "issuetype") return <IssueTypeBadge type={String(v)} />;
   const kind = FIELD_BY_ID[id]?.kind;
   if (kind === "date" || kind === "datetime") {
@@ -63,7 +63,7 @@ export function DefectsCell({ defects, onOpen }: { defects: Issue[] | null; onOp
   const open = defects.filter(isOpenDefect).length;
   const fixed = defects.length - open;
   return (
-    <button type="button" onClick={onOpen}
+    <button type="button" onClick={onOpen} data-xlsx-chip
       title={`Неустранённых ${open}${fixed ? `, устранённых ${fixed}` : ""} — открыть список`}
       className={`inline-flex items-center gap-1 min-w-[32px] justify-center px-2 py-0.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors
         ${open > 0 ? "bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-950/60 dark:text-red-300"
@@ -79,7 +79,7 @@ export function BlockCell({ defects, onOpen }: { defects: Issue[] | null; onOpen
   const blockers = blockersOf(defects);
   if (!blockers.length) return null;
   return (
-    <button type="button" onClick={onOpen} aria-label={`Блокирующих дефектов: ${blockers.length}`}
+    <button type="button" onClick={onOpen} data-xlsx-chip aria-label={`Блокирующих дефектов: ${blockers.length}`}
       title={`Блокирующих дефектов: ${blockers.length} — ${blockers.map(b => b.key).join(", ")}`}
       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-950/60">
       <AlertTriangle className="w-4 h-4" strokeWidth={2.5} />
@@ -159,7 +159,7 @@ export function StageBadge({ info }: { info: StageInfo }) {
   switch (info.kind) {
     case "blocked":
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap" style={stageStyle("blocked")}
+        <span data-xlsx-chip className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap" style={stageStyle("blocked")}
           title={`Блокирующие незакрытые дефекты: ${info.by.map(d => d.key).join(", ")} (список — в «Дефекты (st)»). Без блокировки — «${stageText(info.base)}».`}>
           <Ban className="w-3 h-3" /> {STAGE_LABEL.blocked}
           {info.by.length > 1 && <span className="opacity-80">· {info.by.length}</span>}
@@ -167,7 +167,7 @@ export function StageBadge({ info }: { info: StageInfo }) {
       );
     case "stage":
       return (
-        <span className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}
+        <span data-xlsx-chip className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap" style={stageStyle(info.stage)}
           title={info.manual ? `Поставлен вручную. По Jira — «${stageText(info.manual)}»` : undefined}>
           {STAGE_LABEL[info.stage]}
         </span>
@@ -179,7 +179,7 @@ export function StageBadge({ info }: { info: StageInfo }) {
             ? `Поставлен вручную. По сторям эпика — «${stageText(info.manual)}»`
             : `Статус (st) по сторям эпика: ${info.behind} из ${info.total} — «${STAGE_LABEL[info.stage]}»`
               + (info.unmapped ? `; не сопоставлено: ${info.unmapped}` : "")}>
-          <span className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>
+          <span data-xlsx-chip className="px-2 py-0.5 rounded-md text-[11px] font-medium" style={stageStyle(info.stage)}>
             {STAGE_LABEL[info.stage]}
           </span>
 
@@ -188,14 +188,14 @@ export function StageBadge({ info }: { info: StageInfo }) {
       );
     case "unmapped":
       return (
-        <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 whitespace-nowrap"
+        <span data-xlsx-chip className="inline-flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-300 whitespace-nowrap"
           title={`Статус Jira «${info.status}» не сопоставлен — настройте в «Статус (st)»`}>
           <AlertTriangle className="w-3 h-3" /> Не сопоставлен
         </span>
       );
     case "no-stories":
       return (
-        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
+        <span data-xlsx-chip className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 dark:text-red-400 whitespace-nowrap"
           title="У эпика нет сторей — этап не посчитать. Это нарушение процесса: стори нужно завести и привязать через Epic Link.">
           <AlertTriangle className="w-3 h-3" /> Нет сторей
         </span>
@@ -369,7 +369,7 @@ function LinkCell({ value, label, onChange }: { value: string; label: string; on
 export function Tag({ field, value }: { field: OwnField; value: string }) {
   const c = tagColor(field, value);
   return (
-    <span className="inline-block max-w-full truncate px-1.5 py-0.5 rounded-md text-[11px] font-medium align-middle"
+    <span data-xlsx-chip className="inline-block max-w-full truncate px-1.5 py-0.5 rounded-md text-[11px] font-medium align-middle"
       style={{ backgroundColor: c, color: textOn(c) }}>{value}</span>
   );
 }
@@ -471,7 +471,7 @@ export function RoleBadge({ participant, size = "sm" }: { participant?: Particip
     return <span className={`${dims} inline-block rounded-md border border-dashed border-text-muted/40 flex-shrink-0`} aria-hidden />;
   }
   return (
-    <span className={`${dims} inline-flex items-center justify-center px-1 rounded-md font-bold text-white tracking-tight flex-shrink-0`}
+    <span data-xlsx-chip className={`${dims} inline-flex items-center justify-center px-1 rounded-md font-bold text-white tracking-tight flex-shrink-0`}
       style={{ backgroundColor: participant.color }} title={participant.role ? `Должность: ${participant.role}` : "Должность не указана"}>
       {participant.role || ""}
     </span>
@@ -536,7 +536,7 @@ export function RoleCell({ label, dir, value, people, onChange, onAddPerson, onL
   return (
     <span className="flex items-center gap-1 min-w-0">
       {/* Цветной кружок; поверх — прозрачный выпадающий список (родной: работает с клавиатуры и экранным диктором). */}
-      <span title={ROLE_STATE_LABEL[state]}
+      <span data-xlsx-chip title={ROLE_STATE_LABEL[state]}
         className={`relative w-4 h-4 flex-shrink-0 rounded-full border border-black/10 focus-within:ring-2 focus-within:ring-primary/50 ${ROLE_STATE_CLS[state]}`}>
         <select value={state} onChange={e => onChange({ ...value, state: e.target.value as RoleState })}
           aria-label={`${label}: состояние — ${ROLE_STATE_LABEL[state]}`}
@@ -629,10 +629,10 @@ export function MsCell({ value, catalog, info, shared, self, onChange, onCreate 
               const chip = msChipStyle(n);
               // Цвет — группа микросервиса (lib/msColor.ts); общий с другими задачами — янтарная обводка и «×N».
               return (
-                <span key={n} style={chip.style}
+                <span key={n} data-xlsx-chip style={chip.style}
                   title={`${n}${info[n] ? ` — ${info[n]}` : ""}\nгруппа: ${msGroup(n)}${others.length ? `\nЕщё у задач списка: ${others.join(", ")}` : ""}`}
                   className={`${chip.className} max-w-full truncate px-1.5 py-0.5 rounded text-[11px] font-mono ${others.length ? "ring-2 ring-amber-500" : ""}`}>
-                  {n}{others.length > 0 && <span className="ml-1 opacity-80">×{with_.length}</span>}
+                  {n}{others.length > 0 && <span className="ml-1 opacity-80"> ×{with_.length}</span>}
                 </span>
               );
             })}
@@ -692,16 +692,16 @@ export function ReqCell({ value, url, options, onChange, onUrl }: {
             {value.map(id => {
               const doc = byId.get(id);
               return doc ? (
-                <a key={id} href={reqDocHref(id)} target="_blank" rel="noopener" title={`${doc.name} — открыть в Shark`}
+                <a key={id} data-xlsx-chip href={reqDocHref(id)} target="_blank" rel="noopener" title={`${doc.name} — открыть в Shark`}
                   className="max-w-full truncate px-1.5 py-0.5 rounded bg-primary/10 text-primary text-[11px] hover:bg-primary/20 hover:underline">
                   {doc.name}
                 </a>
               ) : (
-                <span key={id} title="Документ удалён из «Данных»" className="px-1.5 py-0.5 rounded bg-bg-subtle text-text-muted text-[11px] line-through">удалён</span>
+                <span key={id} data-xlsx-chip title="Документ удалён из «Данных»" className="px-1.5 py-0.5 rounded bg-bg-subtle text-text-muted text-[11px] line-through">удалён</span>
               );
             })}
             {url && (href ? (
-              <a href={href} target="_blank" rel="noopener noreferrer" title={`Исходник требований: ${href}`} aria-label={`Открыть исходник требований ${href}`}
+              <a data-xlsx-source href={href} target="_blank" rel="noopener noreferrer" title={`Исходник требований: ${href}`} aria-label={`Открыть исходник требований ${href}`}
                 className="inline-flex p-0.5 rounded-md text-primary hover:bg-primary/10"><Globe className="w-4 h-4" /></a>
             ) : (
               <span title={`Не похоже на ссылку: ${url}`} className="inline-flex p-0.5 text-text-muted/50"><Globe className="w-4 h-4" /></span>
@@ -807,7 +807,7 @@ export function IssueTypeBadge({ type }: { type: string }) {
   const st = TYPE_STYLE.find(t => t.re.test(type)) ?? { color: "#6b778c", Icon: CheckSquare };
   const { Icon } = st;
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium max-w-full"
+    <span data-xlsx-chip className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium max-w-full"
       style={{ color: st.color }} title={type}>
       <span className="w-4 h-4 rounded-[3px] flex items-center justify-center flex-shrink-0" style={{ backgroundColor: st.color }}>
         <Icon className="w-2.5 h-2.5 text-white" strokeWidth={3} />

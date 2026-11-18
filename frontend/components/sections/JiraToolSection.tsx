@@ -30,7 +30,7 @@ import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import ChatFieldsPicker, { type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
-import { downloadBacklog } from "@/lib/backlogExport";
+import { downloadJiraView, jiraViewSheet } from "@/lib/jiraExcelExport";
 import { addMs, getMsCatalog } from "@/lib/standsApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
@@ -129,6 +129,8 @@ export default function JiraToolSection() {
   const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
   const [sort, setSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const excelTable = useRef<HTMLTableElement>(null);
+  const [excelBusy, setExcelBusy] = useState(false);
   /** Режим выбора задач: чекбоксы в таблице и панель действий. Выход — снимает выбор. */
   const [selecting, setSelecting] = useState(false);
   const stopSelecting = () => { setSelecting(false); setSelected(new Set()); };
@@ -906,14 +908,16 @@ export default function JiraToolSection() {
     else { setPendingCopy(text); setReportNote("Браузер не дал скопировать автоматически — нажмите «Скопировать»."); }
   };
 
-  /** Выбранные задачи — в .xlsx по формату «Бэклога Платформы» (lib/backlogExport.ts). */
+  /** Отмеченные строки в том порядке, в котором они видны в открытой таблице. */
   const exportExcel = async () => {
-    if (!ctx || !list) return;
-    const issues = reportSections().flatMap(x => x.issues);
+    if (!ctx || !excelTable.current || excelBusy) return;
+    const sheet = jiraViewSheet(excelTable.current, listIssues, ctx, selected, state.reqUrls);
+    setExcelBusy(true);
     try {
-      const name = await downloadBacklog(list.name, issues, ctx);
-      setReportNote(`Выгружено в Excel: задач ${issues.length} — ${name}`);
+      const name = await downloadJiraView(sheet);
+      setReportNote(`Выгружено в Excel: задач ${sheet.count} — ${name}`);
     } catch (e) { setReportNote((e as Error).message); }
+    finally { setExcelBusy(false); }
   };
 
   const copyChatReport = async () => {
@@ -1488,7 +1492,7 @@ export default function JiraToolSection() {
                     onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }}
                     loading={histBusy} error={histErr} />
                 ) : (
-                  <ListTable key={list.id} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
+                  <ListTable key={list.id} tableRef={excelTable} ctx={ctx} issues={listIssues} sort={sort} onSort={setSort}
                     timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
                     selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
                     selected={selected}
@@ -1577,11 +1581,11 @@ export default function JiraToolSection() {
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
                     <ClipboardCheck className="w-4 h-4" /> Чек-лист
                   </button>
-                  <button type="button" onClick={exportExcel} disabled={!selected.size || !!reportBusy}
-                    title="Как «Бэклог Платформы», два листа: «Фамилии» — люди направлений, «Нагрузка» — их план (в выбранном формате времени). Команда — папка задачи; состояние направления — цветом: серый, жёлтый, зелёный"
+                  {view === "list" && <button type="button" onClick={exportExcel} disabled={!selected.size || !!reportBusy || excelBusy}
+                    title="Видимые отмеченные задачи, колонки и цвета открытой таблицы"
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
-                    <FileSpreadsheet className="w-4 h-4" /> Выгрузить в Excel
-                  </button>
+                    {excelBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />} Выгрузить в Excel
+                  </button>}
                   {reportBusy && (
                     <span className="flex items-center gap-2 text-xs text-text-muted" role="status">
                       <Loader2 className="w-3.5 h-3.5 animate-spin" /> Проверки по требованиям: {reportBusy.done} из {reportBusy.total}

@@ -3,6 +3,7 @@
 import io
 import zipfile
 from xml.dom import minidom
+from xml.etree import ElementTree as ET
 
 from backend.api import xlsx_export
 from backend.xlsx_writer import Cell, Column, Sheet, build_xlsx
@@ -35,6 +36,37 @@ def test_эндпоинт_отдаёт_xlsx():
                                                      rows=[[{"v": "SBER911-1", "link": "https://j/browse/SBER911-1"}]]))
     assert r.media_type.endswith("spreadsheetml.sheet") and r.body[:2] == b"PK"
     assert "filename*=UTF-8''%D0%91" in r.headers["content-disposition"]
+
+
+def test_выгрузка_видимой_таблицы_с_двухуровневой_шапкой_и_числовыми_часами():
+    result = xlsx_export.export_xlsx(xlsx_export.XlsxBody(sheets=[xlsx_export.XlsxSheet(
+        name="Представление Jira", frozenCols=1, sectionRows=[0],
+        columns=[{"title": "Ключ"}, {"title": "ФИО", "group": "Analytics"},
+                 {"title": "Часы", "group": "Analytics"}, {"title": "Дефекты"}, {"title": "Метки"}],
+        rows=[[{"v": "Команда", "bold": True}], [
+            {"v": "SBER911-1", "link": "https://jira.example/browse/SBER911-1", "fill": "020304", "ink": "FAFBFC"},
+            {"v": "Ирина Иванова", "fill": "FCD34D", "ink": "451A03"},
+            {"v": 90 / 1440, "format": "duration", "fill": "FCD34D", "ink": "451A03"},
+            {"v": 0},
+            {"v": "API, UI", "runs": [{"text": "API", "ink": "991B1B"}, {"text": ", UI", "ink": "1E40AF"}]},
+        ]],
+    )]))
+    ns = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(io.BytesIO(result.body)) as z:
+        sheet = ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+        styles = ET.fromstring(z.read("xl/styles.xml"))
+    assert [el.get("ref") for el in sheet.findall("s:mergeCells/s:mergeCell", ns)] == ["B1:C1", "A3:E3"]
+    assert sheet.find("s:autoFilter", ns).get("ref") == "A2:E4"
+    assert sheet.find("s:sheetViews/s:sheetView/s:pane", ns).get("topLeftCell") == "B3"
+    cells = {el.get("r"): el for el in sheet.findall("s:sheetData/s:row/s:c", ns)}
+    assert [cells[ref].find("s:is/s:t", ns).text for ref in ["A2", "B2", "C2"]] == ["Ключ", "ФИО", "Часы"]
+    assert cells["C4"].find("s:v", ns).text == "0.0625" and cells["D4"].find("s:v", ns).text == "0"
+    xfs = styles.findall("s:cellXfs/s:xf", ns)
+    a, b, c = [xfs[int(cells[ref].get("s"))] for ref in ["A4", "B4", "C4"]]
+    fmt = styles.find(f"s:numFmts/s:numFmt[@numFmtId='{c.get('numFmtId')}']", ns)
+    assert fmt.get("formatCode").startswith("[h]") and b.get("fillId") == c.get("fillId")
+    assert int(a.get("fillId")) > 1 and sheet.find("s:hyperlinks/s:hyperlink", ns).get("ref") == "A4"
+    assert [el.get("rgb") for el in cells["E4"].findall("s:is/s:r/s:rPr/s:color", ns)] == ["FF991B1B", "FF1E40AF"]
 
 
 def test_несколько_листов():

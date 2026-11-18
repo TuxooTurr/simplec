@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import io
+import math
 import re
 import zipfile
 from dataclasses import dataclass, field
@@ -21,15 +22,20 @@ _HEX = re.compile(r"^[0-9A-Fa-f]{6}$")
 
 @dataclass
 class Cell:
-    v: str = ""
+    v: str | int | float = ""
     link: str = ""            # гиперссылка (http/https)
     fill: str = ""            # заливка RRGGBB
+    ink: str = ""             # цвет текста RRGGBB
+    format: str = ""
+    runs: list[tuple[str, str]] = field(default_factory=list)   # текст и цвет каждой метки в одной ячейке
+    bold: bool = False
 
 
 @dataclass
 class Column:
     title: str
     width: float = 14
+    group: str = ""
 
 
 @dataclass
@@ -38,6 +44,9 @@ class Sheet:
     columns: list[Column]
     rows: list[list[Cell]] = field(default_factory=list)
     header_fill: str = "1F3864"     # тёмно-синяя шапка, как в бэклоге платформы
+    header_ink: str = "FFFFFF"
+    frozen_cols: int = 0
+    section_rows: set[int] = field(default_factory=set)
 
 
 def _col(n: int) -> str:
@@ -58,30 +67,73 @@ def _sheet_name(name: str) -> str:
     return re.sub(r"[\[\]:*?/\\]", " ", name).strip()[:31] or "Лист1"
 
 
-def _styles(fills: list[str], header_fill: str) -> tuple[str, dict[str, int]]:
-    """styles.xml и номер стиля ячейки по заливке. Стили: 0 обычный, 1 шапка, 2 тело, 3 ссылка, 4.. тело с заливкой."""
-    fill_idx = {f: 3 + i for i, f in enumerate(fills)}          # 0 none, 1 gray125 (обязательные), 2 шапка
-    style_of_fill = {f: 4 + i for i, f in enumerate(fills)}
-    fills_xml = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>',
-                 f'<fill><patternFill patternType="solid"><fgColor rgb="FF{header_fill}"/><bgColor indexed="64"/></patternFill></fill>']
-    fills_xml += [f'<fill><patternFill patternType="solid"><fgColor rgb="FF{f}"/><bgColor indexed="64"/></patternFill></fill>' for f in fills]
-    body_align = '<alignment vertical="center" wrapText="1"/>'
-    xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>',
-           '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1">'
-           '<alignment horizontal="center" vertical="center" wrapText="1"/></xf>',
-           f'<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1">{body_align}</xf>',
-           f'<xf numFmtId="0" fontId="2" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1">{body_align}</xf>']
-    xfs += [f'<xf numFmtId="0" fontId="0" fillId="{fill_idx[f]}" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1">'
-            f'{body_align}</xf>' for f in fills]
+_FORMATS = {
+    "duration": (164, '[h]" ч "mm" мин"'),
+    "date": (165, "dd.mm.yyyy"),
+    "datetime": (166, "dd.mm.yyyy hh:mm"),
+}
+Style = tuple[str, str, str, bool, bool]
+
+
+def _colour(value: str) -> str:
+    return value.upper() if _HEX.fullmatch(value) else ""
+
+
+def _link(cell: Cell) -> str:
+    return cell.link if cell.link.startswith(("http://", "https://")) else ""
+
+
+def _style(cell: Cell) -> Style:
+    link = bool(_link(cell))
+    return _colour(cell.fill), _colour(cell.ink) or ("0563C1" if link else ""), cell.format, link, cell.bold
+
+
+def _header_style(sheet: Sheet) -> Style:
+    return _colour(sheet.header_fill) or "1F3864", _colour(sheet.header_ink) or "FFFFFF", "header", False, True
+
+
+def _styles(sheets: list[Sheet]) -> tuple[str, dict[Style, int]]:
+    """Один стиль на сочетание заливки, шрифта и формата числа, общее для всех листов."""
+    fill_idx = {"": 0}
+    font_ids = {("", False, False): 0}
+    fonts = ['<font><sz val="10"/><name val="Arial"/><family val="2"/></font>']
+    fills = ['<fill><patternFill patternType="none"/></fill>', '<fill><patternFill patternType="gray125"/></fill>']
+    xfs = ['<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>']
+
+    def add_style(key: Style, header: bool = False) -> int:
+        fill, ink, fmt, link, bold = key
+        if fill not in fill_idx:
+            fill_idx[fill] = len(fills)
+            fills.append(f'<fill><patternFill patternType="solid"><fgColor rgb="FF{fill}"/><bgColor indexed="64"/></patternFill></fill>')
+        font = (ink, link, bold)
+        if font not in font_ids:
+            font_ids[font] = len(fonts)
+            colour = f'<color rgb="FF{ink}"/>' if ink else ""
+            fonts.append(f'<font>{"<b/>" if bold else ""}{"<u/>" if link else ""}<sz val="10"/>{colour}<name val="Arial"/><family val="2"/></font>')
+        num = _FORMATS.get(fmt, (0, ""))[0]
+        horizontal = ' horizontal="center"' if header else ""
+        xfs.append(f'<xf numFmtId="{num}" fontId="{font_ids[font]}" fillId="{fill_idx[fill]}" borderId="1" xfId="0" '
+                   'applyFont="1" applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1">'
+                   f'<alignment{horizontal} vertical="center" wrapText="1"/></xf>')
+        return len(xfs) - 1
+
+    style_ids: dict[Style, int] = {}
+    for sh in sheets:
+        key = _header_style(sh)
+        if key not in style_ids:
+            style_ids[key] = add_style(key, header=True)
+        for row in sh.rows:
+            for cell in row:
+                key = _style(cell)
+                if key not in style_ids:
+                    style_ids[key] = add_style(key)
+    numfmts = "".join(f'<numFmt numFmtId="{n}" formatCode="{_text(fmt)}"/>' for n, fmt in _FORMATS.values())
     styles = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-        '<fonts count="3">'
-        '<font><sz val="10"/><name val="Arial"/><family val="2"/></font>'
-        '<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Arial"/><family val="2"/></font>'
-        '<font><u/><sz val="10"/><color rgb="FF0563C1"/><name val="Arial"/><family val="2"/></font>'
-        '</fonts>'
-        f'<fills count="{len(fills_xml)}">{"".join(fills_xml)}</fills>'
+        f'<numFmts count="{len(_FORMATS)}">{numfmts}</numFmts>'
+        f'<fonts count="{len(fonts)}">{"".join(fonts)}</fonts>'
+        f'<fills count="{len(fills)}">{"".join(fills)}</fills>'
         '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
         '<border><left style="thin"><color rgb="FFD9D9D9"/></left><right style="thin"><color rgb="FFD9D9D9"/></right>'
         '<top style="thin"><color rgb="FFD9D9D9"/></top><bottom style="thin"><color rgb="FFD9D9D9"/></bottom><diagonal/></border></borders>'
@@ -90,36 +142,77 @@ def _styles(fills: list[str], header_fill: str) -> tuple[str, dict[str, int]]:
         '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
         '</styleSheet>'
     )
-    return styles, style_of_fill
+    return styles, style_ids
 
 
-def _sheet_xml(sheet: Sheet, style_of_fill: dict[str, int], selected: bool) -> tuple[str, list[tuple[str, str]], str]:
+def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tuple[str, list[tuple[str, str]], str]:
     """XML листа, его ссылки [(ячейка, url)] и диапазон фильтра."""
     ncol = len(sheet.columns)
     last = _col(max(ncol, 1) - 1)
-    nrows = len(sheet.rows) + 1
+    grouped = any(c.group for c in sheet.columns)
+    header_rows = 2 if grouped else 1
+    nrows = len(sheet.rows) + header_rows
     links: list[tuple[str, str]] = []
-    rows_xml = ['<row r="1" ht="30" customHeight="1">' + "".join(
-        f'<c r="{_col(i)}1" s="1" t="inlineStr"><is><t xml:space="preserve">{_text(c.title)}</t></is></c>'
-        for i, c in enumerate(sheet.columns)) + "</row>"]
-    for r, row in enumerate(sheet.rows, start=2):
+    merges: list[str] = []
+    header_style = style_ids[_header_style(sheet)]
+
+    def header_row(r: int, labels: list[str], height: int) -> str:
+        return f'<row r="{r}" ht="{height}" customHeight="1">' + "".join(
+            f'<c r="{_col(i)}{r}" s="{header_style}" t="inlineStr"><is><t xml:space="preserve">{_text(label)}</t></is></c>'
+            for i, label in enumerate(labels)) + "</row>"
+
+    rows_xml = []
+    if grouped:
+        groups = [""] * ncol
+        i = 0
+        while i < ncol:
+            group = sheet.columns[i].group
+            j = i + 1
+            if group:
+                groups[i] = group
+                while j < ncol and sheet.columns[j].group == group:
+                    j += 1
+                if j > i + 1:
+                    merges.append(f"{_col(i)}1:{_col(j - 1)}1")
+            i = j
+        rows_xml.append(header_row(1, groups, 21))
+    rows_xml.append(header_row(header_rows, [c.title for c in sheet.columns], 27))
+    for r, row in enumerate(sheet.rows, start=header_rows + 1):
+        section = r - header_rows - 1 in sheet.section_rows and row and ncol > 1
+        if section:
+            merges.append(f"A{r}:{last}{r}")
         cells = []
-        for i, c in enumerate(row[:ncol]):
+        for i, c in enumerate([row[0]] * ncol if section else row[:ncol]):
             ref = f"{_col(i)}{r}"
-            link = c.link if c.link.startswith(("http://", "https://")) else ""
-            s_ = 3 if link else style_of_fill.get(c.fill.upper(), 2) if c.fill else 2
+            val = "" if section and i else c.v
+            link = _link(c) if not section else ""
+            s_ = style_ids[_style(c)]
             if link:
                 links.append((ref, link))
-            if c.v == "":
+            if val == "":
                 cells.append(f'<c r="{ref}" s="{s_}"/>')
+            elif isinstance(val, (int, float)) and math.isfinite(val):
+                cells.append(f'<c r="{ref}" s="{s_}"><v>{val}</v></c>')
+            elif c.runs:
+                runs = []
+                for txt, ink in c.runs:
+                    ink = _colour(ink)
+                    props = f'<rPr><rFont val="Arial"/><color rgb="FF{ink}"/><sz val="10"/></rPr>' if ink else ""
+                    runs.append(f'<r>{props}<t xml:space="preserve">{_text(txt)}</t></r>')
+                cells.append(f'<c r="{ref}" s="{s_}" t="inlineStr"><is>{"".join(runs)}</is></c>')
             else:
-                cells.append(f'<c r="{ref}" s="{s_}" t="inlineStr"><is><t xml:space="preserve">{_text(c.v)}</t></is></c>')
+                cells.append(f'<c r="{ref}" s="{s_}" t="inlineStr"><is><t xml:space="preserve">{_text(str(val))}</t></is></c>')
         rows_xml.append(f'<row r="{r}">{"".join(cells)}</row>')
     cols = "".join(f'<col min="{i + 1}" max="{i + 1}" width="{max(3.0, float(c.width)):.1f}" customWidth="1"/>'
                    for i, c in enumerate(sheet.columns))
     hyperlinks = ("<hyperlinks>" + "".join(f'<hyperlink ref="{ref}" r:id="rId{n + 1}"/>' for n, (ref, _) in enumerate(links))
                   + "</hyperlinks>") if links else ""
     area = f"A1:{last}{nrows}"
+    filter_area = f"A{header_rows}:{last}{nrows}"
+    frozen = max(0, min(sheet.frozen_cols, ncol))
+    split = f' xSplit="{frozen}"' if frozen else ""
+    pane = "bottomRight" if frozen else "bottomLeft"
+    merge_xml = (f'<mergeCells count="{len(merges)}">' + "".join(f'<mergeCell ref="{m}"/>' for m in merges) + '</mergeCells>') if merges else ""
     tab = ' tabSelected="1"' if selected else ""      # без «\\» внутри {…} f-строки: Python 3.10/3.11 так не умеют
     xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -127,15 +220,16 @@ def _sheet_xml(sheet: Sheet, style_of_fill: dict[str, int], selected: bool) -> t
         'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         f'<dimension ref="{area}"/>'
         f'<sheetViews><sheetView{tab} workbookViewId="0">'
-        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+        f'<pane{split} ySplit="{header_rows}" topLeftCell="{_col(frozen)}{header_rows + 1}" activePane="{pane}" state="frozen"/></sheetView></sheetViews>'
         '<sheetFormatPr defaultRowHeight="15"/>'
         f'<cols>{cols}</cols>'
         f'<sheetData>{"".join(rows_xml)}</sheetData>'
-        f'<autoFilter ref="{area}"/>'
+        f'<autoFilter ref="{filter_area}"/>'
+        f'{merge_xml}'
         f'{hyperlinks}'
         '</worksheet>'
     )
-    return xml, links, f"${_col(0)}$1:${last}${nrows}"
+    return xml, links, f"$A${header_rows}:${last}${nrows}"
 
 
 def _rels(items: list[tuple[str, str, str]], external: bool = False) -> str:
@@ -155,8 +249,7 @@ def build_xlsx(sheets: "Sheet | list[Sheet]") -> bytes:
     sheets = [sheets] if isinstance(sheets, Sheet) else list(sheets)
     if not sheets:
         raise ValueError("Нет листов")
-    fills = sorted({c.fill.upper() for sh in sheets for row in sh.rows for c in row if c.fill and _HEX.match(c.fill)})
-    styles, style_of_fill = _styles(fills, sheets[0].header_fill)
+    styles, style_ids = _styles(sheets)
 
     used: set[str] = set()
     names: list[str] = []
@@ -172,12 +265,13 @@ def build_xlsx(sheets: "Sheet | list[Sheet]") -> bytes:
     files: dict[str, str] = {}
     defined = []
     for k, sh in enumerate(sheets):
-        xml, links, area = _sheet_xml(sh, style_of_fill, k == 0)
+        xml, links, area = _sheet_xml(sh, style_ids, k == 0)
         files[f"xl/worksheets/sheet{k + 1}.xml"] = xml
         if links:
             files[f"xl/worksheets/_rels/sheet{k + 1}.xml.rels"] = _rels(
                 [(f"rId{n + 1}", _REL + "hyperlink", url) for n, (_, url) in enumerate(links)], external=True)
-        defined.append(f'<definedName name="_xlnm._FilterDatabase" localSheetId="{k}" hidden="1">\'{_text(names[k])}\'!{area}</definedName>')
+        name = _text(names[k].replace("'", "''"))
+        defined.append(f'<definedName name="_xlnm._FilterDatabase" localSheetId="{k}" hidden="1">\'{name}\'!{area}</definedName>')
 
     files["[Content_Types].xml"] = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -209,10 +303,28 @@ def build_xlsx(sheets: "Sheet | list[Sheet]") -> bytes:
     return buf.getvalue()
 
 
-def sheet_from_payload(name: str, columns: list[dict], rows: list[list[dict]], header_fill: Optional[str] = None) -> Sheet:
+def _payload_cell(raw: dict) -> Cell:
+    value = raw.get("v")
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        value = "" if value is None else str(value)
+    fmt = raw.get("format")
+    runs = raw.get("runs")
+    return Cell(
+        v=value, link=str(raw.get("link") or ""), fill=str(raw.get("fill") or ""), ink=str(raw.get("ink") or ""),
+        format=fmt if isinstance(fmt, str) and fmt in _FORMATS else "",
+        runs=[(str(r.get("text") or ""), str(r.get("ink") or "")) for r in runs if isinstance(r, dict)] if isinstance(runs, list) else [],
+        bold=raw.get("bold") is True,
+    )
+
+
+def sheet_from_payload(name: str, columns: list[dict], rows: list[list[dict]], header_fill: Optional[str] = None,
+                       header_ink: str = "FFFFFF", frozen_cols: int = 0, section_rows: Optional[list[int]] = None) -> Sheet:
     return Sheet(
         name=name,
-        columns=[Column(str(c.get("title", "")), float(c.get("width") or 14)) for c in columns],
-        rows=[[Cell(str(x.get("v", "") or ""), str(x.get("link", "") or ""), str(x.get("fill", "") or "")) for x in r] for r in rows],
+        columns=[Column(str(c.get("title", "")), float(c.get("width") or 14), str(c.get("group") or "")) for c in columns],
+        rows=[[_payload_cell(x) for x in r] for r in rows],
         header_fill=header_fill if header_fill and _HEX.match(header_fill) else "1F3864",
+        header_ink=header_ink,
+        frozen_cols=frozen_cols,
+        section_rows=set(section_rows or []),
     )

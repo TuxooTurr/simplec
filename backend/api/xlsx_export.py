@@ -2,7 +2,7 @@
 Выгрузка таблицы в Excel (.xlsx): фронт присылает колонки и строки, бэкенд собирает файл (backend/xlsx_writer.py).
 
 Эндпоинт:
-  POST /api/export/xlsx  {filename, sheets: [{name, columns: [{title, width}], rows: [[{v, link?, fill?}]]}]} → .xlsx
+  POST /api/export/xlsx  {filename, sheets: [{name, columns: [{title, width, group?}], rows: [[{v, link?, fill?, ink?, format?}]]}]} → .xlsx
                          (один лист можно и без sheets: {filename, sheet, columns, rows})
 """
 
@@ -20,12 +20,17 @@ from backend.xlsx_writer import build_xlsx, sheet_from_payload
 router = APIRouter()
 
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MAX_COLUMNS = 512
 
 
 class XlsxSheet(BaseModel):
     name: str = "Лист1"
-    columns: list[dict] = Field(..., min_length=1, max_length=100)
+    columns: list[dict] = Field(..., min_length=1, max_length=MAX_COLUMNS)
     rows: list[list[dict]] = Field(default_factory=list, max_length=20000)
+    headerFill: str = "1F3864"
+    headerInk: str = "FFFFFF"
+    frozenCols: int = Field(default=0, ge=0, le=MAX_COLUMNS)
+    sectionRows: list[int] = Field(default_factory=list, max_length=20000)
 
 
 class XlsxBody(BaseModel):
@@ -33,7 +38,7 @@ class XlsxBody(BaseModel):
     sheets: list[XlsxSheet] = Field(default_factory=list, max_length=20)
     # один лист — без sheets
     sheet: str = "Лист1"
-    columns: list[dict] = Field(default_factory=list, max_length=100)
+    columns: list[dict] = Field(default_factory=list, max_length=MAX_COLUMNS)
     rows: list[list[dict]] = Field(default_factory=list, max_length=20000)
 
 
@@ -42,7 +47,7 @@ def export_xlsx(body: XlsxBody) -> Response:
     sheets = body.sheets or ([XlsxSheet(name=body.sheet, columns=body.columns, rows=body.rows)] if body.columns else [])
     if not sheets:
         raise HTTPException(422, "Нет колонок")
-    data = build_xlsx([sheet_from_payload(s.name, s.columns, s.rows) for s in sheets])
+    data = build_xlsx([sheet_from_payload(s.name, s.columns, s.rows, s.headerFill, s.headerInk, s.frozenCols, s.sectionRows) for s in sheets])
     name = re.sub(r'[\\/:*?"<>|]+', "_", body.filename).strip() or "Shark.xlsx"
     if not name.lower().endswith(".xlsx"):
         name += ".xlsx"

@@ -1,4 +1,5 @@
 "use client";
+import DashboardSection from "./sections/DashboardSection";
 
 import { PanelRight } from "lucide-react";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
@@ -48,6 +49,7 @@ export default function SectionRenderer() {
   }
 
   const sections: Record<string, React.ReactNode> = {
+    dashboard: <DashboardSection />,
     generation: <GenerationSection />,
     test_data:  <TestDataSection />,
     etalons:    <EtalonsSection />,

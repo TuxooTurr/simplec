@@ -1,0 +1,9 @@
+{
+  "font": "Inter, system-ui",
+  "palette": "frontend/app/globals.css CSS tokens",
+  "motion": "existing CSS transitions",
+  "spacing": "Tailwind existing scale",
+  "framework": "Next.js App Router + React",
+  "scope": "dashboard, shared issue controls",
+  "date": "2026-11-21"
+}

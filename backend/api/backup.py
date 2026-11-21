@@ -59,6 +59,7 @@ KEEP_SNAPSHOTS = 5
 
 # Разделы — как вкладки в меню. Файл, таблица или ключ настроек относится к одному разделу; не найденное — в «Общее».
 SECTIONS: dict[str, str] = {
+    "dashboard": "Главная",
     "generation": "Тестовая модель",
     "test_data": "Тестовые данные",
     "bugs": "Jira tool",
@@ -75,6 +76,7 @@ SECTIONS: dict[str, str] = {
 }
 
 FILE_SECTION: dict[str, str] = {
+    "dashboard.json": "dashboard", "ether_cookies.json": "dashboard",
     "gen_sessions.json": "generation",
     "testdata_connections.json": "test_data", "datagen_config.json": "test_data", "jdbc_drivers.json": "test_data",
     "people.json": "bugs", "jira_views.json": "bugs",

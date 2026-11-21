@@ -23,6 +23,7 @@ export interface RestoreResult {
 }
 
 export const SECTIONS: { id: string; title: string }[] = [
+  { id: "dashboard", title: "Главная" },
   { id: "generation", title: "Тестовая модель" },
   { id: "test_data", title: "Тестовые данные" },
   { id: "bugs", title: "Jira tool" },
@@ -43,7 +44,7 @@ export const sectionTitle = (id: string) => SECTIONS.find(s => s.id === id)?.tit
 export function sectionOfPath(path: string): string {
   const p = path.split("/")[1] ?? "";
   const map: Record<string, string> = {
-    generation: "generation", "test-data": "test_data", bugs: "bugs", zephyr: "zephyr", stands: "stands", logs: "logs",
+    dashboard: "dashboard", generation: "generation", "test-data": "test_data", bugs: "bugs", zephyr: "zephyr", stands: "stands", logs: "logs",
     kafka: "kafka", "event-generators": "event_generators", alerts: "event_generators", jobs: "event_generators",
     metrics: "event_generators", etalons: "etalons", "model-bench": "model_bench", "auto-model": "auto_model",
     revisor: "auto_model", settings: "settings", aqa: "aqa",
@@ -56,6 +57,9 @@ export function sectionOfPath(path: string): string {
 /** Не переносим: вход, кэши и одноразовые передачи между разделами. */
 const SKIP_KEYS = new Set(["st_auth_token", "st_jira_tool_cache", "st_zephyr_import", "st_automodel_prefill", "st_kafka_session"]);
 const KEY_SECTION: [RegExp, string][] = [
+  [/^st_ether_/, "dashboard"],
+  [/^st_dashboard_/, "dashboard"],
+  [/^st_issue_type_display$/, "bugs"],
   [/^st_(jira_|bug_|plan_unit|cell_icon)/, "bugs"], [/^st_zephyr_/, "zephyr"], [/^st_kafka_/, "kafka"],
   [/^st_(gen_|projects$|teams$|ke$|author$)/, "generation"], [/^st_automodel_|^st_autotest_/, "auto_model"],
   [/^st_testdata_/, "test_data"], [/^st_alert/, "event_generators"], [/^st_logs_/, "logs"], [/^st_aqa_/, "aqa"],

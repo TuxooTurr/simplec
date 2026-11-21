@@ -1,4 +1,5 @@
 "use client";
+import IssueEditButton from "./IssueEditButton";
 
 import { useState } from "react";
 import { ArrowRightLeft, Bug, Check, Link2, MessageSquareShare } from "lucide-react";
@@ -100,11 +101,12 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold">
                 <Bug className="w-4 h-4" /> Создать дефект</button>
             )}
-            {onTransitions && (
+            {onTransitions && (<>
               <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
                 title="Перевести отмеченные дефекты в другой статус Jira — переходы спрашиваются у Jira"
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                 <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
+                  {toSend.length > 1 && <IssueEditButton issues={toSend} onDone={onTransitions} />} </>
             )}
             {chat && <ChatFieldsPicker cfg={chat} align="right" />}
             <button type="button" onClick={copy} disabled={!toSend.length}
@@ -118,7 +120,7 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
             {defects.length ? "Неустранённых дефектов нет." : "Дефектов нет."}
           </p>
         ) : (
-          <IssueTable cols={["type", "key", "summary", "status", "stage", "priority", "assignee"]} initialSort={sort} onSort={setSort}
+          <IssueTable onIssuesChanged={onTransitions} cols={["type", "key", "summary", "status", "stage", "priority", "assignee"]} initialSort={sort} onSort={setSort}
             picked={picked} onPick={pick} widthKey="defects"
             filter={filter} onFilter={setFilter} source={showFixed ? defects : allOpened} stageLabel={label}
             stage={d => <StageBadge info={stageOf(d)} />} stageRank={rank}

@@ -727,10 +727,11 @@ def test_пройти_прогон_ставит_pass_только_непройд
         "items": [{"testCaseKey": "T1", "status": "Pass"}, {"testCaseKey": "T2", "status": "Fail"}, {"testCaseKey": "T3"}]}
     jira["routes"]["/rest/atm/1.0/testrun/SBER911-C1/testresults"] = []
     sent = {}
-    monkeypatch.setattr(z, "_write_variants", lambda cfg, kind, method, variants: sent.update(body=variants[0][1]) or {})
+    monkeypatch.setattr(z, "_write_variants", lambda cfg, kind, method, variants, *, timeout: sent.update(body=variants[0][1], timeout=timeout) or {})
     r = z.pass_run("SBER911-C1", db=None)
     assert [x["testCaseKey"] for x in sent["body"]] == ["T2", "T3"] and all(x["status"] == "Pass" for x in sent["body"])
     assert (r["saved"], r["skipped"], r["total"]) == (2, 1, 3)
+    assert sent["timeout"] == z.WRITE_TIMEOUT
 
 
 def test_удалить_несколько_кейсов(jira, monkeypatch):

@@ -11,6 +11,8 @@ import { stageText, type Stage } from "@/lib/jiraStages";
 import { isStoryColumn } from "@/lib/jiraStoryView";
 import type { ReqOption } from "./ListCells";
 import ColumnFilter, { type FilterOption } from "./ColumnFilter";
+import IssueTypeToggle from "./IssueTypeToggle";
+import { useIssueTypeDisplay } from "@/lib/issueTypeDisplay";
 import { BlockCell, DefectsCell, JiraCell, MsCell, OwnCell, ParticipantCell, LoadCell, PlanCell, ReqCell, RoleCell, StageCell, Tag } from "./ListCells";
 
 export type SortState = { col: ColRef; dir: 1 | -1 } | null;
@@ -165,6 +167,7 @@ export default function ListTable({
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const { list, participants } = ctx;
+  const [typeIconOnly, toggleTypeDisplay] = useIssueTypeDisplay();
   // Закреплённые колонки идут первыми и при прокрутке вбок остаются на месте (как и ключ задачи).
   const pinned = new Set(list.pinned ?? []);
   const cols = [...list.columns.filter(c => pinned.has(c)), ...list.columns.filter(c => !pinned.has(c))];
@@ -177,7 +180,7 @@ export default function ListTable({
   /* ── Ширина колонок: тянем за край заголовка ── */
   const [live, setLive] = useState<{ col: ColRef; w: number } | null>(null);
   const resizing = useRef<{ col: ColRef; x: number; w: number } | null>(null);
-  const colW = (c: ColRef) => (live?.col === c ? live.w : list.widths?.[c] ?? defaultWidth(c, ctx));
+  const colW = (c: ColRef) => (live?.col === c ? live.w : list.widths?.[c] ?? (c === "jira:issuetype" && typeIconOnly ? 100 : defaultWidth(c, ctx)));
   // Ключ не должен обрезаться: ширина столбца — под самый глубокий уровень вложенности (папка + 3 группы).
   // Отметки «n»/«У» стоят перед ключом — под них место, чтобы ключ не обрезался.
   const KEY_W = 150 + (sections ? FOLDER_PAD : 0) + list.groupBy.length * INDENT + (Object.keys(list.marks ?? {}).length ? 22 : 0);
@@ -481,7 +484,7 @@ export default function ListTable({
                 {String(cellIssue.fields.summary ?? "—")}
               </button>
             ) : c.startsWith("jira:") ? (
-              <JiraCell id={c.slice(5)} issue={cellIssue} />
+              <JiraCell id={c.slice(5)} issue={cellIssue} typeIconOnly={typeIconOnly} />
             ) : ownById[c.slice(4)] ? (
               <OwnCell field={ownById[c.slice(4)]} value={list.values[cellIssue.key]?.[c.slice(4)]} icon={list.icons?.[cellIssue.key]?.[c.slice(4)]}
                 computed={ownById[c.slice(4)].type === "rules" ? ruleResult(ownById[c.slice(4)], cellIssue, ctx) : undefined}
@@ -726,6 +729,7 @@ export default function ListTable({
                       <span className="truncate">{colLabel(c, list)}</span>
                       {sort?.col === c && (sort.dir === 1 ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />)}
                     </button>
+                    {c === "jira:issuetype" && <IssueTypeToggle iconOnly={typeIconOnly} onToggle={toggleTypeDisplay} />}
                     {onTimeFmt && timeFmt && (c === LOAD_COL || c === PARTICIPANT_COL || isRoleCol(c)) && (
                       <button type="button" onClick={() => onTimeFmt(timeFmt === "hm" ? "dhm" : "hm")}
                         title={`Трудозатраты: ${timeFmt === "hm" ? "часы и минуты" : "дни, часы и минуты"} — переключить для всех колонок и Excel`}

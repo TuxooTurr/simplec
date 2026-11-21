@@ -8,9 +8,10 @@ import { findJiraUsers, type JiraUser } from "@/lib/jiraToolApi";
  * «Имя в Jira» у человека справочника: поиск пользователя Jira по имени или логину, выбор — логин и имя из Jira.
  * Jira не подключена или поиск не нашёл — логин можно вписать руками (Enter или уход с поля).
  */
-export default function JiraUserField({ name, display, jiraOk, onChange, label = "Имя в Jira" }: {
+export default function JiraUserField({ name, display, jiraOk, onChange, label = "Имя в Jira", id }: {
   /** Подпись слева; пусто — без неё (подпись снаружи). */
   label?: string;
+  id?: string;
   name: string;
   display: string;
   jiraOk: boolean;
@@ -51,7 +52,7 @@ export default function JiraUserField({ name, display, jiraOk, onChange, label =
     <div className="min-w-0">
       <div className="flex items-center gap-1.5">
         {label && <span className="text-[10px] text-text-muted whitespace-nowrap">{label}</span>}
-        <input value={text} onChange={e => setText(e.target.value)} onBlur={commit}
+        <input id={id} value={text} onChange={e => setText(e.target.value)} onBlur={commit}
           onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); commit(); } if (e.key === "Escape") setText(shown); }}
           placeholder={jiraOk ? "поиск по имени или логину" : "логин в Jira"} aria-label={label || "Пользователь Jira"}
           className="min-w-0 flex-1 text-xs border border-border-main rounded-md px-2 py-1 bg-[var(--color-input-bg)] text-text-main placeholder:text-text-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30" />

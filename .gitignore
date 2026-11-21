@@ -54,3 +54,9 @@ data_mock/
 
 # Рабочие файлы долгих задач (архивы-источники, черновики) — не в git
 .work/
+
+# Local integration sessions and shared dashboard runtime
+.env
+.env.local
+data/ether_cookies.json
+data/dashboard.json

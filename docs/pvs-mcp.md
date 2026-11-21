@@ -44,28 +44,28 @@ test -x "$pvs_venv/bin/opensearch-mcp-server-py"
 | `OPENSEARCH_USERNAME` | `pvs_user` |
 | `OPENSEARCH_PASSWORD` | Секрет из корпоративного хранилища или секрет окружения прогона |
 | `OPENSEARCH_SSL_VERIFY` | `true` |
-| `OPENSEARCH_CA_CERT_PATH` | Абсолютный путь к корпоративной цепочке CA, если требуется |
-| `OPENSEARCH_CLIENT_CERT_PATH`, `OPENSEARCH_CLIENT_KEY_PATH` | Абсолютные пути к клиентскому сертификату и ключу, если включён mTLS |
+| `OPENSEARCH_CA_CERT_PATH` | Абсолютный путь к корпоративной цепочке CA; для указанного ИФТ обязателен |
+| `OPENSEARCH_CLIENT_CERT_PATH`, `OPENSEARCH_CLIENT_KEY_PATH` | Абсолютные пути к клиентскому сертификату и ключу; на указанном ИФТ требуется mTLS |
 
 Для ГигаКод Desktop и CI передавайте пароль через окружение запуска из корпоративного хранилища. В репозитории Shark файл `.env` отслеживается Git. При переходе на IAM обновите окружение или конфигурацию самого PVS MCP по документации этого контура.
 
 1. В ГигаКод проверьте подключение и список инструментов. В README указаны `ListIndexTool`, `IndexMappingTool` и `SearchIndexTool`. Если имена в `tools/list` отличаются, используйте объявленные имена.
-2. С помощью `ListIndexTool` найдите конкретный индекс, алиас или выделенный шаблон индексов логов ИФТ. Через `IndexMappingTool` определите поля namespace, микросервиса, времени, уровня и, если есть, сообщения, стека, trace ID и request ID. Для точного совпадения укажите индексируемое поле типа `keyword`, например `service.name.keyword` только при наличии такого подполя. Значения поля сервиса должны совпадать с именами из справочника Shark.
+2. По сведениям ИФТ от 20.11.2026 индекс логов — `sber-app-*`. Сверьте его и маппинг на целевой установке через `IndexMappingTool`. При наличии прав `ListIndexTool` поможет уточнить индекс/алиас; 403 на каталог не мешает поиску по известному индексу. Поля времени, namespace, уровня и сервиса должны соответствовать маппингу, точное совпадение — индексируемому полю `keyword`. Значения сервиса должны совпадать со справочником Shark.
 3. Через `SearchIndexTool` выполните поиск по `sber911-sigma-back` за короткий период. Сверьте время, сервис и сообщение найденной записи в [веб-интерфейсе PVS](https://tsles-sber00076.esrt.sber.ru:15601). Логи из других namespace появятся по мере их подключения.
 
-Пример аргументов `SearchIndexTool`. Подставьте индекс и поля из маппинга и время известной операции в ISO 8601 с часовым поясом.
+Пример аргументов `SearchIndexTool` с известным маппингом ИФТ. Подставьте время известной операции в ISO 8601 с часовым поясом; при другом источнике замените индекс и поля проверенными значениями.
 
 ```json
 {
-  "index": "<индекс из ListIndexTool>",
+  "index": "sber-app-*",
   "format": "json",
   "size": 5,
   "query_dsl": {
     "query": {
       "bool": {
         "filter": [
-          {"term": {"<поле namespace>": "sber911-sigma-back"}},
-          {"range": {"<поле времени>": {"gte": "<начало периода>", "lte": "<конец периода>"}}}
+          {"term": {"k8s.namespace.name.keyword": "sber911-sigma-back"}},
+          {"range": {"timestamp": {"gte": "<начало периода>", "lte": "<конец периода>"}}}
         ]
       }
     }
@@ -75,7 +75,7 @@ test -x "$pvs_venv/bin/opensearch-mcp-server-py"
 
 ## 3. Подключить раздел «Логи» в Shark
 
-После `bash install.sh` добавьте настройки в окружение запуска бэкенда Shark. Сохраните абсолютный путь из шага 1, а индекс и карту замените значениями из шага 2. Ниже пример карты полей, реальные имена берутся из маппинга ИФТ.
+После `bash install.sh` добавьте настройки в окружение запуска бэкенда Shark. Ниже — известный маппинг ИФТ от 20.11.2026; при отличии целевого источника используйте проверенные значения из шага 2. Задайте также пути CA, client cert/key из таблицы выше; файлы остаются вне репозитория.
 
 ```bash
 export LOGS_MCP_PROFILE=pvs
@@ -84,8 +84,8 @@ export LOGS_MCP_COMMAND="/home/work/$USER/.venvs/pvs-mcp/bin/opensearch-mcp-serv
 export OPENSEARCH_URL=https://tsles-sber00075.esrt.sber.ru:19200
 export OPENSEARCH_SSL_VERIFY=true
 export LOGS_MCP_NAMESPACE=sber911-sigma-back
-export LOGS_PVS_INDEX='<индекс, алиас или выделенный шаблон из шага 2>'
-export LOGS_PVS_FIELDS='{"namespace":"kubernetes.namespace_name.keyword","service":"service.name.keyword","timestamp":"@timestamp","level":"level.keyword","message":"message","traceId":"traceId.keyword","requestId":"requestId.keyword"}'
+export LOGS_PVS_INDEX='sber-app-*'
+export LOGS_PVS_FIELDS='{"namespace":"k8s.namespace.name.keyword","service":"service.name.keyword","timestamp":"timestamp","level":"level.keyword","message":"message","traceId":"mdc.traceId.keyword","stack":"stackTrace"}'
 ```
 
 Если имя из `tools/list` отличается от `SearchIndexTool`, задайте `LOGS_MCP_TOOL`. Запустите Shark через `bash start.sh` в настроенном окружении. Откройте **Настройки → Подключения → PVS MCP**, введите логин и пароль сервисной учётки, затем нажмите «Сохранить» и «Проверить подключение». Та же форма открывается по кнопке «Подключения» в шапке раздела «Логи». Настройка доступна администратору Shark.
@@ -109,3 +109,26 @@ PVS_SMOKE=1 PVS_SMOKE_FROM='<ISO 8601>' PVS_SMOKE_TO='<ISO 8601>' \
 ```
 
 Опционально задайте `PVS_SMOKE_SERVICE`, `PVS_SMOKE_REQUEST_ID`, `PVS_SMOKE_TRACE_ID` и `PVS_SMOKE_TIMEOUT` в секундах. Проверка ждёт доставки события за фиксированный период.
+
+Для Python-автотестов доступны `fetch_logs` и `wait_for_logs` из `agents.log_assertions`. Время должно включать часовой пояс; ожидание опрашивает фиксированное окно теста:
+
+```python
+from agents.log_assertions import LogFilter, fetch_logs, wait_for_logs
+
+# test_started_at/test_finished_at — datetime с часовым поясом.
+scope = dict(namespace="sber911-sigma-back", service=service_name, trace_id=trace_id)
+observed = await wait_for_logs(
+    test_started_at, test_finished_at, LogFilter(**scope, text="операция записана"),
+    timeout=45, interval=2,
+)
+assert observed.records
+errors = await fetch_logs(test_started_at, test_finished_at, LogFilter(**scope, levels=("ERROR",)))
+assert not errors.truncated
+assert not errors.records
+```
+
+Выбирайте событие завершающего шага операции и учитывайте задержку доставки ошибок: одна ранняя запись не доказывает отсутствие более поздних ERROR. Можно искать точное значение JSON-поля через `field="context.result", value="SUCCESS"`. При неполной выдаче сузьте период или добавьте trace ID. `requestId` в известном маппинге ИФТ отсутствует; не используйте его как обязательный фильтр этого источника.
+
+## Справочник микросервисов
+
+В разделе «Логи» нажмите «Обновить микросервисы из логов». `POST /api/mcp-logs/catalog/refresh` получает имена агрегацией за 72 часа в заданном namespace, кеширует на 12 часов; `?force=true` обновляет принудительно. Период меняется `LOGS_PVS_SERVICES_HOURS`. Ошибка/неполная агрегация сохраняет предыдущий справочник. Пустой успешный ответ означает, что за период сервисов нет. Индекс, namespace и маппинг входят в ключ кеша — чужой справочник при смене подключения не используется.

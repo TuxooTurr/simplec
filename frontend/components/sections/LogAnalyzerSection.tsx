@@ -1,4 +1,5 @@
 "use client";
+import { refreshLogCatalog } from "@/lib/mcpLogsApi";
 
 import { useEffect, useId, useRef, useState } from "react";
 import { AlertTriangle, Bug, ChevronLeft, ChevronRight, Filter, Loader2, Search, Sparkles } from "lucide-react";
@@ -160,7 +161,7 @@ export default function LogAnalyzerSection() {
 
   const loadCatalog = () => {
     setLoading(true); setProblem("");
-    getLogCatalog().then(setCatalog, e => setProblem((e as Error).message)).finally(() => setLoading(false));
+    getLogCatalog().then(async data => { setCatalog(data); if (data.configured && data.canDiscoverServices && !data.catalogFresh) setCatalog(await refreshLogCatalog(false)); }).catch(e => setProblem((e as Error).message)).finally(() => setLoading(false));
   };
   useEffect(() => {
     loadCatalog();
@@ -240,6 +241,7 @@ export default function LogAnalyzerSection() {
       prefill={{ type: "Дефект", summary: title.slice(0, 250), description }} extraFields={<></>} onSave={() => {}} />);
   };
 
+  const discover = async () => { setLoading(true); try { setCatalog(await refreshLogCatalog()); } catch (e) { setProblem((e as Error).message); } finally { setLoading(false); } };
   const disabled = !catalog?.configured || reading || analyzing;
   const records = result?.response.records ?? [];
   const pageCount = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
@@ -260,6 +262,7 @@ export default function LogAnalyzerSection() {
       </header>
       <PvsSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
+      {catalog?.configured && catalog.canDiscoverServices && <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" loading={loading} disabled={reading || analyzing} onClick={() => void discover()}>Обновить микросервисы из логов</Button><span className="text-xs text-text-muted">Период сервисов: {catalog.servicesHours ?? 72} ч; кеш на 12 часов.</span></div>}
       {catalog && !catalog.configured && <div className="tone-warning flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
         <p>Источник MCP не подключён. Откройте «Подключения» и проверьте параметры PVS.</p>
         <Button type="button" variant="sm" onClick={loadCatalog} loading={loading}>Обновить</Button>

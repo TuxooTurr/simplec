@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 
 export type SectionId =
+  | "dashboard"
   | "generation"
   | "auto_model"
   | "test_data"

@@ -70,6 +70,7 @@ export async function applyTransitions(changes: { key: string; transition_id: st
   for (let i = 0; i < changes.length; i += 200) {
     results.push(...(await post<{ results: typeof results }>("/api/jira/tool/transition", { changes: changes.slice(i, i + 200) })).results);
   }
+  if (results.some(result => result.ok) && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("shark-jira-issues-changed", { detail: results.filter(result => result.ok).map(result => result.key) }));
   return { results, done: results.filter(r => r.ok).length };
 }
 

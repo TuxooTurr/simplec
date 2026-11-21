@@ -450,3 +450,25 @@ def normalize(payload: Any, service: str | None, limit: int, *, namespace: str =
     if payload and not records:
         raise LogSourceError("MCP вернул записи, но Shark не распознал поля сообщения. Нужен пример ответа инструмента.")
     return records, truncated
+
+
+async def discover_services(source) -> list[str]:
+    """Read names with an aggregation: listing OpenSearch indexes is not required."""
+    if isinstance(source, DemoLogSource): return list(DEMO_SERVICES)
+    if not isinstance(source, PvsLogSource):
+        raise LogSourceError('Обновление справочника из логов доступно для профиля PVS.')
+    try: hours = max(1, min(720, int(os.getenv('LOGS_PVS_SERVICES_HOURS', '72'))))
+    except ValueError: hours = 72
+    now = datetime.now(UTC)
+    dsl = {'size': 0, 'query': {'bool': {'filter': [
+        {'term': {source.fields['namespace']: source.namespace}},
+        {'range': {source.fields['timestamp']: {'gte': (now-timedelta(hours=hours)).isoformat(), 'lte': now.isoformat()}}},
+    ]}}, 'aggs': {'services': {'terms': {'field': source.fields['service'], 'size': 5000}}}}
+    args = {'index': source.index, 'query_dsl': json.dumps(dsl) if source.dsl_as_string else dsl, 'size': 1}
+    if source.format_supported: args['format'] = 'json'
+    result = await _call_search(source.client, source.tool, args, pvs=True)
+    buckets = _field(result, 'aggregations.services.buckets')
+    if not isinstance(buckets, list): raise LogSourceError('PVS не вернул справочник сервисов. Проверьте доступ к агрегации и поле service.')
+    if result.get('timed_out') or _field(result, '_shards.failed') or _field(result, 'aggregations.services.sum_other_doc_count'):
+        raise LogSourceError('Справочник PVS получен не полностью. Сузьте период; предыдущий справочник сохранён.')
+    return [str(b['key']) for b in buckets if b.get('key') is not None]

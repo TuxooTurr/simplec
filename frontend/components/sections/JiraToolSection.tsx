@@ -1,4 +1,5 @@
 "use client";
+import IssueEditButton, { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -189,6 +190,9 @@ export default function JiraToolSection() {
    * вернулись в раздел или переключили список — данные сразу, свежие подтягиваются фоном раз в 30 минут.
    */
   const [cache, setCache] = useState<Record<string, Issue>>({});
+  const editedHandler = useRef<(keys: string[]) => void>(() => {});
+  useEffect(() => { const changed = (event: Event) => editedHandler.current((event as CustomEvent<string[]>).detail ?? []); window.addEventListener(JIRA_ISSUES_CHANGED, changed); return () => window.removeEventListener(JIRA_ISSUES_CHANGED, changed); }, []);
+  useEffect(() => { setIssueWins(wins => wins.map(issue => cache[issue.key] ?? issue)); }, [cache]);
   const [missing, setMissingState] = useState<Set<string>>(new Set());
   const [refreshedAt, setRefreshedAt] = useState(0);
   const setMissing = (fn: (m: Set<string>) => Set<string>) => setMissingState(m => {
@@ -1058,6 +1062,8 @@ export default function JiraToolSection() {
     setHist({ ...historyCache.items });
   };
 
+  editedHandler.current = afterTransitions;
+
   const saveOwn = (f: OwnField) => updateList(l => {
     const exists = l.ownFields.some(x => x.id === f.id);
     return {
@@ -1473,6 +1479,7 @@ export default function JiraToolSection() {
                   </span>
                   <button type="button" onClick={() => setModal("bulk")} disabled={!selected.size}
                     className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
+                  {selectedIssues.length > 1 && <IssueEditButton issues={selectedIssues} onDone={afterTransitions} />}
                   <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Требования…</button>
                   <button type="button" onClick={() => setModal("ms")} disabled={!selected.size}

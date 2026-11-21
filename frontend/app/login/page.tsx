@@ -29,7 +29,7 @@ export default function LoginPage() {
     try {
       const tokens = await login(loginStr.trim(), password);
       stashLoginNote(loginTokensNote(tokens));
-      router.replace("/generation");      // акула остаётся до перехода — форма обратно не мигает
+      router.replace("/dashboard");      // акула остаётся до перехода — форма обратно не мигает
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
       setLoading(false);

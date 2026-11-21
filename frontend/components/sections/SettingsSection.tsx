@@ -1,4 +1,7 @@
 "use client";
+import EtherSettingsModal from "@/components/settings/EtherSettingsModal";
+import { fetchEtherState } from "@/lib/etherApi";
+import { MessagesSquare } from "lucide-react";
 
 import { useCallback, useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { BookOpen, ChevronRight, Cpu, Database, FileSearch, GitBranch, HardDrive, Network, Play, Rocket, Ticket } from "lucide-react";
@@ -26,8 +29,8 @@ import { getAqaSettings } from "@/lib/aqaApi";
  * (запрос в модель, в базу) — по кнопке внутри окна.
  */
 
-type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores" | "pvs";
-const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores", "pvs"];
+type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores" | "pvs" | "ether";
+const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores", "pvs", "ether"];
 
 type TabId = "integrations" | "connections" | "backup";
 const TABS: { id: TabId; label: string }[] = [
@@ -48,6 +51,7 @@ interface Row {
 
 const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
   integrations: [
+      { id: "ether", icon: MessagesSquare, title: "Эфир · Главная", description: "Чат, почта и встречи через один MCP · вход в браузере" },
       { id: "jira", icon: Ticket, title: "Jira", description: "Учётная запись Сигмы и адрес Jira" },
       { id: "confluence", icon: BookOpen, title: "Confluence", description: "Учётная запись Сигмы и пространство для страниц" },
       { id: "testops", icon: Rocket, title: "Allure TestOps", description: "Проект с запусками автотестов и API-токен" },
@@ -92,8 +96,8 @@ function writeUrl(tab: TabId, panel: PanelId | null) {
 
 /** Каждый запрос — сам по себе: упал один, остальные строки всё равно показывают своё. */
 async function loadChips(): Promise<Partial<Record<PanelId, Chip>>> {
-  const [providers, corp, settings, conns, aqa] = await Promise.allSettled([
-    getProviders(), getCorpAuthStatus(), getSettings(), listTestDataConnections(), getAqaSettings(),
+  const [providers, corp, settings, conns, aqa, ether] = await Promise.allSettled([
+    getProviders(), getCorpAuthStatus(), getSettings(), listTestDataConnections(), getAqaSettings(), fetchEtherState(),
   ]);
   const chips: Partial<Record<PanelId, Chip>> = {};
 
@@ -129,6 +133,7 @@ async function loadChips(): Promise<Partial<Record<PanelId, Chip>>> {
       : !a.jenkinsOk ? { tone: "bad", text: "Ссылка не разобралась" }
       : a.jenkinsUser && a.jenkinsToken ? { tone: "ok", text: "Подключено" } : { tone: "warn", text: "Нужны логин и токен" };
   }
+  if (ether.status === "fulfilled") { const e = ether.value; chips.ether = e.source === "cookie" || e.state === "connected" ? {tone:"ok",text:"Подключено"} : e.source === "env" ? {tone:"ok",text:"Из окружения"} : e.source === "broken" ? {tone:"bad",text:"Ошибка хранилища"} : {tone:"idle",text:"Не настроено"}; }
   return chips;
 }
 
@@ -259,6 +264,7 @@ export default function SettingsSection() {
       <ConfluenceSettingsModal open={panel === "confluence"} onClose={close} />
       <KafkaMetricsSettingsModal open={panel === "kafka"} onClose={close} onSaved={refreshChips} />
       <PvsSettingsModal open={panel === "pvs"} onClose={close} />
+      <EtherSettingsModal open={panel === "ether"} onClose={close} onChanged={refreshChips} />
       <TestDataSettingsModal open={panel === "testdata"} onClose={close} onChanged={refreshChips} />
       <AqaSettingsModal open={panel === "testops"} only="testops" onClose={close} onSaved={refreshChips} />
       <AqaSettingsModal open={panel === "bitbucket"} only="bitbucket" onClose={close} onSaved={refreshChips} />
@@ -269,5 +275,6 @@ export default function SettingsSection() {
 
 /** Строки, у которых есть состояние: пока оно грузится, вместо него — заглушка. */
 const STATUS_ROWS: Partial<Record<PanelId, true>> = {
+  ether: true,
   jira: true, confluence: true, testops: true, bitbucket: true, jenkins: true, llm: true, kafka: true, testdata: true,
 };

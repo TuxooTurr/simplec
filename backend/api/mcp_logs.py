@@ -20,7 +20,7 @@ from agents.log_assertions import LogFilter, read_matching
 from agents.logs_investigation import investigate_selection
 from agents.logs_mcp import DEMO_SERVICES, UTC, LogSourceError, LogSourceTimeout, Record, configured, configured_namespace, local_pvs_configured, open_source, redact
 from backend.api.auth import require_superuser, require_user
-from db import ms_store, pvs_credentials
+from db import ms_store, pvs_credentials, log_catalog
 from db.paths import MOCK
 from webconnect.secrets import SecretError
 
@@ -115,6 +115,8 @@ async def stop_log_jobs() -> None:
 
 
 def _services() -> list[str]:
+    if os.getenv("LOGS_MCP_PROFILE", "").lower() == "pvs" and not MOCK:
+        return log_catalog.load().get("services", [])
     names = [*DEMO_SERVICES, *ms_store.load()] if MOCK else ms_store.load()
     return sorted(dict.fromkeys(names), key=str.casefold)
 
@@ -212,8 +214,26 @@ async def test_pvs_connection() -> dict:
 
 @router.get("/catalog")
 def catalog() -> dict:
+    cached = log_catalog.load()
+    try: hours = max(1, min(720, int(os.getenv("LOGS_PVS_SERVICES_HOURS", "72"))))
+    except ValueError: hours = 72
     return {"services": _services(), "configured": configured(), "demo": MOCK, "limit": MAX_ROWS,
-            "namespace": configured_namespace()}
+            "namespace": configured_namespace(), "canDiscoverServices": MOCK or os.getenv("LOGS_MCP_PROFILE", "").lower() == "pvs",
+            "servicesHours": hours, "catalogFresh": log_catalog.fresh(cached), "catalogUpdatedAt": cached.get("updatedAt")}
+
+
+@router.post("/catalog/refresh")
+async def refresh_catalog(force: bool = False, user: dict = Depends(require_user)) -> dict:
+    cached = log_catalog.load()
+    if not force and log_catalog.fresh(cached): return {**catalog(), "updatedAt": cached.get("updatedAt"), "cached": True}
+    from agents.logs_mcp import discover_services
+    try:
+        async with open_source() as source:
+            services = await discover_services(source)
+        log_catalog.save(services)
+    except LogSourceTimeout as exc: raise HTTPException(504, str(exc)) from exc
+    except LogSourceError as exc: raise HTTPException(502, str(exc)) from exc
+    return {**catalog(), "services": services, "updatedAt": log_catalog.load().get("updatedAt"), "cached": False}
 
 
 @router.post("/query")

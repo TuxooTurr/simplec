@@ -1,4 +1,5 @@
 "use client";
+import IssueEditButton from "./IssueEditButton";
 
 import { useState } from "react";
 import { ArrowRightLeft, Check, Link2, MessageSquareShare } from "lucide-react";
@@ -93,11 +94,12 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
               {stories.length > 0 && (
                 <>
                   {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
-                  {onTransitions && (
+                  {onTransitions && (<>
                     <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
                       title="Перевести отмеченные стори в другой статус Jira — переходы спрашиваются у Jira"
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
                       <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
+                  {toSend.length > 1 && <IssueEditButton issues={toSend} onDone={onTransitions} />} </>
                   )}
                   {chat && <ChatFieldsPicker cfg={chat} align="right" />}
                   <button type="button" onClick={copy} disabled={!toSend.length}
@@ -113,7 +115,7 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                 У эпика нет сторей (Epic Link) — статус (st) не посчитать. Заведите стори и привяжите их к эпику.
               </p>
             ) : (
-              <IssueTable cols={["type", "key", "summary", "status", "stage", "assignee"]} initialSort={sort} onSort={setSort}
+              <IssueTable onIssuesChanged={onTransitions} cols={["type", "key", "summary", "status", "stage", "assignee"]} initialSort={sort} onSort={setSort}
                 picked={picked} onPick={pick} widthKey="stories"
                 filter={filter} onFilter={setFilter} source={stories} stageLabel={label}
                 stage={s => <StageBadge info={ownStageOf(s)} />} stageRank={rank}

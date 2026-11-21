@@ -30,6 +30,14 @@ logging.basicConfig(
 
 from dotenv import load_dotenv
 load_dotenv(_ROOT / ".env")
+# Дополнительная конфигурация контура — локальный файл, не отслеживаемый Git.
+import os as _env_os
+_corp_env = _env_os.getenv("SHARK_ENV_FILE", "").strip()
+if _corp_env:
+    _corp_path = Path(_corp_env).expanduser()
+    if not _corp_path.is_file():
+        raise RuntimeError("Файл SHARK_ENV_FILE не найден. Проверьте путь к конфигурации контура.")
+    load_dotenv(_corp_path, override=True)
 
 # ── Мок-режим (SHARK_MOCK=1): без корпоративной сети, данные в data_mock/ — см. backend/mock ─────────────────
 from db.paths import MOCK as _MOCK
@@ -58,7 +66,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, mcp_logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
-    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen,
+    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen, dashboard, jira_edit, ether_connect,
 )
 
 # Веб-коннекторы (Playwright) и MCP-сервер для GigaCode временно отключены.
@@ -100,10 +108,15 @@ async def lifespan(app_: FastAPI):
         warnings.warn(f"Autotest autorun monitor failed to start: {_e}")
     from agents import stand_sync
     await stand_sync.start()
+    await dashboard.start()
     yield
     # Shutdown: остановить все задачи
     await mcp_logs.stop_log_jobs()
     await stand_sync.stop()
+    await dashboard.stop()
+    await jira_edit.stop_jobs()
+    from agents import ether_login
+    await ether_login.shutdown()
     try:
         from agents.metrics_scheduler import scheduler
         await scheduler.stop_all()
@@ -215,6 +228,9 @@ app.include_router(people.router)
 app.include_router(backup.router)
 app.include_router(xlsx_export.router)
 app.include_router(stands.router)
+app.include_router(dashboard.router)
+app.include_router(jira_edit.router)
+app.include_router(ether_connect.router)
 app.include_router(datagen.router)
 app.include_router(requirements.router)
 app.include_router(incident_gen.router)

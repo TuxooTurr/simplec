@@ -1,4 +1,5 @@
 "use client";
+import IssueEditButton from "./IssueEditButton";
 
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -180,6 +181,7 @@ export default function IssueModal({ open, issue, onClose, onPlanSaved }: {
     <Modal open={open} onClose={onClose} title={`${issue.key} · ${String(issue.fields.summary ?? "")}`} size="max-w-3xl">
       <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-x-8 gap-y-2 pb-3 border-b border-border-main">
+          {!issue.local && <IssueEditButton issues={[issue]} onDone={() => onPlanSaved?.(issue.key)} />}
           <Person label="Автор" name={issue.fields.reporter} />
           <Person label="Исполнитель" name={issue.fields.assignee} />
           {issue.url && (

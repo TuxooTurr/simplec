@@ -1,9 +1,14 @@
 "use client";
+import IssueModal from "./IssueModal";
+import { issuesByKeys } from "@/lib/jiraToolApi";
+import IssueEditButton, { JIRA_ISSUES_CHANGED } from "./IssueEditButton";
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Search, X } from "lucide-react";
-import { PRIORITIES, STATUS_ORDER, isBlocker, type Issue } from "@/lib/jiraTool";
-import { IssueTypeBadge } from "./ListCells";
+import { FIELD_BY_ID, PRIORITIES, STATUS_ORDER, fmtJiraDate, isBlocker, type Issue } from "@/lib/jiraTool";
+import { IssueTypeBadge, IssueTypeIcon, JiraCell } from "./ListCells";
+import IssueTypeToggle from "./IssueTypeToggle";
+import { useIssueTypeDisplay } from "@/lib/issueTypeDisplay";
 import ColumnFilter, { type FilterOption } from "./ColumnFilter";
 
 /* Таблица задач Jira для окон «Статус (st)» и «Дефекты»: тип, номер со ссылкой в Jira,
@@ -15,7 +20,7 @@ import ColumnFilter, { type FilterOption } from "./ColumnFilter";
    по значениям колонок, как в Excel. Фильтруют строки снаружи (filterIssueRows): тем же списком окно
    собирает отчёт в чат и смену статуса — уходит только видимое. */
 
-export type IssueCol = "type" | "key" | "summary" | "status" | "stage" | "priority" | "assignee";
+export type IssueCol = "type" | "key" | "summary" | "status" | "stage" | "priority" | "assignee" | (string & {});
 export type IssueSort = { col: IssueCol; dir: 1 | -1 };
 
 const LABEL: Record<IssueCol, string> = {
@@ -23,7 +28,7 @@ const LABEL: Record<IssueCol, string> = {
   priority: "Приоритет", assignee: "Исполнитель",
 };
 
-function sortValue(d: Issue, col: IssueCol, stageRank?: (i: Issue) => number): string | number {
+function sortValue(d: Issue, col: IssueCol, stageRank?: (i: Issue) => number, kinds?: Record<string, string>): string | number {
   if (col === "key") return Number(d.key.split("-").pop()) || 0;
   if (col === "type") return String(d.fields.issuetype ?? "").toLowerCase();
   if (col === "status") {
@@ -35,26 +40,30 @@ function sortValue(d: Issue, col: IssueCol, stageRank?: (i: Issue) => number): s
     const i = PRIORITIES.indexOf(String(d.fields.priority ?? ""));
     return i === -1 ? 999 : i;
   }
+  const kind = kinds?.[col] ?? FIELD_BY_ID[col]?.kind;
+  const value = String(d.fields[col] ?? "");
+  if (kind === "number") return value.trim() && Number.isFinite(Number(value.replace(",", "."))) ? Number(value.replace(",", ".")) : Number.MAX_SAFE_INTEGER;
+  if (kind === "date" || kind === "datetime") return Date.parse(value) || Number.MAX_SAFE_INTEGER;
   return String(d.fields[col] ?? "").toLowerCase() || "￿";
 }
 
 /** Фильтр таблицы: строка поиска (номер, название) и отмеченные значения колонок (нет колонки — всё). */
-export type IssueFilter = { q: string; cols: Partial<Record<IssueCol, string[]>> };
+export type IssueFilter = { q: string; cols: Partial<Record<IssueCol, string[]>>; searchCols?: IssueCol[] };
 export const NO_FILTER: IssueFilter = { q: "", cols: {} };
 const FILTER_COLS: IssueCol[] = ["type", "status", "stage", "priority", "assignee"];
 
 /** Значение колонки для фильтра — как его видно в ячейке; пустое — "". */
-function filterValue(d: Issue, col: IssueCol, stageLabel?: (i: Issue) => string): string {
-  if (col === "stage") return stageLabel?.(d) ?? "";
-  if (col === "type") return String(d.fields.issuetype ?? "");
-  return String(d.fields[col] ?? "");
+function filterValues(d: Issue, col: IssueCol, stageLabel?: (i: Issue) => string): string[] {
+  const value = col === "key" ? d.key : col === "stage" ? stageLabel?.(d) : d.fields[col === "type" ? "issuetype" : col];
+  return Array.isArray(value) ? value.length ? value : [""] : [String(value ?? "")];
 }
 
 function matches(d: Issue, f: IssueFilter, stageLabel?: (i: Issue) => string, skip?: IssueCol): boolean {
   const q = f.q.trim().toLowerCase();
-  if (q && !d.key.toLowerCase().includes(q) && !String(d.fields.summary ?? "").toLowerCase().includes(q)) return false;
+  if (q && !d.key.toLowerCase().includes(q) && !String(d.fields.summary ?? "").toLowerCase().includes(q) &&
+    !(f.searchCols ?? []).some(c => filterValues(d, c, stageLabel).some(value => value.toLowerCase().includes(q)))) return false;
   return Object.entries(f.cols).every(([c, vals]) =>
-    c === skip || !vals || vals.includes(filterValue(d, c as IssueCol, stageLabel)));
+    c === skip || !vals || filterValues(d, c, stageLabel).some(value => vals.includes(value)));
 }
 
 export function filterIssueRows(rows: Issue[], f: IssueFilter, stageLabel?: (i: Issue) => string): Issue[] {
@@ -83,20 +92,23 @@ function useWidths(key?: string) {
   return [w, save] as const;
 }
 
-export function sortIssueRows(rows: Issue[], sort: IssueSort, stageRank?: (i: Issue) => number): Issue[] {
+export function sortIssueRows(rows: Issue[], sort: IssueSort, stageRank?: (i: Issue) => number, kinds?: Record<string, string>): Issue[] {
   return [...rows].sort((a, b) => {
-    const x = sortValue(a, sort.col, stageRank), y = sortValue(b, sort.col, stageRank);
+    const x = sortValue(a, sort.col, stageRank, kinds), y = sortValue(b, sort.col, stageRank, kinds);
     return (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ru")) * sort.dir;
   });
 }
 
 export default function IssueTable({
   groups, cols, initialSort, stage, stageRank, dim, picked, onPick, onSort,
-  widthKey, filter, onFilter, source, stageLabel,
+  widthKey, filter, onFilter, source, stageLabel, rowActions, onIssuesChanged, columnLabels, columnKinds,
 }: {
   /** Группы строк (уже отфильтрованные): заголовок (null — без заголовка) и задачи. */
   groups: { title: ReactNode | null; issues: Issue[] }[];
   cols: IssueCol[];
+  /** Names for additional Jira and Shark fields; their values live in issue.fields. */
+  columnLabels?: Record<string, string>;
+  columnKinds?: Record<string, string>;
   initialSort: IssueSort;
   /** Ячейка «Статус (st)», если колонка есть. */
   stage?: (i: Issue) => ReactNode;
@@ -117,8 +129,16 @@ export default function IssueTable({
   source?: Issue[];
   /** Подпись статуса (st) задачи — для фильтра по этой колонке. */
   stageLabel?: (i: Issue) => string;
+  rowActions?: (i: Issue) => ReactNode;
+  onIssuesChanged?: (keys: string[]) => void;
 }) {
+  useEffect(() => { const changed = (event: Event) => onIssuesChanged?.((event as CustomEvent<string[]>).detail ?? []); window.addEventListener(JIRA_ISSUES_CHANGED, changed); return () => window.removeEventListener(JIRA_ISSUES_CHANGED, changed); }, [onIssuesChanged]);
+  const [typeIconOnly, toggleTypeDisplay] = useIssueTypeDisplay();
+  const label = (c: IssueCol) => columnLabels?.[c] ?? LABEL[c] ?? c;
+  const [detail, setDetail] = useState<Issue | null>(null);
   const [sort, setSort] = useState<IssueSort>(initialSort);
+  useEffect(() => { if (!cols.includes(sort.col)) setSort({ col: cols.includes(initialSort.col) ? initialSort.col : cols[0], dir: 1 }); }, [cols, sort.col, initialSort.col]);
+  const openDetail = async (issue: Issue) => { setDetail(issue); if (!issue.local) { try { const r = await issuesByKeys([issue.key]); if (r.issues[0]) setDetail(r.issues[0]); } catch { /* Cached card stays available. */ } } };
   const click = (col: IssueCol) => {
     const next: IssueSort = sort.col === col ? { col, dir: sort.dir === 1 ? -1 : 1 } : { col, dir: 1 };
     setSort(next); onSort?.(next);
@@ -126,10 +146,10 @@ export default function IssueTable({
   const pickable = !!picked && !!onPick;
   const allKeys = groups.flatMap(g => g.issues.map(i => i.key));
   const allOn = allKeys.length > 0 && allKeys.every(k => picked?.has(k));
-  const span = cols.length + (pickable ? 1 : 0);
+  const span = cols.length + (pickable ? 1 : 0) + 1;
 
   const [widths, setWidths] = useWidths(widthKey);
-  const widthOf = (c: IssueCol) => widths[c] ?? DEFAULT_W[c];
+  const widthOf = (c: IssueCol) => widths[c] ?? (c === "type" && typeIconOnly ? 100 : DEFAULT_W[c] ?? 170);
   const drag = useRef<{ col: IssueCol; x: number; w: number } | null>(null);
   const startResize = (c: IssueCol, e: ReactMouseEvent<HTMLElement>) => {
     e.preventDefault(); e.stopPropagation();
@@ -172,8 +192,7 @@ export default function IssueTable({
     const counts = new Map<string, number>();
     for (const d of all) {
       if (!matches(d, filter!, stageLabel, c)) continue;
-      const v = filterValue(d, c, stageLabel);
-      counts.set(v, (counts.get(v) ?? 0) + 1);
+      for (const v of new Set(filterValues(d, c, stageLabel))) counts.set(v, (counts.get(v) ?? 0) + 1);
     }
     return [...counts.entries()]
       .map(([value, count]) => ({ value, count, label: value || "(пусто)" }))
@@ -225,24 +244,26 @@ export default function IssueTable({
                 aria-sort={sort.col === c ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
                 <span className="flex items-center min-w-0">
                   <button type="button" onClick={() => click(c)} className="inline-flex min-w-0 items-center gap-1 uppercase hover:text-text-main">
-                    <span className="truncate">{LABEL[c]}</span>
+                    <span className="truncate">{label(c)}</span>
                     {sort.col === c
                       ? (sort.dir === 1 ? <ArrowUp className="w-3 h-3 flex-shrink-0" /> : <ArrowDown className="w-3 h-3 flex-shrink-0" />)
                       : <ArrowUpDown className="w-3 h-3 flex-shrink-0 opacity-40" />}
                   </button>
-                  {filterOn && FILTER_COLS.includes(c) && (c !== "stage" || !!stageLabel) && (
-                    <ColumnFilter label={LABEL[c]} active={!!filter!.cols[c]} selected={filter!.cols[c] ?? []}
+                  {c === "type" && <IssueTypeToggle iconOnly={typeIconOnly} onToggle={toggleTypeDisplay} />}
+                  {filterOn && (FILTER_COLS.includes(c) || !!columnLabels) && (c !== "stage" || !!stageLabel) && (
+                    <ColumnFilter label={label(c)} active={!!filter!.cols[c]} selected={filter!.cols[c] ?? []}
                       options={options(c)} onChange={v => setCol(c, v)} />
                   )}
                 </span>
                 {/* Ручка ширины: тянуть — шире или уже, двойной щелчок — ширина по умолчанию. */}
-                <span role="separator" aria-orientation="vertical" aria-label={`Ширина колонки ${LABEL[c]}`}
+                <span role="separator" aria-orientation="vertical" aria-label={`Ширина колонки ${label(c)}`}
                   title="Потяните, чтобы изменить ширину; двойной щелчок — как было"
                   onMouseDown={e => startResize(c, e)} onDoubleClick={() => resetWidth(c)}
                   className="absolute top-0 right-0 h-full w-2 cursor-col-resize select-none
                     after:absolute after:right-0 after:top-1/4 after:h-1/2 after:w-px after:bg-border-main hover:after:bg-primary hover:after:w-0.5" />
               </th>
             ))}
+            <th className="px-2 py-2 text-xs text-text-muted w-28">Действия</th>
           </tr>
         </thead>
         {groups.map((g, gi) => (
@@ -252,29 +273,32 @@ export default function IssueTable({
                 <td colSpan={span} className="px-3 py-1.5 text-xs font-semibold text-text-muted">{g.title}</td>
               </tr>
             )}
-            {sortIssueRows(g.issues, sort, stageRank).map(d => (
+            {sortIssueRows(g.issues, sort, stageRank, columnKinds).map(d => (
               <tr key={d.key} className={`border-t border-border-main ${dim?.(d) ? "opacity-60" : ""}`}>
                 {pickable && (
                   <td className="pl-3 pr-1 py-1.5 w-6 align-top">
-                    <input type="checkbox" checked={picked!.has(d.key)} aria-label={`Отправить в чат ${d.key}`}
+                    <input type="checkbox" checked={picked!.has(d.key)} aria-label={`Выбрать ${d.key}`}
                       onChange={e => onPick!([d.key], e.target.checked)} />
                   </td>
                 )}
                 {cols.map(c => (
                   // Переносим, а не обрезаем: узкую колонку видно целиком в несколько строк.
                   <td key={c} className="px-3 py-1.5 align-top text-text-main break-words [overflow-wrap:anywhere]">
-                    {c === "type" ? <IssueTypeBadge type={String(d.fields.issuetype ?? "")} />
+                    {c === "type" ? (typeIconOnly ? <IssueTypeIcon type={String(d.fields.issuetype ?? "")} /> : <IssueTypeBadge type={String(d.fields.issuetype ?? "")} />)
                       : c === "key" ? (d.url
                         ? <a href={d.url} target="_blank" rel="noreferrer" title="Открыть в Jira"
                             className="font-mono text-xs text-primary hover:underline">{d.key} ↗</a>
                         : <span className="font-mono text-xs text-primary">{d.key}</span>)
+                      : c === "summary" ? <button type="button" className="text-left hover:text-primary hover:underline" onClick={() => void openDetail(d)}>{String(d.fields.summary ?? "—")}</button>
                       : c === "stage" ? stage?.(d)
                       : c === "priority" ? (
                         <span className={isBlocker(d) ? "text-red-600 dark:text-red-400 font-semibold" : ""}>{String(d.fields.priority ?? "—")}</span>
                       )
-                      : String(d.fields[c] ?? "—")}
+                      : columnKinds?.[c] === "date" || columnKinds?.[c] === "datetime" ? <span>{filterValues(d, c).filter(Boolean).map(value => fmtJiraDate(value, columnKinds[c] === "datetime")).join(", ") || "—"}</span>
+                      : <JiraCell id={c} issue={d} />}
                   </td>
                 ))}
+                <td className="px-2 py-1.5"><div className="flex flex-wrap gap-1"><IssueEditButton compact issues={[d]} />{rowActions?.(d)}</div></td>
               </tr>
             ))}
             {g.issues.length === 0 && (
@@ -286,6 +310,7 @@ export default function IssueTable({
         ))}
       </table>
     </div>
+      {detail && <IssueModal open issue={detail} onClose={() => setDetail(null)} onPlanSaved={() => { window.dispatchEvent(new CustomEvent(JIRA_ISSUES_CHANGED, {detail:[detail.key]})); void openDetail(detail); }} />}
     </div>
   );
 }

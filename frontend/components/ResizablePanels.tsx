@@ -12,6 +12,7 @@ import { sectionOfPath } from "@/lib/backupApi";
 /** Название раздела в шапке панели — единственный заголовок раздела (внутри раздела его не повторяем).
  *  Ключи — путь страницы (test-data) и id раздела правой панели (test_data). */
 const SECTION_LABELS: Record<string, string> = {
+  dashboard: "Главная",
   generation: "Тестовая модель",
   "test-data": "Тестовые данные", test_data: "Тестовые данные",
   etalons: "Данные",

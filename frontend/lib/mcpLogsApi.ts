@@ -5,7 +5,7 @@ export interface LogQuery extends LogPeriod { service?: string; errorsOnly: bool
 export interface LogRecord {
   service: string; namespace: string; timestamp: string; level: string; message: string; stack: string[]; traceId: string; requestId: string; error: boolean;
 }
-export interface LogCatalog { services: string[]; configured: boolean; demo: boolean; limit: number; namespace: string }
+export interface LogCatalog { services: string[]; configured: boolean; demo: boolean; limit: number; namespace: string; canDiscoverServices?: boolean; servicesHours?: number; catalogFresh?: boolean; catalogUpdatedAt?: number }
 export interface LogResult { records: LogRecord[]; truncated: boolean; timedOut: boolean; errorCount: number }
 export interface LogDiagnosis { title: string; summary: string; impact: string; cause: string; nextSteps: string[] }
 export interface LogLookup {
@@ -81,3 +81,5 @@ export const savePvsCredentials = (login: string, password: string) => fetchJson
 });
 export const clearPvsCredentials = () => fetchJson<PvsSettings>("/api/mcp-logs/pvs", { method: "DELETE" });
 export const testPvsConnection = (options: LogJobOptions) => runLogJob<{ message: string }>("pvs/test", {}, options);
+
+export const refreshLogCatalog = (force = true) => fetchJson<LogCatalog>(`/api/mcp-logs/catalog/refresh?force=${force}`, { method: "POST" });

@@ -36,12 +36,12 @@ const PRIO_DOT: Record<string, string> = {
 
 /* ── Ячейки ────────────────────────────────────────────────────────────── */
 
-export function JiraCell({ id, issue }: { id: string; issue: Issue }) {
+export function JiraCell({ id, issue, typeIconOnly = false }: { id: string; issue: Issue; typeIconOnly?: boolean }) {
   const v = issue.fields[id];
   if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return <span className="text-text-muted/50">—</span>;
   if (id === "status") return <span data-xlsx-chip className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[String(v)] ?? "bg-bg-subtle text-text-main"}`}>{String(v)}</span>;
   if (id === "priority") return <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><span data-xlsx-chip="dot" className={`w-2 h-2 rounded-full ${PRIO_DOT[String(v)] ?? "bg-slate-400"}`} />{String(v)}</span>;
-  if (id === "issuetype") return <IssueTypeBadge type={String(v)} />;
+  if (id === "issuetype") return typeIconOnly ? <IssueTypeIcon type={String(v)} /> : <IssueTypeBadge type={String(v)} />;
   const kind = FIELD_BY_ID[id]?.kind;
   if (kind === "date" || kind === "datetime") {
     return <span className="whitespace-nowrap" title={String(v)}>{fmtJiraDate(String(v), kind === "datetime")}</span>;

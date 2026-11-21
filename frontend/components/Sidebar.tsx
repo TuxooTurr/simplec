@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { House } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import BrandWord from "./BrandWord";
@@ -19,6 +20,7 @@ const NAV: {
   ai?: boolean;
   superuserOnly?: boolean;
 }[] = [
+  { id: "dashboard", href: "/dashboard", label: "Главная", Icon: House },
   { id: "generation",  href: "/generation",  label: "Тестовая модель",        Icon: Zap,          ai: true },
   { id: "test_data",   href: "/test-data",   label: "Тестовые данные",        Icon: Database,    ai: true },
   // Бывшие «Дефекты»: списки задач Jira для планирования и назначения + генератор дефектов.
@@ -81,7 +83,7 @@ export default function Sidebar() {
   useEffect(() => {
     setOrder(loadList(ORDER_KEY));
     setHidden(loadList(HIDDEN_KEY));
-    try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1"); } catch { /* развёрнуто по умолчанию */ }
+    try { setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1" || (localStorage.getItem(COLLAPSED_KEY) === null && window.innerWidth < 768)); } catch { /* развёрнуто по умолчанию */ }
     setMounted(true);
   }, []);
 
@@ -101,11 +103,11 @@ export default function Sidebar() {
       const i = order.indexOf(id);
       return i === -1 ? Number.MAX_SAFE_INTEGER : i;
     };
-    return [...baseNav].sort((a, b) => pos(a.id) - pos(b.id));
+    return [...baseNav].sort((a, b) => a.id === b.id ? 0 : a.id === "dashboard" ? -1 : b.id === "dashboard" ? 1 : pos(a.id) - pos(b.id));
   }, [baseNav, order]);
 
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
-  const visibleNav = mounted && !editMode ? orderedNav.filter((n) => !hiddenSet.has(n.id)) : orderedNav;
+  const visibleNav = mounted && !editMode ? orderedNav.filter((n) => n.id === "dashboard" || !hiddenSet.has(n.id)) : orderedNav;
 
   // «Настроить разделы» живёт в меню под ФИО (TopActions) — оно присылает событие, меню слева входит в режим настройки.
   useEffect(() => {
@@ -134,6 +136,7 @@ export default function Sidebar() {
   };
 
   const toggleHidden = (id: string) => {
+    if (id === "dashboard") return;
     const fullOrder: string[] = order.length ? order : orderedNav.map((n) => n.id);
     persist(fullOrder, hiddenSet.has(id) ? hidden.filter((x) => x !== id) : [...hidden, id]);
   };

@@ -115,3 +115,6 @@ else
 fi
 echo ""
 echo "PVS MCP на ИФТ — инструкция по установке и обновлению для ГигаКод: docs/pvs-mcp.md"
+
+echo "Подготовка запуска в контуре: docs/gigacode-launch.md"
+echo "Проверка без сети: python scripts/shark_doctor.py --software-only"

@@ -1,356 +1,101 @@
 # Shark
 
-**AI-платформа для генерации тест-кейсов, автотестов и мониторинга**
+Веб-приложение для QA: работа с задачами Jira, тестовая модель, планирование стендов, анализ логов и генерация тестовых событий.
 
-Полностью переработанный Full-Stack проект на базе FastAPI + Next.js с поддержкой нескольких LLM-провайдеров, real-time стриминга, Kafka-интеграций и Jupyter-скриптов алертов.
+## Возможности
 
----
+| Раздел | Что доступно |
+|---|---|
+| Главная | Свободная сетка списков S/M/L/XL/XXL и квадратных счётчиков S, диаграммы с настройкой цветов, общая обработка; отдельная панель Эфира «Чат / Почта / Встречи» |
+| Jira tool | Списки и папки задач, фильтрация, сортировка, EPIC/STORY, планирование, одиночное и массовое редактирование, регистрация дефектов, Excel текущего представления |
+| Тестовая модель | Генерация по требованиям: планирование, кейсы, проверка и исправления; экспорт XML для Zephyr |
+| Zephyr Tool | Тест-кейсы, прогоны, релизы, импорт модели и критический регресс |
+| График стендов | Общий план ИФТ/ПСИ из списков Jira tool, бронирование, конфликты, почасовая публикация в Confluence |
+| Трекинг AQA | Jira, Bitbucket, Allure TestOps и Jenkins: роадмап, коммиты, запуски и результаты |
+| Логи | Поиск через MCP по сервисам и времени, ошибки, групповой ИИ-разбор связанных событий, форма дефекта |
+| Тестовые данные | JDBC-подключения, просмотр схемы, поиск данных и генерация SQL |
+| Генераторы событий | Алерты в Jupyter, Jobs, метрики, ТКС и генератор инцидентов |
+| Просмотр Kafka | Подключения, топики и чтение снимка сообщений |
+| Данные | Дерево требований, документы и QA-документация |
+| Тестирование моделей LLM | Сравнение моделей на сценариях и экспорт отчёта |
 
-## Основные возможности
+«Главная» открывается после входа. Отдельные разделы «Автотестирование» и «Ревизор» скрыты; код сохранён.
 
-График ИФТ/ПСИ, единый план всех списков Jira tool и почасовая публикация в Confluence: [инструкция](docs/stand-schedule.md).
+## Требования и запуск
 
-### Генерация тест-кейсов (`/generation`)
-- **3-слойная генерация через WebSocket:** QA-документация → список кейсов → детальные шаги
-- **Глубина:** Smoke (1–5) → Regression (5–10) → Full (11–30) → Atomic (31–100)
-- **Автоопределение типа требований:** API, UI, бизнес-логика, интеграции, безопасность
-- **Загрузка файлов:** PDF, DOCX, XLSX, изображения
-- **Экспорт:** XML (Jira Zephyr Scale), CSV, Markdown
+- Python **3.10–3.12** для Shark.
+- Node.js **20+** и npm.
+- Java **17+** для JDBC-подключений; для остальных разделов не обязательна.
+- SQLite либо PostgreSQL через `DATABASE_URL`; ChromaDB используется для RAG.
+- LLM и корпоративные интеграции настраиваются отдельно. Без них интерфейс запускается, соответствующие операции требуют подключения.
 
-### Автотестирование (`/auto-model`)
-- Генерация Selenium/Cypress тест-скриптов на основе тест-кейсов
-- Поддержка Python/Java (Selenium) и JavaScript (Cypress)
-
-### Дефекты (`/bugs`)
-- Форматирование описаний дефектов через LLM в структурированные баг-репорты
-- Автоопределение типа тестирования и генерация рекомендаций
-
-### Эталоны (`/etalons`)
-- CRUD-управление эталонными тест-кейсами
-- Хранение в ChromaDB (векторные эмбеддинги) для RAG при генерации
-
-### Генератор алертов (`/alerts`)
-- Скрипты-алерты, исполняемые в Jupyter-ядрах (по одному ядру на скрипт — параллельно)
-- Планировщик периодического запуска + глобальный индикатор активных алертов в сайдбаре
-
-### Генератор метрик (`/metrics`)
-- CRUD-управление системами и метриками мониторинга K8s-микросервисов
-- Настройка источников данных, базовых значений, порогов и статусов здоровья
-- Фоновый планировщик (APScheduler) для периодического сбора метрик
-
-### Ревизор (`/revisor`)
-- Сравнение микросервисов по настраиваемым стендам
-- Конструктор API-методов для сборок, версий, статусов, подов и health
-
-### Настройки (`/settings`)
-- Управление подключениями LLM-провайдеров: API key или клиентский сертификат
-- Конфигурация Kafka, параметры моделей
-
----
-
-## Архитектура
-
-```
-Shark/
-├── backend/                  # FastAPI-приложение
-│   ├── main.py               # Инициализация, роутинг, middleware
-│   ├── schemas.py            # Pydantic-модели
-│   └── api/
-│       ├── generation.py     # WebSocket-генерация тест-кейсов
-│       ├── etalons.py        # CRUD эталонов
-│       ├── bugs.py           # Форматирование дефектов
-│       ├── alerts.py         # Kafka-алерты
-│       ├── metrics_*.py      # Метрики и системы мониторинга
-│       ├── revisor.py        # API-конструктор сравнения стендов
-│       ├── autotests_gen.py  # Selenium/Cypress генерация
-│       ├── app_settings.py   # Настройки приложения
-│       └── system.py         # /healthz, /providers, /stats
-│
-├── agents/                   # LLM-оркестрация
-│   ├── llm_client.py         # Универсальный клиент (6 провайдеров)
-│   ├── layered_generator.py  # 3-слойный генератор
-│   ├── prompt_templates.py   # Шаблоны промптов по типам
-│   ├── a2a_builder.py        # A2A-протокол для алертов
-│   ├── kafka_client.py       # Kafka producer
-│   ├── metrics_scheduler.py  # Планировщик метрик
-│   ├── file_parser.py        # Парсинг PDF/DOCX/XLSX/изображений
-│   └── prompt_guard.py       # Защита от prompt injection
-│
-├── db/                       # Хранилища данных
-│   ├── postgres.py           # SQLAlchemy + PostgreSQL
-│   ├── metrics_models.py     # ORM-схема
-│   ├── alerts_store.py       # Скрипты алертов
-│   ├── feedback_store.py     # Оценки генераций
-│   ├── vector_store.py       # ChromaDB эмбеддинги
-│   └── secure_config.py      # Валидация .env
-│
-├── frontend/                 # Next.js-приложение
-│   ├── app/
-│   │   └── (app)/            # generation, etalons, bugs,
-│   │                         # alerts, metrics, auto-model,
-│   │                         # revisor, settings
-│   ├── components/
-│   │   ├── sections/         # Секции страниц
-│   │   ├── Sidebar.tsx       # Навигация + выбор модели
-│   │   ├── LLMStatusBar.tsx  # Статус провайдеров
-│   │   ├── StatusPanel.tsx   # Real-time прогресс генерации
-│   │   ├── CaseCard.tsx      # Карточка тест-кейса
-│   │   └── ExportPanel.tsx   # Экспорт XML/CSV/MD
-│   └── lib/                  # API-клиент, утилиты
-│
-├── docker-compose.yml        # PostgreSQL для локальной разработки
-├── deploy.sh                 # Деплой на VPS (Ubuntu/Debian/AlmaLinux)
-└── .env.example              # Шаблон конфигурации
-```
-
----
-
-## LLM-провайдеры
-
-| Провайдер | Тип | Настройка | Статус без подключения |
-|-----------|-----|-----------|------------------------|
-| Giga Личный | Встроенный | ключ авторизации, scope `GIGACHAT_API_PERS` | Красный |
-| Giga Corp | Встроенный | ключ авторизации юрлица, scope `GIGACHAT_API_CORP` / `GIGACHAT_API_B2B` | Красный |
-| Giga IFT | Встроенный | клиентский сертификат, стенд IFT | Красный |
-| DeepSeek | Встроенный | `DEEPSEEK_AUTH_TYPE`, ключ или сертификат | Красный |
-| Пользовательский LLM | Настраиваемый | через UI Settings | зависит от API key/сертификата |
-
-**Особенности:**
-- Кнопки выбора модели отображаются **только для провайдеров со статусом green** (доступны к генерации)
-- Статус-бар внизу сайдбара показывает **всех** провайдеров с индикаторами
-- Провайдеры без настроенного ключа/сертификата сразу получают `red` без HTTP-запроса к API
-- GigaChat и DeepSeek редактируются в настройках: Base URL, модель, тип подключения, CA bundle, client cert/key.
-- Дополнительные LLM добавляются в настройках как chat/completions-compatible endpoint через API key или сертификат.
-
----
-
-## Технологии
-
-| Слой | Технология |
-|------|-----------|
-| Frontend | Next.js 16, React 19, TypeScript 5, TailwindCSS 3 |
-| Backend | FastAPI 0.128, Uvicorn 0.40, Python 3.12 |
-| База данных | PostgreSQL 16 (драйвер psycopg2) или SQLite, SQLAlchemy 2.x |
-| Vector DB | ChromaDB 1.4 (RAG для эталонов) |
-| Доступ | Bearer-токен; вход логином Jira или универсальной учёткой `Sber911` из `backend/api/auth.py` |
-| Real-time | WebSockets (стриминг генерации) |
-| Мониторинг | APScheduler, Kubernetes Python client |
-| Сообщения | kafka-python, A2A/JSON-RPC 2.0 |
-| Парсинг | PyPDF2, python-docx, openpyxl, Pillow |
-
----
-
-## Установка и запуск (локально)
-
-### Требования
-- Python 3.12+
-- Node.js 20+
-- Docker — **не обязателен** (можно использовать SQLite)
-
-### Вариант 1 — без Docker (SQLite)
-
-Самый простой способ: база данных создаётся автоматически как файл `simpletest.db`.
+Из корня проекта:
 
 ```bash
-git clone https://github.com/TuxooTurr/simplec.git
-cd Shark
-
-python3.12 -m venv .venv
-source .venv/bin/activate        # macOS/Linux
-# .venv\Scripts\activate         # Windows
-
-pip install -r requirements.txt
-
-cp .env.example .env
-# Отредактировать .env:
-#   GIGACHAT_PERS_AUTH_KEY=<ключ>  # или настройте GigaChat в UI: Личный / Corp / IFT
-#   DEEPSEEK_API_KEY=<ключ>      # или настройте сертификат в UI
-#   DATABASE_URL=sqlite:///./simpletest.db   # уже стоит по умолчанию
-
-python3.12 -m uvicorn backend.main:app --reload --port 8000
+bash install.sh
+bash start.sh
 ```
 
-### Вариант 2 — с Docker (PostgreSQL)
+Интерфейс: [localhost:3000](http://localhost:3000). API: [localhost:8000](http://localhost:8000), проверка запуска — [healthz](http://localhost:8000/healthz). Вход — логин и пароль Jira либо локальная универсальная учётка `Sber911` / `1234567` из `backend/api/auth.py`.
+
+Для ручного запуска используйте два терминала с установленными зависимостями:
 
 ```bash
-git clone https://github.com/TuxooTurr/simplec.git
-cd Shark
+# Бэкенд: активное venv/Conda проекта
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
-python3.12 -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
-
-cp .env.example .env
-# Раскомментировать PostgreSQL-строку в .env:
-#   DATABASE_URL=postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics
-
-docker compose up -d             # Поднять PostgreSQL
-
-python3.12 -m uvicorn backend.main:app --reload --port 8000
+# Фронтенд: отдельный терминал
+npm run dev --prefix frontend -- --hostname 127.0.0.1 --port 3000
 ```
 
-### Фронтенд (оба варианта)
+Используйте один API worker: задания и сессии частично находятся в памяти. Сохранённые пользовательские настройки не заменяйте шаблонами при обновлении.
+
+## Настройки и корпоративный запуск
+
+Подключения редактируются в `/settings`. GigaChat поддерживает профили Личный, Corp и IFT; другие модели добавляются как chat/completions-compatible подключения.
+
+[Инструкция корпоративного запуска](docs/gigacode-launch.md) содержит готовую просьбу ГигаКоду, порядок установки PVS, внешнюю конфигурацию, диагностику и приёмку. Шаблон — `config/corporate.env.example`. Проверка окружения без обращения в корпоративную сеть:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+python scripts/shark_doctor.py --software-only
 ```
 
-Откроется на `http://localhost:3000`, API на `http://localhost:8000`.
+Секреты и пути к сертификатам задавайте через окружение, внешний `SHARK_ENV_FILE` или предусмотренные UI-хранилища. `.env` и `frontend/.env.local` исторически отслеживаются Git; не добавляйте туда новые пароли, Cookie и ключи. TLS настраивается через доверенный CA и необходимые клиентские сертификаты.
 
----
+Реальные PVS, Эфир, Jira и Confluence проверяются внутри корпоративной сети. Моки не подтверждают доступ и права.
 
-## Конфигурация (`.env`)
+## Локальная демонстрация
 
-```dotenv
-# Авторизация: вход логином и паролем Jira; без Jira — универсальная учётка Sber911 / 1234567
-# из backend/api/auth.py (в коде → валидна на любой машине).
-
-# LLM-провайдеры
-LLM_PROVIDER=gigachat
-GIGACHAT_PERS_AUTH_KEY=  # Giga Личный: Base64(client_id:client_secret), scope GIGACHAT_API_PERS
-GIGACHAT_CORP_AUTH_KEY=  # Giga Corp: ключ юрлица
-GIGACHAT_CORP_SCOPE=GIGACHAT_API_CORP
-GIGACHAT_AUTH_URL=https://ngw.devices.sberbank.ru:9443/api/v2/oauth
-GIGACHAT_BASE_URL=https://gigachat-ift.sberdevices.delta.sbrf.ru/api/v1   # Giga IFT (по сертификату)
-DEEPSEEK_AUTH_TYPE=api_key
-DEEPSEEK_API_KEY=
-DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-DEEPSEEK_MODEL=deepseek-chat
-# Для режима certificate укажите *_CA_CERT_PATH, *_CLIENT_CERT_PATH, *_CLIENT_KEY_PATH.
-# Дополнительные LLM настраиваются в UI: Settings → Дополнительные LLM
-
-# База данных
-DATABASE_URL=postgresql+psycopg2://simpletest:simpletest@localhost:5432/metrics
-
-# Kafka (алерты)
-KAFKA_BOOTSTRAP_SERVERS=
-KAFKA_SECURITY_PROTOCOL=PLAINTEXT
-
-# Ревизор (стенды)
-# Основная настройка: UI Settings → Ревизор — API стенды.
-# Старые env-переменные оставлены как fallback для статуса стендов.
-REVISOR_NT_URL=
-REVISOR_NT_TOKEN=
-REVISOR_MAJORCHECK_URL=
-REVISOR_MAJORCHECK_TOKEN=
-REVISOR_MAJORGO_URL=
-REVISOR_MAJORGO_TOKEN=
-```
-
-### Логи через MCP
-
-**PVS на ИФТ.** [Инструкция для ГигаКод и Shark](docs/pvs-mcp.md) покрывает установку из AI-market, настройки stdio, проверку индекса и подключение при обновлении Shark.
-
-Для удалённого MCP укажите `LOGS_MCP_TRANSPORT=http`, `LOGS_MCP_URL`, `LOGS_MCP_TOOL` и при необходимости `LOGS_MCP_TOKEN` и `LOGS_MCP_CA_FILE`. `LOGS_MCP_URL` указывает на **сам MCP-сервер**. Сервер PVS подключается к API хранилища на порту `19200`. Веб-интерфейс для ручной проверки работает отдельно на `15601`.
-
-Для локального MCP задайте `LOGS_MCP_TRANSPORT=stdio`, `LOGS_MCP_COMMAND`, `LOGS_MCP_STDIO_ARGS` и список передаваемых переменных `LOGS_MCP_STDIO_ENV`. Профиль `LOGS_MCP_PROFILE=pvs` строит OpenSearch DSL для `SearchIndexTool` по индексу и карте полей. На ИФТ все запросы ограничены namespace `sber911-sigma-back`.
-
-Для других источников адаптер передаёт `namespace`, `service`, `start`, `end` и `limit`. Аргументы `errorsOnly` и `traceId` передаются, если их объявляет инструмент. Для поиска по всем сервисам `service` опускается. Карту аргументов можно задать через `LOGS_MCP_ARGS`. Адаптер читает JSON со списком событий или текст логов. Для демонстрации используйте `SHARK_MOCK=1`.
-
-Для Python-автотестов есть `fetch_logs` и `wait_for_logs` в `agents.log_assertions`. Пример после действия, которое пишет событие с идентификатором операции:
-
-```python
-from agents.log_assertions import LogFilter, fetch_logs, wait_for_logs
-
-# test_started_at и test_finished_at — datetime с часовым поясом.
-scope = dict(namespace="sber911-sigma-back", service=service_name, request_id=request_id)
-observed = await wait_for_logs(
-    test_started_at, test_finished_at, LogFilter(**scope, text="операция записана"),
-    timeout=45, interval=2,
-)
-assert observed.records
-errors = await fetch_logs(test_started_at, test_finished_at, LogFilter(**scope, levels=("ERROR",)))
-assert not errors.truncated
-assert not errors.records
-```
-
-Выберите сообщение, которое пишет завершающий шаг операции. При задержке доставки ошибок по сравнению с завершающим событием учитывайте дополнительное время наблюдения. Можно искать точное значение JSON-поля через `field="context.result", value="SUCCESS"`. Если MCP вернул ограниченную выборку, сузьте период или добавьте идентификатор. Проверка по ИФТ запускается отдельно через `PVS_SMOKE=1`; требуемые переменные описаны в `tests/test_pvs_ift_smoke.py`.
-
----
-
-## Деплой на VPS
+Для демонстрации Jira, Confluence, Bitbucket, TestOps, Jenkins, LLM, PVS и Эфира используйте мок-режим:
 
 ```bash
-# На сервере (Ubuntu/Debian/AlmaLinux)
-curl -O https://raw.githubusercontent.com/TuxooTurr/simplec/main/deploy.sh
-sudo bash deploy.sh
+SHARK_MOCK=1 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-Скрипт автоматически:
-1. Устанавливает nginx, python3.12, certbot
-2. Клонирует репозиторий в `/opt/simpletest`
-3. Создаёт venv и устанавливает зависимости
-4. Настраивает `.env`
-5. Регистрирует systemd-сервисы (`simpletest-api`, `simpletest-next`)
-6. Настраивает nginx как reverse proxy с WebSocket
-7. Выпускает SSL-сертификат (Let's Encrypt)
+Фронтенд запускается как обычно. JSON-данные и SQLite мока находятся в `data_mock/`; отдельный каталог задаётся `SHARK_DATA_DIR`. По умолчанию при первом запуске копируются локальные данные без сохранённых учёток PVS/Эфира. Это демонстрационный режим, а не изоляция всех сетевых подключений: Kafka, внешние JDBC-базы и произвольные скрипты не подменяются.
 
-**Управление сервисами на проде:**
+## Документация
+
+| Документ | Назначение |
+|---|---|
+| [AGENTS.md](AGENTS.md) | Единые инструкции любому агенту и модели, карта кода и правила разработки |
+| [Запуск в корпоративном контуре](docs/gigacode-launch.md) | Установка, диагностика, недостающие доступы и приёмка |
+| [Перенос и серверное развёртывание](MIGRATION.md) | Сохранение данных, восстановление и обновление сервера |
+| [Главная и командная очередь](docs/dashboard.md) | Виджеты, общая обработка, ограничения опроса |
+| [PVS MCP](docs/pvs-mcp.md) | Логи, сертификаты, маппинг, таймауты и проверки из автотестов |
+| [Эфир MCP](docs/efir-mcp.md) | Единое SSO для чата/почты/встреч, отслеживание коллег/слов и лимиты |
+| [График ИФТ/ПСИ](docs/stand-schedule.md) | Планирование и публикация в Confluence |
+| [Корпоративный CA](certs/README.md) | Сборка цепочки доверия для macOS |
+| [Правила тестовой модели](agents/tm_rules/rules.md) | Рабочий промпт генерации; [КЭ и сервисы](agents/tm_rules/ke-services.md), [шаблон QA-документа](agents/tm_rules/qa-doc-template.md) |
+
+Для любого ИИ-агента используйте `AGENTS.md`; если среда не загружает его сама, явно укажите файл в запросе. История проекта хранится в Git, пользовательские заметки о версиях — в `frontend/lib/releaseNotes.ts`.
+
+## Разработка
+
+Backend: `backend/` (FastAPI), интеграции и генерация: `agents/`, хранилища: `db/`, frontend: `frontend/` (Next.js App Router, React, TypeScript, Tailwind). API-схема работающего бэкенда: [Swagger](http://localhost:8000/docs).
 
 ```bash
-systemctl status simpletest-api   # статус бэкенда
-systemctl status simpletest-next  # статус фронтенда
-journalctl -u simpletest-api -f   # логи бэкенда
-cd /opt/simpletest && git pull    # обновление кода
-npm run build --prefix frontend   # пересборка фронтенда
+python -m pytest tests -q
+npm run typecheck --prefix frontend
+npm run build --prefix frontend
 ```
-
----
-
-## API
-
-| Метод | Эндпоинт | Описание |
-|-------|----------|----------|
-| `WS` | `/api/ws/generation` | Стриминг генерации тест-кейсов |
-| `POST` | `/api/generation/parse-file` | Парсинг файла в текст |
-| `POST` | `/api/autotests/generate` | Генерация Selenium/Cypress |
-| `POST` | `/api/bugs/format-bug` | Форматирование дефекта |
-| `GET/POST/DELETE` | `/api/etalons/*` | CRUD эталонов |
-| `GET/POST/DELETE` | `/api/alerts/scripts` | CRUD скриптов алертов |
-| `GET/POST` | `/api/kafka/*` | Просмотр Kafka: подключения, топики, сообщения |
-| `GET/POST/PUT/DELETE` | `/api/testdata/*` | Тестовые данные: подключения к БД, JDBC-драйверы, SELECT |
-| `GET/POST/PUT/DELETE` | `/api/metrics/*` | CRUD систем и метрик |
-| `GET` | `/api/revisor/data` | Сравнение API-стендов Ревизора |
-| `GET` | `/api/revisor/stands` | Статус подключений Ревизора |
-| `GET/POST/DELETE` | `/api/settings/revisor-stands` | Конструктор API-стендов Ревизора |
-| `GET/PUT` | `/api/settings` | Настройки приложения |
-| `GET` | `/api/system/providers` | Статус LLM-провайдеров |
-| `GET` | `/healthz` | Health check |
-
----
-
-## История изменений
-
-### 2026-03-30
-- **fix:** Статус LLM показывает все провайдеры; без ключа — красный «Нет ключа» (без HTTP-запроса)
-- **feat:** Кнопки выбора модели отображаются только для провайдеров с зелёным статусом; автопереключение на первый доступный
-
-### 2026-03-11
-- **fix:** Убрана вкладка Kafka из шапки генератора метрик
-- **fix:** Тоггл «Критичный регресс» — исправлен двойной клик (label→div)
-
-### 2026-02-18
-- **refactor:** Полная переработка с Streamlit на FastAPI + Next.js
-- **feat:** WebSocket стриминг генерации, JWT-аутентификация
-- **feat:** Добавлены разделы: Ревизор, Генератор метрик, Генератор алертов, Автотестирование
-
-### 2026-02-14 и ранее
-- Первоначальная версия на Streamlit (v1.0–v2.0)
-- 3-слойный генератор, ChromaDB, экспорт в Zephyr XML
-
----
-
-## Лицензия
-
-Проприетарный проект.
-
-## Авторы
-
-**Stefan Zastylov** — разработка и поддержка
-
----
-
-**Версия:** 3.1 · **Продакшен:** https://simpletest.pro

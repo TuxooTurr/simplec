@@ -155,7 +155,7 @@ def field_kind(f: dict) -> str:
 
 # ── Запросы к Jira ───────────────────────────────────────────────────────────
 
-def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*navigable") -> tuple[list[dict], int]:
+def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*navigable", *, expand: str = "") -> tuple[list[dict], int]:
     """Задачи по JQL постранично. validateQuery=false: несуществующий ключ в «key in (…)»
     не роняет весь запрос, Jira просто его пропускает."""
     issues: list[dict] = []
@@ -163,7 +163,7 @@ def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*naviga
     while start < total and len(issues) < limit:
         data = _jira_request(cfg, "GET", "/rest/api/2/search", params={
             "jql": jql, "fields": fields, "maxResults": min(_PAGE, limit - len(issues)),
-            "startAt": start, "validateQuery": "false",
+            "startAt": start, "validateQuery": "false", **({"expand": expand} if expand else {}),
         })
         total = int(data.get("total", 0) or 0)
         page = data.get("issues") or []
@@ -178,20 +178,20 @@ def _chunks(items: list[str], n: int) -> list[list[str]]:
     return [items[i:i + n] for i in range(0, len(items), n)]
 
 
-def _by_keys(cfg: dict, keys: list[str], fields: str = "*navigable") -> list[dict]:
+def _by_keys(cfg: dict, keys: list[str], fields: str = "*navigable", *, expand: str = "") -> list[dict]:
     """Задачи по ключам пачками. Если Jira всё же отвергла пачку (старый сервер валидирует
     ключи), добираем по одной — чтобы одна удалённая задача не прятала остальные."""
     out: list[dict] = []
     for chunk in _chunks(keys, _KEYS_PER_QUERY):
         try:
-            found, _ = _search(cfg, f"key in ({', '.join(chunk)})", limit=len(chunk), fields=fields)
+            found, _ = _search(cfg, f"key in ({', '.join(chunk)})", limit=len(chunk), fields=fields, **({"expand": expand} if expand else {}))
             out.extend(found)
         except HTTPException as e:
             if e.status_code != 400:
                 raise
             for k in chunk:
                 try:
-                    out.append(_jira_request(cfg, "GET", f"/rest/api/2/issue/{k}", params={"fields": fields}))
+                    out.append(_jira_request(cfg, "GET", f"/rest/api/2/issue/{k}", params={"fields": fields, **({"expand": expand} if expand else {})}))
                 except HTTPException as e2:
                     if e2.status_code not in (400, 404):
                         raise

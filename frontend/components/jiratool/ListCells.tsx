@@ -11,25 +11,29 @@ import ServicePicker from "@/components/stands/ServicePicker";
 // Окно ярлычков тянет весь набор иконок — грузим его, только когда его открыли.
 const IconPicker = dynamic(() => import("./IconPicker"), { ssr: false });
 import {
-  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, linkHref, tagColor, blockersOf, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
+  FIELD_BY_ID, ROLE_STATES, ROLE_STATE_LABEL, linkHref, loadState, tagColor, blockersOf, fmtJiraDate, fmtMinutes, getTimeDay, inDirection, isOpenDefect, parseDuration,
   type Issue, type LoadSkip, type OwnField, type Participant, type RuleResult, type RoleState, type RoleValue, type Spend,
 } from "@/lib/jiraTool";
-import { STAGES, STAGE_LABEL, jiraStageOf, stageStyle, stageText, textOn, type Stage, type StageInfo } from "@/lib/jiraStages";
+import { STAGES, STAGE_LABEL, applyStageStyles, jiraStageOf, stageForStatus, stageStyle, stageText, textOn, type Stage, type StageInfo, type StageMapping } from "@/lib/jiraStages";
 
 /* Ячейки таблицы Jira tool. Ширину задаёт колонка (её можно растягивать), поэтому
    у содержимого нет своих минимальных ширин — текст переносится или обрезается. */
 
-const STATUS_CLS: Record<string, string> = {
-  "Открыт": "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
-  "В работе": "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
-  "Разработка": "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
-  "Готов к тестированию": "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
-  "Готово к тестированию": "bg-violet-100 text-violet-700 dark:bg-violet-950/60 dark:text-violet-300",
-  "Переоткрыт": "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
-  "Выполнен": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  "Выполнено": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-  "Закрыт": "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
-};
+/**
+ * Цвет статуса Jira в списках (Jira tool, Главная, окна задач) — цвет его этапа «Статус (st)»: сопоставление
+ * «статус Jira → статус (st)» и цвета берутся из настроек Jira tool этого браузера (кнопка «Статус (st)»).
+ * Статус, не сопоставленный в таблице проекта, — нейтральный серый с подсказкой.
+ */
+let stCache: { at: number; mapping: StageMapping } | null = null;
+function stMapping(): StageMapping {
+  if (!stCache || Date.now() - stCache.at > 2000) {
+    const s = loadState();
+    applyStageStyles(s.stageStyles ?? {}, s.customStages ?? []);
+    stCache = { at: Date.now(), mapping: s.mapping ?? {} };
+  }
+  return stCache.mapping;
+}
+
 const PRIO_DOT: Record<string, string> = {
   "Блокирующий": "bg-red-600", "Критичный": "bg-orange-500", "Высокий": "bg-amber-400", "Средний": "bg-sky-400", "Низкий": "bg-slate-400",
 };
@@ -39,7 +43,14 @@ const PRIO_DOT: Record<string, string> = {
 export function JiraCell({ id, issue, typeIconOnly = false }: { id: string; issue: Issue; typeIconOnly?: boolean }) {
   const v = issue.fields[id];
   if (v === null || v === undefined || v === "" || (Array.isArray(v) && !v.length)) return <span className="text-text-muted/50">—</span>;
-  if (id === "status") return <span data-xlsx-chip className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap ${STATUS_CLS[String(v)] ?? "bg-bg-subtle text-text-main"}`}>{String(v)}</span>;
+  if (id === "status") {
+    const info = stageForStatus(issue, String(v), stMapping());
+    return info.kind === "stage"
+      ? <span data-xlsx-chip style={stageStyle(info.stage)} title={`Статус (st): ${STAGE_LABEL[info.stage] ?? info.stage}`}
+          className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap">{String(v)}</span>
+      : <span data-xlsx-chip title="Статус не сопоставлен в «Статус (st)» — настройте в Jira tool"
+          className="inline-block px-2 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap bg-bg-subtle text-text-main">{String(v)}</span>;
+  }
   if (id === "priority") return <span className="inline-flex items-center gap-1.5 whitespace-nowrap"><span data-xlsx-chip="dot" className={`w-2 h-2 rounded-full ${PRIO_DOT[String(v)] ?? "bg-slate-400"}`} />{String(v)}</span>;
   if (id === "issuetype") return typeIconOnly ? <IssueTypeIcon type={String(v)} /> : <IssueTypeBadge type={String(v)} />;
   const kind = FIELD_BY_ID[id]?.kind;

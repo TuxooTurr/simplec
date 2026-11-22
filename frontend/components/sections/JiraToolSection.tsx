@@ -3,7 +3,7 @@ import IssueEditButton, { JIRA_ISSUES_CHANGED } from "@/components/jiratool/Issu
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  AlertTriangle, ChevronDown, Info, ClipboardCheck, FileSpreadsheet, Columns3, Loader2, MessageSquareShare, FilePlus2, FolderTree,
+  AlertTriangle, ChevronDown, Info, ClipboardCheck, FileSpreadsheet, Columns3, Loader2, FilePlus2, FolderTree,
   GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose, ListFilter, PanelLeftOpen, Plus, Search, Trash2,
   Users, X, CalendarRange, List as ListIcon,
 } from "lucide-react";
@@ -31,7 +31,7 @@ import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
-import ChatFieldsPicker, { type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
+import { ChatCopyControls, type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
 import { downloadJiraView, jiraViewSheet } from "@/lib/jiraExcelExport";
 import { addMs, getMsCatalog } from "@/lib/standsApi";
 import IssueModal from "@/components/jiratool/IssueModal";
@@ -1628,12 +1628,9 @@ export default function JiraToolSection() {
               {/* Отчёты по отмеченным задачам — только в режиме выбора (карандаш) */}
               {selecting && (
                 <div className="flex items-center gap-4 flex-wrap text-sm -mt-1">
-                  <button type="button" onClick={copyChatReport} disabled={!selected.size || !!reportBusy}
-                    title="Статус (st), номер и название; под задачей — «Поля в чат» и её неустранённые дефекты"
-                    className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
-                    <MessageSquareShare className="w-4 h-4" /> Скопировать в чат
-                  </button>
-                  {chat && <ChatFieldsPicker cfg={chat} up />}
+                  <ChatCopyControls cfg={chat} onCopy={copyChatReport} disabled={!selected.size || !!reportBusy}
+                    count={selected.size ? String(selected.size) : ""}
+                    title="Статус (st), номер и название; под задачей — «Поля в чат» и её неустранённые дефекты" />
                   <button type="button" onClick={copyChecklist} disabled={!selected.size || !!reportBusy}
                     title="Код и наименование фичи, проверки по требованиям (если привязаны и выбрана модель) и «Результат проверок:»"
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">

@@ -15,7 +15,7 @@ import { formatLoadedAt, matchPriority, readEpicsCache, writeEpicsCache, type Ep
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { formatBug, formatTask } from "@/lib/api";
 import {
-  addLabelPresets, attachJiraFiles, createJiraDefect, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
+  addLabelPresets, attachJiraFiles, createJiraDefect, defaultAssignee, getJiraMeta, getJiraSettings, labelName, loadJiraEpics,
   type JiraProjectMeta, type JiraSettings,
 } from "@/lib/jiraApi";
 import { updateAqaIssue } from "@/lib/aqaApi";
@@ -194,6 +194,19 @@ export default function IssueFormModal({ control, project, participants, listNam
   const standTypes = meta?.stand_types ?? [];
   const epicOptions = (epicsCache?.epics ?? []).map(e => ({ key: e.key, summary: e.summary }));
   const mobiles = new Set(meta?.mobile_components ?? ["iOS", "Android"]);
+  /**
+   * Исполнитель по компоненту и метке (правила SBER911 из метаданных проекта): подставляется при выборе.
+   * Выбранный вручную исполнитель не перезаписывается — меняется только тот, что подставило правило.
+   */
+  const autoAssignee = useRef("");
+  const ruleAssignee = defaultAssignee(meta?.assignee_rules, components, labels);
+  useEffect(() => {
+    setAssignee(cur => {
+      if (cur.jiraName && cur.jiraName !== autoAssignee.current) return cur;
+      autoAssignee.current = ruleAssignee?.login ?? "";
+      return ruleAssignee ? { jiraName: ruleAssignee.login, jiraDisplay: ruleAssignee.name } : { jiraName: "", jiraDisplay: "" };
+    });
+  }, [ruleAssignee?.login]); // eslint-disable-line react-hooks/exhaustive-deps
   const busy = generating || sending;
 
   const toggleComponent = (c: string) => {
@@ -543,6 +556,9 @@ export default function IssueFormModal({ control, project, participants, listNam
               <div className="col-span-2">
                 <span className={LBL}>Исполнитель</span>
                 <JiraUserField label="" jiraOk={jiraReady} name={assignee.jiraName} display={assignee.jiraDisplay} onChange={setAssignee} />
+                {ruleAssignee && assignee.jiraName === ruleAssignee.login && (
+                  <p className="mt-1 text-[11px] text-text-muted">Подставлен по правилу: {ruleAssignee.components.length ? `компонент ${ruleAssignee.components.join(" / ")}` : `метка ${ruleAssignee.labels.join(", ")}`}</p>
+                )}
               </div>
               <div className="col-span-2">
                 <div className="flex items-center justify-between mb-1.5">

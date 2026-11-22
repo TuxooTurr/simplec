@@ -44,6 +44,8 @@ export interface JiraProjectMeta {
   labels_presets: string[];
   warnings: string[];
   mobile_components: string[];
+  /** Исполнитель по умолчанию по компоненту/метке (SBER911); порядок правил важен. */
+  assignee_rules?: { components: string[]; labels: string[]; login: string; name: string }[];
   stand_types: string[];
   default_stand_type: string;
 }
@@ -202,4 +204,15 @@ export function runJiraView(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...view, refresh }),
   });
+}
+
+/** Правило исполнителя для выбранных компонентов и меток — то же сравнение, что на бэкенде (jira_constants.default_assignee). */
+export function defaultAssignee(rules: JiraProjectMeta["assignee_rules"], components: string[], labels: string[]) {
+  const norm = (v: string) => v.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const comps = new Set(components.map(norm).filter(Boolean));
+  const labs = new Set(labels.map(norm).filter(Boolean));
+  for (const r of rules ?? []) {
+    if (r.components.some(c => comps.has(norm(c))) || r.labels.some(l => labs.has(norm(l)))) return r;
+  }
+  return null;
 }

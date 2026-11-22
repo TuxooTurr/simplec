@@ -576,6 +576,7 @@ def project_meta(project: str = Query(...), db: Session = Depends(get_db)) -> di
         # мобильные компоненты — при их выборе разрешён второй компонент.
         # Списка «компонент → КЭ» больше нет: КЭ одна и та же всегда.
         "mobile_components": sorted(JC.MOBILE_COMPONENTS) if is_sber911 else [],
+        "assignee_rules": JC.ASSIGNEE_RULES if is_sber911 else [],
         # тип стенда (customfield_17500) — Major-Check / Major-GO, видимый выбор
         "stand_types": sorted(JC.STAND_TYPE.keys()) if is_sber911 else [],
         "default_stand_type": JC.DEFAULT_STAND_TYPE if is_sber911 else "",
@@ -810,8 +811,12 @@ def create_defect(body: CreateDefectBody, db: Session = Depends(get_db)) -> dict
     components = [c.strip() for c in body.components if c.strip()]
     if components:
         fields["components"] = [{"name": c} for c in components]
-    if body.assignee.strip():
-        fields["assignee"] = {"name": body.assignee.strip()}
+    assignee = body.assignee.strip()
+    if not assignee and is_sber911:
+        rule = JC.default_assignee(components, body.labels)
+        assignee = rule["login"] if rule else ""
+    if assignee:
+        fields["assignee"] = {"name": assignee}
 
     # ── SBER911: ИТ-услуга и КЭ + дефолты справочных полей ──
     refs: list[tuple[str, str, dict]] = []

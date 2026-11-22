@@ -2,7 +2,7 @@
 import IssueEditButton from "./IssueEditButton";
 
 import { useState } from "react";
-import { ArrowRightLeft, Check, Link2, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Check, Link2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { categoryOf, storiesChatReport, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
@@ -10,7 +10,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
 import BulkStatusModal from "./BulkStatusModal";
-import ChatFieldsPicker, { type ChatFieldsCfg } from "./ChatFieldsPicker";
+import { ChatCopyControls, type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок для сортировки по статусу (st): заблокированные и отстающие — первыми. */
 function stageRank(info: StageInfo): number {
@@ -69,7 +69,12 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={`Статус (st) · ${issue.key}`} size="max-w-5xl">
+    <Modal open={open} onClose={onClose} title={`Статус (st) · ${issue.key}`} size="max-w-5xl"
+      footer={isEpic && stories.length > 0 ? <div className="flex items-center gap-3">
+        <ChatCopyControls cfg={chat} onCopy={copy} disabled={!toSend.length} count={`${toSend.length} из ${visible.length}`}
+          title="Статус (st), номер и название стори, «Поля в чат» и активные дефекты — как отчёт списка; галочками выберите, что отправить" />
+        {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400" role="status"><Check className="w-3.5 h-3.5" />{note}</span>}
+      </div> : undefined}>
       <div className="space-y-4">
         <div className="flex items-center gap-2 flex-wrap text-sm">
           <span className="text-text-main font-medium min-w-0">{String(issue.fields.summary ?? "")}</span>
@@ -91,22 +96,14 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
                     <Link2 className="w-4 h-4" /> Добавить</button>
                 )}
-              {stories.length > 0 && (
-                <>
-                  {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
-                  {onTransitions && (<>
-                    <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
-                      title="Перевести отмеченные стори в другой статус Jira — переходы спрашиваются у Jira"
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                      <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
-                  {toSend.length > 1 && <IssueEditButton issues={toSend} onDone={onTransitions} />} </>
-                  )}
-                  {chat && <ChatFieldsPicker cfg={chat} align="right" />}
-                  <button type="button" onClick={copy} disabled={!toSend.length}
-                    title="Статус (st), номер и название стори, «Поля в чат» и активные дефекты — как отчёт списка; галочками выберите, что отправить"
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                    <MessageSquareShare className="w-4 h-4" /> Скопировать в чат ({toSend.length} из {visible.length})</button>
-                </>
+              {stories.length > 0 && onTransitions && (<>
+                <IssueEditButton issues={toSend} onDone={onTransitions} compact />
+                <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
+                  aria-label={`Сменить статус (${toSend.length})`}
+                  title={`Сменить статус (${toSend.length}): перевести отмеченные стори в другой статус Jira — переходы спрашиваются у Jira`}
+                  className="flex items-center px-2 py-1.5 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                  <ArrowRightLeft className="w-4 h-4" /></button>
+              </>
               )}
               </span>
             </div>

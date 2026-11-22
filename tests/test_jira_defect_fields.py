@@ -369,3 +369,27 @@ def test_прочие_ошибки_создания_не_глотаются(fake
     monkeypatch.setattr(JD, "_jira_request", call)
     with pytest.raises(JD.HTTPException):
         JD.create_defect(JD.CreateDefectBody(project="SBER911", summary="x", issuetype="Задача"), db=None)
+
+
+# ── Исполнитель по компоненту и метке (правило владельца) ───────────────────
+
+@pytest.mark.parametrize("components,labels,login", [
+    (["Front-end"], [], "18867943"),
+    (["frontend"], ["911-Команда-Агенты"], "18867943"),          # компонент важнее метки
+    (["Android"], [], "16725319"),
+    (["IOS"], [], "16725319"),
+    (["Back-end"], ["911-Команда-БазовыеСервисы"], "23632682"),
+    (["Back-end"], ["911-команда-агенты"], "23731983"),
+    (["Back-end"], ["другая"], None),
+])
+def test_исполнитель_по_правилу(captured_payload, components, labels, login):
+    JD.create_defect(_create(components, labels=labels), db=None)
+    assert captured_payload.get("assignee") == ({"name": login} if login else None)
+
+
+def test_явный_исполнитель_и_чужой_проект_не_меняются(captured_payload):
+    JD.create_defect(_create(["Front-end"], assignee="someone"), db=None)
+    assert captured_payload["assignee"] == {"name": "someone"}
+    captured_payload.clear()
+    JD.create_defect(JD.CreateDefectBody(project="OTHER", summary="Д", components=["Front-end"]), db=None)
+    assert "assignee" not in captured_payload

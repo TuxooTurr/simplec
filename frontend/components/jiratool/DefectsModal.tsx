@@ -2,7 +2,7 @@
 import IssueEditButton from "./IssueEditButton";
 
 import { useState } from "react";
-import { ArrowRightLeft, Bug, Check, Link2, MessageSquareShare } from "lucide-react";
+import { ArrowRightLeft, Bug, Check, Link2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
@@ -10,7 +10,7 @@ import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
 import BulkStatusModal from "./BulkStatusModal";
-import ChatFieldsPicker, { type ChatFieldsCfg } from "./ChatFieldsPicker";
+import { ChatCopyControls, type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок по статусу (st): раньше по процессу — выше. */
 function stageRank(info: StageInfo): number {
@@ -74,7 +74,12 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
   };
 
   return (
-    <Modal open={open} onClose={onClose} title={`Дефекты ${issue.key}`} size="max-w-5xl">
+    <Modal open={open} onClose={onClose} title={`Дефекты ${issue.key}`} size="max-w-5xl"
+      footer={<div className="flex items-center gap-3">
+        <ChatCopyControls cfg={chat} onCopy={copy} disabled={!toSend.length} count={shown.length ? `${toSend.length} из ${shown.length}` : ""}
+          title="Статус (st), номер и название отмеченных дефектов, под каждым — «Поля в чат»; галочками выберите, что отправить" />
+        {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400" role="status"><Check className="w-3.5 h-3.5" />{note}</span>}
+      </div>}>
       <div className="space-y-3">
         <p className="text-sm text-text-muted">
           {String(issue.fields.summary ?? "")} · неустранённых {allOpened.length}, устранённых {allFixed.length}
@@ -88,31 +93,26 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
             Показать устранённые <span className="text-text-muted">(«Подтверждение исправления», «Исключено», «Отложен», «Закрыт») — отдельной группой</span>
           </label>
           <span className="ml-auto flex items-center gap-2">
-            {note && <span className="flex items-center gap-1 text-xs text-green-700 dark:text-green-400"><Check className="w-3.5 h-3.5" />{note}</span>}
-            {onAdd && (
-              <button type="button" onClick={onAdd}
-                title={categoryOf(issue) === "epic" ? `Найти дефекты в Jira и проставить им Epic Link ${issue.key}` : `Найти дефекты в Jira и связать их с ${issue.key}`}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
-                <Link2 className="w-4 h-4" /> Добавить</button>
-            )}
             {onCreate && (
               <button type="button" onClick={onCreate}
                 title={categoryOf(issue) === "epic" ? "Новый дефект с эпиком " + issue.key : "Новый дефект, связанный с " + issue.key}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold">
                 <Bug className="w-4 h-4" /> Создать дефект</button>
             )}
-            {onTransitions && (<>
-              <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
-                title="Перевести отмеченные дефекты в другой статус Jira — переходы спрашиваются у Jira"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                <ArrowRightLeft className="w-4 h-4" /> Сменить статус ({toSend.length})</button>
-                  {toSend.length > 1 && <IssueEditButton issues={toSend} onDone={onTransitions} />} </>
+            {onAdd && (
+              <button type="button" onClick={onAdd}
+                title={categoryOf(issue) === "epic" ? `Найти дефекты в Jira и проставить им Epic Link ${issue.key}` : `Найти дефекты в Jira и связать их с ${issue.key}`}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
+                <Link2 className="w-4 h-4" /> Добавить дефект</button>
             )}
-            {chat && <ChatFieldsPicker cfg={chat} align="right" />}
-            <button type="button" onClick={copy} disabled={!toSend.length}
-              title="Статус (st), номер и название отмеченных дефектов, под каждым — «Поля в чат»; галочками выберите, что отправить"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">
-              <MessageSquareShare className="w-4 h-4" /> Скопировать в чат{shown.length ? ` (${toSend.length} из ${shown.length})` : ""}</button>
+            {onTransitions && (<>
+              <IssueEditButton issues={toSend} onDone={onTransitions} compact />
+              <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
+                aria-label={`Сменить статус (${toSend.length})`}
+                title={`Сменить статус (${toSend.length}): перевести отмеченные дефекты в другой статус Jira — переходы спрашиваются у Jira`}
+                className="flex items-center px-2 py-1.5 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle disabled:opacity-40">
+                <ArrowRightLeft className="w-4 h-4" /></button>
+            </>)}
           </span>
         </div>
         {defects.length === 0 || (!showFixed && allOpened.length === 0) ? (

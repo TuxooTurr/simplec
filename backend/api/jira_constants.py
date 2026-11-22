@@ -116,3 +116,29 @@ STAND_TYPE: dict[str, str] = {
     "Major-GO":    "33607",
 }
 DEFAULT_STAND_TYPE = "Major-Check"
+
+# Исполнитель по умолчанию при регистрации задачи или дефекта в SBER911 (правило владельца, 22.11.2026).
+# Порядок важен: сначала компонент, затем метка команды. Совпадение компонента и метки — без учёта
+# регистра и знаков («Front-end» = «Frontend», «IOS» = «iOS»). Явно выбранный исполнитель не меняется.
+ASSIGNEE_RULES: list[dict] = [
+    {"components": ["Front-end"],      "labels": [], "login": "18867943", "name": "Данилов Александр Владимирович"},
+    {"components": ["Android", "iOS"], "labels": [], "login": "16725319", "name": "Бондарев Дмитрий Александрович"},
+    {"components": [], "labels": ["911-Команда-БазовыеСервисы"], "login": "23632682", "name": "Бредихин Андрей Александрович"},
+    {"components": [], "labels": ["911-Команда-Агенты"],         "login": "23731983", "name": "Харламов Алексей Львович"},
+]
+
+
+def _norm_rule_token(value: str) -> str:
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
+def default_assignee(components: list[str], labels: list[str]) -> dict | None:
+    """Правило ASSIGNEE_RULES для выбранных компонентов и меток; None — ни одно не подошло."""
+    comps = {_norm_rule_token(c) for c in components if c.strip()}
+    labs = {_norm_rule_token(l) for l in labels if l.strip()}
+    for rule in ASSIGNEE_RULES:
+        if rule["components"] and comps & {_norm_rule_token(c) for c in rule["components"]}:
+            return rule
+        if rule["labels"] and labs & {_norm_rule_token(l) for l in rule["labels"]}:
+            return rule
+    return None

@@ -3,11 +3,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   FlaskConical, Loader2, Copy, CheckCheck, Paperclip, FileText,
-  PlugZap, History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle,
+  PlugZap, History, ChevronLeft,
   Trash2, X, FolderOpen, ChevronDown, ChevronUp, CheckCircle, Search,
 } from "lucide-react";
 import AutotestRunPanel from "@/components/AutotestRunPanel";
-import { generateAutotest, addAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
+import { generateAutotest, parseFile, analyzeProject, type ProjectAnalysis } from "@/lib/api";
 import { getAutotestRunConfig, saveAutotestRunConfig } from "@/lib/autotestRunsApi";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -20,7 +20,6 @@ interface AutoHistEntry {
   feature: string;
   inputText: string;
   code: string;
-  loadedAsEtalon?: boolean;
 }
 
 interface ParsedFileAttachment {
@@ -170,8 +169,6 @@ export default function AutoModelSection() {
   const [genError, setGenError]   = useState<{ message: string; llm_error: boolean } | null>(null);
 
   const [histEntries, setHistEntries] = useState<AutoHistEntry[]>(() => loadHistory());
-  const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
-  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   // Project binding — персистируется в localStorage, не сбрасывается при навигации
   const [projectOpen,    setProjectOpen]    = useState(false);
@@ -240,31 +237,6 @@ export default function AutoModelSection() {
   const clearHistory = useCallback(() => {
     setHistEntries([]);
     localStorage.removeItem(HIST_KEY);
-  }, []);
-
-  const handleLoadAsEtalon = useCallback(async (entry: AutoHistEntry, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
-    try {
-      await addAutotest({
-        xml_text: entry.inputText,
-        java_text: entry.code,
-        feature: entry.feature || undefined,
-      });
-      setHistEntries(prev => {
-        const next = prev.map(h => h.id === entry.id ? { ...h, loadedAsEtalon: true } : h);
-        localStorage.setItem(HIST_KEY, JSON.stringify(next));
-        return next;
-      });
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch (e) {
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
-      setTimeout(() => {
-        setEtalonStatus(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
-        setEtalonErrorMsg(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
-      }, 8000);
-    }
   }, []);
 
   /* ── File upload ─────────────────────────────────────────────────── */
@@ -455,33 +427,6 @@ export default function AutoModelSection() {
                         <span className="text-xs text-text-muted flex-shrink-0">
                           {formatHistTime(entry.timestamp)}
                         </span>
-                        {(() => {
-                          if (entry.loadedAsEtalon) return (
-                            <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </span>
-                          );
-                          const st = etalonStatus[entry.id];
-                          if (st === "loading") return (
-                            <span className="flex-shrink-0 p-0.5 text-text-muted">
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            </span>
-                          );
-                          if (st === "error") return (
-                            <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
-                              <XCircle className="w-3.5 h-3.5" />
-                            </span>
-                          );
-                          return (
-                            <button
-                              onClick={e => handleLoadAsEtalon(entry, e)}
-                              title="Загрузить в эталон автотестов"
-                              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
-                            >
-                              <BookmarkPlus className="w-3.5 h-3.5" />
-                            </button>
-                          );
-                        })()}
                         <button
                           onClick={e => {
                             e.stopPropagation();
@@ -801,30 +746,6 @@ export default function AutoModelSection() {
                     text-text-muted hover:bg-bg-subtle hover:text-text-main transition-all duration-150 active:scale-[0.97]"
                 >
                   <FlaskConical className="w-3.5 h-3.5" /> Новая генерация
-                </button>
-                <button
-                  onClick={async () => {
-                    if (!histEntries[0]) return;
-                    await handleLoadAsEtalon(histEntries[0], { stopPropagation: () => {} } as React.MouseEvent);
-                  }}
-                  className={`flex items-center gap-1.5 text-sm px-3 py-1.5 border rounded-lg
-                    transition-all duration-150 active:scale-[0.97]
-                    ${histEntries[0]?.loadedAsEtalon
-                      ? "bg-green-50 border-green-200 text-green-700"
-                      : etalonStatus[histEntries[0]?.id] === "error"
-                        ? "bg-red-50 border-red-200 text-red-600"
-                        : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-text-main"}`}
-                  title={etalonStatus[histEntries[0]?.id] === "error"
-                    ? etalonErrorMsg[histEntries[0]?.id] || "Ошибка"
-                    : "Загрузить в эталон автотестов"}
-                >
-                  {histEntries[0]?.loadedAsEtalon
-                    ? <><CheckCircle2 className="w-3.5 h-3.5" /> В эталонах</>
-                    : etalonStatus[histEntries[0]?.id] === "loading"
-                      ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
-                      : etalonStatus[histEntries[0]?.id] === "error"
-                        ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
-                        : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
                 </button>
                 <button
                   onClick={handleCopy}

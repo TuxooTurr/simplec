@@ -315,7 +315,7 @@ function ReviewView({ s, onOpenCases }: { s: TmSession; onOpenCases: () => void 
 
 /**
  * Правая зона генерации: этапы одной сессии тестовой модели. Готовый (принятый) набор открывается прежним
- * экраном результата — там кейсы, эталон и экспорт.
+ * экраном результата — там кейсы и экспорт.
  */
 export default function StagePanel({ session: s, onOpenCases, xml }: { session: TmSession; onOpenCases: (id: string) => void; xml: XmlActions }) {
   const { cancel, retry, error } = useTmGen();

@@ -1,7 +1,7 @@
 /**
  * Резервная копия Shark — клиент к /api/backup/* (бэкенд: backend/api/backup.py) плюс данные браузера.
  *
- * В файл: данные сервера (data/*.json, настройки и таблицы БД, эталоны) и данные этого браузера (localStorage
+ * В файл: данные сервера (data/*.json, настройки и таблицы БД, рисунки «Данных») и данные этого браузера (localStorage
  * ключи st_*: списки Jira tool, история генераций и т. п.). Секреты не выгружаются — ни сервером, ни здесь.
  * Выгрузить можно один раздел (вкладку) или все.
  */
@@ -12,7 +12,7 @@ import { backupItemKey, mergeBackupValues } from "./backupMerge";
 export const BACKUP_FORMAT = "simpletest.backup";
 const REDACTED = "__SIMPLETEST_REDACTED__";
 
-export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; etalons: number; assets?: number; widgets?: number; counters?: number }
+export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; assets?: number; widgets?: number; counters?: number }
 export type RestoreMode = "merge" | "replace";
 export interface BackupFile {
   format: string; version: number; createdAt: string; scope: string; scopeTitle: string; secrets: string;
@@ -20,7 +20,7 @@ export interface BackupFile {
   browser?: { localStorage: Record<string, string> };
 }
 export interface RestoreResult {
-  restored: { files: string[]; tables: string[]; settings: string[]; etalons: string[]; assets?: string[] };
+  restored: { files: string[]; tables: string[]; settings: string[]; assets?: string[] };
   errors: string[]; snapshot: string; browserKeys: number;
   mode?: RestoreMode;
 }

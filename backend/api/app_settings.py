@@ -936,19 +936,6 @@ def test_kafka_metrics(db: Session = Depends(get_db)) -> dict:
         return {"status": "red", "message": str(e)[:200]}
 
 
-@router.post("/api/settings/test/chromadb")
-def test_chromadb() -> dict:
-    """Тест подключения к ChromaDB."""
-    try:
-        from db.vector_store import VectorStore
-        store = VectorStore()
-        stats = store.get_stats()
-        total = sum(stats.values())
-        return {"status": "green", "message": f"OK — {total} записей в {len(stats)} коллекциях"}
-    except Exception as e:
-        return {"status": "red", "message": str(e)[:200]}
-
-
 @router.post("/api/settings/test/postgres")
 def test_postgres() -> dict:
     """Тест подключения к PostgreSQL."""

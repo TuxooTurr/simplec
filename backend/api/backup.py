@@ -1,15 +1,15 @@
 """
 Резервная копия данных Shark — выгрузка в один .json и восстановление из него.
 
-Зачем: данные живут внутри папки установки (data/*.json, simpletest.db, db/chroma_data). Переустановка «удалить
+Зачем: данные живут внутри папки установки (data/*.json, simpletest.db). Переустановка «удалить
 папку → поставить заново» стирает их. Перед переустановкой — «Выгрузить всё», после — «Загрузить из файла».
 
 Что входит (раздел = вкладка приложения; выгрузить можно один раздел или все):
   • файлы data/*.json — все, что есть (новые хранилища попадают в выгрузку сами, без правки этого модуля);
   • таблицы БД — настройки (metrics_settings), Метрики ОД, журнал генераций;
-  • эталоны RAG (ChromaDB) — тексты, метаданные и векторы (при восстановлении не пересчитываются);
   • рисунки документов «Данных» (data/requirement_assets) — содержимым в base64, раздел «Данные»;
   • браузерные данные (localStorage) кладёт в файл фронт — бэкенд их не видит.
+Эталоны RAG (ChromaDB) упразднены: ключ server["etalons"] из старых копий при восстановлении пропускается.
 Не входят: кэши, которые собираются заново (индекс Zephyr), JAR-драйверы JDBC, сертификаты и ключи.
 
 Секреты (токены, пароли, ключи API) в файл не попадают: значение заменяется меткой REDACTED. При восстановлении
@@ -110,6 +110,7 @@ SETTING_PREFIX: list[tuple[str, str]] = [
     ("logs_", "logs"), ("revisor_", "auto_model"), ("kafka_", "kafka"), ("tcs_", "event_generators"), ("aqa_", "aqa"),
 ]
 SETTINGS_TABLE = "metrics_settings"
+# id раздела «Данные» — прежнее имя сохранено ради совместимости файлов копий.
 ETALONS = "etalons"
 
 _SECRET_KEY = re.compile(r"(pass(word|wd)?|pwd|secret|token|api_?key|auth_?key|private|credential|cookie|sasl_password)", re.I)
@@ -207,24 +208,6 @@ def _row(table: Table, r: Any) -> dict:
     return out
 
 
-def _etalons_dump() -> tuple[Optional[dict], str]:
-    """Коллекции эталонов: ids, тексты, метаданные, векторы. ChromaDB не поднялась — раздел пропускается с причиной."""
-    try:
-        from db.vector_store import VectorStore
-        vs = VectorStore()
-        out = {}
-        for col in vs.client.list_collections():
-            name = col if isinstance(col, str) else col.name
-            c = vs.client.get_collection(name)
-            got = c.get(include=["documents", "metadatas", "embeddings"])
-            emb = got.get("embeddings")
-            out[name] = {"ids": got["ids"], "documents": got.get("documents") or [], "metadatas": got.get("metadatas") or [],
-                         "embeddings": [list(map(float, e)) for e in emb] if emb is not None else []}
-        return out, ""
-    except Exception as e:     # noqa: BLE001 — эталоны необязательны, остальное выгружается
-        return None, f"эталоны не выгружены: {e}"[:300]
-
-
 ASSETS_DIR_NAME = "requirement_assets"
 _ASSET_NAME = re.compile(r"^[0-9a-f]{20}\.(png|jpg|gif|webp|svg)$")
 
@@ -267,11 +250,6 @@ def collect(db: Session, scope: str = "all", secrets: bool = False) -> dict:
             tables[name] = [_row(table, r) for r in db.execute(table.select()).fetchall()]
     out: dict[str, Any] = {"files": files, "tables": tables}
     if _wanted(ETALONS, scope):
-        et, err = _etalons_dump()
-        if et is not None:
-            out["etalons"] = et
-        if err:
-            skipped.append(err)
         assets = _assets_dump()
         if assets:
             out["assets"] = assets
@@ -279,11 +257,11 @@ def collect(db: Session, scope: str = "all", secrets: bool = False) -> dict:
 
 
 def summary(server: dict) -> list[dict]:
-    """Что лежит в выгрузке по разделам: [{id, title, files, tables, settings, etalons}] — для окна восстановления."""
+    """Что лежит в выгрузке по разделам: [{id, title, files, tables, settings, assets}] — для окна восстановления."""
     acc: dict[str, dict] = {}
 
     def at(s: str) -> dict:
-        return acc.setdefault(s, {"id": s, "title": SECTIONS.get(s, s), "files": [], "tables": [], "settings": 0, "etalons": 0, "assets": 0})
+        return acc.setdefault(s, {"id": s, "title": SECTIONS.get(s, s), "files": [], "tables": [], "settings": 0, "assets": 0})
     for name in server.get("files", {}):
         at(FILE_SECTION.get(name, "settings"))["files"].append(name)
         if name == 'dashboard.json':
@@ -298,8 +276,6 @@ def summary(server: dict) -> list[dict]:
                 at(setting_section(r["key"]))["settings"] += 1
         else:
             at(TABLE_SECTION.get(name, "settings"))["tables"].append(f"{name} ({len(rows)})")
-    if server.get("etalons"):
-        at(ETALONS)["etalons"] = sum(len(c.get("ids") or []) for c in server["etalons"].values())
     if server.get("assets"):
         at(ETALONS)["assets"] = len(server["assets"])
     return [acc[s] for s in SECTIONS if s in acc]
@@ -527,7 +503,7 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode
     """Restore represented stores: add missing records by default, or explicitly replace them."""
     if mode not in ('merge', 'replace'): raise ValueError('Неизвестный режим восстановления.')
     take = (lambda s: sections is None or s in sections)
-    done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "etalons": [], "assets": []}
+    done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "assets": []}
     errors: list[str] = []
 
     files = server.get("files") or {}
@@ -616,33 +592,7 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode
             except (ValueError, OSError) as e:
                 errors.append(f"рисунок {name}: {e}"[:200])
 
-    if server.get("etalons") and take(ETALONS):
-        try:
-            from db.vector_store import VectorStore
-            vs = VectorStore()
-            for name, c in server["etalons"].items():
-                col = vs.client.get_or_create_collection(name, embedding_function=vs.ef)
-                ids = c.get("ids") or []
-                if not ids:
-                    continue
-                docs, metas, embs = c.get("documents") or [], c.get("metadatas") or [], c.get("embeddings") or []
-                existing = set(col.get(ids=ids, include=[])['ids']) if mode == 'merge' else set()
-                # Chroma не принимает пустые метаданные — записи с ними и без них пишем отдельными пачками.
-                for with_meta in (True, False):
-                    idx = [i for i in range(len(ids)) if ids[i] not in existing and bool(i < len(metas) and metas[i]) == with_meta]
-                    if not idx:
-                        continue
-                    kw: dict[str, Any] = {"ids": [ids[i] for i in idx]}
-                    if docs:
-                        kw["documents"] = [docs[i] for i in idx]
-                    if with_meta:
-                        kw["metadatas"] = [metas[i] for i in idx]
-                    if embs:
-                        kw["embeddings"] = [embs[i] for i in idx]
-                    col.upsert(**kw)
-                done["etalons"].append(f"{name} ({len(ids)})")
-        except Exception as e:     # noqa: BLE001
-            errors.append(f"эталоны не восстановлены: {e}"[:300])
+    # server["etalons"] из старых копий (эталоны RAG) намеренно не восстанавливается: функция упразднена.
     return {"restored": done, "errors": errors}
 
 
@@ -691,6 +641,6 @@ def _check(backup: dict) -> dict:
     server = backup.get("server")
     if not isinstance(server, dict):
         raise HTTPException(422, "В копии нет данных сервера")
-    for key in ('files', 'tables', 'assets', 'etalons'):
+    for key in ('files', 'tables', 'assets'):
         if key in server and not isinstance(server[key], dict): raise HTTPException(422, f'Некорректный раздел копии: {key}.')
     return server

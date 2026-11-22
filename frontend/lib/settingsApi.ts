@@ -146,12 +146,6 @@ export async function testKafkaMetrics(): Promise<TestResult> {
   return r.json();
 }
 
-export async function testChromaDb(): Promise<TestResult> {
-  const r = await af(`${BASE}/test/chromadb`, { method: "POST" });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
 export async function testPostgres(): Promise<TestResult> {
   const r = await af(`${BASE}/test/postgres`, { method: "POST" });
   if (!r.ok) throw new Error(await r.text());

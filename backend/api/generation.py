@@ -175,24 +175,6 @@ async def _run_generation(session_id: str):
         llm = LLMClient(provider=provider)
         gen = LayeredGenerator(llm)
 
-        # Context docs from vector store
-        context_docs_text = ""
-        try:
-            from db.vector_store import VectorStore
-            vs = VectorStore()
-            similar = vs.find_similar_context_docs(requirement, n_results=5)
-            if similar:
-                parts = []
-                for doc in similar:
-                    name = doc.get("metadata", {}).get("name", "")
-                    text = doc.get("document", "")
-                    if text:
-                        header = f"[{name}]" if name else "[Документ]"
-                        parts.append(f"{header}\n{text[:3000]}")
-                context_docs_text = "\n\n---\n\n".join(parts)
-        except Exception:
-            pass
-
         qa_doc = session.get("qa_doc") or ""
         qa_doc_truncated = session.get("qa_doc_truncated", False)
         case_list = session.get("case_list") or []
@@ -204,7 +186,7 @@ async def _run_generation(session_id: str):
             store.update_session(session_id, current_layer=1, status="generating")
 
             qa_doc, qa_doc_truncated = await asyncio.to_thread(
-                gen.generate_qa_doc, requirement, feature, context_docs_text
+                gen.generate_qa_doc, requirement, feature
             )
             t1 = round(time.time() - t_start)
 

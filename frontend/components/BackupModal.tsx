@@ -93,7 +93,7 @@ export function BackupPanel({ section, file: file0 }: { section: string; file?: 
             <label className="flex items-start gap-2 cursor-pointer text-text-main">
               <input type="radio" className="mt-1" checked={scope === "all"} onChange={() => setScope("all")} />
               <span>Все разделы
-                <span className="block text-xs text-text-muted">виджеты и счётчики Главной, документы, подключения к БД, скрипты, справочники, настройки, эталоны</span>
+                <span className="block text-xs text-text-muted">виджеты и счётчики Главной, документы, подключения к БД, скрипты, справочники, настройки</span>
               </span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer text-text-main">
@@ -131,7 +131,7 @@ export function BackupPanel({ section, file: file0 }: { section: string; file?: 
                   const s = loaded.summary.find(x => x.id === id);
                   const what = [
                     s?.files.length ? `файлов ${s.files.length}` : "", s?.tables.length ? `таблиц ${s.tables.length}` : "",
-                    s?.settings ? `настроек ${s.settings}` : "", s?.etalons ? `эталонов ${s.etalons}` : "", s?.assets ? `рисунков ${s.assets}` : "",
+                    s?.settings ? `настроек ${s.settings}` : "", s?.assets ? `рисунков ${s.assets}` : "",
                     browser[id] ? `данных браузера ${browser[id]}` : "",
                     s?.widgets !== undefined ? `списков ${s.widgets}` : "", s?.counters !== undefined ? `счётчиков ${s.counters}` : "",
                   ].filter(Boolean).join(", ");
@@ -157,7 +157,7 @@ export function BackupPanel({ section, file: file0 }: { section: string; file?: 
             <div className="rounded-lg border border-green-600/40 bg-green-600/5 p-2.5 space-y-1 text-xs">
               <p className="flex items-center gap-1.5 text-green-700 dark:text-green-400 font-semibold text-sm"><Check className="w-4 h-4" /> {done.errors.length ? "Восстановлено с замечаниями" : "Восстановлено"} · {mode === "merge" ? "дополнение" : "перезапись"}</p>
               <p className="text-text-main">Файлов {done.restored.files.length}, таблиц {done.restored.tables.length}, настроек {done.restored.settings.length},
-                коллекций эталонов {done.restored.etalons.length}, рисунков {done.restored.assets?.length ?? 0}, данных браузера {done.browserKeys}.</p>
+                рисунков {done.restored.assets?.length ?? 0}, данных браузера {done.browserKeys}.</p>
               <p className="text-text-muted">Снимок до восстановления: {done.snapshot}</p>
               {done.errors.length > 0 && <p className="text-amber-700 dark:text-amber-300">Не восстановлено: {done.errors.join("; ")}</p>}
               {(done.browserKeys > 0 || Object.values(done.restored).some(values => values?.length)) && <p className="text-text-main">Страница перезагрузится через несколько секунд.</p>}

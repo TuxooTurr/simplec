@@ -22,7 +22,7 @@ import { useTmGen } from "@/contexts/TmGenContext";
 import { tmXml, zephyrProject, type TmStart } from "@/lib/tmApi";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import {
-  parseFile, addEtalon, deleteGenSession, listGenSessions, getGenSession, exportGenSession,
+  parseFile, deleteGenSession, listGenSessions, getGenSession, exportGenSession,
   listTestDataConnections, getTestDataSchemasText,
   listRequirements, addRequirement, listReqFolders,
   type GenSessionSummary, type GenSession, type TestDataConnection, type Requirement, type ReqFolder,
@@ -75,35 +75,6 @@ function buildLlmSourceText(fieldText: string, files: ParsedFileAttachment[]): s
   }
 
   return parts.join("\n\n");
-}
-
-function stripMarkdown(text: string): string {
-  return text
-    .replace(/```[\w]*\n?/g, "").replace(/```/g, "")
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")
-    .replace(/`(.+?)`/g, "$1")
-    .trim();
-}
-
-function casesToText(cases: Case[]): string {
-  return cases.map((c, i) => {
-    const lines = [
-      `${i + 1}. ${c.name}`,
-      `Приоритет: ${c.priority} | Тип: ${c.case_type}`,
-      "",
-    ];
-    c.steps.forEach((s, si) => {
-      lines.push(`Шаг ${si + 1}: ${s.action}`);
-      if (s.test_data) lines.push(`Тест-данные: ${s.test_data}`);
-      if (s.ui)        lines.push(`UI: ${s.ui}`);
-      if (s.api)       lines.push(`API: ${s.api}`);
-      if (s.db)        lines.push(`DB: ${s.db}`);
-      lines.push("");
-    });
-    return lines.join("\n");
-  }).join("\n---\n\n");
 }
 
 function sumEstimatedMinutes(cases: Case[]): number {
@@ -293,8 +264,6 @@ export default function GenerationSection() {
     }
   }, []);
 
-  const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
-  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   // Пара исходник+документация в требования — доступно уже во время генерации
   // (сразу после layer 1), без ожидания кейсов: чистое локальное сохранение,
@@ -319,30 +288,6 @@ export default function GenerationSection() {
       setTimeout(() => {
         setReqDocStatus((prev) => { const n = { ...prev }; delete n[eid]; return n; });
         setReqDocErrorMsg((prev) => { const n = { ...prev }; delete n[eid]; return n; });
-      }, 8000);
-    }
-  }, []);
-
-  /** Загрузить полную сессию и отправить в эталон */
-  const handleLoadAsEtalon = useCallback(async (entry: GenSessionSummary, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
-    try {
-      const full = await getGenSession(entry.id);
-      await addEtalon({
-        req_text: stripMarkdown(full.requirement ?? ""),
-        tc_text: casesToText(full.cases as Case[]),
-        qa_doc: stripMarkdown(full.qa_doc ?? ""),
-        platform: full.platform,
-        feature: full.feature,
-      });
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch (e) {
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
-      setTimeout(() => {
-        setEtalonStatus(prev => { const n = { ...prev }; delete n[entry.id]; return n; });
-        setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[entry.id]; return n; });
       }, 8000);
     }
   }, []);
@@ -432,7 +377,7 @@ export default function GenerationSection() {
   useEffect(() => { if (tm.active && stage === "input") setStage("tm"); }, [tm.active?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tm.sessions.some(s => s.status === "done")) refreshHistory(); }, [tm.sessions.filter(s => s.status === "done").length]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Принятый (или проверенный) набор → прежний экран результата: кейсы, эталон, экспорт. */
+  /** Принятый (или проверенный) набор → прежний экран результата: кейсы, экспорт. */
   const openTmCases = (id: string) => {
     const s = tm.sessions.find(x => x.id === id);
     genMetaRef.current = { ...genMetaRef.current, feature: s?.feature ?? "", requirement: s?.requirement ?? "" };
@@ -1065,14 +1010,14 @@ export default function GenerationSection() {
                       const st = reqDocStatus[eid];
                       if (st === "done") return (
                         <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-green-200 bg-green-50 rounded-lg text-green-700">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> В эталоне
+                          <CheckCircle2 className="w-3.5 h-3.5" /> В Данных
                         </span>
                       );
                       return (
                         <button
                           disabled={st === "loading"}
                           onClick={() => handleSaveDocAsRequirement(eid, qaDoc, qaDocTruncated)}
-                          title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в эталон — не прерывает генерацию"}
+                          title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в «Данные» — не прерывает генерацию"}
                           className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
                             ${st === "error"
                               ? "border-red-200 text-red-500"
@@ -1082,7 +1027,7 @@ export default function GenerationSection() {
                             ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
                             : st === "error"
                               ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
-                              : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                              : <><BookmarkPlus className="w-3.5 h-3.5" /> В Данные</>}
                         </button>
                       );
                     })()}
@@ -1187,54 +1132,6 @@ export default function GenerationSection() {
               </button>
               {cases.length > 0 && selectedCases.size > 0 && (
                 <>
-                  {/* В эталон */}
-                  {(() => {
-                    const eid = sessionId ?? "current";
-                    const st = etalonStatus[eid];
-                    if (st === "done") return (
-                      <span className="flex items-center gap-1 px-2.5 py-1.5 border border-green-200 bg-green-50 rounded-lg text-xs text-green-700 whitespace-nowrap flex-shrink-0">
-                        <CheckCircle2 className="w-3 h-3" /> Эталон
-                      </span>
-                    );
-                    return (
-                      <button
-                        disabled={st === "loading"}
-                        onClick={async () => {
-                          setEtalonStatus(prev => ({ ...prev, [eid]: "loading" }));
-                          try {
-                            const sel = cases.filter((_, i) => selectedCases.has(i));
-                            await addEtalon({
-                              req_text: stripMarkdown(genMetaRef.current.requirement ?? ""),
-                              tc_text: casesToText(sel),
-                              qa_doc: stripMarkdown(qaDoc),
-                              platform: genMetaRef.current.platform.join(", "),
-                              feature: genMetaRef.current.feature,
-                              name: genMetaRef.current.feature || "Генерация",
-                            });
-                            setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
-                          } catch (e) {
-                            setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
-                            setEtalonErrorMsg(prev => ({ ...prev, [eid]: e instanceof Error ? e.message : String(e) }));
-                            setTimeout(() => {
-                              setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; });
-                              setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[eid]; return n; });
-                            }, 8000);
-                          }
-                        }}
-                        title={st === "error" ? (etalonErrorMsg[eid] || "Ошибка") : undefined}
-                        className={`flex items-center gap-1 px-2.5 py-1.5 border rounded-lg text-xs transition-all duration-150 whitespace-nowrap flex-shrink-0
-                          ${st === "error"
-                            ? "border-red-200 text-red-500"
-                            : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
-                      >
-                        {st === "loading"
-                          ? <><Loader2 className="w-3 h-3 animate-spin" /> ...</>
-                          : st === "error"
-                            ? <><XCircle className="w-3 h-3" /> Ошибка</>
-                            : <><BookmarkPlus className="w-3 h-3" /> Эталон</>}
-                      </button>
-                    );
-                  })()}
                   {tm.sessions.some(x => x.id === sessionId && x.status === "done") ? (<>
                     {/* Тестовая модель: XML уже собран из кейсов — скачать или сразу в Zephyr, без окна экспорта */}
                     <button disabled={!!tmXmlBusy} onClick={() => void downloadTm([sessionId!], { [sessionId!]: [...selectedCases].sort((a, b) => a - b) })}
@@ -1305,14 +1202,14 @@ export default function GenerationSection() {
                         const st = reqDocStatus[eid];
                         if (st === "done") return (
                           <span className="flex items-center gap-1.5 text-xs px-3 py-1.5 border border-green-200 bg-green-50 rounded-lg text-green-700">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> В эталоне
+                            <CheckCircle2 className="w-3.5 h-3.5" /> В Данных
                           </span>
                         );
                         return (
                           <button
                             disabled={st === "loading"}
                             onClick={() => handleSaveDocAsRequirement(eid, qaDoc, qaDocTruncated)}
-                            title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в эталон"}
+                            title={st === "error" ? (reqDocErrorMsg[eid] || "Ошибка") : "Сохранить пару исходник + документация в «Данные»"}
                             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 border rounded-lg transition-all duration-150
                               ${st === "error"
                                 ? "border-red-200 text-red-500"
@@ -1322,7 +1219,7 @@ export default function GenerationSection() {
                               ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
                               : st === "error"
                                 ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
-                                : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
+                                : <><BookmarkPlus className="w-3.5 h-3.5" /> В Данные</>}
                           </button>
                         );
                       })()}
@@ -1501,34 +1398,6 @@ export default function GenerationSection() {
                               </div>
                             </div>
                             <span className="text-xs text-text-muted flex-shrink-0">{formatHistTime(entry.created_at)}</span>
-                            {/* Загрузить в эталон */}
-                            {entry.status === "done" && entry.case_count > 0 && (() => {
-                              const st = etalonStatus[entry.id];
-                              if (st === "done") return (
-                                <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                </span>
-                              );
-                              if (st === "loading") return (
-                                <span className="flex-shrink-0 p-0.5 text-text-muted">
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                </span>
-                              );
-                              if (st === "error") return (
-                                <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
-                                  <XCircle className="w-3.5 h-3.5" />
-                                </span>
-                              );
-                              return (
-                                <button
-                                  onClick={e => handleLoadAsEtalon(entry, e)}
-                                  title="Загрузить в эталон"
-                                  className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
-                                >
-                                  <BookmarkPlus className="w-3.5 h-3.5" />
-                                </button>
-                              );
-                            })()}
                             <button
                               onClick={e => { e.stopPropagation(); if (window.confirm("Удалить эту запись?")) deleteHistSession(entry.id); }}
                               className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-red-500 transition-opacity flex-shrink-0 p-0.5"
@@ -1584,54 +1453,6 @@ export default function GenerationSection() {
                     )}
                     {hvCases.length > 0 && histSelectedCases.size > 0 && (
                       <>
-                        {/* В эталон */}
-                        {(() => {
-                          const eid = histView.id;
-                          const st = etalonStatus[eid];
-                          if (st === "done") return (
-                            <span className="flex items-center gap-1.5 px-3.5 py-2 border border-green-200 bg-green-50 rounded-lg text-sm text-green-700">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> В эталонах
-                            </span>
-                          );
-                          return (
-                            <button
-                              disabled={st === "loading"}
-                              onClick={async () => {
-                                setEtalonStatus(prev => ({ ...prev, [eid]: "loading" }));
-                                try {
-                                  const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));
-                                  await addEtalon({
-                                    req_text: stripMarkdown(histView.requirement ?? ""),
-                                    tc_text: casesToText(sel),
-                                    qa_doc: stripMarkdown(hvQaDoc),
-                                    platform: histView.platform,
-                                    feature: histView.feature,
-                                    name: histView.feature || "Генерация",
-                                  });
-                                  setEtalonStatus(prev => ({ ...prev, [eid]: "done" }));
-                                } catch (e) {
-                                  setEtalonStatus(prev => ({ ...prev, [eid]: "error" }));
-                                  setEtalonErrorMsg(prev => ({ ...prev, [eid]: e instanceof Error ? e.message : String(e) }));
-                                  setTimeout(() => {
-                                    setEtalonStatus(prev => { const n = { ...prev }; delete n[eid]; return n; });
-                                    setEtalonErrorMsg(prev => { const n = { ...prev }; delete n[eid]; return n; });
-                                  }, 8000);
-                                }
-                              }}
-                              title={st === "error" ? (etalonErrorMsg[eid] || "Ошибка") : undefined}
-                              className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-lg text-sm transition-all duration-150
-                                ${st === "error"
-                                  ? "border-red-200 text-red-500"
-                                  : "border-border-main text-text-muted hover:bg-bg-subtle hover:text-indigo-600"}`}
-                            >
-                              {st === "loading"
-                                ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Сохраняю...</>
-                                : st === "error"
-                                  ? <><XCircle className="w-3.5 h-3.5" /> Ошибка</>
-                                  : <><BookmarkPlus className="w-3.5 h-3.5" /> В эталон</>}
-                            </button>
-                          );
-                        })()}
                         <button
                           onClick={() => {
                             const sel = hvCases.filter((_: Case, i: number) => histSelectedCases.has(i));

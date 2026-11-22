@@ -40,13 +40,6 @@ class ExportRequest(BaseModel):
     provider: Optional[str] = None
 
 
-class EtalonAddRequest(BaseModel):
-    req_text: str
-    tc_text: str
-    platform: str = ""
-    feature: str = ""
-
-
 class BugFormatRequest(BaseModel):
     platform: str
     feature: str

@@ -20,7 +20,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(bk, "DATA_DIR", data)
     monkeypatch.setattr(bk, "BACKUPS_DIR", data / "backups")
     monkeypatch.setattr(bk, "_ROOT", tmp_path)
-    monkeypatch.setattr(bk, "_etalons_dump", lambda: ({"test_cases": {"ids": ["t1"], "documents": ["кейс"], "metadatas": [{}], "embeddings": []}}, ""))
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine)()
@@ -54,7 +53,8 @@ def test_выгрузка_всего_без_секретов(env):
     assert settings["confluence_token_path"] == "/home/me/token.txt"                # путь к файлу с токеном переносим
     assert "s3cret" not in json.dumps(b, ensure_ascii=False) and "PAT-123" not in json.dumps(b) and "gsk_1" not in json.dumps(b)
     titles = {s["id"] for s in b["summary"]}
-    assert {"bugs", "test_data", "model_bench", "settings", "etalons"} <= titles
+    assert {"bugs", "test_data", "model_bench", "settings"} <= titles
+    assert "etalons" not in b["server"]                                              # эталоны RAG упразднены
 
 
 def test_выгрузка_одного_раздела(env):
@@ -75,24 +75,7 @@ def test_восстановление_после_переустановки_и_�
     for p in data.glob("*.json"):
         p.unlink()
     db.query(MetricsSettings).delete(); db.query(Systems).delete(); db.commit()
-    restored = []
-    import db.vector_store as vsmod                                                    # эталоны — без настоящей Chroma
-
-    class FakeCol:
-        def get(self, **kw): return {"ids": []}
-        def upsert(self, **kw): restored.append(kw)
-
-    class FakeVS:
-        ef = None
-        class client:
-            @staticmethod
-            def get_or_create_collection(name, embedding_function=None): return FakeCol()
-    vsmod_orig = vsmod.VectorStore
-    vsmod.VectorStore = FakeVS
-    try:
-        r = bk.import_backup(bk.ImportBody(backup=backup), db=db)
-    finally:
-        vsmod.VectorStore = vsmod_orig
+    r = bk.import_backup(bk.ImportBody(backup=backup), db=db)
     assert not r["errors"] and r["snapshot"].startswith("data/backups/before-restore-")
     people = json.loads((data / "people.json").read_text("utf-8"))
     assert people["people"][0]["name"] == "Иванов"
@@ -101,7 +84,6 @@ def test_восстановление_после_переустановки_и_�
     s = {m.key: m.value for m in db.query(MetricsSettings).all()}
     assert s["jira_token"] == "" and s["jira_base_url"] == "https://jira.example"
     assert db.query(Systems).one().started_at == datetime(2026, 10, 1, 9, 30)   # таблица и даты восстановлены
-    assert restored == [{"ids": ["t1"], "documents": ["кейс"]}]                       # пустые метаданные в Chroma не передаём
 
     # Тот же Loom, секреты введены заново, восстановили ещё раз — секреты на месте.
     conns[0]["password"] = "new"
@@ -295,25 +277,16 @@ def test_merge_database_remaps_ids_and_keeps_relationships(env):
     assert metric.system.it_service_ci == 'NEW-CI' and metric.test_system_id != 1
 
 
-def test_merge_etalons_keeps_existing_ids_and_adds_missing(env, monkeypatch):
-    db, _ = env
-    import db.vector_store as vsmod
-    calls = []
-    class Collection:
-        def get(self, **kw): return {'ids': ['existing']}
-        def upsert(self, **kw): calls.append(kw)
-    class FakeVS:
-        ef = None
-        class client:
-            @staticmethod
-            def get_or_create_collection(*args, **kwargs): return Collection()
-    monkeypatch.setattr(vsmod, 'VectorStore', FakeVS)
-    incoming = {'etalons': {'test_cases': {'ids': ['existing', 'new'], 'documents': ['old', 'added']}}}
-    assert not bk.restore(db, incoming)['errors']
-    assert calls == [{'ids': ['new'], 'documents': ['added']}]
-    calls.clear()
-    assert not bk.restore(db, incoming, mode='replace')['errors']
-    assert calls[0]['ids'] == ['existing', 'new']
+def test_old_backup_with_rag_etalons_restores_without_errors(env):
+    """Копии до упразднения эталонов содержат server["etalons"]: остальное восстанавливается, ключ пропускается."""
+    db, data = env
+    incoming = {'files': {'people.json': {'people': [{'id': 'p2', 'name': 'Петров'}]}},
+                'etalons': {'test_cases': {'ids': ['t1'], 'documents': ['кейс'], 'embeddings': [[0.1]]}}}
+    for mode in ('merge', 'replace'):
+        result = bk.restore(db, incoming, mode=mode)
+        assert not result['errors'] and 'etalons' not in result['restored']
+    assert json.loads((data / 'people.json').read_text('utf-8'))['people'][-1]['name'] == 'Петров'
+    assert bk.summary(incoming) and all('etalons' not in row for row in bk.summary(incoming))
 
 
 def test_corrupt_current_file_is_reported_and_not_overwritten(env):

@@ -62,7 +62,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
 
 from backend.api import (
-    auth, generation, etalons, bugs, system, alerts, kernel,
+    auth, generation, bugs, system, alerts, kernel,
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, mcp_logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
@@ -198,7 +198,6 @@ app.include_router(auth.router)
 app.include_router(system.router)
 app.include_router(generation.router)
 app.include_router(tm_gen.router)
-app.include_router(etalons.router)
 app.include_router(bugs.router)
 app.include_router(alerts.router)
 app.include_router(kernel.router)

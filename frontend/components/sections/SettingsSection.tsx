@@ -63,7 +63,7 @@ const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
       { id: "pvs", icon: FileSearch, title: "PVS MCP", description: "Логи ИФТ, сервисная учётная запись и проверка подключения" },
       { id: "kafka", icon: Network, title: "Kafka", description: "Поток для «Метрик ОД»: SASL, SSL, сертификаты" },
       { id: "testdata", icon: Database, title: "Базы для тестовых данных", description: "Подключения к внешним БД и JDBC-драйверы" },
-      { id: "stores", icon: HardDrive, title: "Служебные хранилища", description: "ChromaDB и PostgreSQL самого приложения" },
+      { id: "stores", icon: HardDrive, title: "Служебные хранилища", description: "PostgreSQL самого приложения" },
   ],
 };
 

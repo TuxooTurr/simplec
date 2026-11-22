@@ -11,7 +11,7 @@ import { Select } from "@/components/ui";
 import {
   getSettings, saveSettings,
   getCustomLlmProviders, saveCustomLlmProvider, deleteCustomLlmProvider,
-  testLlmConnection, testChromaDb, testPostgres,
+  testLlmConnection, testPostgres,
   type CustomLlmProvider, type TestResult,
 } from "@/lib/settingsApi";
 import {
@@ -798,13 +798,12 @@ export function LlmProvidersPanel() {
   );
 }
 
-/** Тело окна «Служебные хранилища»: ChromaDB и PostgreSQL проверяются только по кнопке — проверка ходит в сами базы. */
+/** Тело окна «Служебные хранилища»: PostgreSQL проверяется только по кнопке — проверка ходит в саму базу. */
 export function SystemStoresPanel() {
   const [results, setResults] = useState<Record<string, TestResult | null>>({});
   const [testing, setTesting] = useState<string | null>(null);
 
   const stores = [
-    { id: "chroma", name: "ChromaDB", note: "Векторное хранилище для RAG: эталоны, документы", test: testChromaDb },
     { id: "pg", name: "PostgreSQL", note: "Метрики и настройки приложения", test: testPostgres },
   ];
 

@@ -4,10 +4,10 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Bug, Loader2, Copy, CheckCheck, Server, Monitor, Smartphone,
   BarChart2, Palette, GitBranch, PlugZap,
-  History, ChevronLeft, BookmarkPlus, CheckCircle2, XCircle, Trash2,
+  History, ChevronLeft, XCircle, Trash2,
   Paperclip, Image as ImageIcon, FileText, File as FileIcon, ListChecks, X, RotateCcw,
 } from "lucide-react";
-import { formatBug, addDefect, listRequirements, type Requirement } from "@/lib/api";
+import { formatBug, listRequirements, type Requirement } from "@/lib/api";
 import { SectionSettingsButton } from "@/components/ui";
 import JiraSettingsModal from "@/components/settings/JiraSettingsModal";
 import NotionRenderer from "@/components/NotionRenderer";
@@ -28,7 +28,6 @@ interface BugHistEntry {
   title?: string;
   parsedDescription?: string;
   priority?: string;
-  loadedAsEtalon?: boolean;
 }
 
 function loadBugHistory(): BugHistEntry[] {
@@ -166,8 +165,6 @@ export default function BugsSection() {
   }, []);
 
   const [histEntries, setHistEntries] = useState<BugHistEntry[]>(() => loadBugHistory());
-  const [etalonStatus, setEtalonStatus] = useState<Record<string, "loading" | "done" | "error">>({});
-  const [etalonErrorMsg, setEtalonErrorMsg] = useState<Record<string, string>>({});
 
   /* ── Pre-fill от анализатора логов ─────────────────────────────────── */
   useEffect(() => {
@@ -202,31 +199,6 @@ export default function BugsSection() {
   const clearHistory = useCallback(() => {
     setHistEntries([]);
     localStorage.removeItem("st_bug_history");
-  }, []);
-
-  const handleLoadAsEtalon = useCallback(async (entry: BugHistEntry, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setEtalonStatus(prev => ({ ...prev, [entry.id]: "loading" }));
-    try {
-      await addDefect({
-        description: entry.description,
-        defect_body: entry.report,
-        feature: entry.feature || undefined,
-      });
-      setHistEntries(prev => {
-        const next = prev.map(h => h.id === entry.id ? { ...h, loadedAsEtalon: true } : h);
-        localStorage.setItem("st_bug_history", JSON.stringify(next));
-        return next;
-      });
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "done" }));
-    } catch (e) {
-      setEtalonStatus(prev => ({ ...prev, [entry.id]: "error" }));
-      setEtalonErrorMsg(prev => ({ ...prev, [entry.id]: e instanceof Error ? e.message : String(e) }));
-      setTimeout(() => {
-        setEtalonStatus(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
-        setEtalonErrorMsg(prev => { const next = { ...prev }; delete next[entry.id]; return next; });
-      }, 8000);
-    }
   }, []);
 
   /* ── Следующий дефект / с нуля ──────────────────────────────────── */
@@ -377,34 +349,6 @@ export default function BugsSection() {
                         <span className="text-xs text-text-muted flex-shrink-0">
                           {formatHistTime(entry.timestamp)}
                         </span>
-                        {/* Загрузить в эталон */}
-                        {(() => {
-                          if (entry.loadedAsEtalon) return (
-                            <span className="flex-shrink-0 p-0.5 text-green-500" title="Добавлено в эталоны">
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </span>
-                          );
-                          const st = etalonStatus[entry.id];
-                          if (st === "loading") return (
-                            <span className="flex-shrink-0 p-0.5 text-text-muted">
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            </span>
-                          );
-                          if (st === "error") return (
-                            <span className="flex-shrink-0 p-0.5 text-red-500" title={etalonErrorMsg[entry.id] || "Ошибка"}>
-                              <XCircle className="w-3.5 h-3.5" />
-                            </span>
-                          );
-                          return (
-                            <button
-                              onClick={e => handleLoadAsEtalon(entry, e)}
-                              title="Загрузить в эталон дефектов"
-                              className="opacity-0 group-hover:opacity-100 text-text-muted hover:text-indigo-500 transition-opacity flex-shrink-0 p-0.5"
-                            >
-                              <BookmarkPlus className="w-3.5 h-3.5" />
-                            </button>
-                          );
-                        })()}
                         <button
                           onClick={e => {
                             e.stopPropagation();

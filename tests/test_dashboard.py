@@ -330,3 +330,20 @@ def test_several_widgets_with_same_jql_are_independent(dashboard, monkeypatch):
     assert api.widget_data('inbox', alice)['pending'] == 1
     assert api.widget_data('inbox-2', alice)['pending'] == 2          # отметка в одном счётчике не трогает другой
     assert len(api.widget_data('list-same', alice)['items']) == 2
+
+
+def test_only_ether_owner_can_reply(dashboard, monkeypatch, tmp_path):
+    from db import ether_credentials
+    from agents import ether_mcp
+    monkeypatch.setattr(ether_credentials, '_OWNER', tmp_path / 'owner.json')
+    monkeypatch.setattr(api, 'MOCK', False)
+    monkeypatch.setattr(ether_mcp, 'configured', lambda: True)
+    sent = []
+    monkeypatch.setattr(ether_mcp, 'send_message', lambda peer, text: sent.append((peer, text)) or {'sent': True})
+    ether_credentials.set_owner('alice')
+    with pytest.raises(HTTPException) as exc:
+        api.ether_send(api.EtherSend(peer={'id': 1}, text='привет'), {'login': 'bob'})
+    assert exc.value.status_code == 403 and sent == []
+    assert api.ether_send(api.EtherSend(peer={'id': 1}, text='привет'), {'login': 'alice'}) == {'sent': True}
+    monkeypatch.setattr(ether_mcp, 'get_thread', lambda peer: {'messages': [], 'canSend': True})
+    assert api.ether_thread(api.EtherPeer(peer={'id': 1}), {'login': 'bob'})['canSend'] is False

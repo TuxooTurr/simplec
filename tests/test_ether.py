@@ -206,3 +206,67 @@ def test_budget_does_not_starve_later_dialogs(monkeypatch):
         seen.update(message['id'] for message in mcp.fetch_feed(['Иванов']))
         clock[0] += 61
     assert len(seen) == 25
+
+
+# ── Поиск участников, переписка и ответы ─────────────────────────────────────
+
+def _tool(name, readonly=None, destructive=None, props=()):
+    return SimpleNamespace(name=name, annotations=SimpleNamespace(read_only_hint=readonly, destructive_hint=destructive),
+                           input_schema={'properties': {p: {} for p in props}})
+
+
+def _fake_client(monkeypatch, tools, answers, calls):
+    class Client:
+        async def list_tools(self, cursor=None): return SimpleNamespace(tools=tools)
+        async def call_tool(self, name, args):
+            calls.append((name, args))
+            return SimpleNamespace(is_error=False, structured_content=answers.get(name, {}), content=[])
+    @asynccontextmanager
+    async def client(*args): yield Client()
+    monkeypatch.setattr(mcp, 'open_client', client)
+
+
+def test_search_people_and_chats_from_real_tools(monkeypatch):
+    calls = []
+    tools = [_tool('get_dialogs', True, props=('scope', 'limit')), _tool('search_users', True, props=('query', 'limit'))]
+    answers = {'get_dialogs': {'dialogs': [{'peer': {'id': 7}, 'name': 'Тюрин Сергей', 'type': 'private'},
+                                           {'peer': {'id': 9}, 'name': 'Команда QA', 'type': 'group'}]},
+               'search_users': {'users': [{'display_name': 'Тюрин Сергей Павлович', 'login': 'tyurin', 'position': 'QA'}]}}
+    _fake_client(monkeypatch, tools, answers, calls)
+    res = mcp.search_participants('тюрин')
+    kinds = [(i['kind'], i['name']) for i in res['items']]
+    assert ('chat', 'Тюрин Сергей') in kinds and ('person', 'Тюрин Сергей Павлович') in kinds
+    assert all(n != 'Команда QA' for _, n in kinds) and res['people']
+    assert ('search_users', {'query': 'тюрин', 'limit': 20}) in calls      # только объявленные аргументы
+
+
+def test_search_without_people_tool_still_finds_chats(monkeypatch):
+    _fake_client(monkeypatch, [_tool('get_dialogs', True, props=('limit',))],
+                 {'get_dialogs': {'dialogs': [{'peer': 1, 'name': 'Команда QA', 'type': 'group'}]}}, [])
+    res = mcp.search_participants('кома')
+    assert res['items'][0]['kind'] == 'group' and not res['people'] and 'не подтверждён' in res['reason']
+
+
+def test_thread_and_send_only_through_non_destructive_tool(monkeypatch):
+    now = datetime.now(timezone.utc).isoformat()
+    calls = []
+    tools = [_tool('get_messages', True, props=('peer', 'limit')), _tool('send_message', False, False, props=('peer', 'text'))]
+    _fake_client(monkeypatch, tools, {'get_messages': {'messages': [{'mid': 1, 'sender': {'name': 'Тюрин'}, 'date': now, 'text': 'Привет', 'out': False}]}}, calls)
+    thread = mcp.get_thread({'id': 7})
+    assert thread['canSend'] and thread['messages'][0]['author'] == 'Тюрин'
+    assert mcp.send_message({'id': 7}, ' Ответ ') == {'sent': True}
+    assert calls[-1] == ('send_message', {'peer': {'id': 7}, 'text': 'Ответ'})
+
+
+def test_destructive_send_tool_is_never_called(monkeypatch):
+    calls = []
+    _fake_client(monkeypatch, [_tool('send_message', False, True, props=('peer', 'text'))], {}, calls)
+    with pytest.raises(mcp.EtherMcpError):
+        mcp.send_message({'id': 7}, 'текст')
+    assert calls == []
+
+
+def test_meetings_without_tracking_show_all(monkeypatch):
+    monkeypatch.setattr(mcp, 'MOCK', True)
+    assert len(mcp.fetch_channel('meetings', [], [])['messages']) == 3
+    assert mcp.fetch_channel('chat', [], [])['messages'] == []          # чат и почта без фильтра — пусто

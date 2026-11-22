@@ -361,6 +361,76 @@ def chat(body: Chat, user=Depends(require_user)):
     try: return {'source': 'ether', 'configured': True, **ether_mcp.fetch_channel(body.channel, body.users, body.keywords)}
     except ether_mcp.EtherMcpError as exc: raise HTTPException(502, str(exc)) from exc
 
+class EtherSearch(BaseModel):
+    q: str = Field(min_length=2, max_length=100)
+
+class EtherPeer(BaseModel):
+    peer: dict | list | str | int
+
+class EtherSend(EtherPeer):
+    text: str = Field(min_length=1, max_length=4000)
+
+class EtherMail(BaseModel):
+    id: str = Field(min_length=1, max_length=500)
+
+class EtherMailReply(EtherMail):
+    text: str = Field(min_length=1, max_length=20000)
+
+
+def _ether(fn, *args):
+    from agents import ether_mcp
+    if not ether_mcp.configured(): raise HTTPException(409, 'Эфир не подключён.')
+    try: return fn(*args)
+    except ether_mcp.EtherMcpError as exc: raise HTTPException(502, str(exc)) from exc
+
+
+def _ether_writer(user):
+    """Сессия Эфира одна на сервер: писать от её имени может только тот, кто её подключил."""
+    from db import ether_credentials
+    if MOCK: return
+    owner = ether_credentials.owner()
+    if not owner or owner != user.get('login'):
+        raise HTTPException(403, 'Отвечать в Эфире может только тот, кто подключил Эфир в Shark: сообщение уйдёт от его имени.')
+
+
+def _can_write(user):
+    try: _ether_writer(user); return True
+    except HTTPException: return False
+
+
+@router.post('/ether/search')
+def ether_search(body: EtherSearch, user=Depends(require_user)):
+    from agents import ether_mcp
+    return _ether(ether_mcp.search_participants, body.q)
+
+@router.post('/ether/thread')
+def ether_thread(body: EtherPeer, user=Depends(require_user)):
+    from agents import ether_mcp
+    res = _ether(ether_mcp.get_thread, body.peer)
+    writer = _can_write(user)
+    return {**res, 'canSend': bool(res.get('canSend')) and writer,
+            'reason': res.get('reason') or ('' if writer else 'Ответить может только тот, кто подключил Эфир в Shark.')}
+
+@router.post('/ether/send')
+def ether_send(body: EtherSend, user=Depends(require_user)):
+    from agents import ether_mcp
+    _ether_writer(user)
+    return _ether(ether_mcp.send_message, body.peer, body.text)
+
+@router.post('/ether/mail/message')
+def ether_mail(body: EtherMail, user=Depends(require_user)):
+    from agents import ether_mcp
+    res = _ether(ether_mcp.get_mail, body.id)
+    writer = _can_write(user)
+    return {**res, 'canReply': bool(res.get('canReply')) and writer,
+            'replyReason': res.get('replyReason') or ('' if writer else 'Ответить может только тот, кто подключил Эфир в Shark.')}
+
+@router.post('/ether/mail/reply')
+def ether_mail_reply(body: EtherMailReply, user=Depends(require_user)):
+    from agents import ether_mcp
+    _ether_writer(user)
+    return _ether(ether_mcp.reply_mail, body.id, body.text)
+
 def launch(widget_id):
     if widget_id in _queued: return _queued[widget_id]
     task = asyncio.create_task(asyncio.to_thread(refresh, widget_id))

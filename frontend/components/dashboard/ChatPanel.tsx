@@ -3,6 +3,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { CalendarDays, ChevronRight, CircleHelp, Mail, Maximize2, MessageSquare, Minimize2, Plug, RefreshCw, Search, Settings2, Sparkles, Users } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import EtherSettingsModal from "@/components/settings/EtherSettingsModal";
+import { MailModal, ParticipantPicker, ThreadModal } from "./EtherDialogs";
 import { etherFeed, type EtherChannel, type EtherFeed, type EtherMessage } from "@/lib/etherApi";
 const CHANNELS: { id: EtherChannel; label: string; Icon: typeof Mail }[] = [
   { id: "chat", label: "Чат", Icon: MessageSquare }, { id: "mail", label: "Почта", Icon: Mail }, { id: "meetings", label: "Встречи", Icon: CalendarDays },
@@ -47,7 +48,8 @@ export default function ChatPanel({ demo = false, expanded = false, onExpand }: 
   const profile = profiles[channel];
   const words = split(profile.keywords);
   const people = split(profile.users);
-  const ready = !!(words.length || people.length);
+  // Встречи без настроенного отслеживания показываются все; чат и почта — только по коллегам или словам.
+  const ready = channel === "meetings" || !!(words.length || people.length);
   const feed = feeds[channel];
   const current = CHANNELS.find(c => c.id === channel)!;
   useEffect(() => {
@@ -96,7 +98,7 @@ export default function ChatPanel({ demo = false, expanded = false, onExpand }: 
     <header className="px-4 pt-4 pb-3 shrink-0">
       <div className="flex items-center gap-2 mb-3">
         <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><Sparkles className="w-4 h-4" /></span>
-        <div className="flex-1 min-w-0"><h2 className="font-semibold text-sm">Эфир</h2><p className="text-[10px] text-text-muted">{demo ? "Демонстрационные данные" : feed?.configured ? "Подключён · только чтение" : "Коммуникации команды"}</p></div>
+        <div className="flex-1 min-w-0"><h2 className="font-semibold text-sm">Эфир</h2><p className="text-[10px] text-text-muted">{demo ? "Демонстрационные данные" : feed?.configured ? "Подключён" : "Коммуникации команды"}</p></div>
         <Button variant="icon" title="Подключение Эфира" onClick={() => setConnection(true)} icon={<Plug className="w-4 h-4" />} />
         {onExpand && <Button variant="icon" title={expanded ? "Вернуть панели" : "Развернуть Эфир"} onClick={onExpand} icon={expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />} />}
       </div>
@@ -114,7 +116,7 @@ export default function ChatPanel({ demo = false, expanded = false, onExpand }: 
     <div className="px-4 pb-3 border-b border-border-main shrink-0">
       <div className="flex items-center gap-2 justify-between">
         <button type="button" onClick={() => setTracking({ ...profile })} className="min-w-0 flex items-center gap-1.5 text-xs text-text-muted hover:text-primary focus-visible:ring-2 focus-visible:ring-primary rounded py-1">
-          <Users className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{people.length ? `Коллеги: ${people.length}` : "Все авторы"}{words.length ? ` · слов: ${words.length}` : ""}</span><Settings2 className="w-3 h-3 shrink-0" />
+          <Users className="w-3.5 h-3.5 shrink-0" /><span className="truncate">{people.length ? `Участники: ${people.length}` : channel === "meetings" && !words.length ? "Все встречи" : "Все авторы"}{words.length ? ` · слов: ${words.length}` : ""}</span><Settings2 className="w-3 h-3 shrink-0" />
         </button>
         <Button variant="icon" title={`Настроить отслеживание: ${current.label}`} onClick={() => setTracking({ ...profile })} icon={<Settings2 className="w-3.5 h-3.5" />} />
       </div>
@@ -147,13 +149,13 @@ export default function ChatPanel({ demo = false, expanded = false, onExpand }: 
             {message.title && <h3 className="text-xs font-semibold mb-1.5 break-words">{highlight(message.title, words)}</h3>}
             <p className="text-xs leading-relaxed text-text-main whitespace-pre-wrap break-words line-clamp-4">{highlight(message.text, words)}</p>
             <button type="button" className="mt-2.5 text-[11px] text-text-muted hover:text-primary inline-flex gap-1 items-center rounded focus-visible:ring-2 focus-visible:ring-primary" onClick={() => setDetail(message)}>
-              {channel === "meetings" ? "Детали встречи" : "Подробнее"}<ChevronRight className="w-3 h-3" />
+              {channel === "meetings" ? "Детали встречи" : channel === "chat" && message.peer != null ? "Открыть переписку" : channel === "mail" ? "Открыть письмо" : "Подробнее"}<ChevronRight className="w-3 h-3" />
             </button>
           </article>;
         })}
     </div>
     <footer className="border-t border-border-main px-4 py-2 flex items-center justify-between gap-2 text-[10px] text-text-muted shrink-0">
-      <span>{loading ? "Обновление…" : ready ? `Найдено: ${messages.length}` : "Настройте отслеживание"} · только чтение</span>
+      <span>{loading ? "Обновление…" : ready ? `Найдено: ${messages.length}` : "Настройте отслеживание"}</span>
       <Button variant="icon" title="Обновить Эфир" disabled={!ready || loading} onClick={() => setRevision(v => v + 1)} icon={<RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />} />
     </footer>
     {tracking && <Modal open title={`Отслеживание · ${current.label}`} onClose={() => setTracking(null)}
@@ -163,13 +165,16 @@ export default function ChatPanel({ demo = false, expanded = false, onExpand }: 
         setFeeds(s => ({ ...s, [channel]: undefined }));
       }}>Применить</Button></div>}>
       <p className="text-xs text-text-muted mb-4">Настройки личные и отдельные для каждой вкладки. Запись попадёт в ленту, если совпадёт коллега или хотя бы одно слово.</p>
-      <label className="block text-sm mb-4">Кого отслеживать<textarea aria-label="Кого отслеживать" rows={3} maxLength={10000} value={tracking.users} onChange={e => setTracking({ ...tracking, users: e.target.value })}
-        placeholder="ФИО, логин или почта · по одному на строку" className="w-full mt-1 border border-border-main rounded-lg p-2.5 bg-bg-card text-sm" /></label>
+      <div className="text-sm mb-4"><p className="mb-1">Кого отслеживать — коллеги, чаты и группы</p>
+        <ParticipantPicker value={split(tracking.users)} onChange={next => setTracking({ ...tracking, users: next.join("\n") })} />
+        {channel === "meetings" && <p className="mt-1.5 text-[11px] text-text-muted">Пусто — показываются все встречи.</p>}</div>
       <label className="block text-sm">Слова и фразы<textarea aria-label="Слова и фразы" rows={3} maxLength={10000} value={tracking.keywords} onChange={e => setTracking({ ...tracking, keywords: e.target.value })}
         placeholder="релиз, ошибка, ИФТ" className="w-full mt-1 border border-border-main rounded-lg p-2.5 bg-bg-card text-sm" /></label>
       <p className="mt-2 text-xs text-text-muted">Разделяйте запятой или новой строкой. Совпадения выделяются в тексте и подсвечивают карточку.</p>
     </Modal>}
-    {detail && <Modal open title={detail.title || detail.dialog || "Сообщение Эфира"} onClose={() => setDetail(null)} size="max-w-2xl" footer={<Button variant="ghost" onClick={() => setDetail(null)}>Закрыть</Button>}>
+    {detail && channel === "chat" && detail.peer != null && <ThreadModal message={detail} onClose={() => setDetail(null)} />}
+    {detail && channel === "mail" && <MailModal message={detail} onClose={() => setDetail(null)} />}
+    {detail && (channel === "meetings" || channel === "chat" && detail.peer == null) && <Modal open title={detail.title || detail.dialog || "Сообщение Эфира"} onClose={() => setDetail(null)} size="max-w-2xl" footer={<Button variant="ghost" onClick={() => setDetail(null)}>Закрыть</Button>}>
       <p className="text-xs text-text-muted mb-4">{detail.author} · {new Date(detail.date).toLocaleString("ru-RU")}</p>
       {detail.location && <p className="text-xs text-primary mb-3">{detail.location}</p>}
       <div className="dashboard-feed-row text-sm whitespace-pre-wrap break-words">{highlight(detail.text, words)}</div>

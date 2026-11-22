@@ -25,3 +25,22 @@ def save(cookie):
 
 def clear():
     _FILE.unlink(missing_ok=True)
+    clear_owner()
+
+# Кто подключил Эфир (логин Shark). Сессия Эфира одна на сервер — писать от её имени (ответ в чат, ответ на письмо)
+# может только этот пользователь Shark; остальные видят ленту и переписку только на чтение. Не секрет.
+_OWNER = DATA_DIR / 'ether_owner.json'
+
+
+def set_owner(login):
+    _OWNER.parent.mkdir(parents=True, exist_ok=True)
+    _OWNER.write_text(json.dumps({'login': str(login or '')}, ensure_ascii=False), encoding='utf-8')
+
+
+def owner():
+    try: return str(json.loads(_OWNER.read_text(encoding='utf-8')).get('login') or '')
+    except (OSError, ValueError, AttributeError): return os.getenv('ETHER_OWNER_LOGIN', '').strip()
+
+
+def clear_owner():
+    _OWNER.unlink(missing_ok=True)

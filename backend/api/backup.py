@@ -82,7 +82,7 @@ SECTIONS: dict[str, str] = {
 }
 
 FILE_SECTION: dict[str, str] = {
-    "dashboard.json": "dashboard", "ether_cookies.json": "dashboard",
+    "dashboard.json": "dashboard", "ether_cookies.json": "dashboard", "ether_owner.json": "dashboard",
     "gen_sessions.json": "generation",
     "testdata_connections.json": "test_data", "datagen_config.json": "test_data", "jdbc_drivers.json": "test_data",
     "people.json": "bugs", "jira_views.json": "bugs",

@@ -168,11 +168,15 @@ export default function CaseTable({ cases, cols, folder, withChildren, text, che
     if (col === "status") return <CaseStatus status={c.status} />;
     if (col === "duration") return <span className="whitespace-nowrap tabular-nums">{fmtDuration(c.estimatedTime)}</span>;
     if (col === "updated") return <span className="text-xs text-text-muted whitespace-nowrap">{c.updated ? fmtDate(c.updated) : "—"}</span>;
+    if (col === "archived") return c.archived ? <span className="text-xs text-text-muted">В архиве</span> : <span className="text-xs text-text-muted">—</span>;
     if (col === "folder") return <span className="block truncate text-xs text-text-muted" title={c.folder}>{c.folder || "—"}</span>;
     if (col === "name") {
       return (
         <>
-          <span className="block truncate text-text-main" title={c.name}>{c.name}</span>
+          <span className="flex items-center gap-1.5 min-w-0">
+            {c.archived && <span className="flex-shrink-0 px-1.5 py-px rounded border border-border-main bg-bg-subtle text-[10px] text-text-muted" title="Кейс в архиве Zephyr">Архив</span>}
+            <span className={`truncate ${c.archived ? "text-text-muted" : "text-text-main"}`} title={c.name}>{c.name}</span>
+          </span>
           {(!folder || (withChildren && c.folder !== folder)) && c.folder && !cols.includes("folder") && (
             <span className="block text-[11px] text-text-muted truncate">{folder && c.folder.startsWith(folder + "/") ? `…${c.folder.slice(folder.length)}` : c.folder}</span>
           )}

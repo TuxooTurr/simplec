@@ -292,7 +292,8 @@ def _save_index(base: str, project: str, idx: dict) -> None:
         _INDEX_DIR.mkdir(parents=True, exist_ok=True)
         tmp = _index_file(base, project).with_suffix(".tmp")
         tmp.write_text(json.dumps({"loadedAt": idx["loadedAt"], "cases": list(idx["cases"].values()),
-                                   "folders": sorted(idx.get("folders", set()))}, ensure_ascii=False), "utf-8")
+                                   "folders": sorted(idx.get("folders", set())),
+                                   "archivedError": idx.get("archivedError", "")}, ensure_ascii=False), "utf-8")
         tmp.replace(_index_file(base, project))
     except OSError as e:
         logger.warning("Zephyr: индекс не сохранился на диск: %s", e)
@@ -359,6 +360,68 @@ def fetch_all(cfg: dict, project: str, extra: str = "", kind: str = "testcase") 
 
 MAX_ALL = 30000
 
+# ── Архивные кейсы ───────────────────────────────────────────────────────────
+# Публичный поиск (/rest/atm/1.0/testcase/search) архивные кейсы не отдаёт: в интерфейсе Zephyr они лежат
+# в отдельной папке «Archived». Внутренний поиск интерфейса принимает archived=true (по отзывам на стендах
+# Server/DC); запасной вариант — TQL с archived = true. Стенд не отдал ни одним — модель грузится без архива,
+# причина видна в «Все кейсы». Проверяется в /api/zephyr/probe («case-archived»).
+ARCHIVED_PAGE = 200
+
+
+def _archived_variants(cfg: dict, project: str, start: int, size: int) -> list[tuple[str, dict]]:
+    out: list[tuple[str, dict]] = []
+    try:
+        pid = _project_id(cfg, project)
+    except HTTPException:
+        pid = ""
+    if pid:
+        out.append((f"{TESTS}/testcase/search", {"query": f"testCase.projectId IN ({pid})", "archived": "true",
+                                                 "startAt": start, "maxResults": size}))
+    out.append((f"{ATM}/testcase/search", {"query": _q_query(project, "archived = true"), "startAt": start, "maxResults": size}))
+    return out
+
+
+def _flat_folder(c: dict) -> dict:
+    """Внутренний API отдаёт папку объектом — приводим к пути, как у публичного."""
+    f = c.get("folder")
+    if isinstance(f, dict):
+        c = {**c, "folder": str(f.get("fullName") or f.get("name") or "")}
+    return c
+
+
+def fetch_archived(cfg: dict, project: str) -> tuple[list[dict], str]:
+    """Архивные кейсы проекта (с пометкой archived) и текст ошибки, если стенд их не отдал. В отличие от
+    _first_working, следующий вариант пробуем и на 401/403: внутренний API на части стендов закрыт."""
+    key = (cfg["base_url"], "testcase-archived")
+    rows: list[dict] = []
+    seen: set[str] = set()
+    start, err = 0, ""
+    while start < MAX_ALL:
+        variants = _archived_variants(cfg, project, start, ARCHIVED_PAGE)
+        order = list(range(len(variants)))
+        if key in _working and _working[key] < len(variants):
+            order.remove(_working[key]); order.insert(0, _working[key])
+        page, errors = None, []
+        for i in order:
+            try:
+                page = _items(_jira_request(cfg, "GET", variants[i][0], params=variants[i][1], timeout=PAGE_TIMEOUT))
+                _working[key] = i
+                break
+            except HTTPException as e:
+                errors.append(f"{e.status_code}: {str(e.detail)[:150]}")
+        if page is None:
+            err = "архивные кейсы не получены — " + "; ".join(errors)
+            break
+        fresh = [c for c in page if c.get("key") and c["key"] not in seen]
+        if not fresh:
+            break
+        seen.update(c["key"] for c in fresh)
+        rows += fresh
+        if len(page) < ARCHIVED_PAGE:
+            break
+        start += len(page)
+    return [{**_slim(_flat_folder(c)), "archived": True} for c in rows], err
+
 
 def _runs_key(project: str) -> str:
     """Индекс прогонов живёт рядом с индексом кейсов под своим именем (файл SBER911~runs_<tag>.json)."""
@@ -390,7 +453,7 @@ def get_index(cfg: dict, project: str, refresh: bool = False, kind: str = "testc
                 try:
                     raw = json.loads(f.read_text("utf-8"))
                     _index[key] = {"loadedAt": raw.get("loadedAt", 0), "cases": {c["key"]: c for c in raw.get("cases", []) if c.get("key")},
-                                   "folders": set(raw.get("folders", []))}
+                                   "folders": set(raw.get("folders", [])), "archivedError": raw.get("archivedError", "")}
                     return _index[key]
                 except (OSError, ValueError) as e:
                     logger.warning("Zephyr: индекс на диске повреждён (%s) — гружу из Jira", e)
@@ -407,6 +470,12 @@ def get_index(cfg: dict, project: str, refresh: bool = False, kind: str = "testc
         keep = (_index.get(key) or {}).get("folders", set())
         slim = _slim if kind == "testcase" else _slim_run
         idx = {"loadedAt": time.time(), "cases": {c["key"]: slim(c) for c in rows if c.get("key")}, "folders": set(keep)}
+        if kind == "testcase":
+            archived, idx["archivedError"] = fetch_archived(cfg, project)
+            for c in archived:                      # активный кейс важнее: архивный добавляется, только если его нет
+                idx["cases"].setdefault(c["key"], c)
+            if idx["archivedError"]:
+                logger.warning("Zephyr: %s — %s", project, idx["archivedError"])
         logger.info("Zephyr: %s %s загружены — %s за %.1f с", "кейсы" if kind == "testcase" else "прогоны",
                     project, len(idx["cases"]), time.time() - t0)
         _index[key] = idx
@@ -424,7 +493,7 @@ def _index_put(cfg: dict, project: str, cases_: list[dict], drop_folder: Optiona
         return
     with _locks.setdefault(key, threading.Lock()):
         if drop_folder is not None:
-            for k in [k for k, c in idx["cases"].items() if c.get("folder") == drop_folder]:
+            for k in [k for k, c in idx["cases"].items() if c.get("folder") == drop_folder and not c.get("archived")]:
                 del idx["cases"][k]
         for k in remove or []:
             idx["cases"].pop(k, None)
@@ -443,7 +512,9 @@ def index_info(project: str = Query(..., min_length=1), refresh: bool = False, d
     """Состояние модели: сколько кейсов и когда загружена. refresh=true — перечитать всё из Jira."""
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper(), refresh)
-    return {"total": len(idx["cases"]), "loadedAt": idx["loadedAt"]}
+    archived = sum(1 for c in idx["cases"].values() if c.get("archived"))
+    return {"total": len(idx["cases"]), "loadedAt": idx["loadedAt"], "archived": archived,
+            "archivedError": idx.get("archivedError", "")}
 
 
 class FolderRefresh(BaseModel):
@@ -468,7 +539,7 @@ def tree(project: str = Query(..., min_length=1), db: Session = Depends(get_db))
     """Дерево папок — из путей кейсов индекса (внутренний foldertree на стенде закрыт)."""
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper())
-    paths = [c.get("folder") or "" for c in idx["cases"].values()]
+    paths = [c.get("folder") or "" for c in idx["cases"].values() if not c.get("archived")]
     return {"source": "index", "folders": tree_from_paths(paths, sorted(idx.get("folders", set()))), "total": len(paths), "loadedAt": idx["loadedAt"]}
 
 
@@ -517,10 +588,13 @@ def cases(project: str = Query(..., min_length=1), folder: str = "", text: str =
     cfg = _load_cfg(db)
     idx = get_index(cfg, project.strip().upper())
     t = text.strip().lower()
+    # Архивные кейсы — только в «Все кейсы» (folder ""): в дереве папок их нет, как и в интерфейсе Zephyr.
     out = [c for c in idx["cases"].values()
-           if in_folder(c.get("folder") or "", folder, children) and (not t or t in c["name"].lower() or t in c["key"].lower())]
+           if (not c.get("archived") or not folder) and in_folder(c.get("folder") or "", folder, children)
+           and (not t or t in c["name"].lower() or t in c["key"].lower())]
     out.sort(key=lambda c: _key_num(c["key"]))
-    return {"cases": [{**c, "customFields": cf_plain(c.get("customFields"))} for c in out[:MAX_CASES_LIST]], "total": len(out)}
+    return {"cases": [{**c, "customFields": cf_plain(c.get("customFields"))} for c in out[:MAX_CASES_LIST]], "total": len(out),
+            "archivedError": "" if folder else idx.get("archivedError", "")}
 
 
 @router.get("/api/zephyr/case/{key}")
@@ -686,6 +760,11 @@ def probe(project: str = Query("SBER911", min_length=1), samples: bool = False, 
         results[-1]["note"] = f"кейсов: {len(page['items'])} · шаги в ответе: {'да — fields не учтён, ответ тяжелее' if steps else 'нет'}"
     check("case-search-doc", "Поиск кейсов: JQL=project (как в документации)", lambda: f"{ATM}/testcase/search/",
           {"JQL": f"project = {project}", "maxResult": 3}, first_key("case"))
+    check("case-archived-tests", "Архивные кейсы: внутренний поиск archived=true",
+          lambda: f"{TESTS}/testcase/search" if found.get("pid") else None,
+          {"query": f'testCase.projectId IN ({found.get("pid", "")})', "archived": "true", "maxResults": 3})
+    check("case-archived-tql", "Архивные кейсы: TQL archived = true (публичный v1)", lambda: f"{ATM}/testcase/search",
+          {"query": _q_query(project, "archived = true"), "maxResults": 3})
     check("case-get", "Кейс целиком (шаги)", lambda: f"{ATM}/testcase/{found['case']}" if found.get("case") else None)
     check("run-search-v1", "Поиск прогонов: testrun (публичный v1)", lambda: f"{ATM}/testrun/search",
           {"query": _q_query(project), "maxResults": 3}, first_key("run"))
@@ -2421,6 +2500,49 @@ def edit_cases(body: CasesEdit, db: Session = Depends(get_db)) -> dict:
         _jira_request(cfg, "PUT", f"{ATM}/testcase/{k}", json_body=payload)
         fresh.append(_slim(_jira_request(cfg, "GET", f"{ATM}/testcase/{k}")))
     ok, errors = _each(body.keys, one)
+    _index_put(cfg, project, fresh)
+    return {"updated": ok, "errors": errors}
+
+
+class CaseChange(BaseModel):
+    key: str = Field(..., min_length=1)
+    fields: dict[str, Any] = Field(..., min_length=1)
+
+
+class CasesEditEach(BaseModel):
+    project: str = Field(..., min_length=1)
+    items: list[CaseChange] = Field(..., min_length=1, max_length=500)
+
+
+# Поля, которые массовая правка может прислать для каждого кейса (значения уже посчитаны в окне правки:
+# «переписать», «заполнить пустые», «заменить» — у каждого кейса своё).
+EACH_FIELDS = {"name", "status", "priority", "owner", "objective", "precondition", "estimatedTime", "labels", "issueLinks", "customFields"}
+
+
+@router.post("/api/zephyr/cases/edit-each")
+def edit_cases_each(body: CasesEditEach, db: Session = Depends(get_db)) -> dict:
+    """Массовая правка с разными значениями у кейсов: по каждому кейсу — свой набор полей. Сбой одного не роняет
+    остальные; после записи кейс перечитывается в модель."""
+    cfg = _load_cfg(db)
+    project = body.project.strip().upper()
+    payloads: dict[str, dict] = {}
+    for it in body.items:
+        bad = set(it.fields) - EACH_FIELDS
+        if bad:
+            raise HTTPException(422, f"Поля не поддерживаются массовой правкой: {', '.join(sorted(bad))}")
+        p = {k: (v.strip() if isinstance(v, str) else v) for k, v in it.fields.items()}
+        if "name" in p and not p["name"]:
+            raise HTTPException(422, f"{it.key}: название не может быть пустым")
+        if "estimatedTime" in p and not (isinstance(p["estimatedTime"], int) and p["estimatedTime"] >= 0):
+            raise HTTPException(422, f"{it.key}: длительность — целое число миллисекунд")
+        payloads[it.key.strip().upper()] = p
+    get_index(cfg, project)
+    fresh: list[dict] = []
+
+    def one(k: str) -> None:
+        _jira_request(cfg, "PUT", f"{ATM}/testcase/{k}", json_body=payloads[k])
+        fresh.append(_slim(_jira_request(cfg, "GET", f"{ATM}/testcase/{k}")))
+    ok, errors = _each(list(payloads), one)
     _index_put(cfg, project, fresh)
     return {"updated": ok, "errors": errors}
 

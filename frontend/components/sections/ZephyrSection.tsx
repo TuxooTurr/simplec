@@ -70,7 +70,7 @@ export default function ZephyrSection() {
   const [bulk, setBulk] = useState<"edit" | "delete" | null>(null);
   /** Кейс открыт кнопкой «Изменить» — карточка сразу в режиме правки. */
   const [editOpen, setEditOpen] = useState(false);
-  const [cols, toggleCol] = useCaseCols();
+  const [cols, setCols] = useCaseCols();
   /** Перенос/переименование папки ждёт подтверждения: сколько кейсов уедет и куда. */
   const [folderMove, setFolderMove] = useState<{ source: string; target: string; count: number; rename: boolean } | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
@@ -87,6 +87,8 @@ export default function ZephyrSection() {
   const [applySnap, setApplySnap] = useState<Staging | null>(null);
   const [cases, setCases] = useState<ZCase[] | null>(null);
   const [casesErr, setCasesErr] = useState("");
+  /** «Все кейсы»: стенд не отдал архивные кейсы — почему (список показан без них). */
+  const [archivedErr, setArchivedErr] = useState("");
   const [q, setQ] = useState("");
   const [text, setText] = useState("");
   const [caseKey, setCaseKey] = useState<string | null>(null);
@@ -157,7 +159,7 @@ export default function ZephyrSection() {
     let live = true;
     setCases(null); setCasesErr("");
     getCases(project, folder, text, withChildren)
-      .then(r => { if (live) setCases(r.cases); })
+      .then(r => { if (live) { setCases(r.cases); setArchivedErr(r.archivedError ?? ""); } })
       .catch(e => live && setCasesErr((e as Error).message));
     return () => { live = false; };
   }, [project, folder, text, reloadKey, withChildren]);
@@ -328,11 +330,11 @@ export default function ZephyrSection() {
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle disabled:opacity-50 whitespace-nowrap">
                     <RefreshIcon busy={modelBusy === "folder"} className="w-3.5 h-3.5" /> Обновить папку</button>
                 )}
-                <button type="button" onClick={() => setExportFor(folder)}
-                  title={folder ? "Выгрузить папку со всеми вложенными в Zephyr XML" : "Выгрузить всю модель проекта в Zephyr XML"}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border-main text-xs text-text-main hover:bg-bg-subtle whitespace-nowrap">
-                  <Download className="w-3.5 h-3.5" /> Выгрузить XML</button>
-                <ColumnsMenu cols={cols} custom={customFields} onToggle={toggleCol} />
+                <button type="button" onClick={() => setExportFor(folder)} aria-label="Выгрузить XML"
+                  title={folder ? "Выгрузить XML: папка со всеми вложенными в формате Zephyr" : "Выгрузить XML: вся модель проекта в формате Zephyr"}
+                  className="flex items-center px-2 py-1.5 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle">
+                  <Download className="w-4 h-4" /></button>
+                <ColumnsMenu cols={cols} custom={customFields} onChange={setCols} />
                 <label className="flex items-center gap-2 w-64 px-2.5 py-1.5 rounded-lg border border-border-main bg-[var(--color-input-bg)] focus-within:ring-2 focus-within:ring-primary/30">
                   <Search className="w-3.5 h-3.5 text-text-muted" />
                   <input value={q} onChange={e => setQ(e.target.value)} placeholder="Название кейса" aria-label="Найти кейс"
@@ -341,6 +343,11 @@ export default function ZephyrSection() {
                 </label>
               </div>
               {casesErr && <p className="p-4 text-sm text-red-600 dark:text-red-400">Кейсы не загрузились: {casesErr}</p>}
+              {!folder && cases && (archivedErr
+                ? <p className="px-4 py-1.5 text-xs text-amber-700 dark:text-amber-300 border-b border-border-main" title={archivedErr}>
+                    Архивные кейсы не показаны: стенд их не отдал. Подробности — «Проверить API» (проверки «Архивные кейсы»).</p>
+                : cases.some(c => c.archived) && <p className="px-4 py-1.5 text-xs text-text-muted border-b border-border-main">
+                    Включая архивные: {cases.filter(c => c.archived).length}. Колонка «Архив» — фильтр по ним.</p>)}
               {!cases && !casesErr && <p className="flex items-center gap-2 p-4 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загружаю кейсы…</p>}
               {cases && (
                 <CaseTable key={project} cases={cases} cols={cols} folder={folder} withChildren={withChildren} text={text}
@@ -392,7 +399,7 @@ export default function ZephyrSection() {
         </Modal>
       )}
       {bulk === "edit" && (
-        <BulkEditModal project={project} keys={[...checked]} onClose={() => setBulk(null)}
+        <BulkEditModal project={project} keys={[...checked]} cases={cases ?? []} onClose={() => setBulk(null)}
           onDone={r => { setBulk(null); setChecked(new Set()); done(!r.errors.length, `Изменено кейсов: ${r.ok}.${r.errors.length ? ` Ошибки: ${r.errors.map(e => `${e.key} — ${e.error}`).join("; ")}` : ""}`); }} />
       )}
       {bulk === "delete" && (

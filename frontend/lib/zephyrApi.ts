@@ -22,6 +22,8 @@ export interface ZCase {
   estimatedTime?: number | null;
   /** Пользовательские поля: строка (флажок — «Да»/«Нет») или несколько значений списком. */
   customFields?: Record<string, string | string[]>;
+  /** Кейс в архиве Zephyr: виден только в «Все кейсы», в дереве папок его нет. */
+  archived?: boolean;
 }
 
 export interface ZStep { index: number; description: string; testData: string; expectedResult: string }
@@ -108,7 +110,7 @@ export const refreshFolder = (project: string, folder: string) =>
 
 /** Кейсы папки (все, с пользовательскими полями); children — и всех вложенных папок на любой глубине. */
 export const getCases = (project: string, folder: string, text = "", children = false) =>
-  fetchJson<{ cases: ZCase[]; total: number }>(`/api/zephyr/cases?${q({ project, folder, text, children: String(children) })}`);
+  fetchJson<{ cases: ZCase[]; total: number; archivedError?: string }>(`/api/zephyr/cases?${q({ project, folder, text, children: String(children) })}`);
 
 /** Кейс целиком; с project — заодно освежает его запись в модели на сервере. */
 export const getCase = (key: string, project = "") =>
@@ -454,6 +456,25 @@ export interface CasesEditIn {
 
 export const editCases = (project: string, keys: string[], edit: CasesEditIn) =>
   post<{ updated: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/edit", { project, keys, ...edit });
+
+/** Правка одного кейса в массовой правке: поля уже посчитаны (у каждого кейса свои значения). */
+export interface CaseChange { key: string; fields: Record<string, unknown> }
+const EDIT_CHUNK = 500;
+
+/** Массовая правка с разными значениями у кейсов — пачками по 500 (предел сервера), с прогрессом. */
+export async function editCasesEach(project: string, items: CaseChange[], onProgress?: (done: number, total: number) => void) {
+  const updated: string[] = [];
+  const errors: { key: string; error: string }[] = [];
+  for (let i = 0; i < items.length; i += EDIT_CHUNK) {
+    const part = items.slice(i, i + EDIT_CHUNK);
+    try {
+      const r = await post<{ updated: string[]; errors: { key: string; error: string }[] }>("/api/zephyr/cases/edit-each", { project, items: part });
+      updated.push(...r.updated); errors.push(...r.errors);
+    } catch (e) { errors.push(...part.map(x => ({ key: x.key, error: (e as Error).message }))); }
+    onProgress?.(Math.min(i + EDIT_CHUNK, items.length), items.length);
+  }
+  return { updated, errors };
+}
 
 export const deleteCase = (key: string, project: string) =>
   fetchJson<{ deleted: string }>(`/api/zephyr/case/${encodeURIComponent(key)}?${q({ project })}`, { method: "DELETE" });

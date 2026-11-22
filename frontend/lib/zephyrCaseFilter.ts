@@ -19,7 +19,7 @@ export interface FilterTemplate { id: string; name: string; filters: CaseFilters
 export const STD_COLS: { id: CaseColId; label: string }[] = [
   { id: "status", label: "Статус" }, { id: "priority", label: "Приоритет" }, { id: "duration", label: "Длительность" },
   { id: "owner", label: "Владелец" }, { id: "folder", label: "Папка" }, { id: "labels", label: "Метки" },
-  { id: "issueLinks", label: "Связи" }, { id: "updated", label: "Изменён" },
+  { id: "issueLinks", label: "Связи" }, { id: "updated", label: "Изменён" }, { id: "archived", label: "Архив" },
 ];
 const STATUS_RU: Record<string, string> = { approved: "Утверждено", draft: "Черновик", deprecated: "Устарел" };
 
@@ -50,6 +50,7 @@ export function caseValues(c: ZCase, col: CaseColId): string[] {
     case "issueLinks": return c.issueLinks ?? [];
     case "duration": return c.estimatedTime ? [fmtDuration(c.estimatedTime)] : [];
     case "updated": return c.updated ? [c.updated.slice(0, 10)] : [];
+    case "archived": return [c.archived ? "В архиве" : "Активный"];
     default: return [];
   }
 }

@@ -1196,3 +1196,75 @@ def test_прогоны_по_задачам_истёкший_токен_прер
     monkeypatch.setattr(z, "nf_type_value", lambda cfg, project: "НФ")
     with pytest.raises(HTTPException):
         z.task_runs(z.TaskRunsBody(project="SBER911", tasks=[z.TaskRun(key="SBER911-1", caseKeys=["T1"])]), db=None)
+
+
+# ── Архивные кейсы ───────────────────────────────────────────────────────────
+
+def _active_and_archive(jira, archive_route):
+    jira["routes"]["/rest/api/2/project/SBER911"] = {"id": "10500"}
+    def active(p):
+        if "archived" in p["query"]:
+            raise HTTPException(400, "Jira: unknown field archived")
+        return [{"key": "ICON-T1", "folder": "/A", "name": "Активный"}] if p["startAt"] == 0 else []
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = active
+    if archive_route is not None:
+        jira["routes"]["/rest/tests/1.0/testcase/search"] = archive_route
+
+
+def test_архивные_кейсы_только_во_всех_кейсах(jira):
+    _active_and_archive(jira, lambda p: {"results": [
+        {"key": "ICON-T9", "name": "Старый", "folder": {"fullName": "/A"}, "status": {"name": "Deprecated"}},
+        {"key": "ICON-T1", "name": "Дубль активного"}]} if p["startAt"] == 0 and p["archived"] == "true" else {"results": []})
+    all_ = z.cases(project="SBER911", folder="", text="", db=None)
+    assert {c["key"]: c.get("archived", False) for c in all_["cases"]} == {"ICON-T1": False, "ICON-T9": True}
+    assert all_["cases"][0]["name"] == "Активный"                       # активный не затирается архивной копией
+    assert [c["key"] for c in z.cases(project="SBER911", folder="/A", text="", db=None)["cases"]] == ["ICON-T1"]
+    assert z.tree(project="SBER911", db=None)["total"] == 1
+    info = z.index_info(project="SBER911", db=None)
+    assert info["archived"] == 1 and info["archivedError"] == ""
+
+
+def test_архив_закрыт_модель_грузится_с_причиной(jira):
+    _active_and_archive(jira, HTTPException(403, "Jira: forbidden"))
+    res = z.cases(project="SBER911", folder="", text="", db=None)
+    assert [c["key"] for c in res["cases"]] == ["ICON-T1"]
+    assert "403" in res["archivedError"] and "400" in res["archivedError"]
+    assert z.cases(project="SBER911", folder="/A", text="", db=None)["archivedError"] == ""
+
+
+def test_обновление_папки_не_теряет_архивные(jira):
+    _active_and_archive(jira, lambda p: {"results": [{"key": "ICON-T9", "name": "Старый", "folder": "/A"}]}
+                        if p["startAt"] == 0 else {"results": []})
+    z.get_index(CFG, "SBER911")
+    z.refresh_folder(z.FolderRefresh(project="SBER911", folder="/A"), db=None)
+    assert z._index[(CFG["base_url"], "SBER911")]["cases"]["ICON-T9"]["archived"] is True
+
+
+def test_массовая_правка_своё_значение_каждому_кейсу(jira):
+    jira["routes"]["/rest/atm/1.0/testcase/search"] = lambda p: [] if "archived" not in p["query"] else []
+    puts = {}
+    for k in ("ICON-T1", "ICON-T2"):
+        jira["routes"][f"/rest/atm/1.0/testcase/{k}"] = (lambda key: (lambda p: {"key": key, "name": f"Новое {key}"}))(k)
+    orig = z._jira_request
+    def req(cfg, method, path, params=None, json_body=None, timeout=30, **kw):
+        if method == "PUT":
+            puts[path.rsplit("/", 1)[1]] = json_body
+            return {}
+        return orig(cfg, method, path, params=params, json_body=json_body, timeout=timeout)
+    z._jira_request = req
+    try:
+        r = z.edit_cases_each(z.CasesEditEach(project="SBER911", items=[
+            {"key": "ICON-T1", "fields": {"name": " Вход: смс ", "customFields": {"Крит. регресс": True}}},
+            {"key": "icon-t2", "fields": {"labels": ["a", "b"]}}]), db=None)
+    finally:
+        z._jira_request = orig
+    assert sorted(r["updated"]) == ["ICON-T1", "ICON-T2"] and not r["errors"]
+    assert puts == {"ICON-T1": {"name": "Вход: смс", "customFields": {"Крит. регресс": True}}, "ICON-T2": {"labels": ["a", "b"]}}
+    assert z._index[(CFG["base_url"], "SBER911")]["cases"]["ICON-T1"]["name"] == "Новое ICON-T1"
+
+
+def test_массовая_правка_отклоняет_чужие_поля_и_пустое_название(jira):
+    with pytest.raises(HTTPException):
+        z.edit_cases_each(z.CasesEditEach(project="SBER911", items=[{"key": "ICON-T1", "fields": {"folder": "/X"}}]), db=None)
+    with pytest.raises(HTTPException):
+        z.edit_cases_each(z.CasesEditEach(project="SBER911", items=[{"key": "ICON-T1", "fields": {"name": "  "}}]), db=None)

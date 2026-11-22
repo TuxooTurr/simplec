@@ -116,6 +116,15 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     apiKeyLabel: "API Key",
   },
   {
+    // Kimi (Moonshot AI): ключ — platform.kimi.ai/console/api-keys, API — api.moonshot.ai (OpenAI-совместимый).
+    // kimi-k2.6 и kimi-k2.7-code не выдаются новым пользователям и выводятся в конце 2026 года — в списке их нет.
+    id: "kimi", name: "Kimi", color: "#000000", iconLetter: "K",
+    logo: "/logos/kimi.svg",
+    base_url: "https://api.moonshot.ai/v1", model: "kimi-k3.1-pro",
+    models: ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"],
+    apiKeyLabel: "API Key",
+  },
+  {
     id: "openai", name: "OpenAI", color: "#000000", iconLetter: "O",
     logo: "/logos/openai.svg",
     base_url: "https://api.openai.com/v1", model: "gpt-4o",

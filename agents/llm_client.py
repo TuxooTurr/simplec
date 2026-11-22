@@ -144,6 +144,12 @@ def gigachat_only() -> bool:
     return os.environ.get("GIGACHAT_ONLY", "").lower() in ("1", "true", "yes")
 
 
+def _always_thinking_fixed_sampling(model: str) -> bool:
+    """Модели, которые всегда рассуждают и не принимают temperature/top_p (Kimi K3-серия:
+    kimi-k3, kimi-k3.1-pro, kimi-k3.1-pro-highspeed — platform.kimi.ai/docs/api/chat)."""
+    return model.strip().lower().startswith("kimi-k3")
+
+
 def _load_custom_providers() -> list[dict]:
     """Custom LLM providers from CUSTOM_LLM_PROVIDERS JSON env."""
     if gigachat_only():
@@ -521,7 +527,9 @@ class LLMClient:
         if self.auth_type == "certificate" and not client_cert:
             raise ValueError("Custom LLM client certificate path is empty")
         cert = (client_cert, client_key) if client_cert and client_key else (client_cert or None)
-        self.client = httpx.Client(timeout=self._timeout_override or 180.0, verify=verify, cert=cert)
+        # Модели с обязательным рассуждением отвечают дольше: длинный документ QA не должен обрываться таймаутом.
+        default_timeout = 600.0 if _always_thinking_fixed_sampling(self.model) else 180.0
+        self.client = httpx.Client(timeout=self._timeout_override or default_timeout, verify=verify, cert=cert)
 
     def chat(self, messages: List[Message],
              temperature: float = 0.7,
@@ -650,13 +658,20 @@ class LLMClient:
         return headers
 
     def _chat_custom(self, messages, temperature, max_tokens, model_override: str = ""):
+        model = model_override or self.model
         payload = {
-            "model": model_override or self.model,
+            "model": model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
         }
+        if _always_thinking_fixed_sampling(model):
+            # Kimi K3: temperature зафиксирована (любое значение → ошибка API), а рассуждение
+            # (reasoning_content) расходует тот же лимит, что и ответ. Лимиты Shark в 1500–4000
+            # оставили бы ответ пустым — берём лимит провайдера по умолчанию (131 072).
+            payload.pop("temperature")
+            payload.pop("max_tokens")
         response = self.client.post(
             self.base_url + "/chat/completions",
             json=payload,

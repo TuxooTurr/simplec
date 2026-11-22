@@ -73,9 +73,10 @@ def _observe_status(entry, issue, when):
                                                'reason': 'status-change', 'change': entry['statusChange']})
     if new['id'] or new['name']: entry['observedStatus'] = new
 
-def observe(widget_id, issues, *, retained=(), error='', partial=False):
+def observe(widget_id, issues, *, retained=(), error='', partial=False, layout_version=None):
     with LOCK:
         data = read()
+        if layout_version is not None and data['version'] != layout_version: return
         widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
         if not widget: return
         queue = data.setdefault('queues', {}).setdefault(widget_id, {'entries': {}})

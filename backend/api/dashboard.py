@@ -189,11 +189,13 @@ def observed_issue(raw, base_url):
     return issue
 
 def refresh(widget_id):
+    layout_version = None
     with _guard:
         if widget_id in _busy: return
         _busy.add(widget_id)
     try:
         data = store.read()
+        layout_version = data['version']
         widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
         if not widget: return
         with SessionLocal() as db:
@@ -213,11 +215,11 @@ def refresh(widget_id):
                 for batch in jira._chunks(missing, 1000):
                     fetched = jira._by_keys(cfg, batch, **expansion)
                     retained.extend(observed_issue(issue, cfg['base_url']) for issue in fetched)
-            store.observe(widget_id, issues, retained=retained, partial=total > len(raw),
+            store.observe(widget_id, issues, retained=retained, partial=total > len(raw), layout_version=layout_version,
                           error='Jira вернула больше 20 000 задач. Сузьте фильтр: выдача неполная.' if total > len(raw) else '')
     except Exception as exc:
         text = str(exc.detail)[:500] if isinstance(exc, HTTPException) else 'Не удалось обновить Jira. Сохранён предыдущий результат.'
-        store.observe(widget_id, None, error=text)
+        store.observe(widget_id, None, error=text, layout_version=layout_version)
     finally:
         with _guard: _busy.discard(widget_id)
 

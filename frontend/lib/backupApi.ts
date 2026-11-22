@@ -7,11 +7,13 @@
  */
 
 import { fetchJson } from "./jiraApi";
+import { backupItemKey, mergeBackupValues } from "./backupMerge";
 
 export const BACKUP_FORMAT = "simpletest.backup";
 const REDACTED = "__SIMPLETEST_REDACTED__";
 
-export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; etalons: number; assets?: number }
+export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; etalons: number; assets?: number; widgets?: number; counters?: number }
+export type RestoreMode = "merge" | "replace";
 export interface BackupFile {
   format: string; version: number; createdAt: string; scope: string; scopeTitle: string; secrets: string;
   server: Record<string, unknown>; summary: BackupSummary[];
@@ -20,6 +22,7 @@ export interface BackupFile {
 export interface RestoreResult {
   restored: { files: string[]; tables: string[]; settings: string[]; etalons: string[]; assets?: string[] };
   errors: string[]; snapshot: string; browserKeys: number;
+  mode?: RestoreMode;
 }
 
 export const SECTIONS: { id: string; title: string }[] = [
@@ -59,6 +62,7 @@ const SKIP_KEYS = new Set(["st_auth_token", "st_jira_tool_cache", "st_zephyr_imp
 const KEY_SECTION: [RegExp, string][] = [
   [/^st_ether_/, "dashboard"],
   [/^st_dashboard_/, "dashboard"],
+  [/^st_jira_issue_table_w:dashboard-/, "dashboard"],
   [/^st_issue_type_display$/, "bugs"],
   [/^st_(jira_|bug_|plan_unit|cell_icon)/, "bugs"], [/^st_zephyr_/, "zephyr"], [/^st_kafka_/, "kafka"],
   [/^st_(gen_|projects$|teams$|ke$|author$)/, "generation"], [/^st_automodel_|^st_autotest_/, "auto_model"],
@@ -81,7 +85,8 @@ function unredact(v: unknown, old: unknown): unknown {
   if (v === REDACTED) return typeof old === "string" ? old : "";
   if (Array.isArray(v)) {
     const olds = Array.isArray(old) ? old : [];
-    return v.map((x, i) => unredact(x, olds[i]));
+    const byKey = new Map(olds.flatMap(x => { const key = backupItemKey(x); return key === null ? [] : [[key, x] as const]; }));
+    return v.map((x, i) => { const key = backupItemKey(x); return unredact(x, key === null ? olds[i] : byKey.get(key)); });
   }
   if (v && typeof v === "object") {
     const o = old && typeof old === "object" ? old as Record<string, unknown> : {};
@@ -95,7 +100,7 @@ function browserData(scope: string): Record<string, string> {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (!k || !k.startsWith("st_") || SKIP_KEYS.has(k) || (scope !== "all" && keySection(k) !== scope)) continue;
+      if (!k || !k.startsWith("st_") || SKIP_KEYS.has(k) || isSecret(k) || (scope !== "all" && keySection(k) !== scope)) continue;
       const raw = localStorage.getItem(k) ?? "";
       try { out[k] = JSON.stringify(redact(JSON.parse(raw))); } catch { out[k] = raw; }
     }
@@ -145,19 +150,24 @@ export async function readBackup(file: File): Promise<BackupFile> {
 }
 
 /** Восстановить выбранные разделы: сервер (со снимком перед заменой) и данные браузера. */
-export async function restoreBackup(b: BackupFile, sections: string[]): Promise<RestoreResult> {
+export async function restoreBackup(b: BackupFile, sections: string[], mode: RestoreMode = "merge"): Promise<RestoreResult> {
   const r = await fetchJson<Omit<RestoreResult, "browserKeys">>("/api/backup/import", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ backup: b, sections }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ backup: b, sections, mode }),
   });
   let browserKeys = 0;
   for (const [k, v] of Object.entries(b.browser?.localStorage ?? {})) {
-    if (!k.startsWith("st_") || SKIP_KEYS.has(k) || !sections.includes(keySection(k))) continue;
+    if (!k.startsWith("st_") || SKIP_KEYS.has(k) || isSecret(k) || !sections.includes(keySection(k))) continue;
     try {
       let value = v;
-      try { value = JSON.stringify(unredact(JSON.parse(v), JSON.parse(localStorage.getItem(k) ?? "null"))); } catch { /* не JSON — как есть */ }
+      const old = localStorage.getItem(k);
+      try {
+        const current = old === null ? undefined : JSON.parse(old);
+        const incoming = unredact(JSON.parse(v), current);
+        value = JSON.stringify(mode === "merge" && old !== null ? mergeBackupValues(current, incoming) : incoming);
+      } catch { if (mode === "merge" && old !== null) value = old; }
       localStorage.setItem(k, value);
       browserKeys++;
-    } catch { /* нет места — пропускаем ключ */ }
+    } catch { r.errors.push(`Данные браузера ${k}: не удалось сохранить. Проверьте свободное место.`); }
   }
   return { ...r, browserKeys };
 }

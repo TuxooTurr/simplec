@@ -37,6 +37,12 @@ def test_error_does_not_zero_queue_or_replace_success_timestamp(dashboard):
     view=api.widget_data('inbox',{})
     assert view['pending']==1 and view['error'] and view['lastCheckedAt']==stamp
 
+def test_stale_refresh_cannot_overwrite_restored_layout(dashboard):
+    old_version = store.read()['version']
+    store.layout([dashboard], old_version)
+    store.observe('inbox', [issue(1)], layout_version=old_version)
+    assert not store.read().get('queues')
+
 def test_refresh_race_does_not_erase_processed_and_marks_idempotent(dashboard):
     store.observe('inbox',[issue(1)])
     with ThreadPoolExecutor(2) as pool:

@@ -16,35 +16,40 @@
 на месте метки остаётся то, что уже сохранено на этом Shark (пароль подключения с тем же id, токен Jira…);
 нечего оставить — поле пустое, его вводят заново.
 
-Восстановление заменяет выбранные разделы целиком (настройки — по ключам, чужие ключи не трогает). Исключение —
-«Данные»: дерево папок и документы не заменяются, а сливаются (merge_requirements) — текущее дерево (в том числе
-базовое дерево фич) остаётся, из копии дописывается недостающее. Перед заменой текущие данные сохраняются
-в data/backups/ (последние 5) — ошибочное восстановление можно откатить. Сбой одного файла или таблицы не обрывает
-остальное: он попадает в errors.
+При загрузке выбирается режим. По умолчанию merge дописывает недостающее, сохраняя существующие значения;
+replace заменяет представленные в копии файлы/таблицы и значения ключей настроек. Отсутствующие хранилища
+и невыбранные разделы не трогаются. В merge папки «Данных» сопоставляются также по пути, записи коллекций —
+по id/key/name. Главная переносится с раскладкой, настройками и очередями; её версия обновляется, новые
+виджеты размещаются без наложения на существующие. Перед восстановлением данные сервера сохраняются
+в data/backups/ (последние 5). Сбой одного хранилища не обрывает остальные: он попадает в errors.
 
 Эндпоинты:
   GET  /api/backup/sections         — разделы и что в них есть сейчас
   GET  /api/backup/export?scope=…   — выгрузка: all или id раздела (generation, bugs, …)
-  POST /api/backup/import           — восстановление: {backup, sections?: [id…]}
+  POST /api/backup/import           — восстановление: {backup, sections?: [id…], mode?: "merge" | "replace"}
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from tempfile import NamedTemporaryFile
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Table, text
+from sqlalchemy import DateTime, Integer, Table, UniqueConstraint, text
 from sqlalchemy.orm import Session
 
 from backend.api.auth import require_superuser
 from db.metrics_models import Base
 from db.postgres import get_db
 from db.paths import DATA_DIR
+from backend.backup_merge import merge_missing
 
 # Вся выгрузка и восстановление — только суперюзеру: в файле все данные приложения.
 router = APIRouter(dependencies=[Depends(require_superuser)])
@@ -56,6 +61,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = DATA_DIR
 BACKUPS_DIR = DATA_DIR / "backups"
 KEEP_SNAPSHOTS = 5
+RESTORE_LOCK = threading.RLock()
 
 # Разделы — как вкладки в меню. Файл, таблица или ключ настроек относится к одному разделу; не найденное — в «Общее».
 SECTIONS: dict[str, str] = {
@@ -280,6 +286,12 @@ def summary(server: dict) -> list[dict]:
         return acc.setdefault(s, {"id": s, "title": SECTIONS.get(s, s), "files": [], "tables": [], "settings": 0, "etalons": 0, "assets": 0})
     for name in server.get("files", {}):
         at(FILE_SECTION.get(name, "settings"))["files"].append(name)
+        if name == 'dashboard.json':
+            data = server['files'][name]
+            widgets = data.get('widgets') or [] if isinstance(data, dict) else []
+            widgets = [w for w in widgets if isinstance(w, dict)] if isinstance(widgets, list) else []
+            at('dashboard')['widgets'] = sum(w.get('kind') != 'counter' for w in widgets)
+            at('dashboard')['counters'] = sum(w.get('kind') == 'counter' for w in widgets)
     for name, rows in server.get("tables", {}).items():
         if name == SETTINGS_TABLE:
             for r in rows:
@@ -297,9 +309,13 @@ def summary(server: dict) -> list[dict]:
 
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".restore.tmp")
-    tmp.write_text(json.dumps(value, ensure_ascii=False, indent=2), "utf-8")
-    tmp.replace(path)
+    with NamedTemporaryFile('w', encoding='utf-8', dir=path.parent, delete=False) as tmp:
+        try:
+            json.dump(value, tmp, ensure_ascii=False, indent=2)
+            tmp.close()
+            os.replace(tmp.name, path)
+        finally:
+            if os.path.exists(tmp.name): os.unlink(tmp.name)
 
 
 def _parse_dt(table: Table, row: dict) -> dict:
@@ -328,12 +344,13 @@ def _fix_sequence(db: Session, table: Table) -> None:
 def _snapshot(db: Session) -> str:
     """Текущие данные (с секретами — файл не покидает сервер) → data/backups/; хранится последние KEEP_SNAPSHOTS."""
     BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
-    path = BACKUPS_DIR / f"before-restore-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    path = BACKUPS_DIR / f"before-restore-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}.json"
     _write_json(path, {"format": FORMAT, "version": VERSION, "createdAt": datetime.now().isoformat(timespec="seconds"),
                        "scope": "all", "secrets": "included", "server": collect(db, "all", secrets=True)})
     for old in sorted(BACKUPS_DIR.glob("before-restore-*.json"))[:-KEEP_SNAPSHOTS]:
         old.unlink(missing_ok=True)
-    return str(path.relative_to(_ROOT))
+    try: return str(path.relative_to(_ROOT))
+    except ValueError: return f'backups/{path.name}'
 
 
 REQ_FOLDERS, REQ_DOCS, REQ_SEEDED = "requirement_folders.json", "requirements.json", "requirement_folders_seeded.json"
@@ -382,18 +399,15 @@ def merge_folders(current: list[dict], incoming: list[dict]) -> tuple[list[dict]
 
 
 def merge_requirements(current: list[dict], incoming: list[dict], idmap: dict[str, str], folder_ids: set[str]) -> list[dict]:
-    """Документы из копии: новых — дописать (в папку из копии, переведённую на здешние id); тот же документ есть —
-    остаётся более свежий по updated_at, а папка — здешняя (раскладку по дереву копия не меняет)."""
+    """Add new documents with remapped folder ids; existing documents remain unchanged."""
     out = list(current)
     pos = {d["id"]: i for i, d in enumerate(out)}
     for doc in incoming:
         fid = idmap.get(doc.get("folder_id") or "", doc.get("folder_id") or "")
         if doc["id"] not in pos:
+            pos[doc['id']] = len(out)
             out.append({**doc, "folder_id": fid if fid in folder_ids else ""})
             continue
-        cur = out[pos[doc["id"]]]
-        if str(doc.get("updated_at", "")) > str(cur.get("updated_at", "")):
-            out[pos[doc["id"]]] = {**doc, "folder_id": cur.get("folder_id", "")}
     return out
 
 
@@ -404,21 +418,25 @@ def _read_json(path: Path) -> Any:
         return None
 
 
+def _current_json(path: Path) -> Any:
+    return json.loads(path.read_text('utf-8')) if path.exists() else None
+
+
 def _restore_requirements(files: dict, done: dict, errors: list[str]) -> None:
     """Раздел «Данные»: дерево и документы сливаются с текущими, а не заменяют их."""
     try:
-        folders_now = _dicts(_read_json(DATA_DIR / REQ_FOLDERS))
+        folders_now = _dicts(_current_json(DATA_DIR / REQ_FOLDERS))
         folders, idmap = merge_folders(folders_now, _dicts(files.get(REQ_FOLDERS)))
         if REQ_FOLDERS in files:
             _write_json(DATA_DIR / REQ_FOLDERS, folders)
             done["files"].append(REQ_FOLDERS)
         if REQ_DOCS in files:
-            docs_now = _dicts(_read_json(DATA_DIR / REQ_DOCS))
+            docs_now = _dicts(_current_json(DATA_DIR / REQ_DOCS))
             docs = merge_requirements(docs_now, _dicts(unredact(files[REQ_DOCS], docs_now)), idmap, {f["id"] for f in folders})
             _write_json(DATA_DIR / REQ_DOCS, docs)
             done["files"].append(REQ_DOCS)
         if REQ_SEEDED in files:
-            seeded = _read_json(DATA_DIR / REQ_SEEDED)
+            seeded = _current_json(DATA_DIR / REQ_SEEDED)
             both = {x for x in (seeded or []) + (files[REQ_SEEDED] or []) if isinstance(x, str)}
             _write_json(DATA_DIR / REQ_SEEDED, sorted(both))
             done["files"].append(REQ_SEEDED)
@@ -426,35 +444,121 @@ def _restore_requirements(files: dict, done: dict, errors: list[str]) -> None:
         errors.append(f"«Данные» (дерево и документы): {e}"[:300])
 
 
-def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> dict:
-    """Заменить выбранные разделы данными из выгрузки (дерево и документы «Данных» — слить). Возвращает, что восстановлено."""
+def _restore_dashboard(path: Path, incoming: dict, mode: str) -> None:
+    from db import dashboard_store
+    from backend.api.dashboard import positioned
+    with dashboard_store.LOCK:
+        current = (_current_json(path) if mode == 'merge' else _read_json(path)) or {'version': 0, 'widgets': [], 'queues': {}}
+        if not isinstance(current, dict) or not isinstance(current.get('widgets'), list):
+            if mode == 'merge': raise ValueError('Текущие данные Главной повреждены.')
+            current = {'version': 0, 'widgets': [], 'queues': {}}
+        if not isinstance(incoming, dict) or not isinstance(incoming.get('widgets'), list) or not isinstance(incoming.get('queues', {}), dict):
+            raise ValueError('Некорректные данные Главной в копии.')
+        # Validate even colliding incoming widgets; never silently import malformed settings.
+        source = positioned(incoming['widgets'], repair=True)
+        if len({w['id'] for w in source}) != len(source): raise ValueError('В копии повторяются id виджетов.')
+        for queue in incoming.get('queues', {}).values():
+            if not isinstance(queue, dict) or not isinstance(queue.get('entries', {}), dict): raise ValueError('Некорректная очередь Главной.')
+            for key, entry in queue.get('entries', {}).items():
+                if not isinstance(entry, dict) or not isinstance(entry.get('firstSeenAt'), str) or not isinstance(entry.get('issue'), dict) or entry['issue'].get('key') != key or not isinstance(entry['issue'].get('fields', {}), dict):
+                    raise ValueError('Некорректная запись очереди Главной.')
+        if mode == 'merge':
+            result = merge_missing(current, incoming)
+            known = {w['id'] for w in current['widgets']}
+            by_id = {w['id']: w for w in source}
+            existing = [merge_missing(w, by_id.get(w['id'], {}), merge_lists=False) for w in current['widgets']]
+            result['widgets'] = positioned([*existing, *(w for w in source if w['id'] not in known)], repair=True)
+        else:
+            result = {**incoming, 'widgets': source}
+        # Invalidate old editor versions and in-flight Jira reads.
+        result['version'] = int(current.get('version', 0)) + 1
+        _write_json(path, result)
+
+
+def _merge_setting(new, old):
+    restored = _unredact_setting(new, old)
+    try:
+        current, incoming = json.loads(old), json.loads(restored)
+        return json.dumps(merge_missing(current, incoming), ensure_ascii=False)
+    except (TypeError, ValueError): return old
+
+
+def _merge_rows(db: Session, table: Table, rows: list[dict], id_maps: dict) -> int:
+    """Preserve existing records, map natural-key matches and colliding integer ids across related tables."""
+    current = [dict(row) for row in db.execute(table.select()).mappings()]
+    primary = [column.name for column in table.primary_key]
+    unique = [[column.name for column in constraint.columns] for constraint in table.constraints
+              if isinstance(constraint, UniqueConstraint)]
+    indexes = [{tuple(row.get(key) for key in group): row for row in current if all(row.get(key) is not None for key in group)} for group in unique]
+    by_primary = {tuple(row.get(key) for key in primary): row for row in current} if primary else {}
+    mapping = {}
+    inserted = 0
+    numeric_pk = len(primary) == 1 and isinstance(table.c[primary[0]].type, Integer)
+    next_id = max([int(row.get(primary[0]) or 0) for row in [*current, *rows]], default=0) + 1 if numeric_pk else 0
+    for source in rows:
+        values = _parse_dt(table, source)
+        for column in table.columns:
+            for foreign in column.foreign_keys:
+                target = foreign.column
+                values[column.name] = id_maps.get(target.table.name, {}).get((target.name, values.get(column.name)), values.get(column.name))
+        natural = [i for i, group in enumerate(unique) if all(values.get(key) is not None for key in group)]
+        same = next((row for i in natural if (row := indexes[i].get(tuple(values[key] for key in unique[i]))) is not None), None)
+        collision = by_primary.get(tuple(values.get(key) for key in primary)) if primary else None
+        if same is None and not natural: same = collision
+        if same is None:
+            if collision is not None:
+                if not numeric_pk: raise ValueError('Конфликт ключей: запись не добавлена.')
+                values[primary[0]], next_id = next_id, next_id + 1
+            result = db.execute(table.insert().values(**values))
+            for key, value in zip(primary, result.inserted_primary_key): values[key] = value
+            current.append(values)
+            if primary: by_primary[tuple(values.get(key) for key in primary)] = values
+            for i in natural: indexes[i][tuple(values[key] for key in unique[i])] = values
+            same = values
+            inserted += 1
+        for key in primary:
+            if source.get(key) is not None: mapping[key, source[key]] = same[key]
+    _fix_sequence(db, table)
+    id_maps[table.name] = mapping
+    return inserted
+
+
+def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode: Literal['merge', 'replace'] = 'merge') -> dict:
+    """Restore represented stores: add missing records by default, or explicitly replace them."""
+    if mode not in ('merge', 'replace'): raise ValueError('Неизвестный режим восстановления.')
     take = (lambda s: sections is None or s in sections)
     done: dict[str, list[str]] = {"files": [], "tables": [], "settings": [], "etalons": [], "assets": []}
     errors: list[str] = []
 
     files = server.get("files") or {}
-    if take(ETALONS) and any(n in files for n in MERGED_FILES):
+    if mode == 'merge' and take(ETALONS) and any(n in files for n in MERGED_FILES):
         _restore_requirements(files, done, errors)
 
     for name, value in files.items():
-        if name in MERGED_FILES or not take(FILE_SECTION.get(name, "settings")):
+        if (mode == 'merge' and name in MERGED_FILES) or not take(FILE_SECTION.get(name, "settings")):
             continue
         if Path(name).name != name or not name.endswith(".json") or name.startswith("."):
             errors.append(f"{name}: недопустимое имя файла")
             continue
         path = DATA_DIR / name
         try:
-            _write_json(path, unredact(value, _read_json(path)))
+            if name == 'dashboard.json':
+                _restore_dashboard(path, value, mode)
+            else:
+                old = _current_json(path) if mode == 'merge' else _read_json(path)
+                restored = unredact(value, old)
+                _write_json(path, merge_missing(old, restored) if mode == 'merge' and path.exists() else restored)
             done["files"].append(name)
         except (OSError, TypeError, ValueError) as e:
             errors.append(f"{name}: {e}"[:200])
 
     tables = _tables()
-    for name, rows in (server.get("tables") or {}).items():
-        table = tables.get(name)
-        if table is None:
-            errors.append(f"{name}: такой таблицы в этой версии нет — пропущена")
-            continue
+    incoming_tables = server.get('tables') or {}
+    errors.extend(f'{name}: такой таблицы в этой версии нет — пропущена' for name in incoming_tables if name not in tables)
+    id_maps, failed = {}, set()
+    for name, table in tables.items():
+        if name not in incoming_tables: continue
+        rows = incoming_tables[name]
         # Каждая таблица — своей транзакцией: сбой одной (например, копия старой версии без нового столбца)
         # откатывает только её, остальное восстанавливается.
         try:
@@ -465,26 +569,36 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> d
                     if not take(setting_section(r.get("key", ""))):
                         continue
                     vals = _parse_dt(table, r)
-                    vals["value"] = _unredact_setting(vals.get("value"), current.get(r["key"]))
+                    vals.pop('id', None)
+                    vals["value"] = _merge_setting(vals.get("value"), current[r['key']]) if mode == 'merge' and r['key'] in current else _unredact_setting(vals.get("value"), current.get(r["key"]))
                     if r["key"] in current:
                         db.execute(table.update().where(table.c.key == r["key"]).values(**vals))
                     else:
                         db.execute(table.insert().values(**vals))
+                    current[r['key']] = vals['value']
                     keys.append(r["key"])
                 db.commit()
                 done["settings"].extend(keys)
                 continue
             if not take(TABLE_SECTION.get(name, "settings")):
                 continue
-            db.execute(table.delete())
-            if rows:
-                db.execute(table.insert(), [_parse_dt(table, r) for r in rows])
-                _fix_sequence(db, table)
+            if mode == 'merge':
+                if any(fk.column.table.name in failed for col in table.columns for fk in col.foreign_keys):
+                    raise ValueError('Не восстановлена связанная таблица; записи пропущены.')
+                count = _merge_rows(db, table, rows, id_maps)
+            else:
+                db.execute(table.delete())
+                count = len(rows)
+                if rows:
+                    db.execute(table.insert(), [_parse_dt(table, r) for r in rows])
+                    _fix_sequence(db, table)
             db.commit()
-            done["tables"].append(f"{name} ({len(rows)})")
+            done["tables"].append(f"{name} ({count})")
         except Exception as e:     # noqa: BLE001
             db.rollback()
-            errors.append(f"таблица {name}: {e}"[:300])
+            failed.add(name)
+            id_maps.pop(name, None)
+            errors.append(f"таблица {name}: не удалось восстановить, изменения этой таблицы отменены ({type(e).__name__}).")
 
     # Рисунки «Данных»: дописываем (имя — хэш содержимого: тот же файл совпадёт сам с собой, чужие не трогаем).
     if server.get("assets") and take(ETALONS):
@@ -496,6 +610,7 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> d
                 continue
             try:
                 folder.mkdir(parents=True, exist_ok=True)
+                if mode == 'merge' and (folder / name).exists(): continue
                 (folder / name).write_bytes(base64.b64decode(b64, validate=True))
                 done["assets"].append(name)
             except (ValueError, OSError) as e:
@@ -511,9 +626,10 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None) -> d
                 if not ids:
                     continue
                 docs, metas, embs = c.get("documents") or [], c.get("metadatas") or [], c.get("embeddings") or []
+                existing = set(col.get(ids=ids, include=[])['ids']) if mode == 'merge' else set()
                 # Chroma не принимает пустые метаданные — записи с ними и без них пишем отдельными пачками.
                 for with_meta in (True, False):
-                    idx = [i for i in range(len(ids)) if bool(i < len(metas) and metas[i]) == with_meta]
+                    idx = [i for i in range(len(ids)) if ids[i] not in existing and bool(i < len(metas) and metas[i]) == with_meta]
                     if not idx:
                         continue
                     kw: dict[str, Any] = {"ids": [ids[i] for i in idx]}
@@ -548,6 +664,7 @@ def export(scope: str = "all", db: Session = Depends(get_db)) -> dict:
 class ImportBody(BaseModel):
     backup: dict
     sections: Optional[list[str]] = Field(None, description="Какие разделы восстановить; None — все, что есть в файле")
+    mode: Literal['merge', 'replace'] = 'merge'
 
 
 @router.post("/api/backup/preview")
@@ -560,9 +677,10 @@ def preview(body: ImportBody) -> dict:
 @router.post("/api/backup/import")
 def import_backup(body: ImportBody, db: Session = Depends(get_db)) -> dict:
     server = _check(body.backup)
-    snap = _snapshot(db)
-    res = restore(db, server, set(body.sections) if body.sections is not None else None)
-    return {**res, "snapshot": snap}
+    with RESTORE_LOCK:
+        snap = _snapshot(db)
+        res = restore(db, server, set(body.sections) if body.sections is not None else None, body.mode)
+    return {**res, "snapshot": snap, 'mode': body.mode}
 
 
 def _check(backup: dict) -> dict:
@@ -573,4 +691,6 @@ def _check(backup: dict) -> dict:
     server = backup.get("server")
     if not isinstance(server, dict):
         raise HTTPException(422, "В копии нет данных сервера")
+    for key in ('files', 'tables', 'assets', 'etalons'):
+        if key in server and not isinstance(server[key], dict): raise HTTPException(422, f'Некорректный раздел копии: {key}.')
     return server

@@ -79,6 +79,7 @@ def test_восстановление_после_переустановки_и_�
     import db.vector_store as vsmod                                                    # эталоны — без настоящей Chroma
 
     class FakeCol:
+        def get(self, **kw): return {"ids": []}
         def upsert(self, **kw): restored.append(kw)
 
     class FakeVS:
@@ -198,7 +199,7 @@ def test_восстановление_данных_не_затирает_дер�
     assert json.loads((data / "requirement_folders_seeded.json").read_text("utf-8")) == ["/Карточка"]
 
 
-def test_тот_же_документ_новее_в_копии_берётся_из_копии_папка_остаётся(env):
+def test_merge_сохраняет_документ_даже_если_копия_новее(env):
     db, data = env
     (data / "requirement_folders.json").write_text(json.dumps(BASE_TREE, ensure_ascii=False), "utf-8")
     (data / "requirements.json").write_text(json.dumps([
@@ -206,7 +207,7 @@ def test_тот_же_документ_новее_в_копии_берётся_и
     bk.restore(db, {"files": {"requirements.json": [{"id": "d0", "name": "Стало", "folder_id": "", "updated_at": "2026-10-20"}]},
                     "tables": {}}, None)
     doc = json.loads((data / "requirements.json").read_text("utf-8"))[0]
-    assert doc["name"] == "Стало" and doc["folder_id"] == "b3"
+    assert doc["name"] == "Было" and doc["folder_id"] == "b3"
     assert len(json.loads((data / "requirement_folders.json").read_text("utf-8"))) == 3
 
 
@@ -214,7 +215,127 @@ def test_сбой_одной_таблицы_не_обрывает_восстан
     db, data = env
     server = {"files": {"people.json": {"people": []}},
               "tables": {"test_systems": [{"id": 1, "name": None, "it_service_ci": None}]}}   # NOT NULL — упадёт
-    res = bk.restore(db, server, None)
+    res = bk.restore(db, server, None, mode="replace")
     assert "people.json" in res["restored"]["files"]
     assert any("test_systems" in e for e in res["errors"])
     assert db.query(Systems).count() == 1                                     # таблица откатилась целиком
+
+
+def test_merge_adds_missing_json_settings_and_is_idempotent(env):
+    db, data = env
+    server = {'files': {'people.json': {'people': [{'id': 'p1', 'name': 'Из копии', 'role': 'QA'}, {'id': 'p2', 'name': 'Новый'}]},
+                         'testdata_connections.json': [{'id': 'c1', 'host': 'other', 'password': bk.REDACTED}, {'id': 'c3', 'host': 'new'}]},
+              'tables': {'metrics_settings': [{'id': 99, 'key': 'jira_base_url', 'value': 'other'},
+                                               {'id': 1, 'key': 'new_setting', 'value': 'added'},
+                                               {'key': 'custom_llm_providers', 'value': json.dumps([{'id': 'groq', 'model': 'other', 'api_key': bk.REDACTED}, {'id': 'new', 'api_key': bk.REDACTED}])}]}}
+    for _ in range(2): assert not bk.restore(db, server)['errors']
+    people = json.loads((data / 'people.json').read_text())['people']
+    assert people == [{'id': 'p1', 'name': 'Иванов', 'role': 'QA'}, {'id': 'p2', 'name': 'Новый'}]
+    conns = json.loads((data / 'testdata_connections.json').read_text())
+    assert len(conns) == 3 and conns[0]['host'] == 'db1' and conns[0]['password'] == 's3cret'
+    settings = {row.key: row.value for row in db.query(MetricsSettings)}
+    assert settings['jira_base_url'] == 'https://jira.example' and settings['new_setting'] == 'added'
+    assert json.loads(settings['custom_llm_providers']) == [{'id': 'groq', 'model': 'llama', 'api_key': 'gsk_1'}, {'id': 'new', 'api_key': ''}]
+
+
+def test_replace_overwrites_represented_stores_and_keeps_other_sections(env):
+    db, data = env
+    result = bk.restore(db, {'files': {'people.json': {'people': [{'id': 'p2'}]},
+                                      'requirements.json': [{'id': 'new', 'name': 'Из копии', 'folder_id': ''}]},
+                             'tables': {'metrics_settings': [{'key': 'jira_base_url', 'value': 'new'}]}},
+                        {'bugs', 'etalons'}, mode='replace')
+    assert not result['errors']
+    assert json.loads((data / 'people.json').read_text()) == {'people': [{'id': 'p2'}]}
+    assert json.loads((data / 'requirements.json').read_text())[0]['name'] == 'Из копии'
+    assert db.query(MetricsSettings).filter_by(key='jira_base_url').one().value == 'new'
+    assert (data / 'testdata_connections.json').exists()
+
+
+def test_dashboard_roundtrip_counts_merge_marks_and_replacement(env):
+    db, data = env
+    from backend.api.dashboard import Widget
+    current = Widget(id='counter', title='Мой счётчик', jql='project = QA', kind='counter', x=0, y=0).model_dump()
+    entry = {'issue': {'key': 'QA-1', 'fields': {}}, 'firstSeenAt': '2026-11-22T00:00:00Z', 'processedAt': 'now', 'processedBy': 'alice'}
+    local = {'version': 90, 'widgets': [current], 'queues': {'counter': {'entries': {'QA-1': entry}}}}
+    (data / 'dashboard.json').write_text(json.dumps(local))
+    exported = bk.export('dashboard', db=db)
+    assert exported['server']['files']['dashboard.json'] == local
+    assert exported['summary'][0]['counters'] == 1 and exported['summary'][0]['widgets'] == 0
+    extra = Widget(id='new', title='Новый список', jql='project = QA', colors={'Открыт': '#abcdef'}, columns=['key', 'st:ms'], stListId='team', x=0, y=0).model_dump()
+    incoming = {'version': 1, 'widgets': [{**current, 'title': 'Старое название', 'jql': 'project = OTHER'}, extra],
+                'queues': {'counter': {'entries': {'QA-1': {**entry, 'processedAt': None}, 'QA-2': {**entry, 'issue': {'key': 'QA-2', 'fields': {}}}}}}}
+    for _ in range(2): assert not bk.restore(db, {'files': {'dashboard.json': incoming}}, {'dashboard'})['errors']
+    restored = json.loads((data / 'dashboard.json').read_text())
+    assert restored['version'] == 92 and len(restored['widgets']) == 2
+    assert restored['widgets'][0] == current
+    assert restored['widgets'][1]['y'] >= 4
+    assert restored['widgets'][1]['columns'] == ['key', 'st:ms'] and restored['widgets'][1]['colors'] == extra['colors']
+    assert restored['queues']['counter']['entries']['QA-1']['processedAt'] == 'now'
+    assert set(restored['queues']['counter']['entries']) == {'QA-1', 'QA-2'}
+    assert not bk.restore(db, {'files': {'dashboard.json': incoming}}, {'dashboard'}, mode='replace')['errors']
+    restored = json.loads((data / 'dashboard.json').read_text())
+    assert restored['version'] == 93 and restored['widgets'][0]['title'] == 'Старое название'
+    assert restored['queues']['counter']['entries']['QA-1']['processedAt'] is None
+
+
+def test_merge_database_remaps_ids_and_keeps_relationships(env):
+    db, _ = env
+    source = {'tables': {
+        # Order in the file must not determine foreign-key processing.
+        'test_metrics': [{'id': 1, 'test_system_id': 1, 'metric_hash': 'new-metric', 'metric_name': 'M', 'metric_description': '',
+                          'metric_type': 'Errors', 'metric_group': 'App', 'metric_unit': 'count', 'object_id': 'obj',
+                          'object_name': 'Obj', 'mon_system_metric_id': 'M'}],
+        'test_systems': [{'id': 1, 'it_service_ci': 'NEW-CI', 'name': 'Новая система', 'mon_system_ci': 'MON'},
+                         {'id': 100, 'it_service_ci': 'CI001', 'name': 'Старое имя', 'mon_system_ci': 'OTHER'}]}}
+    for _ in range(2): assert not bk.restore(db, source)['errors']
+    assert db.query(Systems).count() == 2
+    assert db.query(Systems).filter_by(it_service_ci='CI001').one().name == 'ОД'
+    from db.metrics_models import TestMetric
+    metric = db.query(TestMetric).one()
+    assert metric.system.it_service_ci == 'NEW-CI' and metric.test_system_id != 1
+
+
+def test_merge_etalons_keeps_existing_ids_and_adds_missing(env, monkeypatch):
+    db, _ = env
+    import db.vector_store as vsmod
+    calls = []
+    class Collection:
+        def get(self, **kw): return {'ids': ['existing']}
+        def upsert(self, **kw): calls.append(kw)
+    class FakeVS:
+        ef = None
+        class client:
+            @staticmethod
+            def get_or_create_collection(*args, **kwargs): return Collection()
+    monkeypatch.setattr(vsmod, 'VectorStore', FakeVS)
+    incoming = {'etalons': {'test_cases': {'ids': ['existing', 'new'], 'documents': ['old', 'added']}}}
+    assert not bk.restore(db, incoming)['errors']
+    assert calls == [{'ids': ['new'], 'documents': ['added']}]
+    calls.clear()
+    assert not bk.restore(db, incoming, mode='replace')['errors']
+    assert calls[0]['ids'] == ['existing', 'new']
+
+
+def test_corrupt_current_file_is_reported_and_not_overwritten(env):
+    db, data = env
+    (data / 'people.json').write_text('{invalid')
+    result = bk.restore(db, {'files': {'people.json': {'people': []}}})
+    assert result['errors'] and (data / 'people.json').read_text() == '{invalid'
+    result = bk.restore(db, {'files': {'people.json': {'people': []}}}, mode='replace')
+    assert not result['errors'] and json.loads((data / 'people.json').read_text()) == {'people': []}
+
+
+def test_restore_snapshot_is_private_and_unique(env):
+    import stat
+    db, data = env
+    first, second = bk._snapshot(db), bk._snapshot(db)
+    assert first != second
+    assert stat.S_IMODE((data.parent / first).stat().st_mode) == 0o600
+
+
+def test_invalid_dashboard_copy_does_not_replace_current_layout(env):
+    db, data = env
+    current = {'version': 1, 'widgets': [], 'queues': {}}
+    (data / 'dashboard.json').write_text(json.dumps(current))
+    result = bk.restore(db, {'files': {'dashboard.json': {'widgets': [{'id': 'bad'}]}}}, mode='replace')
+    assert result['errors'] and json.loads((data / 'dashboard.json').read_text()) == current

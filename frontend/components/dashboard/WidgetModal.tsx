@@ -8,14 +8,18 @@ import { GRID_COLUMNS, pixels, sizeLabel, WIDGET_SIZES, PALETTES } from "@/lib/d
 import { useDashboardColumns } from "@/lib/dashboardColumns";
 import { PickerPanel } from "@/components/jiratool/FieldPicker";
 const input = "w-full mt-1 rounded-lg border border-border-main bg-bg-card px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
-export default function WidgetModal({ widget, onSave, onClose }: {
-  widget?: DashboardWidget; onSave: (widget: DashboardWidget) => Promise<void>; onClose: () => void;
+export default function WidgetModal({ widget, canShare, onSave, onClose }: {
+  widget?: DashboardWidget;
+  /** Редактор Главной: может создавать и менять виджеты «Для всех». */
+  canShare: boolean;
+  onSave: (widget: DashboardWidget) => Promise<void>; onClose: () => void;
 }) {
   const formId = useId();
   const [v, setV] = useState<DashboardWidget>(widget?.kind === "counter" ? { ...widget, size: "S", w: 4, h: 4 } : widget ?? {
     id: crypto.randomUUID(), title: "", jql: "project = SBER911", kind: "view", size: "M",
     presentation: "list", palette: "indigo", colors: {}, groupField: "status", valueField: "",
     period: "all", fromDate: "", toDate: "", fullWidth: false, gridVersion: 2, ...WIDGET_SIZES.M,
+    scope: canShare ? "shared" : "personal",
   });
   const [groupNames, setGroupNames] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -59,6 +63,15 @@ export default function WidgetModal({ widget, onSave, onClose }: {
             <span className="flex items-center gap-2"><Icon className="w-4 h-4 text-primary" /><b className="text-sm">{title}</b>{v.kind === id && <Check className="ml-auto w-3.5 h-3.5 text-primary" />}</span>
             <span className="text-[11px] text-text-muted block mt-1.5">{text}</span>
           </button>)}
+      </div>
+      <div role="radiogroup" aria-label="Кому виден виджет" className="flex flex-wrap items-center gap-2">
+        {([["shared", "Для всех", "Видят все пользователи Shark. Создаёт и меняет редактор Главной"], ["personal", "Личный", "Видите только вы"]] as const).map(([id, label, hint]) =>
+          <button type="button" key={id} role="radio" aria-checked={(v.scope ?? "shared") === id} title={hint}
+            disabled={id === "shared" && !canShare}
+            onClick={() => set("scope", id)}
+            className={`px-3 py-1.5 rounded-lg border text-sm focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-40 disabled:cursor-not-allowed ${(v.scope ?? "shared") === id ? "border-primary bg-primary/5 text-primary" : "border-border-main hover:bg-bg-subtle"}`}>
+            {label}</button>)}
+        <span className="text-[11px] text-text-muted">{(v.scope ?? "shared") === "personal" ? "Виден только вам; в резервную копию попадает, восстанавливается только вам." : canShare ? "Виден всем пользователям." : "«Для всех» создаёт редактор Главной."}</span>
       </div>
       <label className="block text-sm">Название<input required maxLength={200} placeholder="Например, ошибки на ИФТ" value={v.title} onChange={e => set("title", e.target.value)} className={input} /></label>
       <label className="block text-sm">Фильтр JQL<textarea aria-label="Фильтр JQL" required maxLength={4000} rows={3} value={v.jql} onChange={e => set("jql", e.target.value)} className={input + " font-mono text-xs"} /></label>

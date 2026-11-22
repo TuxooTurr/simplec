@@ -26,11 +26,16 @@ export interface DashboardWidget {
   period: "all" | "today" | "week" | "custom";
   fromDate: string;
   toDate: string;
+  /** «Для всех» — видят все, меняет редактор Главной; «Личный» — видит и меняет только владелец. */
+  scope?: "shared" | "personal";
+  owner?: string;
 }
 export interface Layout {
   version: number;
   widgets: DashboardWidget[];
+  /** Может менять виджеты «Для всех»; личные может создавать любой пользователь. */
   canEdit: boolean;
+  login?: string;
   demo?: boolean;
 }
 export type QueueIssue = Issue & {

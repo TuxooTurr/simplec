@@ -12,7 +12,7 @@ import { backupItemKey, mergeBackupValues } from "./backupMerge";
 export const BACKUP_FORMAT = "simpletest.backup";
 const REDACTED = "__SIMPLETEST_REDACTED__";
 
-export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; assets?: number; widgets?: number; counters?: number }
+export interface BackupSummary { id: string; title: string; files: string[]; tables: string[]; settings: number; assets?: number; widgets?: number; counters?: number; personal?: number }
 export type RestoreMode = "merge" | "replace";
 export interface BackupFile {
   format: string; version: number; createdAt: string; scope: string; scopeTitle: string; secrets: string;

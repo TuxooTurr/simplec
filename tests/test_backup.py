@@ -75,7 +75,7 @@ def test_восстановление_после_переустановки_и_�
     for p in data.glob("*.json"):
         p.unlink()
     db.query(MetricsSettings).delete(); db.query(Systems).delete(); db.commit()
-    r = bk.import_backup(bk.ImportBody(backup=backup), db=db)
+    r = bk.import_backup(bk.ImportBody(backup=backup), db=db, user={"login": "tester"})
     assert not r["errors"] and r["snapshot"].startswith("data/backups/before-restore-")
     people = json.loads((data / "people.json").read_text("utf-8"))
     assert people["people"][0]["name"] == "Иванов"
@@ -89,7 +89,7 @@ def test_восстановление_после_переустановки_и_�
     conns[0]["password"] = "new"
     (data / "testdata_connections.json").write_text(json.dumps(conns), "utf-8")
     db.query(MetricsSettings).filter_by(key="jira_token").update({"value": "PAT-NEW"}); db.commit()
-    bk.import_backup(bk.ImportBody(backup=backup, sections=["test_data", "bugs"]), db=db)
+    bk.import_backup(bk.ImportBody(backup=backup, sections=["test_data", "bugs"]), db=db, user={"login": "tester"})
     assert json.loads((data / "testdata_connections.json").read_text("utf-8"))[0]["password"] == "new"
     assert db.query(MetricsSettings).filter_by(key="jira_token").one().value == "PAT-NEW"
 
@@ -99,7 +99,7 @@ def test_выбранные_разделы_и_снимок(env):
     backup = json.loads(json.dumps(bk.export("all", db=db)))
     (data / "people.json").write_text('{"people": []}', "utf-8")
     (data / "model_bench_scenarios.json").write_text("[]", "utf-8")
-    r = bk.import_backup(bk.ImportBody(backup=backup, sections=["model_bench"]), db=db)
+    r = bk.import_backup(bk.ImportBody(backup=backup, sections=["model_bench"]), db=db, user={"login": "tester"})
     assert r["restored"]["files"] == ["model_bench_scenarios.json"]
     assert json.loads((data / "people.json").read_text("utf-8")) == {"people": []}    # раздел не выбран — не тронут
     snap = json.loads((data.parent / r["snapshot"]).read_text("utf-8"))
@@ -112,9 +112,9 @@ def test_выбранные_разделы_и_снимок(env):
 def test_чужой_или_битый_файл(env):
     db, _ = env
     with pytest.raises(HTTPException):
-        bk.import_backup(bk.ImportBody(backup={"format": "other"}), db=db)
+        bk.import_backup(bk.ImportBody(backup={"format": "other"}), db=db, user={"login": "tester"})
     with pytest.raises(HTTPException):
-        bk.import_backup(bk.ImportBody(backup={"format": bk.FORMAT, "version": 99, "server": {}}), db=db)
+        bk.import_backup(bk.ImportBody(backup={"format": bk.FORMAT, "version": 99, "server": {}}), db=db, user={"login": "tester"})
     r = bk.restore(db, {"files": {"../evil.json": {}, "x.txt": {}}})
     assert len(r["errors"]) == 2 and not r["restored"]["files"]
 
@@ -312,3 +312,19 @@ def test_invalid_dashboard_copy_does_not_replace_current_layout(env):
     (data / 'dashboard.json').write_text(json.dumps(current))
     result = bk.restore(db, {'files': {'dashboard.json': {'widgets': [{'id': 'bad'}]}}}, mode='replace')
     assert result['errors'] and json.loads((data / 'dashboard.json').read_text()) == current
+
+
+def test_personal_widgets_restore_only_to_owner(env):
+    db, data = env
+    def w(i, scope='shared', owner=''):
+        return {'id': i, 'title': i, 'jql': 'project = QA', 'scope': scope, 'owner': owner}
+    incoming = {'version': 1, 'widgets': [w('shared'), w('bob-own', 'personal', 'bob'), w('carol-own', 'personal', 'carol')],
+                'queues': {'carol-own': {'entries': {}}}}
+    summary = {s['id']: s for s in bk.summary({'files': {'dashboard.json': incoming}})}['dashboard']
+    assert summary['widgets'] == 1 and summary['personal'] == 2
+    (data / 'dashboard.json').write_text(json.dumps({'version': 3, 'widgets': [w('dave-own', 'personal', 'dave')], 'queues': {'dave-own': {'entries': {}}}}))
+    for mode in ('merge', 'replace'):
+        assert not bk.restore(db, {'files': {'dashboard.json': incoming}}, {'dashboard'}, mode=mode, login='bob')['errors']
+        restored = json.loads((data / 'dashboard.json').read_text())
+        assert {x['id'] for x in restored['widgets']} == {'shared', 'bob-own', 'dave-own'}, mode   # чужой личный — нет, dave — на месте
+        assert 'carol-own' not in restored['queues'] and 'dave-own' in restored['queues']

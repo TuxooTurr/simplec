@@ -133,7 +133,7 @@ export function BackupPanel({ section, file: file0 }: { section: string; file?: 
                     s?.files.length ? `файлов ${s.files.length}` : "", s?.tables.length ? `таблиц ${s.tables.length}` : "",
                     s?.settings ? `настроек ${s.settings}` : "", s?.assets ? `рисунков ${s.assets}` : "",
                     browser[id] ? `данных браузера ${browser[id]}` : "",
-                    s?.widgets !== undefined ? `списков ${s.widgets}` : "", s?.counters !== undefined ? `счётчиков ${s.counters}` : "",
+                    s?.widgets !== undefined ? `списков ${s.widgets}` : "", s?.counters !== undefined ? `счётчиков ${s.counters}` : "", s?.personal ? `личных ${s.personal} (восстановятся только владельцу)` : "",
                   ].filter(Boolean).join(", ");
                   return (
                     <li key={id}>

@@ -46,6 +46,9 @@ class Widget(BaseModel):
     period: Literal['all', 'today', 'week', 'custom'] = 'all'
     fromDate: str = ''
     toDate: str = ''
+    # «Для всех» (shared) видят все, меняет редактор Главной; «Личный» (personal) видит и меняет только владелец.
+    scope: Literal['shared', 'personal'] = 'shared'
+    owner: str = Field(default='', max_length=100)
 
     @model_validator(mode='before')
     @classmethod
@@ -125,22 +128,61 @@ def can_edit(user):
     return user.get('login') in {e.strip() for e in editors} or (
         'DASHBOARD_EDITORS' not in os.environ and user.get('source') == 'local' and user.get('role') == 'superuser')
 
+def is_personal(widget):
+    return widget.get('scope') == 'personal'
+
+
+def visible_to(widget, user):
+    """Общий виджет видят все; личный — только владелец."""
+    return not is_personal(widget) or widget.get('owner') == user.get('login')
+
+
+def _view(widgets, user):
+    """Что видит пользователь: общие, затем свои личные (при наложении сдвигаются личные)."""
+    mine = [w for w in widgets if visible_to(w, user)]
+    return [w for w in mine if not is_personal(w)] + [w for w in mine if is_personal(w)]
+
+
+def _widget_or_404(data, widget_id, user):
+    widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
+    if not widget or not visible_to(widget, user): raise HTTPException(404, 'Виджет удалён.')
+    return widget
+
+
 @router.get('')
 def get_dashboard(user=Depends(require_user)):
     data = store.read()
-    return {'version': data['version'], 'widgets': positioned(data['widgets'], repair=True), 'canEdit': can_edit(user), 'demo': MOCK}
+    return {'version': data['version'], 'widgets': positioned(_view(data['widgets'], user), repair=True),
+            'canEdit': can_edit(user), 'login': user.get('login', ''), 'demo': MOCK}
 
 @router.put('/layout')
 def save_layout(body: Layout, user=Depends(require_user)):
-    if not can_edit(user): raise HTTPException(403, 'Раскладку может менять только редактор Главной.')
+    """Раскладка того, что видит пользователь: общие виджеты меняет только редактор, личные — их владелец.
+    Чужие личные виджеты не приходят и не затрагиваются."""
+    login, editor = user.get('login', ''), can_edit(user)
     if len({w.id for w in body.widgets}) != len(body.widgets): raise HTTPException(422, 'Идентификаторы виджетов повторяются.')
-    for widget in body.widgets: query_for(widget.model_dump())
-    widgets = positioned([w.model_dump() for w in body.widgets])
+    incoming = [w.model_dump() for w in body.widgets]
+    for widget in incoming:
+        widget['owner'] = login if is_personal(widget) else ''
+        query_for(widget)
+    current = store.read()
+    others = [w for w in current['widgets'] if is_personal(w) and w.get('owner') != login]
+    if {w['id'] for w in incoming} & {w['id'] for w in others}: raise HTTPException(422, 'Идентификаторы виджетов повторяются.')
+    if editor:
+        shared = [w for w in incoming if not is_personal(w)]
+    else:
+        current_shared = [w for w in current['widgets'] if not is_personal(w)]
+        if {w['id'] for w in incoming if not is_personal(w)} - {w['id'] for w in current_shared}:
+            raise HTTPException(403, 'Виджеты «Для всех» может добавлять только редактор Главной. Создайте личный виджет.')
+        # Общие виджеты у не-редактора не меняются: берём их из хранилища (перетаскивание их не сдвигает).
+        shared = current_shared
+    widgets = positioned([*shared, *(w for w in incoming if is_personal(w))])
     for i, a in enumerate(widgets):
         for b in widgets[i + 1:]:
             if a['x'] < b['x'] + b['w'] and a['x'] + a['w'] > b['x'] and a['y'] < b['y'] + b['h'] and a['y'] + a['h'] > b['y']:
+                if not editor and not is_personal(a) and not is_personal(b): continue   # общие — как есть
                 raise HTTPException(422, 'Виджеты пересекаются. Разместите их в свободных ячейках.')
-    try: store.layout(widgets, body.version)
+    try: store.layout([*widgets, *others], body.version)
     except ValueError as exc: raise HTTPException(409, str(exc)) from exc
     return get_dashboard(user)
 
@@ -275,8 +317,7 @@ def refresh(widget_id):
 @router.get('/widgets/{widget_id}/data')
 def widget_data(widget_id: str, user=Depends(require_user)):
     data = store.read()
-    widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
-    if not widget: raise HTTPException(404, 'Виджет удалён.')
+    widget = _widget_or_404(data, widget_id, user)
     queue = data.get('queues', {}).get(widget_id, {})
     entries = queue.get('entries', {})
     current = set(queue.get('currentKeys', []))
@@ -289,13 +330,14 @@ def widget_data(widget_id: str, user=Depends(require_user)):
 
 @router.post('/widgets/{widget_id}/refresh', status_code=202)
 async def refresh_widget(widget_id: str, user=Depends(require_user)):
-    if not any(w['id'] == widget_id for w in store.read()['widgets']): raise HTTPException(404, 'Виджет удалён.')
+    _widget_or_404(store.read(), widget_id, user)
     # The monitor and browser share the same single-flight worker.
     launch(widget_id)
     return {'running': True}
 
 @router.post('/widgets/{widget_id}/processed')
 def mark_processed(widget_id: str, body: Mark, user=Depends(require_user)):
+    _widget_or_404(store.read(), widget_id, user)
     try: store.processed(widget_id, body.keys, body.processed, user['login'])
     except KeyError: raise HTTPException(404, 'Виджет удалён.')
     except ValueError as exc: raise HTTPException(422, str(exc)) from exc

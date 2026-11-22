@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Integer, Table, UniqueConstraint, text
 from sqlalchemy.orm import Session
 
-from backend.api.auth import require_superuser
+from backend.api.auth import require_superuser, require_user
 from db.metrics_models import Base
 from db.postgres import get_db
 from db.paths import DATA_DIR
@@ -268,8 +268,10 @@ def summary(server: dict) -> list[dict]:
             data = server['files'][name]
             widgets = data.get('widgets') or [] if isinstance(data, dict) else []
             widgets = [w for w in widgets if isinstance(w, dict)] if isinstance(widgets, list) else []
-            at('dashboard')['widgets'] = sum(w.get('kind') != 'counter' for w in widgets)
-            at('dashboard')['counters'] = sum(w.get('kind') == 'counter' for w in widgets)
+            shared = [w for w in widgets if w.get('scope') != 'personal']
+            at('dashboard')['widgets'] = sum(w.get('kind') != 'counter' for w in shared)
+            at('dashboard')['counters'] = sum(w.get('kind') == 'counter' for w in shared)
+            at('dashboard')['personal'] = len(widgets) - len(shared)
     for name, rows in server.get("tables", {}).items():
         if name == SETTINGS_TABLE:
             for r in rows:
@@ -420,9 +422,15 @@ def _restore_requirements(files: dict, done: dict, errors: list[str]) -> None:
         errors.append(f"«Данные» (дерево и документы): {e}"[:300])
 
 
-def _restore_dashboard(path: Path, incoming: dict, mode: str) -> None:
+def _restore_dashboard(path: Path, incoming: dict, mode: str, login: str = '') -> None:
+    """Общие виджеты восстанавливаются всем; личные — только если копию загружает их владелец (login).
+    Чужие личные виджеты на сервере не трогаются ни в одном режиме."""
     from db import dashboard_store
-    from backend.api.dashboard import positioned
+    from backend.api.dashboard import positioned, is_personal
+    if isinstance(incoming, dict) and isinstance(incoming.get('widgets'), list):
+        skip = {w.get('id') for w in incoming['widgets'] if isinstance(w, dict) and is_personal(w) and (not login or w.get('owner') != login)}
+        incoming = {**incoming, 'widgets': [w for w in incoming['widgets'] if not (isinstance(w, dict) and w.get('id') in skip)],
+                    'queues': {k: v for k, v in (incoming.get('queues') or {}).items() if k not in skip}}
     with dashboard_store.LOCK:
         current = (_current_json(path) if mode == 'merge' else _read_json(path)) or {'version': 0, 'widgets': [], 'queues': {}}
         if not isinstance(current, dict) or not isinstance(current.get('widgets'), list):
@@ -445,7 +453,10 @@ def _restore_dashboard(path: Path, incoming: dict, mode: str) -> None:
             existing = [merge_missing(w, by_id.get(w['id'], {}), merge_lists=False) for w in current['widgets']]
             result['widgets'] = positioned([*existing, *(w for w in source if w['id'] not in known)], repair=True)
         else:
-            result = {**incoming, 'widgets': source}
+            # Перезапись не удаляет чужие личные виджеты и их очереди: их владельцы копию не загружали.
+            keep = [w for w in current['widgets'] if is_personal(w) and w.get('owner') != login and w['id'] not in {x['id'] for x in source}]
+            queues = {**{w['id']: current.get('queues', {})[w['id']] for w in keep if w['id'] in current.get('queues', {})}, **(incoming.get('queues') or {})}
+            result = {**incoming, 'widgets': positioned([*source, *keep]), 'queues': queues}
         # Invalidate old editor versions and in-flight Jira reads.
         result['version'] = int(current.get('version', 0)) + 1
         _write_json(path, result)
@@ -499,7 +510,8 @@ def _merge_rows(db: Session, table: Table, rows: list[dict], id_maps: dict) -> i
     return inserted
 
 
-def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode: Literal['merge', 'replace'] = 'merge') -> dict:
+def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode: Literal['merge', 'replace'] = 'merge',
+            login: str = '') -> dict:
     """Restore represented stores: add missing records by default, or explicitly replace them."""
     if mode not in ('merge', 'replace'): raise ValueError('Неизвестный режим восстановления.')
     take = (lambda s: sections is None or s in sections)
@@ -519,7 +531,7 @@ def restore(db: Session, server: dict, sections: Optional[set[str]] = None, mode
         path = DATA_DIR / name
         try:
             if name == 'dashboard.json':
-                _restore_dashboard(path, value, mode)
+                _restore_dashboard(path, value, mode, login)
             else:
                 old = _current_json(path) if mode == 'merge' else _read_json(path)
                 restored = unredact(value, old)
@@ -625,11 +637,11 @@ def preview(body: ImportBody) -> dict:
 
 
 @router.post("/api/backup/import")
-def import_backup(body: ImportBody, db: Session = Depends(get_db)) -> dict:
+def import_backup(body: ImportBody, db: Session = Depends(get_db), user: dict = Depends(require_user)) -> dict:
     server = _check(body.backup)
     with RESTORE_LOCK:
         snap = _snapshot(db)
-        res = restore(db, server, set(body.sections) if body.sections is not None else None, body.mode)
+        res = restore(db, server, set(body.sections) if body.sections is not None else None, body.mode, user.get('login', ''))
     return {**res, "snapshot": snap, 'mode': body.mode}
 
 

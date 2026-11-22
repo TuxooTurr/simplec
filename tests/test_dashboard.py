@@ -54,9 +54,12 @@ def test_refresh_race_does_not_erase_processed_and_marks_idempotent(dashboard):
 
 def test_layout_permissions_and_optimistic_lock(dashboard,monkeypatch):
     monkeypatch.setenv('DASHBOARD_EDITORS','alice')
-    with pytest.raises(HTTPException) as exc:api.save_layout(api.Layout(version=1,widgets=[]),{'login':'bob','role':'superuser'})
+    # Не-редактор не удаляет и не добавляет общие виджеты: пустая раскладка оставляет общий на месте.
+    assert [w['id'] for w in api.save_layout(api.Layout(version=1,widgets=[]),{'login':'bob','role':'superuser'})['widgets']]==['inbox']
+    with pytest.raises(HTTPException) as exc:
+        api.save_layout(api.Layout(version=2,widgets=[api.Widget(**dashboard),api.Widget(id='new',title='Общий',jql='project = QA')]),{'login':'bob'})
     assert exc.value.status_code==403
-    assert api.save_layout(api.Layout(version=1,widgets=[api.Widget(**dashboard)]),{'login':'alice'})['version']==2
+    assert api.save_layout(api.Layout(version=2,widgets=[api.Widget(**dashboard)]),{'login':'alice'})['version']==3
     with pytest.raises(ValueError):store.layout([],1)
 
 def test_changed_filter_does_not_clear_existing_pending(dashboard):
@@ -293,3 +296,37 @@ def test_light_poll_keeps_retained_issue_that_left_filter(dashboard, monkeypatch
     assert not any(c[0] == 'keys' and c[1] != api.LIGHT_FIELDS for c in calls)   # не менялась — без догрузки
     item = api.widget_data('inbox', {})['items'][0]
     assert item['fields']['summary'] == 'Задача 1' and item['inFilter'] is False
+
+
+
+def test_personal_widgets_are_private_and_survive_other_saves(dashboard, monkeypatch):
+    monkeypatch.setenv('DASHBOARD_EDITORS', 'alice')
+    bob = {'login': 'bob'}; carol = {'login': 'carol'}; alice = {'login': 'alice'}
+    mine = api.Widget(id='bob-1', title='Мои баги', jql='assignee = bob', scope='personal', owner='someone-else')
+    v = api.save_layout(api.Layout(version=1, widgets=[api.Widget(**dashboard), mine]), bob)
+    stored = next(w for w in store.read()['widgets'] if w['id'] == 'bob-1')
+    assert stored['owner'] == 'bob'                                     # владелец — тот, кто сохранил
+    assert {w['id'] for w in v['widgets']} == {'inbox', 'bob-1'}
+    assert [w['id'] for w in api.get_dashboard(carol)['widgets']] == ['inbox']
+    with pytest.raises(HTTPException): api.widget_data('bob-1', carol)
+    store.observe('bob-1', [issue(1)])
+    with pytest.raises(HTTPException): api.mark_processed('bob-1', api.Mark(keys=['QA-1']), carol)
+    # Редактор меняет общие — личный виджет bob остаётся.
+    api.save_layout(api.Layout(version=store.read()['version'], widgets=[api.Widget(**{**dashboard, 'title': 'Новое'})]), alice)
+    assert {w['id'] for w in store.read()['widgets']} == {'inbox', 'bob-1'}
+    assert api.widget_data('bob-1', bob)['pending'] == 1
+
+
+def test_several_widgets_with_same_jql_are_independent(dashboard, monkeypatch):
+    monkeypatch.setenv('DASHBOARD_EDITORS', 'alice')
+    alice = {'login': 'alice'}
+    twin = api.Widget(id='inbox-2', title='Та же очередь', jql=dashboard['jql'], kind='counter')
+    view = api.Widget(id='list-same', title='Тот же JQL списком', jql=dashboard['jql'])
+    saved = api.save_layout(api.Layout(version=1, widgets=[api.Widget(**dashboard), twin, view]), alice)
+    assert [w['id'] for w in saved['widgets']] == ['inbox', 'inbox-2', 'list-same']
+    for wid in ('inbox', 'inbox-2', 'list-same'):
+        store.observe(wid, [issue(1), issue(2)])
+    api.mark_processed('inbox', api.Mark(keys=['QA-1']), alice)
+    assert api.widget_data('inbox', alice)['pending'] == 1
+    assert api.widget_data('inbox-2', alice)['pending'] == 2          # отметка в одном счётчике не трогает другой
+    assert len(api.widget_data('list-same', alice)['items']) == 2

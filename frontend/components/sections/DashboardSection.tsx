@@ -33,6 +33,8 @@ export default function DashboardSection() {
   const compact = width < 640;
   const columns = Math.max(4, Math.min(GRID_COLUMNS, Math.floor((width + GRID_GAP) / (GRID_ROW + GRID_GAP)) || 4));
   const widgets = arranging ? draft : layout?.widgets ?? [];
+  /** Общие виджеты меняет редактор Главной, личные — их владелец (сервер отдаёт только свои личные). */
+  const editable = (w: Widget) => !!layout?.canEdit || w.scope === "personal";
   const fitted = fitWidgets(widgets, columns);
 
   useEffect(() => {
@@ -82,7 +84,7 @@ export default function DashboardSection() {
     finally { setSaving(false); }
   }
   function begin(e: PointerEvent, widget: Widget, mode: Interaction["mode"]) {
-    if (!arranging || compact || e.button !== 0) return;
+    if (!arranging || compact || e.button !== 0 || !editable(widget)) return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     interaction.current = { id: widget.id, mode, startX: e.clientX, startY: e.clientY, rect: rectOf(widget, columns), base: fitWidgets(draft, columns), original: draft };
@@ -103,6 +105,7 @@ export default function DashboardSection() {
   function end() { interaction.current = null; setActive(null); }
   function cancelDrag() { if (interaction.current) setDraft(interaction.current.original); end(); }
   function keyboard(widget: Widget, key: string, resize = false) {
+    if (!editable(widget)) return;
     const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[key];
     if (!delta) return;
     const base = fitWidgets(draft, columns);
@@ -130,7 +133,7 @@ export default function DashboardSection() {
         </div>
         {saved && !arranging && <span role="status" className="text-xs text-text-muted flex items-center gap-1"><Check className="w-3.5 h-3.5" />Сохранено</span>}
         {!expanded && <Button variant="ghost" className="dashboard-open-ether" aria-label="Открыть панель Эфир" onClick={() => setExpanded(true)} icon={<MessageSquare className="w-3.5 h-3.5" />}>Эфир</Button>}
-        {layout?.canEdit && !expanded && (
+        {layout && !expanded && (
           <div className="flex gap-2 flex-wrap">
             {arranging ? <>
               <Button variant="ghost" disabled={saving} onClick={() => { setArranging(false); setError(""); }} icon={<X className="w-3.5 h-3.5" />}>Отмена</Button>
@@ -149,20 +152,20 @@ export default function DashboardSection() {
               const rect = rectOf(w, columns);
               return <div key={w.id} className="dashboard-card" data-editing={arranging} data-active={active === w.id}
                 style={{ gridColumn: `${rect.x + 1} / span ${rect.w}`, gridRow: `${rect.y + 1} / span ${rect.h}`, width: w.fullWidth && width ? `${width}px` : undefined }}>
-                <DashboardWidget widget={w} canEdit={!!layout?.canEdit} arranging={arranging}
+                <DashboardWidget widget={w} canEdit={editable(w)} arranging={arranging}
                   onColumnsChange={async columns => {
                     const source = arranging ? draft : layout!.widgets;
                     const next = source.map(item => item.id === w.id ? { ...item, columns } : item);
                     if (arranging) setDraft(next); else await save(next);
                   }}
                   onEdit={() => setEditing(widgets.find(source => source.id === w.id)!)} onDelete={() => setDeleting(w)}
-                  dragHandle={arranging && !compact ? <button type="button" className="dashboard-drag text-text-muted p-1 rounded hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-primary"
+                  dragHandle={arranging && !compact && editable(w) ? <button type="button" className="dashboard-drag text-text-muted p-1 rounded hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-primary"
                     aria-label={`Переместить ${w.title}`} title="Перетащить · стрелки — перемещение"
                     onPointerDown={e => begin(e, w, "move")} onPointerMove={drag} onPointerUp={end} onPointerCancel={cancelDrag}
                     onKeyDown={e => { if (e.key.startsWith("Arrow")) { e.preventDefault(); keyboard(w, e.key); } }}>
                     <Grip className="w-4 h-4" />
                   </button> : undefined} />
-                {arranging && !compact && w.kind !== "counter" && <button type="button" className="dashboard-resize focus-visible:ring-2 focus-visible:ring-primary"
+                {arranging && !compact && editable(w) && w.kind !== "counter" && <button type="button" className="dashboard-resize focus-visible:ring-2 focus-visible:ring-primary"
                   aria-label={`Изменить размер ${w.title}`} title={`${w.fullWidth ? "Вся ширина" : pixels(rect.w)} × ${pixels(rect.h)} · тяните угол или нажимайте стрелки`}
                   onPointerDown={e => begin(e, w, "resize")} onPointerMove={drag} onPointerUp={end} onPointerCancel={cancelDrag}
                   onKeyDown={e => { if (e.key.startsWith("Arrow")) { e.preventDefault(); keyboard(w, e.key, true); } }}>
@@ -175,7 +178,7 @@ export default function DashboardSection() {
               <Grid2X2 className="w-7 h-7 text-primary mb-3" />
               <h2 className="font-semibold mb-2">Ваш рабочий стол</h2>
               <p className="text-sm text-text-muted max-w-md">Начните со списка задач или счётчика. Затем расположите виджеты так, как удобно вашей команде.</p>
-              {layout.canEdit && <Button className="mt-4" onClick={() => setEditing(null)} icon={<Plus className="w-4 h-4" />}>Добавить виджет</Button>}
+              <Button className="mt-4" onClick={() => setEditing(null)} icon={<Plus className="w-4 h-4" />}>Добавить виджет</Button>
             </div>}
           </div>
         </main>}
@@ -189,7 +192,7 @@ export default function DashboardSection() {
           <ChatPanel demo={layout?.demo ?? false} expanded={expanded} onExpand={() => setExpanded(v => !v)} />
         </div>
       </div>
-      {editing !== undefined && layout && <WidgetModal widget={editing ?? undefined} onClose={() => setEditing(undefined)} onSave={async w => {
+      {editing !== undefined && layout && <WidgetModal widget={editing ?? undefined} canShare={layout.canEdit} onClose={() => setEditing(undefined)} onSave={async w => {
         const source = arranging ? draft : layout.widgets;
         const next = editing ? placeWidget(source.map(x => x.id === w.id ? w : x), w.id, rectOf(w, columns), columns) : addWidget(source, w, columns);
         if (arranging) setDraft(next); else await save(next);

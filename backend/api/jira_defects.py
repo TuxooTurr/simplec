@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+
+from backend.api import http_pool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -177,7 +180,7 @@ def _jira_request(cfg: dict, method: str, path: str,
     logger.info("Jira → %s %s params=%s body=%s", method, url, params, json_body)
 
     try:
-        resp = requests.request(
+        resp = http_pool.request(
             method, url,
             json=json_body, params=params, headers=headers,
             auth=auth, verify=cfg["ssl_verify"], timeout=timeout,
@@ -979,8 +982,9 @@ async def attach_files(
 
     logger.info("Jira attach: %s файлов=%s", key, [p[1][0] for p in payload])
     try:
-        resp = requests.post(url, files=payload, headers=headers,
-                             verify=cfg["ssl_verify"], timeout=60)
+        # В поток: загрузка до 60 с не должна останавливать сервер для остальных пользователей.
+        resp = await asyncio.to_thread(http_pool.request, "POST", url, files=payload, headers=headers,
+                                       verify=cfg["ssl_verify"], timeout=60)
     except requests.exceptions.RequestException as e:
         logger.error("Jira attach: %s недоступна: %s", key, e)
         raise HTTPException(502, f"Не удалось приложить файлы к {key}: {str(e)[:200]}")

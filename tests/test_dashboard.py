@@ -204,3 +204,92 @@ def test_image_size_presets_and_legacy_shape_migration():
     assert (old.w, old.h, old.gridVersion) == (8, 8, 2)
     custom = api.Widget.model_validate({'title':'Свои размеры','jql':'project=QA','size':'M','w':7,'h':9,'gridVersion':2})
     assert (custom.w, custom.h) == (7, 9)
+
+
+def _jira_stub(monkeypatch, light, detail):
+    """light/detail: key → raw. Возвращает журнал вызовов (fields каждого запроса)."""
+    calls = []
+    monkeypatch.setattr(api, 'SessionLocal', lambda: nullcontext(None))
+    monkeypatch.setattr(api.jira, '_load_cfg', lambda db: {'base_url': 'https://jira.test'})
+    def search(cfg, jql, limit=0, fields='*navigable', expand=''):
+        calls.append(('search', fields))
+        rows = list((light if fields == api.LIGHT_FIELDS else detail).values())
+        return rows, len(rows)
+    def by_keys(cfg, keys, fields='*navigable', expand=''):
+        calls.append(('keys', fields, tuple(keys)))
+        source = light if fields == api.LIGHT_FIELDS else detail
+        return [source[k] for k in keys if k in source]
+    monkeypatch.setattr(api.jira, '_search', search)
+    monkeypatch.setattr(api.jira, '_by_keys', by_keys)
+    return calls
+
+
+def _raw(n, updated, status=('1', 'Открыт'), summary=None):
+    return {'key': f'QA-{n}', 'fields': {'summary': summary or f'Задача {n}', 'updated': updated,
+                                       'status': {'id': status[0], 'name': status[1]}}}
+
+
+def _light(n, updated, status=('1', 'Открыт')):
+    return {'key': f'QA-{n}', 'fields': {'updated': updated, 'status': {'id': status[0], 'name': status[1]}}}
+
+
+def test_light_poll_fetches_details_only_for_changed_issues(dashboard, monkeypatch):
+    detail = {'QA-1': _raw(1, 't1'), 'QA-2': _raw(2, 't1')}
+    calls = _jira_stub(monkeypatch, {}, detail)
+    api.refresh('inbox')                                   # первый опрос — полная выборка
+    assert len(calls) == 1 and calls[0][0] == 'search' and calls[0][1].startswith('*navigable')
+    queue = store.read()['queues']['inbox']
+    assert queue['fullSyncAt'] and queue['entries']['QA-1']['jiraUpdated'] == 't1'
+
+    calls.clear()
+    detail['QA-2'] = _raw(2, 't2', summary='Переименованная')
+    light = {'QA-1': _light(1, 't1'), 'QA-2': _light(2, 't2'), 'QA-3': _light(3, 't1')}
+    detail['QA-3'] = _raw(3, 't1')
+    calls[:] = []
+    monkeypatch.setattr(api.jira, '_search', lambda cfg, jql, limit=0, fields='', expand='': (calls.append(('search', fields)) or (list(light.values()), 3)))
+    api.refresh('inbox')
+    assert calls[0] == ('search', api.LIGHT_FIELDS)
+    assert calls[1][0] == 'keys' and calls[1][1].startswith('*navigable') and calls[1][2] == ('QA-2', 'QA-3')      # QA-1 не менялась — не догружается
+    items = {i['key']: i for i in api.widget_data('inbox', {})['items']}
+    assert items['QA-1']['fields']['summary'] == 'Задача 1'
+    assert items['QA-2']['fields']['summary'] == 'Переименованная'
+    assert set(items) == {'QA-1', 'QA-2', 'QA-3'} and all(i['inFilter'] for i in items.values())
+
+
+def test_light_poll_still_auto_processes_status_change(dashboard, monkeypatch):
+    detail = {'QA-1': _raw(1, 't1')}
+    _jira_stub(monkeypatch, {}, detail)
+    api.refresh('inbox')
+    assert api.widget_data('inbox', {})['pending'] == 1
+    detail['QA-1'] = _raw(1, 't2', status=('2', 'В работе'))
+    _jira_stub(monkeypatch, {'QA-1': _light(1, 't2', ('2', 'В работе'))}, detail)
+    api.refresh('inbox')
+    data = api.widget_data('inbox', {})
+    assert data['pending'] == 0 and data['items'][0]['processedReason'] == 'status-change'
+
+
+def test_full_sync_returns_after_interval_or_column_change(dashboard, monkeypatch):
+    calls = _jira_stub(monkeypatch, {'QA-1': _light(1, 't1')}, {'QA-1': _raw(1, 't1')})
+    api.refresh('inbox')
+    calls.clear(); api.refresh('inbox')
+    assert calls[0] == ('search', api.LIGHT_FIELDS)
+    state = store.read()
+    state['queues']['inbox']['fullSyncAt'] = '2000-01-01T00:00:00+00:00'; store.write(state)
+    calls.clear(); api.refresh('inbox')
+    assert calls[0][1].startswith('*navigable')
+    widget = api.Widget(**{**dashboard, 'columns': ['summary', 'customfield_9']})
+    store.layout([widget.model_dump()], store.read()['version'])
+    calls.clear(); api.refresh('inbox')
+    assert calls[0][0] == 'search' and 'customfield_9' in calls[0][1]
+
+
+def test_light_poll_keeps_retained_issue_that_left_filter(dashboard, monkeypatch):
+    _jira_stub(monkeypatch, {}, {'QA-1': _raw(1, 't1')})
+    api.refresh('inbox')
+    calls = _jira_stub(monkeypatch, {'QA-1': _light(1, 't1')}, {'QA-1': _raw(1, 't1')})
+    monkeypatch.setattr(api.jira, '_search', lambda cfg, jql, limit=0, fields='', expand='': (calls.append(('search', fields)) or ([], 0)))
+    api.refresh('inbox')
+    assert ('keys', api.LIGHT_FIELDS, ('QA-1',)) in calls
+    assert not any(c[0] == 'keys' and c[1] != api.LIGHT_FIELDS for c in calls)   # не менялась — без догрузки
+    item = api.widget_data('inbox', {})['items'][0]
+    assert item['fields']['summary'] == 'Задача 1' and item['inFilter'] is False

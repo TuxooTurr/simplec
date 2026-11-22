@@ -58,6 +58,8 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from backend.api import http_pool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -166,7 +168,7 @@ def _http(name: str, method: str, url: str, verify: Any, *, token: str = "", aut
     if token:
         headers["Authorization"] = "Bearer " + token
     try:
-        resp = requests.request(method, url, params=params, json=json_body, data=data, headers=headers,
+        resp = http_pool.request(method, url, params=params, json=json_body, data=data, headers=headers,
                                 auth=auth, verify=verify, timeout=timeout)
     except requests.exceptions.SSLError as e:
         raise HTTPException(502, f"{name}: SSL-ошибка ({str(e)[:150]}). Отключите проверку сертификата в настройках Jira")

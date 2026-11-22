@@ -30,12 +30,13 @@ def jira(monkeypatch):
     sent: dict = {}
     monkeypatch.setattr(jd, "_load_cfg", lambda db: {"base_url": "https://jira.example", "token": "t", "token_path": "", "ssl_verify": False})
 
-    def post(url, files, headers, verify, timeout):
+    def post(method, url, files, headers, verify, timeout):
+        assert method == "POST"
         sent.update(url=url, names=[f[1][0] for f in files], types=[f[1][2] for f in files], headers=headers)
         return sent.get("resp") or _Resp(200, [{"filename": f[1][0]} for f in files])
 
-    import requests
-    monkeypatch.setattr(requests, "post", post)
+    from backend.api import http_pool
+    monkeypatch.setattr(http_pool, "request", post)
     return sent
 
 

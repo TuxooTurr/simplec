@@ -4,7 +4,7 @@ import asyncio
 import os
 import re
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
@@ -186,7 +186,45 @@ def observed_issue(raw, base_url):
                             'to': item.get('toString') or after or '',
                             'by': (history.get('author') or {}).get('displayName') or ''})
     issue['_statusChanges'] = changes
+    issue['_updated'] = _updated(raw)
     return issue
+
+# Опрос Jira раз в 30 с идёт в два шага: лёгкий запрос (только статус и дата изменения) по всему JQL,
+# затем полные поля и история — лишь для новых и изменившихся задач. Полная выборка — раз в
+# FULL_SYNC_EVERY и при смене набора полей виджета: страховка от правок, не меняющих updated.
+FULL_SYNC_EVERY = timedelta(minutes=15)
+LIGHT_FIELDS = 'status,updated'
+
+
+def _full_due(queue, signature):
+    if queue.get('detailSig') != signature: return True
+    last = store._time(queue.get('fullSyncAt'))
+    return last is None or datetime.now(timezone.utc) - last >= FULL_SYNC_EVERY
+
+
+def _updated(raw):
+    return str((raw.get('fields') or {}).get('updated') or '')
+
+
+def _merge_light(cfg, light, known, detail):
+    """Лёгкие записи → полноценные: изменившиеся догружаются, остальные берутся из сохранённой очереди."""
+    changed = [r['key'] for r in light
+               if not (known.get(r['key'], {}).get('jiraUpdated') and known[r['key']]['jiraUpdated'] == _updated(r))]
+    fresh = {r['key']: r for r in jira._by_keys(cfg, changed, **detail)} if changed else {}
+    result = []
+    for raw in light:
+        key, entry = raw['key'], known.get(raw['key'])
+        if key in fresh:
+            result.append(observed_issue(fresh[key], cfg['base_url']))
+        elif entry and entry.get('issue'):
+            # Задача не менялась (или детали недоступны) — статус берём из лёгкого ответа, остальное из очереди.
+            status = (raw.get('fields') or {}).get('status')
+            result.append({**entry['issue'], '_statusId': str(status.get('id') or '') if isinstance(status, dict) else '',
+                           '_updated': entry.get('jiraUpdated', ''), '_statusChanges': []})
+        else:
+            result.append(observed_issue(raw, cfg['base_url']))
+    return result
+
 
 def refresh(widget_id):
     layout_version = None
@@ -204,19 +242,30 @@ def refresh(widget_id):
             selected = [*widget.get('columns', []), widget.get('groupField', ''), widget.get('valueField', '')]
             fields = [field for field in selected if field not in ('key', 'type') and re.fullmatch(r'[A-Za-z][\w]*', field)]
             if fields: expansion['fields'] = ','.join(dict.fromkeys(['*navigable', *fields]))
-            raw, total = jira._search(cfg, query_for(widget), limit=20000, **expansion)
-            issues = [observed_issue(i, cfg['base_url']) for i in raw]
+            queue = data.get('queues', {}).get(widget_id, {})
+            known = queue.get('entries') or {}
+            signature = f"{widget['kind']}|{expansion.get('fields', '*navigable')}"
+            full = _full_due(queue, signature)
+            if full:
+                raw, total = jira._search(cfg, query_for(widget), limit=20000, **expansion)
+                issues = [observed_issue(i, cfg['base_url']) for i in raw]
+            else:
+                raw, total = jira._search(cfg, query_for(widget), limit=20000, fields=LIGHT_FIELDS)
+                issues = _merge_light(cfg, raw, known, expansion)
             retained = []
             # Fetch outstanding retained work even after it leaves a sliding JQL window.
             if widget['kind'] == 'counter':
-                known = (data.get('queues', {}).get(widget_id, {}).get('entries') or {})
                 current = {i['key'] for i in issues}
                 missing = [k for k, e in known.items() if not e.get('processedAt') and k not in current]
                 for batch in jira._chunks(missing, 1000):
-                    fetched = jira._by_keys(cfg, batch, **expansion)
-                    retained.extend(observed_issue(issue, cfg['base_url']) for issue in fetched)
+                    if full:
+                        fetched = jira._by_keys(cfg, batch, **expansion)
+                        retained.extend(observed_issue(issue, cfg['base_url']) for issue in fetched)
+                    else:
+                        retained.extend(_merge_light(cfg, jira._by_keys(cfg, batch, fields=LIGHT_FIELDS), known, expansion))
             store.observe(widget_id, issues, retained=retained, partial=total > len(raw), layout_version=layout_version,
-                          error='Jira вернула больше 20 000 задач. Сузьте фильтр: выдача неполная.' if total > len(raw) else '')
+                          error='Jira вернула больше 20 000 задач. Сузьте фильтр: выдача неполная.' if total > len(raw) else '',
+                          full_sync=signature if full else None)
     except Exception as exc:
         text = str(exc.detail)[:500] if isinstance(exc, HTTPException) else 'Не удалось обновить Jira. Сохранён предыдущий результат.'
         store.observe(widget_id, None, error=text, layout_version=layout_version)

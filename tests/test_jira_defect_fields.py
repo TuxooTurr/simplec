@@ -345,7 +345,7 @@ def test_повтор_учитывает_поля_за_пределами_соо
         }} if rejected else {"key": "SBER911-1"}
         return _jira_response(400 if rejected else 201, payload)
 
-    monkeypatch.setattr("requests.request", request)
+    monkeypatch.setattr("backend.api.http_pool.request", request)
     cfg = {"base_url": "https://jira.example", "token": "t", "ssl_verify": False}
     fields = {"project": {"key": "SBER911"}, "issuetype": {"name": "Задача"}, "summary": "Задача"}
     created, dropped = JD._create_skipping_offscreen(cfg, {**fields, IT_SERVICE_FIELD: "ИТ-услуга", KE_FIELD: "КЭ"})

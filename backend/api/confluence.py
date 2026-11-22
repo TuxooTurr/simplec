@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+
+from backend.api import http_pool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -87,7 +89,7 @@ def _request(cfg: dict, method: str, path: str, params: Optional[dict] = None, j
         headers["X-Atlassian-Token"] = "no-check"   # без него Confluence отклоняет загрузку вложений (XSRF)
     logger.info("Confluence → %s %s params=%s", method, url, params)
     try:
-        resp = requests.request(method, url, params=params, json=json_body, files=files, headers=headers, auth=auth,
+        resp = http_pool.request(method, url, params=params, json=json_body, files=files, headers=headers, auth=auth,
                                 verify=cfg["ssl_verify"], timeout=timeout)
     except requests.exceptions.SSLError as e:
         raise HTTPException(502, f"SSL-ошибка при подключении к Confluence: {str(e)[:200]}. "
@@ -129,19 +131,21 @@ def download_attachment(cfg: dict, page_id: str, filename: str) -> tuple[bytes, 
         raise HTTPException(404, f"Confluence не дал ссылку на «{filename}»")
     url = path if path.startswith("http") else cfg["base_url"] + path
     try:
-        resp = requests.get(url, headers={"Authorization": "Bearer " + _resolve_token(cfg),
+        resp = http_pool.request("GET", url, headers={"Authorization": "Bearer " + _resolve_token(cfg),
                                           "User-Agent": "Mozilla/5.0 (compatible; Shark-QA/1.0)"},
                             verify=cfg["ssl_verify"], timeout=60, stream=True)
     except requests.exceptions.RequestException as e:
         raise HTTPException(502, f"Confluence недоступен: {str(e)[:200]}")
-    if resp.status_code >= 400:
-        raise HTTPException(resp.status_code, f"Confluence не отдал «{filename}» ({resp.status_code})")
-    data = b""
-    for chunk in resp.iter_content(64 * 1024):
-        data += chunk
-        if len(data) > MAX_ATTACHMENT:
-            raise HTTPException(413, f"«{filename}» больше {MAX_ATTACHMENT // 1024 // 1024} МБ")
-    return data, resp.headers.get("Content-Type", "application/octet-stream").split(";")[0]
+    # stream=True: ответ закрываем явно, иначе при раннем выходе соединение не вернётся в общий пул.
+    with resp:
+        if resp.status_code >= 400:
+            raise HTTPException(resp.status_code, f"Confluence не отдал «{filename}» ({resp.status_code})")
+        data = b""
+        for chunk in resp.iter_content(64 * 1024):
+            data += chunk
+            if len(data) > MAX_ATTACHMENT:
+                raise HTTPException(413, f"«{filename}» больше {MAX_ATTACHMENT // 1024 // 1024} МБ")
+        return data, resp.headers.get("Content-Type", "application/octet-stream").split(";")[0]
 
 
 # ── Настройки ────────────────────────────────────────────────────────────────

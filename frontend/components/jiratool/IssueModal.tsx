@@ -1,5 +1,6 @@
 "use client";
-import IssueEditButton from "./IssueEditButton";
+import IssueActions from "./IssueActions";
+import AddToListAction from "./AddToListAction";
 
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -171,8 +172,10 @@ export function PlanDates({ issueKey, onSaved }: { issueKey: string; onSaved?: (
 }
 
 /** Задача из списка: кто автор, кто исполнитель, плановые даты и описание — без перехода в Jira. */
-export default function IssueModal({ open, issue, onClose, onPlanSaved }: {
+export default function IssueModal({ open, issue, onClose, onPlanSaved, addToList = false }: {
   open: boolean; issue: Issue; onClose: () => void;
+  /** Значок «Добавить в список» (списки Jira tool) — в карточке задачи из списков Главной. */
+  addToList?: boolean;
   /** Плановые даты записаны в Jira — перечитать историю для графика. */
   onPlanSaved?: (key: string) => void;
 }) {
@@ -181,7 +184,7 @@ export default function IssueModal({ open, issue, onClose, onPlanSaved }: {
     <Modal open={open} onClose={onClose} title={`${issue.key} · ${String(issue.fields.summary ?? "")}`} size="max-w-3xl">
       <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-x-8 gap-y-2 pb-3 border-b border-border-main">
-          {!issue.local && <IssueEditButton issues={[issue]} onDone={() => onPlanSaved?.(issue.key)} />}
+          {!issue.local && <IssueActions issues={[issue]} onDone={() => onPlanSaved?.(issue.key)}>{addToList && <AddToListAction issue={issue} />}</IssueActions>}
           <Person label="Автор" name={issue.fields.reporter} />
           <Person label="Исполнитель" name={issue.fields.assignee} />
           {issue.url && (

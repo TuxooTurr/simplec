@@ -1,5 +1,6 @@
 "use client";
-import IssueEditButton, { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
+import { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
+import IssueActions from "@/components/jiratool/IssueActions";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -27,7 +28,6 @@ import OwnFieldModal from "@/components/jiratool/OwnFieldModal";
 import ParticipantsModal, { initials } from "@/components/jiratool/ParticipantsModal";
 import IssueFormModal, { type IssueDraft } from "@/components/jiratool/IssueFormModal";
 import { openForm } from "@/lib/backgroundForms";
-import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
 import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
@@ -75,7 +75,7 @@ import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
  */
 const STRUCTURE_ENABLED = false;
 
-type ModalState = null | "add" | "create" | "import" | "participants" | "bulk" | "stages" | "reqs" | "ms" | "msOverlaps" | "loadDetails" | { stageFor: Issue }
+type ModalState = null | "add" | "create" | "import" | "participants" | "stages" | "reqs" | "ms" | "msOverlaps" | "loadDetails" | { stageFor: Issue }
   | { own: OwnField | null } | { defectsFor: Issue };
 
 /** Свёрнута ли левая колонка — удобство конкретного человека, живёт в его браузере. */
@@ -1477,9 +1477,8 @@ export default function JiraToolSection() {
                   <span className="text-sm text-text-main">
                     {selected.size ? <>Выбрано: <b>{selected.size}</b></> : "Отметьте задачи чекбоксами"}
                   </span>
-                  <button type="button" onClick={() => setModal("bulk")} disabled={!selected.size}
-                    className="ml-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-40">Сменить статус</button>
-                  {selectedIssues.length > 1 && <IssueEditButton issues={selectedIssues} onDone={afterTransitions} />}
+                  <span className="ml-2"><IssueActions issues={selectedIssues} onDone={afterTransitions} storiesOf={k => byEpic.get(k) ?? []}
+                    onStatusClosed={moved => { if (moved) setSelected(new Set()); }} /></span>
                   <button type="button" onClick={() => setModal("reqs")} disabled={!selected.size}
                     className="px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle disabled:opacity-40">Требования…</button>
                   <button type="button" onClick={() => setModal("ms")} disabled={!selected.size}
@@ -1723,9 +1722,6 @@ export default function JiraToolSection() {
       {modal === "reqs" && (
         <ReqAssignModal open count={selected.size} options={reqOptions} onClose={() => setModal(null)}
           onApply={(ids, mode) => setReqs([...selected], ids, mode)} />
-      )}
-      {modal === "bulk" && (
-        <BulkStatusModal open issues={selectedIssues} storiesOf={k => byEpic.get(k) ?? []} onClose={moved => { setModal(null); if (moved) setSelected(new Set()); }} onDone={afterTransitions} />
       )}
       {modal === "stages" && (
         <StageMappingModal open project={list?.project ?? "SBER911"} projects={state.lists.map(l => l.project)}

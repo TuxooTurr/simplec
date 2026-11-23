@@ -1,15 +1,14 @@
 "use client";
-import IssueEditButton from "./IssueEditButton";
+import IssueActions from "./IssueActions";
 
 import { useState } from "react";
-import { ArrowRightLeft, Check, Link2 } from "lucide-react";
+import { Check, Link2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { categoryOf, storiesChatReport, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
-import BulkStatusModal from "./BulkStatusModal";
 import { ChatCopyControls, type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок для сортировки по статусу (st): заблокированные и отстающие — первыми. */
@@ -48,7 +47,6 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
   onTransitions?: (keys: string[]) => void;
   onClose: () => void;
 }) {
-  const [statusOpen, setStatusOpen] = useState(false);
   const info = stageOf(issue);
   const isEpic = categoryOf(issue) === "epic";
   const [picked, setPicked] = useState<Set<string>>(() => new Set(stories.map(s => s.key)));
@@ -89,6 +87,7 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
         {isEpic && (
           <section className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
+              {stories.length > 0 && onTransitions && <IssueActions issues={toSend} onDone={onTransitions} noun="стори" />}
               <h3 className="text-sm font-semibold text-text-main">Стори эпика · {stories.length}</h3>
               <span className="ml-auto flex items-center gap-2">
                 {onAdd && (
@@ -96,15 +95,6 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
                     <Link2 className="w-4 h-4" /> Добавить</button>
                 )}
-              {stories.length > 0 && onTransitions && (<>
-                <IssueEditButton issues={toSend} onDone={onTransitions} compact />
-                <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
-                  aria-label={`Сменить статус (${toSend.length})`}
-                  title={`Сменить статус (${toSend.length}): перевести отмеченные стори в другой статус Jira — переходы спрашиваются у Jira`}
-                  className="flex items-center px-2 py-1.5 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                  <ArrowRightLeft className="w-4 h-4" /></button>
-              </>
-              )}
               </span>
             </div>
             {stories.length === 0 ? (
@@ -121,9 +111,6 @@ export default function StageModal({ open, issue, stories, stageOf, ownStageOf, 
           </section>
         )}
       </div>
-      {statusOpen && onTransitions && (
-        <BulkStatusModal open issues={toSend} storiesOf={() => []} onDone={onTransitions} onClose={() => setStatusOpen(false)} />
-      )}
     </Modal>
   );
 }

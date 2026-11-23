@@ -100,7 +100,7 @@ export function sortIssueRows(rows: Issue[], sort: IssueSort, stageRank?: (i: Is
 }
 
 export default function IssueTable({
-  groups, cols, initialSort, stage, stageRank, dim, picked, onPick, onSort,
+  groups, cols, initialSort, stage, stageRank, dim, picked, onPick, onSort, renderCell, detailAddToList,
   widthKey, filter, onFilter, source, stageLabel, rowActions, onIssuesChanged, columnLabels, columnKinds,
 }: {
   /** Группы строк (уже отфильтрованные): заголовок (null — без заголовка) и задачи. */
@@ -112,6 +112,10 @@ export default function IssueTable({
   initialSort: IssueSort;
   /** Ячейка «Статус (st)», если колонка есть. */
   stage?: (i: Issue) => ReactNode;
+  /** Своя ячейка колонки (например, «Статус (st)» со стрелкой выбора на Главной); undefined — обычная. */
+  renderCell?: (col: string, issue: Issue) => ReactNode | undefined;
+  /** Карточка задачи по названию — со значком «Добавить в список» (только списки Главной). */
+  detailAddToList?: boolean;
   stageRank?: (i: Issue) => number;
   /** Приглушить строку (например, устранённый дефект). */
   dim?: (i: Issue) => boolean;
@@ -284,7 +288,7 @@ export default function IssueTable({
                 {cols.map(c => (
                   // Переносим, а не обрезаем: узкую колонку видно целиком в несколько строк.
                   <td key={c} className="px-3 py-1.5 align-top text-text-main break-words [overflow-wrap:anywhere]">
-                    {c === "type" ? (typeIconOnly ? <IssueTypeIcon type={String(d.fields.issuetype ?? "")} /> : <IssueTypeBadge type={String(d.fields.issuetype ?? "")} />)
+                    {renderCell?.(c, d) ?? (c === "type" ? (typeIconOnly ? <IssueTypeIcon type={String(d.fields.issuetype ?? "")} /> : <IssueTypeBadge type={String(d.fields.issuetype ?? "")} />)
                       : c === "key" ? (d.url
                         ? <a href={d.url} target="_blank" rel="noreferrer" title="Открыть в Jira"
                             className="font-mono text-xs text-primary hover:underline">{d.key} ↗</a>
@@ -295,7 +299,7 @@ export default function IssueTable({
                         <span className={isBlocker(d) ? "text-red-600 dark:text-red-400 font-semibold" : ""}>{String(d.fields.priority ?? "—")}</span>
                       )
                       : columnKinds?.[c] === "date" || columnKinds?.[c] === "datetime" ? <span>{filterValues(d, c).filter(Boolean).map(value => fmtJiraDate(value, columnKinds[c] === "datetime")).join(", ") || "—"}</span>
-                      : <JiraCell id={c} issue={d} />}
+                      : <JiraCell id={c} issue={d} />)}
                   </td>
                 ))}
                 <td className="px-2 py-1.5"><div className="flex flex-wrap gap-1"><IssueEditButton compact issues={[d]} />{rowActions?.(d)}</div></td>
@@ -310,7 +314,7 @@ export default function IssueTable({
         ))}
       </table>
     </div>
-      {detail && <IssueModal open issue={detail} onClose={() => setDetail(null)} onPlanSaved={() => { window.dispatchEvent(new CustomEvent(JIRA_ISSUES_CHANGED, {detail:[detail.key]})); void openDetail(detail); }} />}
+      {detail && <IssueModal open issue={detail} addToList={detailAddToList} onClose={() => setDetail(null)} onPlanSaved={() => { window.dispatchEvent(new CustomEvent(JIRA_ISSUES_CHANGED, {detail:[detail.key]})); void openDetail(detail); }} />}
     </div>
   );
 }

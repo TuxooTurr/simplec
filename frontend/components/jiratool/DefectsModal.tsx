@@ -1,15 +1,14 @@
 "use client";
-import IssueEditButton from "./IssueEditButton";
+import IssueActions from "./IssueActions";
 
 import { useState } from "react";
-import { ArrowRightLeft, Bug, Check, Link2 } from "lucide-react";
+import { Bug, Check, Link2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { blockersOf, categoryOf, defectsChatReport, isOpenDefect, type Issue } from "@/lib/jiraTool";
 import { STAGES, stageText, type StageInfo } from "@/lib/jiraStages";
 import { copyToClipboard } from "@/lib/clipboard";
 import { StageBadge } from "./ListCells";
 import IssueTable, { NO_FILTER, filterIssueRows, sortIssueRows, type IssueFilter, type IssueSort } from "./IssueTable";
-import BulkStatusModal from "./BulkStatusModal";
 import { ChatCopyControls, type ChatFieldsCfg } from "./ChatFieldsPicker";
 
 /** Порядок по статусу (st): раньше по процессу — выше. */
@@ -48,7 +47,6 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
   onClose: () => void;
 }) {
   const [showFixed, setShowFixed] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
   const [note, setNote] = useState("");
   const [filter, setFilter] = useState<IssueFilter>(NO_FILTER);
   const label = (d: Issue) => stageText(stageOf(d));
@@ -88,6 +86,7 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
             : categoryOf(issue) === "story" ? " Считаются связанные дефекты и блокирующие дефекты эпика." : " Считаются связанные дефекты."}
         </p>
         <div className="flex flex-wrap items-center gap-3">
+          {onTransitions && <IssueActions issues={toSend} onDone={onTransitions} noun="дефекты" />}
           <label className="inline-flex items-center gap-2 text-sm text-text-main cursor-pointer select-none">
             <input type="checkbox" checked={showFixed} onChange={e => setShowFixed(e.target.checked)} />
             Показать устранённые <span className="text-text-muted">(«Подтверждение исправления», «Исключено», «Отложен», «Закрыт») — отдельной группой</span>
@@ -105,14 +104,6 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-main text-sm text-text-main hover:bg-bg-subtle">
                 <Link2 className="w-4 h-4" /> Добавить дефект</button>
             )}
-            {onTransitions && (<>
-              <IssueEditButton issues={toSend} onDone={onTransitions} compact />
-              <button type="button" onClick={() => setStatusOpen(true)} disabled={!toSend.length}
-                aria-label={`Сменить статус (${toSend.length})`}
-                title={`Сменить статус (${toSend.length}): перевести отмеченные дефекты в другой статус Jira — переходы спрашиваются у Jira`}
-                className="flex items-center px-2 py-1.5 rounded-lg border border-border-main text-text-main hover:bg-bg-subtle disabled:opacity-40">
-                <ArrowRightLeft className="w-4 h-4" /></button>
-            </>)}
           </span>
         </div>
         {defects.length === 0 || (!showFixed && allOpened.length === 0) ? (
@@ -130,9 +121,6 @@ export default function DefectsModal({ open, issue, defects, stageOf, chat, onCr
               : [{ title: null, issues: opened }]} />
         )}
       </div>
-      {statusOpen && onTransitions && (
-        <BulkStatusModal open issues={toSend} storiesOf={() => []} onDone={onTransitions} onClose={() => setStatusOpen(false)} />
-      )}
     </Modal>
   );
 }

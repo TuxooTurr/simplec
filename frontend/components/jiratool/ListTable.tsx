@@ -35,7 +35,7 @@ export function sortIssues(issues: Issue[], sort: SortState, ctx: ColCtx): Issue
 
 /* ── Ширина колонок ──────────────────────────────────────────────────────── */
 
-const SELECT_W = 56, REMOVE_W = 36, MIN_W = 60, INDENT = 12;
+const SELECT_W = 64, REMOVE_W = 36, MIN_W = 60, INDENT = 12;
 /**
  * Задачи в папке начинаются под названием папки, а не под стрелкой: так вложенность видна сразу.
  * 42 = от края колонки ключа до начала названия папки (стрелка 16 + отступ 6 + значок 16 + отступ 8, минус 4 на поле ключа).
@@ -392,7 +392,7 @@ export default function ListTable({
           ${dragRow?.key === issue.key && dragRow.path === path ? "opacity-40" : ""}
           ${over === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
           ${over === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
-        {first && <td rowSpan={span} className={`pl-1 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
+        {first && <td rowSpan={span} className={`pl-3 pr-1 py-1.5 align-top whitespace-nowrap ${rowBg(on)}`} style={stick(0)}>
           {/* span, а не button: с кнопки Firefox и Safari перенос не начинают (у папок ручка — тоже span) */}
           <span role="button" tabIndex={rowsMovable ? 0 : -1} aria-label={`Переместить ${issue.key}`} aria-disabled={!rowsMovable}
             title={storyRows ? "В режиме STORY порядок стори закреплён внутри эпика" : rowsMovable ? "Перетащите, чтобы поменять порядок или папку (или ↑/↓)" : "Сбросьте сортировку по колонке, чтобы менять порядок вручную"}
@@ -534,7 +534,7 @@ export default function ListTable({
             if (plan && (plan.kind === "folder" || (leaf && plan.changes.length))) dropRow(plan, null, "after");
             endRowDrag();
           }}>
-          <td className="pl-1 pr-1 py-1.5 bg-bg-subtle" style={stick(0)}>
+          <td className="pl-3 pr-1 py-1.5 bg-bg-subtle" style={stick(0)}>
             <span className="inline-block w-[18px]" />
             {selecting && (
               <input type="checkbox" checked={groupOn} onChange={() => onSelect(keys, !groupOn)} aria-label={`Выбрать группу ${node.label}`}
@@ -618,7 +618,7 @@ export default function ListTable({
         className={`group/fh border-t-2 border-border-main bg-bg-card ${isOver ? "outline outline-2 -outline-offset-2 outline-primary" : ""}
           ${fOver === "before" ? "shadow-[inset_0_2px_0_0_var(--color-primary,#6366f1)]" : ""}
           ${fOver === "after" ? "shadow-[inset_0_-2px_0_0_var(--color-primary,#6366f1)]" : ""}`}>
-        <td className="pl-1 pr-1 py-2 whitespace-nowrap bg-bg-card" style={stick(0)}>
+        <td className="pl-3 pr-1 py-2 whitespace-nowrap bg-bg-card" style={stick(0)}>
           {name ? (
             <span className="inline-flex align-middle p-0.5 text-text-muted opacity-0 group-hover/fh:opacity-100 cursor-grab" title="Перетащите, чтобы поменять порядок папок">
               <GripVertical className="w-3.5 h-3.5" />
@@ -678,7 +678,7 @@ export default function ListTable({
         </colgroup>
         <thead className="sticky top-0 z-10 bg-bg-card">
           <tr className="text-left">
-            <th className="pl-1 pr-1 py-2 text-left bg-bg-card whitespace-nowrap" style={stick(0, 4)}>
+            <th className="pl-3 pr-1 py-2 text-left bg-bg-card whitespace-nowrap" style={stick(0, 4)}>
               <button type="button" onClick={onToggleSelecting} aria-pressed={selecting}
                 aria-label={selecting ? "Скрыть выбор задач" : "Выбрать задачи"}
                 title={selecting ? "Скрыть чекбоксы и снять выбор" : "Выбрать задачи: смена статуса, папка, убрать из списка"}

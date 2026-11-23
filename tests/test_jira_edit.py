@@ -60,3 +60,54 @@ def test_background_edit_owner_and_completed_results(jira,monkeypatch):
         assert all(item['ok'] for item in result['results'])
     asyncio.run(scenario())
     api._jobs.clear()
+
+
+@pytest.fixture
+def screen(monkeypatch):
+    """Экран правки с текстом, метками и эпиком; текущие значения задач — по GET /issue/{key}."""
+    meta = {'summary': {'name': 'Тема', 'schema': {'type': 'string'}, 'required': True},
+            'labels': {'name': 'Метки', 'schema': {'type': 'array', 'items': 'string'}},
+            'priority': {'name': 'Приоритет', 'schema': {'type': 'priority'}, 'allowedValues': [{'id': '1', 'name': 'Высокий'}]},
+            api.constants.FIELD_EPIC_LINK: {'name': 'Epic Link', 'schema': {'type': 'any'}}}
+    current = {'QA-1': {'summary': 'Вход по смс', 'labels': ['ift-old', 'регресс']},
+               'QA-2': {'summary': 'Выход', 'labels': ['ift-old']}}
+    puts = []
+    monkeypatch.setattr(api.jira, '_load_cfg', lambda db: {})
+    def request(cfg, method, path, json_body=None, params=None):
+        key = path.split('/')[5]
+        if method == 'PUT': puts.append((key, json_body['fields'])); return {}
+        if path.endswith('/editmeta'): return {'fields': meta}
+        return {'fields': current[key]}
+    monkeypatch.setattr(api.jira, '_jira_request', request)
+    return puts
+
+
+def test_replace_fragment_per_issue_in_text_and_labels(screen):
+    res = api.update(api.Edit(keys=['QA-1', 'QA-2'], replace={'summary': ['Вход', 'Авторизация'], 'labels': ['ift-old', 'ift']}), None)
+    assert res['done'] == 2
+    assert screen == [('QA-1', {'summary': 'Авторизация по смс', 'labels': ['ift', 'регресс']}),
+                      ('QA-2', {'labels': ['ift']})]                              # «Выход» без «Вход» не трогаем
+
+
+def test_replace_only_for_text_fields(screen):
+    res = api.update(api.Edit(keys=['QA-1'], replace={'priority': ['1', '2']}), None)
+    assert not res['done'] and 'текстовых' in res['results'][0]['error'] and not screen
+
+
+def test_epic_link_is_editable_and_validated(screen):
+    assert api.constants.FIELD_EPIC_LINK in api.editable({api.constants.FIELD_EPIC_LINK: {'schema': {'type': 'any'}}})
+    assert api.update(api.Edit(keys=['QA-1'], fields={api.constants.FIELD_EPIC_LINK: 'sber911-77'}), None)['done'] == 1
+    assert screen[-1] == ('QA-1', {api.constants.FIELD_EPIC_LINK: 'SBER911-77'})
+    assert not api.update(api.Edit(keys=['QA-1'], fields={api.constants.FIELD_EPIC_LINK: 'не ключ'}), None)['done']
+
+
+def test_preview_shows_before_after_and_rejects_non_free_fields(screen, monkeypatch):
+    monkeypatch.setattr(api.jira, '_by_keys', lambda cfg, keys, fields='': [
+        {'key': 'QA-1', 'fields': {'summary': 'Вход по смс', 'labels': ['ift-old']}},
+        {'key': 'QA-2', 'fields': {'summary': 'Выход', 'labels': []}}])
+    res = api.preview(api.Preview(keys=['QA-1', 'QA-2'], replace={'summary': ['Вход', 'Авторизация']}), None)
+    assert res['affected'] == 1
+    assert res['items'][0]['changes'] == [{'field': 'summary', 'name': 'Тема', 'before': 'Вход по смс', 'after': 'Авторизация по смс'}]
+    assert res['items'][1]['changes'] == [] and not screen                     # ничего не записано
+    with pytest.raises(HTTPException):
+        api.preview(api.Preview(keys=['QA-1'], replace={'priority': ['1', '2']}), None)

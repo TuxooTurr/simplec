@@ -20,6 +20,7 @@ import {
 } from "@/lib/jiraApi";
 import { updateAqaIssue } from "@/lib/aqaApi";
 import JiraUserField from "./JiraUserField";
+import RequirementsPicker, { CONFLUENCE_REF_RE, type RequirementsSource } from "./RequirementsPicker";
 import { CREATE_TYPES, PRIORITIES, TESTING, inDirection, loadState, type Participant } from "@/lib/jiraTool";
 import { issueCache } from "@/lib/jiraToolCache";
 import { RefreshIcon } from "@/components/ui/RefreshButton";
@@ -42,7 +43,6 @@ export interface IssueDraft {
 
 const GEN_IMAGE_RE = /\.(png|jpe?g)$/i;
 // В «Требованиях (st)» бывают и ссылки на другие системы, например Figma.
-const CONFLUENCE_REF_RE = /(?:[?&]pageId=\d+|\/pages\/\d+|\/display\/[^/]+\/)/i;
 
 function withoutScreenshot(description: string, name: string): string {
   return description.replace(`![${name}](${name})`, "")
@@ -120,6 +120,12 @@ export default function IssueFormModal({ control, project, participants, listNam
   const [requestSources, setRequestSources] = useState(false);
   const [sourceRef, setSourceRef] = useState("");
   const [sourceFile, setSourceFile] = useState<File>();
+  /**
+   * Требования для ИИ: ссылка Confluence и документы «Данных» (несколько). По умолчанию — привязанные к эпику
+   * (как раньше подставлялись сами); после правки руками эпик их больше не перезаписывает.
+   */
+  const [reqPick, setReqPick] = useState<RequirementsSource>({ ref: "", ids: [] });
+  const reqTouched = useRef(false);
 
   /* ── Поля задачи ── */
   const [summary, setSummary] = useState(initial?.summary ?? prefill?.summary ?? "");
@@ -254,16 +260,22 @@ export default function IssueFormModal({ control, project, participants, listNam
   };
 
   const canGenerate = Boolean(summary.trim() || description.trim() || files.some(f => PARSEABLE_RE.test(f.name)));
+  useEffect(() => {
+    if (reqTouched.current) return;
+    const key = epicKey.trim().toUpperCase();
+    const { reqLinks, reqUrls } = loadState();
+    const ref = reqUrls[key]?.trim() ?? "";
+    setReqPick({ ref: CONFLUENCE_REF_RE.test(ref) ? ref : "", ids: reqLinks[key] ?? [] });
+  }, [epicKey]);
   const generate = async (withoutRequirements = false) => {
     if (busy || !canGenerate) return;
     setGenerating(true);
     setGenerated(false);
     setGenError("");
     const key = epicKey.trim().toUpperCase();
-    const { lists, reqLinks, reqUrls } = loadState();
-    const storedRef = reqUrls[key]?.trim() ?? "";
-    const linkedRef = CONFLUENCE_REF_RE.test(storedRef) ? storedRef : "";
-    const confluenceRef = withoutRequirements ? "" : sourceRef.trim() || linkedRef;
+    const { lists } = loadState();
+    const pickedRef = CONFLUENCE_REF_RE.test(reqPick.ref.trim()) ? reqPick.ref.trim() : "";
+    const confluenceRef = withoutRequirements ? "" : sourceRef.trim() || pickedRef;
     try {
       const listedEpic = lists.some(list => list.keys.includes(key)) ? issueCache().issues[key] : undefined;
       const epicSummary = String(listedEpic?.fields.summary ??
@@ -276,7 +288,7 @@ export default function IssueFormModal({ control, project, participants, listNam
       const text = [...shotNames.values()].reduce(withoutScreenshot, description).trim();
       const res = await (isDefect ? formatBug : formatTask)({
         feature: "", description: text, provider, files: readable,
-        requirementIds: reqLinks[key] ?? [],
+        requirementIds: withoutRequirements ? [] : reqPick.ids,
         requirementFile: withoutRequirements ? undefined : sourceFile,
         jiraContext: {
           summary: summary.trim().slice(0, 250), epic: key, epic_summary: epicSummary.slice(0, 500),
@@ -471,6 +483,10 @@ export default function IssueFormModal({ control, project, participants, listNam
                 </button>
               </div>
             </div>
+            <details className="rounded-lg border border-border-main px-3 py-2">
+              <summary className="text-xs cursor-pointer select-none">Требования для ИИ · {reqPick.ids.length + (reqPick.ref.trim() ? 1 : 0)}</summary>
+              <div className="mt-2"><RequirementsPicker value={reqPick} disabled={busy} onChange={v => { reqTouched.current = true; setReqPick(v); }} /></div>
+            </details>
             {requestSources && (
               <section className="space-y-2 rounded-lg border border-border-main bg-bg-subtle p-3 text-xs text-text-main" aria-label="Требования для генерации">
                 <p>{epicKey ? `Для эпика ${epicKey} нет доступного текста требований.` : "Эпик не выбран."} Укажите ссылку на Confluence или приложите файл требований.</p>

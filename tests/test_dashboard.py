@@ -347,3 +347,11 @@ def test_only_ether_owner_can_reply(dashboard, monkeypatch, tmp_path):
     assert api.ether_send(api.EtherSend(peer={'id': 1}, text='привет'), {'login': 'alice'}) == {'sent': True}
     monkeypatch.setattr(ether_mcp, 'get_thread', lambda peer: {'messages': [], 'canSend': True})
     assert api.ether_thread(api.EtherPeer(peer={'id': 1}), {'login': 'bob'})['canSend'] is False
+
+
+def test_counter_color_and_thresholds_are_validated_and_sorted():
+    w = api.Widget(title='Очередь', jql='project = QA', kind='counter', counterColor='#112233',
+                   thresholds=[{'from': 10, 'color': '#ff0000'}, {'from': '3', 'color': '#ffaa00'}, {'from': 10, 'color': '#990000'}])
+    assert w.thresholds == [{'from': 3, 'color': '#ffaa00'}, {'from': 10, 'color': '#990000'}]
+    for bad in ({'counterColor': 'red'}, {'thresholds': [{'from': 0, 'color': '#ff0000'}]}, {'thresholds': [{'from': 5, 'color': 'red'}]}):
+        with pytest.raises(ValueError): api.Widget(title='Очередь', jql='project = QA', kind='counter', **bad)

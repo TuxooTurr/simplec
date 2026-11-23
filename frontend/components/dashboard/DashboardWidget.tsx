@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback, type CSSProperties, type ReactNode } from "react";
-import { ArrowUpRight, BarChart3, Donut, List, Lock, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { ArrowUpRight, BarChart3, Donut, List, Lock, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui";
 import IssueTable, { NO_FILTER, filterIssueRows, type IssueFilter } from "@/components/jiratool/IssueTable";
 import { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
@@ -8,7 +8,15 @@ import { getWidgetData, refreshWidget, type DashboardWidget as Widget, type Widg
 import { seriesColor } from "@/lib/dashboardGrid";
 import IssueQueueModal from "./IssueQueueModal";
 import DashboardColumns from "./DashboardColumns";
-import { useDashboardColumns } from "@/lib/dashboardColumns";
+import { needsStList, useDashboardColumns } from "@/lib/dashboardColumns";
+import IssueActions from "@/components/jiratool/IssueActions";
+import { stageRenderer } from "./stageCell";
+/** Цвет числа счётчика: последний порог «от N», который число достигло, иначе свой цвет; ноль — всегда зелёный. */
+function counterColor(widget: Widget, count: number | null): string | undefined {
+  if (!count) return undefined;
+  const hit = [...(widget.thresholds ?? [])].sort((a, b) => b.from - a.from).find(t => count >= t.from);
+  return hit?.color || widget.counterColor || undefined;
+}
 const formats = [
   { id: "list" as const, label: "Список", Icon: List },
   { id: "donut" as const, label: "Кольцо", Icon: Donut },
@@ -24,6 +32,9 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
   const [modal, setModal] = useState<{ keys?: Set<string> } | null>(null);
   const table = useDashboardColumns(widget, data?.items);
   const st = table.st;
+  /** Карандаш выбора — как в списках Jira tool: чекбоксы и действия «Сменить статус» / «Изменить задачу». */
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
   const changeColumns = async (columns: string[]) => { await onColumnsChange(columns); setFilter(NO_FILTER); };
   useEffect(() => setFilter(NO_FILTER), [widget.columns]);
   const load = useCallback(async () => {
@@ -58,7 +69,8 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
       </header>
       <button type="button" disabled={!data} onClick={() => setModal({})} aria-label={`${widget.title}: ${count ?? "ожидание"}. Открыть очередь. ${status}`}
         className="w-full flex-1 min-h-0 p-3 flex items-center justify-center rounded-lg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary hover:bg-primary/[0.02] disabled:cursor-wait">
-        <strong className={`dashboard-counter-number ${count === 0 ? "tone-success-text" : "text-primary"}`} style={{ "--counter-digits": String(count ?? "—").length } as CSSProperties}>{count ?? "—"}</strong>
+        <strong className={`dashboard-counter-number ${count === 0 ? "tone-success-text" : counterColor(widget, count) ? "" : "text-primary"}`}
+          style={{ "--counter-digits": String(count ?? "—").length, ...(count ? { color: counterColor(widget, count) } : {}) } as CSSProperties}>{count ?? "—"}</strong>
       </button>
       {modal && data && <IssueQueueModal canEdit={canEdit} onColumnsChange={changeColumns} widget={widget} data={{ ...data, error: problem }} onClose={() => setModal(null)} onChanged={() => { void load(); void refresh(); }} />}
     </article>;
@@ -107,6 +119,11 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
           onClick={() => setKind(id)}><Icon className="w-3.5 h-3.5" /></button>)}
       </div>
       <div className="flex items-center gap-1">
+      {kind === "list" && <button type="button" aria-pressed={selecting} aria-label={selecting ? "Скрыть выбор задач" : "Выбрать задачи"}
+        title={selecting ? "Скрыть чекбоксы и снять выбор" : "Выбрать задачи: сменить статус, изменить"}
+        onClick={() => { setSelecting(v => !v); setPicked(new Set()); }}
+        className={`p-1.5 rounded transition-colors focus-visible:ring-2 focus-visible:ring-primary ${selecting ? "bg-primary/15 text-primary" : "text-text-muted hover:text-primary hover:bg-bg-subtle"}`}>
+        <Pencil className="w-3.5 h-3.5" /></button>}
       {kind === "list" && canEdit && <DashboardColumns columns={table.columns} options={table.options} onChange={changeColumns} />}
       <button type="button" title="Открыть задачи" aria-label="Открыть задачи" onClick={() => setModal({})}
         className="text-xs text-text-muted inline-flex items-center gap-1 whitespace-nowrap p-1 rounded hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-primary">
@@ -114,13 +131,21 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
       </button></div>
     </div>
     <div className="flex-1 min-h-0 overflow-auto min-w-0 p-3">
-      {(widget.groupField.startsWith("st:") || widget.valueField.startsWith("st:") || table.columns.some(c => c.startsWith("st:"))) && (!st.available || !st.lists.length) && <p className="text-xs tone-warning mb-2">Источник ST не найден в этом браузере. Откройте нужный список Jira tool или выберите другой источник.</p>}
+      {(needsStList(widget.groupField) || needsStList(widget.valueField) || table.columns.some(needsStList)) && (!st.available || !st.lists.length) && <p className="text-xs tone-warning mb-2">Источник ST не найден в этом браузере. Откройте нужный список Jira tool или выберите другой источник.</p>}
       {(error || data?.error) && <p role="alert" className="text-xs tone-danger mb-2">{error || data?.error}</p>}
       {data?.filterChangedAt && (!data.lastCheckedAt || data.filterChangedAt > data.lastCheckedAt) && <p role="status" className="text-xs text-text-muted mb-2">Фильтр изменён. Ожидаю обновления; предыдущие данные сохранены.</p>}
       {data?.partial && <p role="status" className="text-xs tone-warning mb-2">Выдача ограничена. Сузьте JQL.</p>}
       {(filter.q || Object.keys(filter.cols).length > 0) && <Button variant="sm" onClick={() => setFilter(NO_FILTER)} className="mb-2">Сбросить фильтр</Button>}
-      {!data?.lastCheckedAt && !error && !data?.error ? <p role="status" className="text-xs text-text-muted py-5">Получаю задачи из Jira…</p> : metricConflict && kind !== "list" ? <p className="text-xs tone-warning">Числовые значения ST различаются между списками. Выберите конкретный список в настройках виджета.</p> : kind === "list" ? <IssueTable cols={table.columns} columnLabels={table.labels} columnKinds={table.kinds} initialSort={{ col: "key", dir: 1 }}
-        groups={[{ title: null, issues: filteredRows }]} source={rows} filter={tableFilter} onFilter={setFilter} widthKey={`dashboard-${widget.id}`} />
+      {!data?.lastCheckedAt && !error && !data?.error ? <p role="status" className="text-xs text-text-muted py-5">Получаю задачи из Jira…</p> : metricConflict && kind !== "list" ? <p className="text-xs tone-warning">Числовые значения ST различаются между списками. Выберите конкретный список в настройках виджета.</p> : kind === "list" ? <>
+        {selecting && <div className="flex items-center gap-2 mb-2">
+          <IssueActions issues={filteredRows.filter(i => picked.has(i.key))} onDone={() => { void load(); void refresh(); }} />
+          <span className="text-xs text-text-muted">Выбрано: {filteredRows.filter(i => picked.has(i.key)).length}</span>
+        </div>}
+        <IssueTable cols={table.columns} columnLabels={table.labels} columnKinds={table.kinds} initialSort={{ col: "key", dir: 1 }}
+          groups={[{ title: null, issues: filteredRows }]} source={rows} filter={tableFilter} onFilter={setFilter} widthKey={`dashboard-${widget.id}`}
+          renderCell={stageRenderer(st)} detailAddToList
+          {...(selecting ? { picked, onPick: (keys: string[], on: boolean) => setPicked(p => { const n = new Set(p); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; }) } : {})} />
+      </>
         : !filteredRows.length ? <p className="py-8 text-center text-xs text-text-muted">Нет задач для отображения</p>
         : <div className={`h-full min-h-0 flex ${kind === "donut" ? "flex-nowrap" : "flex-col"} items-center gap-3`}>
           {kind === "donut" && <svg viewBox="0 0 100 100" className="h-full max-h-40 max-w-[44%] w-auto shrink-0 mx-auto" role="img" aria-label={`${widget.title}: распределение задач`}>

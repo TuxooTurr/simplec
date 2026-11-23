@@ -29,6 +29,9 @@ export interface DashboardWidget {
   /** «Для всех» — видят все, меняет редактор Главной; «Личный» — видит и меняет только владелец. */
   scope?: "shared" | "personal";
   owner?: string;
+  /** Счётчик: цвет числа и пороги «от N задач — цвет» (ноль всегда зелёный). */
+  counterColor?: string;
+  thresholds?: { from: number; color: string }[];
 }
 export interface Layout {
   version: number;

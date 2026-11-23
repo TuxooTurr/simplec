@@ -6,8 +6,7 @@ import IssueTable, {
   filterIssueRows,
   type IssueFilter,
 } from "@/components/jiratool/IssueTable";
-import BulkStatusModal from "@/components/jiratool/BulkStatusModal";
-import IssueEditButton from "@/components/jiratool/IssueEditButton";
+import IssueActions from "@/components/jiratool/IssueActions";
 import type { Issue } from "@/lib/jiraTool";
 import type {
   DashboardWidget,
@@ -15,8 +14,9 @@ import type {
   WidgetData,
 } from "@/lib/dashboardApi";
 import DashboardColumns from "./DashboardColumns";
-import { useDashboardColumns } from "@/lib/dashboardColumns";
+import { needsStList, useDashboardColumns } from "@/lib/dashboardColumns";
 import { markWidget } from "@/lib/dashboardApi";
+import { stageRenderer } from "./stageCell";
 export default function IssueQueueModal({
   widget,
   data,
@@ -35,7 +35,6 @@ export default function IssueQueueModal({
   const [done, setDone] = useState(false),
     [picked, setPicked] = useState<Set<string>>(new Set()),
     [filter, setFilter] = useState<IssueFilter>(NO_FILTER),
-    [status, setStatus] = useState(false),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const rows = data.items.filter(
@@ -94,20 +93,11 @@ export default function IssueQueueModal({
           </div>
         )}
         <div className="flex flex-wrap gap-2 items-center">
-          {canEdit && <DashboardColumns columns={table.columns} options={table.options} onChange={async columns => { await onColumnsChange(columns); setFilter(NO_FILTER); }} />}
+          <IssueActions issues={selected} onDone={() => onChanged()} />
           <span className="text-sm text-text-muted">
             Выбрано: {selected.length}
           </span>
-          <Button
-            variant="ghost"
-            disabled={!selected.length}
-            onClick={() => setStatus(true)}
-          >
-            Сменить статус
-          </Button>
-          {selected.length > 1 && (
-            <IssueEditButton issues={selected} onDone={onChanged} />
-          )}
+          {canEdit && <DashboardColumns columns={table.columns} options={table.options} onChange={async columns => { await onColumnsChange(columns); setFilter(NO_FILTER); }} />}
           {widget.kind === "counter" && (
             <Button
               disabled={!selected.length}
@@ -123,10 +113,11 @@ export default function IssueQueueModal({
             {error}
           </p>
         )}
-        {table.columns.some(c => c.startsWith("st:")) && !table.available && <p className="text-xs tone-warning">Источник ST не найден в этом браузере. Выберите источник в настройках виджета или перенесите данные Jira tool.</p>}
+        {table.columns.some(needsStList) && !table.available && <p className="text-xs tone-warning">Источник ST не найден в этом браузере. Выберите источник в настройках виджета или перенесите данные Jira tool.</p>}
         <IssueTable
           cols={table.columns}
           columnLabels={table.labels} columnKinds={table.kinds}
+          renderCell={stageRenderer(table.st)} detailAddToList
           initialSort={{ col: "key", dir: 1 }}
           filter={tableFilter}
           onFilter={setFilter}
@@ -171,15 +162,6 @@ export default function IssueQueueModal({
           </p>
         )}
       </div>
-      {status && (
-        <BulkStatusModal
-          open
-          issues={selected}
-          storiesOf={() => []}
-          onDone={onChanged}
-          onClose={() => setStatus(false)}
-        />
-      )}
     </Modal>
   );
 }

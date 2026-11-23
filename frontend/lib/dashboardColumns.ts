@@ -4,6 +4,8 @@ import { FIELD_BY_ID, setCatalog, type Issue, type JiraFieldDef } from "./jiraMo
 import { getCatalog } from "./jiraToolApi";
 import type { DashboardWidget } from "./dashboardApi";
 import { useDashboardFields } from "./dashboardFields";
+/** Поле ST, которому нужны списки Jira tool (всё, кроме «Статуса (st)»). */
+export const needsStList = (id: string) => id.startsWith("st:") && id !== "st:stage";
 export const DEFAULT_DASHBOARD_COLUMNS = ["key", "summary", "status", "assignee"];
 export function dashboardColumns(widget: DashboardWidget) {
   return [...new Set(["key", ...(widget.columns ?? (widget.kind === "counter" ? ["type", "summary", "status", "priority", "assignee"] : DEFAULT_DASHBOARD_COLUMNS))])];

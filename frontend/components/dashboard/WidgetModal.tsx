@@ -131,6 +131,27 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
       {v.kind === "counter" && <div><label className="text-sm block mb-1">Источник полей ST в очереди</label><Select aria-label="Источник полей ST" value={v.stListId ?? ""} onChange={id => set("stListId", id)}>
         <option value="">Все сохранённые списки Jira tool</option>{st.lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}
       </Select></div>}
+      {v.kind === "counter" && <div className="space-y-2 border-t border-border-main pt-4">
+        <p className="text-sm">Цвет числа</p>
+        <div className="flex flex-wrap items-center gap-3 text-xs">
+          <label className="flex items-center gap-2">Основной
+            <input type="color" aria-label="Основной цвет счётчика" className="dashboard-color" value={v.counterColor || "#4f46e5"} onChange={e => set("counterColor", e.target.value)} /></label>
+          {v.counterColor && <Button type="button" variant="sm" onClick={() => set("counterColor", "")}>Цвет темы</Button>}
+          <span className="text-text-muted">Ноль всегда зелёный.</span>
+        </div>
+        {(v.thresholds ?? []).map((t, i) => <div key={i} className="flex items-center gap-2 text-xs">
+          <span>От</span>
+          <input type="number" min={1} aria-label={`Порог ${i + 1}: от скольких задач`} value={t.from}
+            onChange={e => set("thresholds", (v.thresholds ?? []).map((x, j) => j === i ? { ...x, from: Math.max(1, Number(e.target.value) || 1) } : x))}
+            className="w-20 rounded-lg border border-border-main bg-bg-card px-2 py-1" />
+          <span>задач</span>
+          <input type="color" aria-label={`Порог ${i + 1}: цвет`} className="dashboard-color" value={t.color}
+            onChange={e => set("thresholds", (v.thresholds ?? []).map((x, j) => j === i ? { ...x, color: e.target.value } : x))} />
+          <button type="button" aria-label={`Убрать порог ${i + 1}`} className="text-text-muted hover:text-red-500" onClick={() => set("thresholds", (v.thresholds ?? []).filter((_, j) => j !== i))}>Убрать</button>
+        </div>)}
+        {(v.thresholds ?? []).length < 10 && <Button type="button" variant="sm" onClick={() => set("thresholds", [...(v.thresholds ?? []), { from: Math.max(1, ...(v.thresholds ?? []).map(t => t.from + 1), 5), color: "#dc2626" }])}>Добавить порог</Button>}
+        <p className="text-[11px] text-text-muted">Число окрашивается цветом самого большого достигнутого порога, например: от 5 — жёлтый, от 10 — красный.</p>
+      </div>}
       {v.kind === "counter" && <p className="text-xs text-text-muted rounded-lg bg-bg-subtle p-3">Найденные задачи остаются в командной очереди до отметки «Обработано», даже если выходят из фильтра. Счётчик — самостоятельный виджет.</p>}
       {error && <p role="alert" className="text-sm tone-danger">{error}</p>}
     </form>

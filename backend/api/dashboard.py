@@ -49,6 +49,9 @@ class Widget(BaseModel):
     # «Для всех» (shared) видят все, меняет редактор Главной; «Личный» (personal) видит и меняет только владелец.
     scope: Literal['shared', 'personal'] = 'shared'
     owner: str = Field(default='', max_length=100)
+    # Счётчик: свой цвет числа и пороги «от N задач — цвет» (ноль всегда зелёный).
+    counterColor: str = Field(default='', max_length=7)
+    thresholds: list[dict] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode='before')
     @classmethod
@@ -87,6 +90,17 @@ class Widget(BaseModel):
             raise ValueError('Виджет выходит за границы сетки.')
         if any(len(label) > 300 or not re.fullmatch(r'#[0-9a-fA-F]{6}', color) for label, color in self.colors.items()):
             raise ValueError('Цвет группы должен быть в формате #RRGGBB.')
+        if self.counterColor and not re.fullmatch(r'#[0-9a-fA-F]{6}', self.counterColor):
+            raise ValueError('Цвет счётчика должен быть в формате #RRGGBB.')
+        clean = []
+        for rule in self.thresholds:
+            try: start = int(rule.get('from'))
+            except (TypeError, ValueError): raise ValueError('Порог счётчика — целое число задач.')
+            color = str(rule.get('color', ''))
+            if start < 1 or start > 1_000_000 or not re.fullmatch(r'#[0-9a-fA-F]{6}', color):
+                raise ValueError('Порог счётчика: число от 1 и цвет #RRGGBB.')
+            clean.append({'from': start, 'color': color})
+        self.thresholds = sorted({r['from']: r for r in clean}.values(), key=lambda r: r['from'])
         return self
 
 

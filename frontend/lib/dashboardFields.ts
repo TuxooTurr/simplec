@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { loadState, ST_COLS, ROLE_FIELDS, ROLE_STATE_LABEL, colLabel, colValues, makeDefectsOf, defectIndex, JIRA_TOOL_STORAGE_KEY, type TaskList, type Issue, type ToolState } from "./jiraTool";
-import { applyStageStyles, blockingDefects, makeStageResolver, stageText, storiesByEpic } from "./jiraStages";
+import { loadState, saveState, ST_COLS, ROLE_FIELDS, ROLE_STATE_LABEL, colLabel, colValues, makeDefectsOf, defectIndex, JIRA_TOOL_STORAGE_KEY, type TaskList, type Issue, type ToolState } from "./jiraTool";
+import { applyStageStyles, blockingDefects, jiraStageOf, makeStageResolver, stageKeyOf, stageText, storiesByEpic, type Stage } from "./jiraStages";
 import { issueCache } from "./jiraToolCache";
 import { listRequirements } from "./api";
 import { loadStandTransfers, STAND_TRANSFERS_KEY } from "./standPlan";
@@ -40,14 +40,16 @@ export function useDashboardFields(issues: Issue[] = NO_ISSUES, listId = "") {
       { id: "st:ift", name: "Передача на ИФТ (st)", kind: "date" }, { id: "st:psi", name: "Передача на ПСИ (st)", kind: "date" });
     for (const role of ROLE_FIELDS) fields.push({ id: "st:hours:" + role.id, name: role.label + ": часы (st)", kind: "number" },
       { id: "st:state:" + role.id, name: role.label + ": состояние (st)", kind: "text" });
-    for (const list of selected) for (const field of list.ownFields) fields.push({ id: `st:own:${list.id}:${field.id}`, name: `${field.name} (st) · ${list.name}`, kind: field.type === "date" ? "date" : "text" });
+    // Свои поля отдельных списков («… (st) · имя списка») в выбор колонок Главной не попадают — только общие поля ST.
+    // Уже выбранные раньше колонки продолжают показываться (значения ниже), но новых не добавить.
     function values(id: string, issue: Issue): string[] {
       if (!id.startsWith("st:")) {
         const value = issue.fields[id]; return value == null ? [] : Array.isArray(value) ? value : [String(value)];
       }
-      if (!state || !available) return [];
       const ref = id.slice(3);
+      // «Статус (st)» считается по задачам и сопоставлению статусов — списки Jira tool ему не нужны.
       if (ref === "stage") return [stageText(stageOf(issue))];
+      if (!state || !available) return [];
       if (ref === "ms") return state.msLinks[issue.key] ?? [];
       if (ref === "reqs") return (state.reqLinks[issue.key] ?? []).map(key => names[key] ?? "Требование не загружено");
       if (ref === "ift" || ref === "psi") return transfers[issue.key]?.[ref] ? [transfers[issue.key][ref]] : [];
@@ -66,6 +68,18 @@ export function useDashboardFields(issues: Issue[] = NO_ISSUES, listId = "") {
       });
       return [...new Set(result)];
     }
-    return { fields, lists, available, values };
+    /**
+     * Статус (st) руками — как стрелкой в списке Jira tool: то же хранилище (stageManual) и отметка в журнале
+     * (stageLog) с этапом по Jira в этот момент; null — вернуть расчёт по Jira.
+     */
+    function setManual(issue: Issue, stage: Stage | null) {
+      const s = loadState();
+      const base = stageKeyOf(jiraStageOf(stageOf(issue)));
+      const manual = { ...s.stageManual };
+      if (stage) manual[issue.key] = stage; else delete manual[issue.key];
+      const mark = { at: new Date().toISOString(), stage, base };
+      saveState({ ...s, stageManual: manual, stageLog: { ...s.stageLog, [issue.key]: [...(s.stageLog[issue.key] ?? []), mark].slice(-200) } });
+    }
+    return { fields, lists, available, values, stageOf, manual: state?.stageManual ?? {}, setManual };
   }, [issues, listId, state, revision, names]);
 }

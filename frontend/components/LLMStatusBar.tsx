@@ -49,10 +49,13 @@ export default function LLMStatusBar({ compact = false }: { compact?: boolean })
     };
   }, [providersRefreshKey, setProvider, setProviderStatuses]);
 
+  // В меню — только подключённые (зелёные) провайдеры; остальные настраиваются в «Настройки → LLM-провайдеры».
+  const connected = providers.filter((p) => p.status === "green");
+
   if (compact) {
     return (
       <div role="group" aria-label="Статус LLM" className="flex flex-col items-center gap-1">
-        {providers.map((p) => {
+        {connected.map((p) => {
           const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-bg-muted/30", label: "—" };
           const isActive = provider === p.id;
           return (
@@ -72,7 +75,7 @@ export default function LLMStatusBar({ compact = false }: { compact?: boolean })
     <div>
       <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wide mb-2">Статус LLM</p>
       <div className="flex flex-col gap-1.5">
-        {providers.map((p) => {
+        {connected.map((p) => {
           const cfg = STATUS_CONFIG[p.status] ?? { dot: "bg-gray-400", ring: "bg-bg-muted/30", label: "—" };
           const isPulsing = p.status === "green" || p.status === "yellow";
           const isActive = provider === p.id;
@@ -108,8 +111,8 @@ export default function LLMStatusBar({ compact = false }: { compact?: boolean })
             </button>
           );
         })}
-        {hasLoaded && providers.length === 0 && (
-          <p className="text-xs text-text-muted">Нет провайдеров</p>
+        {hasLoaded && connected.length === 0 && (
+          <p className="text-[11px] text-text-muted">Активных подключений нет</p>
         )}
       </div>
     </div>

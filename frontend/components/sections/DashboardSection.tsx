@@ -1,13 +1,12 @@
 "use client";
 /* Hallmark · pre-emit critique: P4 H5 E4 S5 R5 V4 · Shark workspace */
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
-import { Check, Grip, Grid2X2, MessageSquare, MoveDiagonal2, Plus, X } from "lucide-react";
+import { Check, Grip, Grid2X2, MoveDiagonal2, Plus, X } from "lucide-react";
 import { Button, Modal } from "@/components/ui";
 import { getDashboard, refreshWidget, saveDashboard, type Layout, type DashboardWidget as Widget } from "@/lib/dashboardApi";
 import { addWidget, fitWidgets, placeWidget, rectOf, pixels, GRID_COLUMNS, GRID_GAP, GRID_ROW, type GridRect } from "@/lib/dashboardGrid";
 import DashboardWidget from "@/components/dashboard/DashboardWidget";
 import WidgetModal from "@/components/dashboard/WidgetModal";
-import ChatPanel from "@/components/dashboard/ChatPanel";
 import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import "../dashboard/dashboard.css";
 
@@ -23,13 +22,9 @@ export default function DashboardSection() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [width, setWidth] = useState(0);
-  const [etherWidth, setEtherWidth] = useState(350);
-  const [expanded, setExpanded] = useState(false);
   const [active, setActive] = useState<string | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
-  const workspace = useRef<HTMLDivElement>(null);
   const interaction = useRef<Interaction | null>(null);
-  const divider = useRef<{ x: number; width: number } | null>(null);
   const compact = width < 640;
   const columns = Math.max(4, Math.min(GRID_COLUMNS, Math.floor((width + GRID_GAP) / (GRID_ROW + GRID_GAP)) || 4));
   const widgets = arranging ? draft : layout?.widgets ?? [];
@@ -56,8 +51,6 @@ export default function DashboardSection() {
   }
   useEffect(() => {
     void load();
-    const value = Number(localStorage.getItem("st_dashboard_ether_width"));
-    if (value >= 280 && value <= 900) setEtherWidth(value);
   }, []);
   useEffect(() => {
     const node = canvas.current;
@@ -65,7 +58,7 @@ export default function DashboardSection() {
     const observer = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width));
     observer.observe(node);
     return () => observer.disconnect();
-  }, [expanded]);
+  }, []);
   usePanelRefresh(() => {
     if (arranging) setError("Сохраните или отмените раскладку перед обновлением.");
     else void (async () => {
@@ -114,12 +107,6 @@ export default function DashboardSection() {
     else { rect.x += delta[0]; rect.y += delta[1]; }
     setDraft(placeWidget(base, widget.id, rect, columns, { width: resize && delta[0] !== 0, height: resize && delta[1] !== 0 })); setSaved(false);
   }
-  function setPaneWidth(value: number) {
-    const max = Math.max(280, (workspace.current?.clientWidth ?? 1000) - 300);
-    const next = Math.max(280, Math.min(max, value));
-    setEtherWidth(next);
-    localStorage.setItem("st_dashboard_ether_width", String(next));
-  }
 
   return (
     <section className="shark-dashboard" aria-label="Главная">
@@ -132,8 +119,7 @@ export default function DashboardSection() {
           <p className="text-xs text-text-muted mt-1">{arranging ? "Перетаскивайте за ручку, меняйте размер за угол. Стрелки на клавиатуре тоже работают." : "Задачи под контролем. Коммуникации — рядом."}</p>
         </div>
         {saved && !arranging && <span role="status" className="text-xs text-text-muted flex items-center gap-1"><Check className="w-3.5 h-3.5" />Сохранено</span>}
-        {!expanded && <Button variant="ghost" className="dashboard-open-ether" aria-label="Открыть панель Эфир" onClick={() => setExpanded(true)} icon={<MessageSquare className="w-3.5 h-3.5" />}>Эфир</Button>}
-        {layout && !expanded && (
+        {layout && (
           <div className="flex gap-2 flex-wrap">
             {arranging ? <>
               <Button variant="ghost" disabled={saving} onClick={() => { setArranging(false); setError(""); }} icon={<X className="w-3.5 h-3.5" />}>Отмена</Button>
@@ -144,14 +130,16 @@ export default function DashboardSection() {
         )}
       </header>
       {error && <p role="alert" className="px-6 py-2 text-sm tone-danger">{error}</p>}
-      <div ref={workspace} className="dashboard-workspace">
-        {!expanded && <main className="dashboard-main">
+      <div className="dashboard-workspace">
+        <main className="dashboard-main">
           {busy && !layout && <p role="status" className="text-sm text-text-muted">Загружаю рабочий стол…</p>}
-          <div ref={canvas} className="dashboard-canvas" data-editing={arranging} style={{ gridTemplateColumns: `repeat(${columns}, ${GRID_ROW}px)`, gridAutoRows: `${GRID_ROW}px`, gap: `${GRID_GAP}px`, "--dashboard-grid-step": `${GRID_ROW + GRID_GAP}px` } as CSSProperties}>
+          <div ref={canvas} className="dashboard-canvas" data-editing={arranging} style={{ gridTemplateColumns: `repeat(${columns}, ${GRID_ROW}px)`, gridAutoRows: `${GRID_ROW}px`, gap: `${GRID_GAP}px`, "--dashboard-grid-step": `${GRID_ROW + GRID_GAP}px`,
+              // Сетка по центру: остаток ширины, не кратный ячейке, делится поровну слева и справа (точки раскладки — вровень с ячейками).
+              justifyContent: "center", backgroundPosition: `${Math.max(0, (width - pixels(columns)) / 2)}px 0` } as CSSProperties}>
             {fitted.map(w => {
               const rect = rectOf(w, columns);
               return <div key={w.id} className="dashboard-card" data-editing={arranging} data-active={active === w.id}
-                style={{ gridColumn: `${rect.x + 1} / span ${rect.w}`, gridRow: `${rect.y + 1} / span ${rect.h}`, width: w.fullWidth && width ? `${width}px` : undefined }}>
+                style={{ gridColumn: `${rect.x + 1} / span ${rect.w}`, gridRow: `${rect.y + 1} / span ${rect.h}`, }}>
                 <DashboardWidget widget={w} canEdit={editable(w)} arranging={arranging}
                   onColumnsChange={async columns => {
                     const source = arranging ? draft : layout!.widgets;
@@ -181,16 +169,7 @@ export default function DashboardSection() {
               <Button className="mt-4" onClick={() => setEditing(null)} icon={<Plus className="w-4 h-4" />}>Добавить виджет</Button>
             </div>}
           </div>
-        </main>}
-        {!expanded && <div className="dashboard-divider focus-visible:outline-none" role="separator" aria-label="Ширина панели Эфир" aria-orientation="vertical"
-          aria-valuenow={Math.round(etherWidth)} aria-valuemin={280} aria-valuemax={Math.max(280, (workspace.current?.clientWidth ?? 1000) - 300)} tabIndex={0}
-          onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId); divider.current = { x: e.clientX, width: etherWidth }; }}
-          onPointerMove={e => { if (divider.current) setPaneWidth(divider.current.width + divider.current.x - e.clientX); }}
-          onPointerUp={() => { divider.current = null; }} onPointerCancel={() => { divider.current = null; }}
-          onKeyDown={e => { if (["ArrowLeft", "ArrowRight"].includes(e.key)) { e.preventDefault(); setPaneWidth(etherWidth + (e.key === "ArrowLeft" ? 24 : -24)); } }} />}
-        <div className="dashboard-ether" data-expanded={expanded} style={{ "--ether-width": `${etherWidth}px` } as CSSProperties}>
-          <ChatPanel demo={layout?.demo ?? false} expanded={expanded} onExpand={() => setExpanded(v => !v)} />
-        </div>
+        </main>
       </div>
       {editing !== undefined && layout && <WidgetModal widget={editing ?? undefined} canShare={layout.canEdit} onClose={() => setEditing(undefined)} onSave={async w => {
         const source = arranging ? draft : layout.widgets;

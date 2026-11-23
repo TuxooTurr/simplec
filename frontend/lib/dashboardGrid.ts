@@ -42,7 +42,7 @@ export function fitWidgets(widgets: DashboardWidget[], columns: number): Dashboa
   return widgets.map(widget => ({ ...widget, x: positions.get(widget.id)!.x, y: positions.get(widget.id)!.y }));
 }
 
-/** The target keeps its position; collisions move other cards down, never hide them. */
+/** Перемещение: цель встаёт на место, задетые карточки уходят ниже (не прячутся). Размер — только до соседей. */
 export function placeWidget(widgets: DashboardWidget[], id: string, target: GridRect, columns = GRID_COLUMNS,
   resize: { width?: boolean; height?: boolean } = {}): DashboardWidget[] {
   const source = widgets.find(widget => widget.id === id)!;
@@ -53,6 +53,17 @@ export function placeWidget(widgets: DashboardWidget[], id: string, target: Grid
     h: counter ? 4 : resize.height ? Math.max(4, Math.min(64, target.h)) : source.h ?? WIDGET_SIZES[source.size].h };
   target.x = fullWidth ? 0 : Math.max(0, Math.min(columns - target.w, target.x));
   target.y = Math.max(0, Math.min(2800, target.y));
+  // Изменение размера не сдвигает соседей: виджет растёт только до ближайшего занятого места и там упирается.
+  let width = canonicalWidth, wide = fullWidth;
+  if (resize.width || resize.height) {
+    const others = widgets.filter(w => w.id !== id).map(w => fitRect(w, columns));
+    const blocked = () => others.some(o => overlaps(target, o));
+    while (blocked() && resize.width && target.w > 4) target.w -= 1;
+    while (blocked() && resize.height && target.h > 4) target.h -= 1;
+    if (blocked()) Object.assign(target, fitRect(source, columns));          // места нет вовсе — размер не меняется
+    wide = wide && target.w >= columns;
+    if (resize.width) width = wide ? GRID_COLUMNS : target.w;
+  }
   const occupied: GridRect[] = [target];
   const positions = new Map<string, GridRect>([[id, target]]);
   for (const widget of widgets.filter(w => w.id !== id).sort((a, b) => rectOf(a).y - rectOf(b).y || rectOf(a).x - rectOf(b).x)) {
@@ -63,7 +74,7 @@ export function placeWidget(widgets: DashboardWidget[], id: string, target: Grid
   }
   return widgets.map(widget => {
     const rect = positions.get(widget.id)!;
-    return widget.id === id ? { ...widget, x: rect.x, y: rect.y, w: canonicalWidth, h: rect.h, fullWidth, gridVersion: 2 }
+    return widget.id === id ? { ...widget, x: rect.x, y: rect.y, w: width, h: rect.h, fullWidth: wide, gridVersion: 2 }
       : { ...widget, x: rect.x, y: rect.y };
   });
 }

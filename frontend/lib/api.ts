@@ -103,6 +103,12 @@ export interface AlertScript {
   created_at?:           string;
 }
 
+/** ИИ-помощник: черновик нового скрипта по требованиям (не сохраняется). notes — что ИИ поправил при проверке. */
+export function aiGenerateScript(body: { provider: string; confluence_ref: string; requirement_ids: string[]; example_id: string; notes: string }) {
+  return fetchJson<{ name: string; topic: string; notebook: NotebookCell[]; dynamic_params: DynamicParam[]; notes: string[] }>(
+    "/api/alerts/ai-generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
 export async function getAlertFolders(): Promise<AlertFolder[]> {
   return fetchJson("/api/alerts/folders");
 }

@@ -1,6 +1,7 @@
 """Мок LLM: все подключения GigaChat «готовы», ответ — заготовка без сети."""
 from __future__ import annotations
 
+import json
 import time
 
 MODELS = ["GigaChat-2", "GigaChat-2-Pro", "GigaChat-2-Max"]
@@ -89,6 +90,14 @@ def answer(messages) -> str:
         return tm
     prompt = " ".join(str(getattr(m, "content", "")) for m in messages)
     component = "\nКомпонент Jira: 1" if "Компонент Jira: <номер или 0>" in prompt else ""
+    if "скрипт-генератор событий для Jupyter Notebook" in prompt:
+        return json.dumps({"name": "Демо: событие инцидента", "topic": "incidents", "cells": [
+            {"type": "markdown", "source": "# Отправка события инцидента\nДемо-скрипт ИИ-помощника."},
+            {"type": "code", "source": "from kafka import KafkaProducer\nimport json\nsystem = \"CI0000001\"\npriority = \"P2\"\nraised = \"2026-11-23T10:00\"\nevent = {\"system\": system, \"priority\": priority, \"raised\": raised}\nprint(json.dumps(event, ensure_ascii=False))"}],
+            "params": [{"label": "Система (КЭ)", "code_key": "system", "placeholder": "CI0000001", "field_type": "text"},
+                       {"label": "Приоритет", "code_key": "priority", "placeholder": "P2", "field_type": "dropdown", "options": ["P1", "P2", "P3"]},
+                       {"label": "Время возникновения", "code_key": "raised", "placeholder": "2026-11-23T10:00", "field_type": "datetime"}]},
+            ensure_ascii=False)
     if "Выбери по входным данным один код слоя" in prompt:
         return (f"# [Fn][Карточка инцидента] Ошибка при сохранении{component}\n\n"
                 "## Описание\nКарточка не сохраняется.\n\n"

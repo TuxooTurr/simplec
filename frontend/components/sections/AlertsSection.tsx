@@ -8,7 +8,7 @@ import {
   CircleCheck, CircleX, Wifi, WifiOff, RefreshCw,
   RotateCcw, Eye, EyeOff, Clock, User, List,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
-  Maximize2, Minimize2, Copy,
+  Maximize2, Minimize2, Copy, Sparkles,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import Modal from "@/components/ui/Modal";
@@ -22,6 +22,9 @@ import {
 import { useAlertsScheduler, missingParams } from "@/contexts/AlertsSchedulerContext";
 import KernelChat from "@/components/alerts/KernelChat";
 import { useAuth } from "@/contexts/AuthContext";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import RequirementsPicker, { CONFLUENCE_REF_RE, type RequirementsSource } from "@/components/jiratool/RequirementsPicker";
+import { aiGenerateScript } from "@/lib/api";
 
 // ── Styles ───────────────────────────────────────────────────────────────────
 
@@ -569,6 +572,30 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
   const [wide,   setWide]   = useState(false);
 
   const [editTab, setEditTab] = useState<"fields" | "json">("fields");
+
+  /* ── ИИ-помощник (только новый скрипт): требования → блокнот и параметры запуска; результат правится здесь же ── */
+  const { provider } = useWorkspace();
+  const { scripts: examples } = useAlertsScheduler();
+  const [aiOpen, setAiOpen] = useState(!editing);
+  const [aiReqs, setAiReqs] = useState<RequirementsSource>({ ref: "", ids: [] });
+  const [aiExample, setAiExample] = useState("");
+  const [aiNotes, setAiNotes] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string; notes?: string[] } | null>(null);
+  const aiReady = CONFLUENCE_REF_RE.test(aiReqs.ref.trim()) || aiReqs.ids.length > 0;
+  const generate = async () => {
+    setAiBusy(true); setAiMsg(null);
+    try {
+      const d = await aiGenerateScript({ provider, confluence_ref: CONFLUENCE_REF_RE.test(aiReqs.ref.trim()) ? aiReqs.ref.trim() : "",
+        requirement_ids: aiReqs.ids, example_id: aiExample, notes: aiNotes });
+      setName(n => n.trim() ? n : d.name);
+      setCells(d.notebook.map(c => ({ ...c, type: normType(c.type) })));
+      setParams(d.dynamic_params.map(p => ({ ...p, options: p.options ?? [] })));
+      setAiMsg({ ok: true, text: `Готово: ячеек ${d.notebook.length}, параметров ${d.dynamic_params.length}. Проверьте код и параметры, поправьте при необходимости и сохраните.`, notes: d.notes });
+      setAiOpen(false);
+    } catch (e) { setAiMsg({ ok: false, text: (e as Error).message }); }
+    finally { setAiBusy(false); }
+  };
   const jsonParams  = params.filter(isJsonParam);
   const fieldParams = params.filter(p => !isJsonParam(p));
   const visibleParams = editTab === "json" ? jsonParams : fieldParams;
@@ -653,6 +680,29 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
         </button>
       </div>}>
       <div className="space-y-5">
+        {!editing && <section aria-label="ИИ-помощник" className="rounded-xl border border-primary/25 bg-primary/5 p-3 space-y-3">
+          <button type="button" onClick={() => setAiOpen(o => !o)} aria-expanded={aiOpen} className="flex items-center gap-2 text-sm font-semibold text-primary">
+            <Sparkles className="w-4 h-4" /> ИИ-помощник: скрипт по требованиям</button>
+          {aiOpen && <>
+            <p className="text-xs text-text-muted">ИИ изучит требования, напишет блокнот и объявит параметры запуска с проверкой типа. Где тип неизвестен — свободный ввод; всё можно поправить ниже.</p>
+            <RequirementsPicker value={aiReqs} onChange={setAiReqs} disabled={aiBusy} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <label className="block"><span className="block mb-1 text-text-muted">Пример — существующий скрипт (необязательно)</span>
+                <Select value={aiExample} onChange={setAiExample} aria-label="Скрипт-пример" disabled={aiBusy}>
+                  <option value="">Без примера — ИИ напишет сам</option>
+                  {examples.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </Select></label>
+              <label className="block"><span className="block mb-1 text-text-muted">Пожелания (необязательно)</span>
+                <input value={aiNotes} onChange={e => setAiNotes(e.target.value)} maxLength={4000} disabled={aiBusy} placeholder="топик, формат, количество событий…" className={INPUT_CLS} /></label>
+            </div>
+            <button type="button" onClick={() => void generate()} disabled={aiBusy || !aiReady}
+              title={aiReady ? "Сгенерировать блокнот и параметры" : "Укажите ссылку на Confluence или документы «Данных»"}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40">
+              {aiBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{aiBusy ? "Пишу скрипт…" : "Сгенерировать"}</button>
+          </>}
+          {aiMsg && <div role={aiMsg.ok ? "status" : "alert"} className={`text-xs ${aiMsg.ok ? "tone-success-text" : "tone-danger"}`}>{aiMsg.text}
+            {!!aiMsg.notes?.length && <ul className="mt-1 list-disc pl-4 text-text-muted">{aiMsg.notes.map(n => <li key={n}>{n}</li>)}</ul>}</div>}
+        </section>}
         {/* Name */}
         <div>
           <label className={LABEL_CLS}>Название *</label>

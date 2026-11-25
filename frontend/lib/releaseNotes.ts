@@ -50,9 +50,9 @@ export interface Release {
 
 export const RELEASES: Release[] = [
   {
-    id: "2026-11-25-shark-workspaces-and-versioned-requirements",
-    version: "2.011.25",
-    date: "25 ноября 2026",
+    id: "2026-11-26-shark-workspaces-and-versioned-requirements",
+    version: "2.011.26",
+    date: "26 ноября 2026",
     title: "Рабочие столы, версии требований и рассылка виджетов",
     summary: "Активность сотрудников на Главной, аудит и Excel в Jira tool, генерация тестов по версиям и макетам Pixso.",
     sections: [

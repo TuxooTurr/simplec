@@ -14,10 +14,10 @@ def state():
 
 @router.post('/connect')
 def connect(user=Depends(require_user)):
-    # Кто подключает — от его имени Shark сможет отвечать в Эфире.
-    ether_credentials.set_owner(user.get('login', ''))
-    ether_login.start();return state()
+    ether_login.start(login=user.get("login", ""))
+    return state()
 
 @router.delete('/connect')
-def disconnect():
-    ether_login.cancel();return state()
+def disconnect(user=Depends(require_user)):
+    ether_login.cancel(login=user.get("login", ""))
+    return state()

@@ -291,23 +291,31 @@ def _commit_view(c: dict, cfg: dict, ts: int) -> dict:
             "url": f"{cfg['base_url']}/projects/{cfg['project']}/repos/{cfg['repo']}/commits/{c.get('id', '')}"}
 
 
+def bb_commit_pages(cfg: dict, branch: str):
+    params: dict[str, Any] = {"limit": 1000, "start": 0}
+    if branch.strip():
+        params["until"] = _ref(branch)
+    for _ in range(100):
+        data = _http("Bitbucket", "GET", f"{_repo_url(cfg)}/commits", cfg["ssl_verify"], token=cfg["token"], params=params.copy())
+        more = not data.get("isLastPage", True) and data.get("nextPageStart") is not None
+        yield data.get("values") or [], more
+        if not more:
+            break
+        params["start"] = int(data["nextPageStart"])
+
+
 def bb_commits(cfg: dict, branch: str = "") -> dict:
     """Коммиты ветки (пусто — по умолчанию): сегодня, 7 дней, всего, по дням за две недели, последние, авторы недели.
     Всего — по всем страницам (до 1000 на страницу)."""
-    url = f"{_repo_url(cfg)}/commits"
     today0, week0 = _ms(_day_start()), _ms(_day_start(6))
     day0 = _day_start(DAILY_DAYS - 1)
     daily = [0] * DAILY_DAYS
     authors: dict[str, int] = {}
     total = today = week = 0
     recent: list[dict] = []
-    start, pages, truncated = 0, 0, False
-    base_params: dict[str, Any] = {"limit": 1000}
-    if branch.strip():
-        base_params["until"] = _ref(branch)
-    while True:
-        data = _http("Bitbucket", "GET", url, cfg["ssl_verify"], token=cfg["token"], params={**base_params, "start": start})
-        for c in data.get("values") or []:
+    truncated = False
+    for commits, truncated in bb_commit_pages(cfg, branch):
+        for c in commits:
             ts = int(c.get("committerTimestamp") or c.get("authorTimestamp") or 0)
             total += 1
             today += ts >= today0
@@ -322,13 +330,6 @@ def bb_commits(cfg: dict, branch: str = "") -> dict:
                     daily[n] += 1
             if len(recent) < RECENT_COMMITS:
                 recent.append(_commit_view(c, cfg, ts))
-        pages += 1
-        if data.get("isLastPage", True) or data.get("nextPageStart") is None:
-            break
-        if pages >= 100:                            # 100 000 коммитов — дальше «всего» не точное
-            truncated = True
-            break
-        start = int(data["nextPageStart"])
     return {"today": today, "week": week, "total": total, "totalTruncated": truncated,
             "last": recent[0] if recent else None, "recent": recent,
             "daily": [{"date": (day0 + timedelta(days=i)).date().isoformat(), "count": daily[i]} for i in range(DAILY_DAYS)],
@@ -931,12 +932,27 @@ def _jk_get(cfg: dict, path: str, tree: str) -> dict:
 
 def jk_param(raw: dict) -> dict:
     """Параметр джоба → поле формы. Значение пароля по умолчанию наружу не отдаём: Jenkins подставит его сам."""
-    kind = _JK_KINDS.get(str(raw.get("type") or ""), "string")
+    kind_name = str(raw.get("type") or str(raw.get("_class") or "").rsplit(".", 1)[-1])
+    kind = _JK_KINDS.get(kind_name, "string")
     default = (raw.get("defaultParameterValue") or {}).get("value")
-    choices = [str(c) for c in raw.get("choices") or []] or \
-              [str(v.get("value") or v.get("name")) for v in (raw.get("allValueItems") or {}).get("values") or []]
-    if choices and kind == "string":
-        kind = "choice"
+    configured = raw.get("choices") or []
+    if isinstance(configured, str):
+        configured = configured.splitlines()
+    plugin_choices = raw.get("allValueItems") or {}
+    if isinstance(plugin_choices, dict):
+        plugin_choices = plugin_choices.get("values") or []
+    if not isinstance(plugin_choices, list):
+        plugin_choices = []
+    choices = [str(c) for c in configured if isinstance(c, (str, int))] or [
+        str(v.get("value", v.get("name", ""))) if isinstance(v, dict) else str(v)
+        for v in plugin_choices if isinstance(v, (str, int, dict))
+    ]
+    choices = list(dict.fromkeys(choices))
+    if kind == "string":
+        if choices:
+            kind = "choice"
+        elif "choice" in kind_name.lower() or kind_name.startswith("PT_") or kind_name == "GitParameterDefinition":
+            kind = "choice_unavailable"
     if kind == "boolean":
         value: Any = bool(default)
     else:
@@ -953,7 +969,10 @@ def jk_params(data: dict) -> list[dict]:
     for block in (data.get("property") or []) + (data.get("actions") or []):
         for raw in (block or {}).get("parameterDefinitions") or []:
             if raw.get("name"):
-                seen.setdefault(str(raw["name"]), jk_param(raw))
+                name = str(raw["name"])
+                param = jk_param(raw)
+                if name not in seen or (not seen[name]["choices"] and param["choices"]):
+                    seen[name] = param
     return list(seen.values())
 
 
@@ -979,13 +998,23 @@ _QUEUE_RE = re.compile(r"/queue/item/(\d+)")
 def jenkins_run(cfg: dict, values: dict[str, Any]) -> dict:
     """Запуск джоба. Описание читаем заново: уходят только параметры, которые есть в джобе сейчас, и форма, открытая
     до правки Jenkinsfile, не отправит устаревшее. У джоба без параметров другой адрес: /build."""
-    params = {p["name"]: p for p in jk_params(_jk_get(cfg, cfg["job_path"], _JK_TREE))}
+    job = _jk_get(cfg, cfg["job_path"], _JK_TREE)
+    if job.get("buildable") is False:
+        raise HTTPException(422, "Джоб отключён в Jenkins.")
+    params = {p["name"]: p for p in jk_params(job)}
+    if any(p["kind"] == "choice_unavailable" for p in params.values()):
+        raise HTTPException(422, "Jenkins не отдал все варианты параметров. Откройте форму в Jenkins.")
     unknown = [k for k in values if k not in params]
     if unknown:
         raise HTTPException(422, f"В джобе больше нет параметров: {', '.join(unknown)}. Откройте окно запуска заново")
     data: dict[str, str] = {}
     for name, v in values.items():
-        kind = params[name]["kind"]
+        param = params[name]
+        kind = param["kind"]
+        if kind == "choice" and v not in param["choices"]:
+            raise HTTPException(422, f"Jenkins больше не предлагает выбранное значение параметра {name}. Обновите окно запуска.")
+        if kind == "boolean" and not isinstance(v, bool):
+            raise HTTPException(422, f"Параметр {name} должен быть логическим.")
         if kind == "file" or (kind == "password" and not v):
             continue                                   # файл из формы не передать; пустой пароль — умолчание Jenkins
         data[name] = ("true" if v else "false") if kind == "boolean" else str(v)

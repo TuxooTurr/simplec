@@ -12,10 +12,12 @@ const INPUT = "w-full border border-border-main rounded-lg px-3 py-1.5 text-sm b
  * Сборка документа QA: ИИ читает исходник документа и отмеченные страницы Confluence — ссылки, найденные в самом
  * документе, и добавленные здесь (+), — и собирает единый документ по функции из названия документа (и «Что нужно»).
  */
-export default function QaGenerateModal({ open, doc, onClose, onGenerate }: {
+export default function QaGenerateModal({ open, doc, onClose, onGenerate, progress, onCancelGenerate }: {
   open: boolean;
   doc: Requirement;
   onClose: () => void;
+  progress?: string;
+  onCancelGenerate?: () => Promise<void>;
   onGenerate: (links: string[], focus: string) => Promise<void>;
 }) {
   const [found, setFound] = useState<{ title: string; url: string }[] | null>(null);
@@ -45,10 +47,9 @@ export default function QaGenerateModal({ open, doc, onClose, onGenerate }: {
   const sources = doc.sources ?? [];
 
   return (
-    <Modal open={open} onClose={() => !busy && onClose()} title="Документ QA" size="max-w-2xl">
+    <Modal open={open} onClose={onClose} title="Документ QA" size="max-w-2xl">
       <div className="space-y-4 text-sm">
-        <p className="text-text-muted">ИИ соберёт единый документ по функции <b className="text-text-main">«{doc.name}»</b>: из исходника документа
-          и отмеченных страниц Confluence — только то, что относится к этой функции.</p>
+        <p className="text-text-muted">Обзор и страницы версий для <b className="text-text-main">«{doc.name}»</b> собираются из исходника, макетов и выбранных страниц Confluence.</p>
 
         <label className="block">
           <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-muted"><Target className="w-3.5 h-3.5" /> Что именно нужно (необязательно)</span>
@@ -109,7 +110,9 @@ export default function QaGenerateModal({ open, doc, onClose, onGenerate }: {
 
         {err && <p className="text-red-600 dark:text-red-400">{err}</p>}
         <div className="flex items-center justify-end gap-2 border-t border-border-main pt-3">
-          <span className="mr-auto text-xs text-text-muted">Прочитает страниц: {links.length}</span>
+          <span className="mr-auto text-xs text-text-muted" role="status">{busy ? progress || "Подготовка…" : `Дополнительных страниц: ${links.length}`}</span>
+          {busy && onCancelGenerate && <button type="button" className="text-xs text-primary hover:underline"
+            onClick={() => void onCancelGenerate().catch(e => setErr(e.message))}>Остановить</button>}
           <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-border-main px-3 py-1.5 hover:bg-bg-subtle">Отмена</button>
           <button type="button" onClick={() => void run()} disabled={busy}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 font-semibold text-white hover:bg-primary-dark disabled:opacity-50">

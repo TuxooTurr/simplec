@@ -1,14 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import type { ListView } from "@/lib/jiraTool";
-
-/** Буквы кружка: первые буквы двух слов названия или первые две буквы. */
-function initials(name: string): string {
-  const w = name.trim().split(/\s+/).filter(Boolean);
-  return (w.length > 1 ? w[0][0] + w[1][0] : (w[0] ?? "?").slice(0, 2)).toUpperCase();
-}
+import { ViewButtons } from "@/components/ui/ViewButtons";
 
 /**
  * Представления списка кружочками: клик — переключиться (меняются только колонки; папки, порядок
@@ -37,24 +32,20 @@ export default function ViewSwitcher({ views, active, onSwitch, onAdd, onRename,
 
   return (
     <div ref={box} className="relative flex items-center gap-1" role="toolbar" aria-label="Представления списка">
-      {views.map(v => {
+      <ViewButtons active={active} addLabel="Новое представление"
+        addTitle="Новое представление: ключ, тип и тема — дальше выберите любые колонки"
+        onAdd={() => { setMenu(null); onAdd(); }} views={views.map(v => {
         const on = v.id === active;
-        return (
-          <button key={v.id} type="button" aria-pressed={on}
-            aria-label={on ? `Представление «${v.name}» — переименовать или удалить` : `Переключить на представление «${v.name}»`}
-            title={`${v.name} · колонок: ${v.columns.length}${on ? " — нажмите, чтобы переименовать" : ""}`}
-            onClick={() => { if (on) { setName(v.name); setMenu(m => (m === v.id ? null : v.id)); } else { setMenu(null); onSwitch(v.id); } }}
-            className={`w-7 h-7 flex-shrink-0 rounded-full text-[10px] font-bold transition-colors
-              ${on ? "bg-primary text-white ring-2 ring-primary/30" : "bg-bg-subtle text-text-muted hover:text-primary border border-border-main"}`}>
-            {initials(v.name)}
-          </button>
-        );
-      })}
-      <button type="button" onClick={() => { setMenu(null); onAdd(); }} aria-label="Новое представление"
-        title="Новое представление: ключ, тип и тема — дальше выберите любые колонки"
-        className="w-7 h-7 flex-shrink-0 rounded-full border border-dashed border-border-main text-text-muted hover:text-primary hover:border-primary/40 flex items-center justify-center">
-        <Plus className="w-3.5 h-3.5" />
-      </button>
+        return {
+          id: v.id, name: v.name,
+          label: on ? `Представление «${v.name}» — переименовать или удалить` : `Переключить на представление «${v.name}»`,
+          title: `${v.name} · колонок: ${v.columns.length}${on ? " — нажмите, чтобы переименовать" : ""}`,
+          onSelect: () => {
+            if (on) { setName(v.name); setMenu(m => (m === v.id ? null : v.id)); }
+            else { setMenu(null); onSwitch(v.id); }
+          },
+        };
+      })} />
 
       {menu && (
         <div className="absolute z-30 top-full left-0 mt-2 w-64 rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-lg p-2 space-y-2 animate-fade-in">

@@ -56,13 +56,17 @@ export function placeWidget(widgets: DashboardWidget[], id: string, target: Grid
   // Изменение размера не сдвигает соседей: виджет растёт только до ближайшего занятого места и там упирается.
   let width = canonicalWidth, wide = fullWidth;
   if (resize.width || resize.height) {
+    const original = fitRect(source, columns);
+    const wantedWidth = Math.min(target.w, columns - original.x);
+    const wantedHeight = target.h;
     const others = widgets.filter(w => w.id !== id).map(w => fitRect(w, columns));
-    const blocked = () => others.some(o => overlaps(target, o));
-    while (blocked() && resize.width && target.w > 4) target.w -= 1;
-    while (blocked() && resize.height && target.h > 4) target.h -= 1;
-    if (blocked()) Object.assign(target, fitRect(source, columns));          // места нет вовсе — размер не меняется
+    const free = (rect: GridRect) => !others.some(other => overlaps(rect, other));
+    // Apply any shrink first, then try enlarging each axis without sacrificing the other.
+    Object.assign(target, original, { w: Math.min(original.w, wantedWidth), h: Math.min(original.h, wantedHeight) });
+    while (target.w < wantedWidth && free({ ...target, w: target.w + 1 })) target.w += 1;
+    while (target.h < wantedHeight && free({ ...target, h: target.h + 1 })) target.h += 1;
     wide = wide && target.w >= columns;
-    if (resize.width) width = wide ? GRID_COLUMNS : target.w;
+    if (resize.width) width = wide ? GRID_COLUMNS : target.w === original.w ? source.w ?? WIDGET_SIZES[source.size].w : target.w;
   }
   const occupied: GridRect[] = [target];
   const positions = new Map<string, GridRect>([[id, target]]);

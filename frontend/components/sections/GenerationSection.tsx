@@ -19,6 +19,7 @@ import StagePanel from "@/components/tmgen/StagePanel";
 import TmBatchBar from "@/components/tmgen/TmBatchBar";
 import DataTreePicker from "@/components/tmgen/DataTreePicker";
 import { useTmGen } from "@/contexts/TmGenContext";
+import { sourceLinks } from "@/lib/pixso";
 import { tmXml, zephyrProject, type TmStart } from "@/lib/tmApi";
 import { useGeneration, type Case, type ExportResult } from "@/lib/useGeneration";
 import {
@@ -168,6 +169,7 @@ export default function GenerationSection() {
   const [reqSaved, setReqSaved] = useState(false);
 
   // Генерация по задачам Jira tool: выбранные задачи (предзаполнено из требований), выгрузка и предпросмотр модели
+  const [linkText, setLinkText] = useState("");
   const [taskDrafts, setTaskDrafts] = useState<TaskDraft[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [taskExportMode, setTaskExportMode] = useState(false);
@@ -326,7 +328,7 @@ export default function GenerationSection() {
     }
   }, []);
 
-  useEffect(() => { if (reqSource === "data") refreshData(); }, [reqSource, refreshData]);
+  useEffect(() => { if (reqSource !== "free") refreshData(); }, [reqSource, refreshData]);
 
   const chosenDocs = dataDocs.filter(d => pickedDocs.has(d.id));
   /** Документ отмечен: фича — из документа или его папки, если ещё не вписана. */
@@ -353,7 +355,7 @@ export default function GenerationSection() {
       });
       setReqSaved(true);
       setTimeout(() => setReqSaved(false), 2000);
-      if (reqSource === "data") refreshData();
+      if (reqSource !== "free") refreshData();
     } catch (err) {
       alert("Не удалось сохранить требование: " + String(err));
     } finally {
@@ -390,7 +392,7 @@ export default function GenerationSection() {
 
   /** Задачи выбраны: новые предзаполняем из требований, у оставшихся правки не трогаем. */
   const pickTasks = (tasks: TaskPick[]) => setTaskDrafts(cur => tasks.map(t =>
-    cur.find(x => x.key === t.key) ?? { ...t, feature: featureOf(t), text: taskSource(t) }));
+    cur.find(x => x.key === t.key) ?? { ...t, feature: featureOf(t), text: "" }));
 
   /** Параметры ExportPanel → выгрузка каждой задачи её сессией; папка в XML — корень модели. */
   const exportTasks = async (p: ExportPanelParams) => {
@@ -543,11 +545,22 @@ export default function GenerationSection() {
     const schemas = await schemasBlock();
     try {
       if (reqSource === "tasks") {
-        const items: TmStart[] = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).map(t => ({
-          requirement: buildLlmSourceText(t.text, fileAttachments) + schemas, feature: t.feature.trim(), provider, platforms,
+        const items: TmStart[] = taskDrafts.filter(t => t.docs.some(d => d.text.trim()) && t.feature.trim()).map(t => {
+          const docs = t.docs.map(d => {
+            const release = d.releases?.find(v => v.id === t.contentVersions?.[d.id]);
+            const snapshot = d.versions?.find(v => v.n === t.docVersions?.[d.id]);
+            return { ...d, text: release?.requirement ?? snapshot?.text ?? d.text };
+          });
+          const focus = [t.versionHint, ...t.docs.flatMap(d => t.contentVersions?.[d.id]
+            ? [d.name + " · " + t.contentVersions[d.id]] : [])].filter(Boolean).join(", ").slice(0, 300);
+          const text = [taskSource({ ...t, docs }), t.text.trim()].filter(Boolean).join("\n\nДополнение:\n");
+          return {
+          requirement: buildLlmSourceText(text, fileAttachments) + schemas, feature: t.feature.trim(), provider, platforms,
+          document_ids: docs.map(d => d.id), source_links: sourceLinks(linkText), version_hint: focus, microservices: t.microservices,
           source: "task", place: t.dataPath,
           task: { key: t.key, summary: t.summary, project: t.project, reqNames: t.docs.map(d => d.name), dataPath: t.dataPath },
-        }));
+          };
+        });
         if (!items.length) return;
         await tm.startBatch(items);
       } else {
@@ -556,7 +569,7 @@ export default function GenerationSection() {
         const text = reqSource === "data" ? buildLlmSourceText(docText, fileAttachments) : buildLlmSourceText(requirement, fileAttachments);
         if (!text) return;
         const place = reqSource === "data" ? dataFolderPath(dataFolders, chosenDocs.find(d => d.folder_id)?.folder_id) : [];
-        await tm.startOne({ requirement: text + schemas, feature: featureName.trim(), provider, platforms, source: reqSource, place });
+        await tm.startOne({ requirement: text + schemas, feature: featureName.trim(), provider, platforms, source: reqSource, place, source_links: sourceLinks(linkText), document_ids: reqSource === "data" ? chosenDocs.map(d => d.id) : [] });
       }
       reset();
       setTaskFiles(null); setTaskExportMode(false);
@@ -571,7 +584,7 @@ export default function GenerationSection() {
     historySavedRef.current = false;
     tm.clear();
     setPickedDocs(new Set());
-    setTaskDrafts([]); setTaskFiles(null); setTaskExportMode(false); setTaskExportErr("");
+    setTaskDrafts([]); setLinkText(""); setTaskFiles(null); setTaskExportMode(false); setTaskExportErr("");
     reset();
     setStage("input");
     setRequirement("");
@@ -582,7 +595,7 @@ export default function GenerationSection() {
   };
 
   const fileChars = fileAttachments.reduce((sum, file) => sum + file.text.length, 0);
-  const readyTasks = taskDrafts.filter(t => t.text.trim() && t.feature.trim()).length;
+  const readyTasks = taskDrafts.filter(t => t.docs.some(d => d.text.trim()) && t.feature.trim()).length;
   const hasGenerationSource = reqSource === "tasks" ? readyTasks > 0
     : reqSource === "data" ? chosenDocs.some(d => (d.text || d.qa_doc || "").trim())
     : Boolean(requirement.trim() || fileAttachments.some((file) => file.text.trim()));
@@ -711,10 +724,16 @@ export default function GenerationSection() {
                     <ListChecks className="w-4 h-4" /> {taskDrafts.length ? "Изменить" : "Выбрать задачи"}
                   </button>
                 </div>
-                {taskDrafts.length > 0 && <TaskDrafts tasks={taskDrafts} onChange={setTaskDrafts} />}
+                {taskDrafts.length > 0 && <TaskDrafts tasks={taskDrafts} onChange={setTaskDrafts}
+                  available={dataDocs.map(d => ({ id: d.id, name: d.name, feature: d.feature, text: d.text || d.qa_doc,
+                    dataPath: dataFolderPath(dataFolders, d.folder_id), version: d.version ?? 1, versions: d.versions, releases: d.release_pages }))} />}
               </div>
             )}
 
+            <label className="mt-3 block text-xs text-text-muted">Ссылки на макеты Pixso и страницы Confluence
+              <textarea className={`${INPUT_CLS} mt-1 resize-y`} value={linkText} onChange={e => setLinkText(e.target.value)}
+                rows={2} placeholder="По одной ссылке на строку" />
+            </label>
             {reqSource === "free" && (<>
             <textarea
               value={requirement}

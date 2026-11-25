@@ -1,4 +1,5 @@
 "use client";
+import PixsoSettingsModal from "@/components/settings/PixsoSettingsModal";
 import EtherSettingsModal from "@/components/settings/EtherSettingsModal";
 import { fetchEtherState } from "@/lib/etherApi";
 import { MessagesSquare } from "lucide-react";
@@ -29,8 +30,8 @@ import { getAqaSettings } from "@/lib/aqaApi";
  * (запрос в модель, в базу) — по кнопке внутри окна.
  */
 
-type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores" | "pvs" | "ether";
-const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores", "pvs", "ether"];
+type PanelId = "jira" | "confluence" | "testops" | "bitbucket" | "jenkins" | "llm" | "kafka" | "testdata" | "stores" | "pvs" | "ether" | "pixso";
+const PANEL_IDS: PanelId[] = ["jira", "confluence", "testops", "bitbucket", "jenkins", "llm", "kafka", "testdata", "stores", "pvs", "ether", "pixso"];
 
 type TabId = "integrations" | "connections" | "backup";
 const TABS: { id: TabId; label: string }[] = [
@@ -54,6 +55,7 @@ const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
       { id: "ether", icon: MessagesSquare, title: "Эфир · Главная", description: "Чат, почта и встречи через один MCP · вход в браузере" },
       { id: "jira", icon: Ticket, title: "Jira", description: "Учётная запись Сигмы и адрес Jira" },
       { id: "confluence", icon: BookOpen, title: "Confluence", description: "Учётная запись Сигмы и пространство для страниц" },
+      { id: "pixso", icon: BookOpen, title: "Pixso MCP", description: "Доступ к экранам и слоям для генерации тестов" },
       { id: "testops", icon: Rocket, title: "Allure TestOps", description: "Проект с запусками автотестов и API-токен" },
       { id: "bitbucket", icon: GitBranch, title: "Bitbucket", description: "Репозиторий автотестов и маркер доступа" },
       { id: "jenkins", icon: Play, title: "Jenkins", description: "Джоб запуска автотестов, логин и API-токен" },
@@ -261,6 +263,7 @@ export default function SettingsSection() {
         <SystemStoresPanel />
       </Modal>
       <JiraSettingsModal open={panel === "jira"} onClose={close} />
+      {panel === "pixso" && <PixsoSettingsModal onClose={close} />}
       <ConfluenceSettingsModal open={panel === "confluence"} onClose={close} />
       <KafkaMetricsSettingsModal open={panel === "kafka"} onClose={close} onSaved={refreshChips} />
       <PvsSettingsModal open={panel === "pvs"} onClose={close} />

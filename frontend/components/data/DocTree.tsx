@@ -34,12 +34,13 @@ function NameInput({ initial, depth, onDone }: { initial: string; depth: number;
  * Документ и папку можно перетащить на другую папку или на заголовок «Документы» (в корень).
  */
 export default function DocTree({
-  folders, docs, selected, onSelect, onNewDoc, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveDoc, onMoveFolder,
+  folders, docs, selected, selectedRelease, onSelect, onNewDoc, onCreateFolder, onRenameFolder, onDeleteFolder, onMoveDoc, onMoveFolder,
 }: {
   folders: ReqFolder[];
   docs: Requirement[];
   selected: string | null;
-  onSelect: (id: string) => void;
+  selectedRelease?: string;
+  onSelect: (id: string, release?: string) => void;
   onNewDoc: (folderId: string) => void;
   onCreateFolder: (name: string, parentId: string) => Promise<void>;
   onRenameFolder: (id: string, name: string) => Promise<void>;
@@ -133,7 +134,8 @@ export default function DocTree({
     if (found && !found.docOk.has(d.id)) return null;
     const on = selected === d.id;
     return (
-      <div key={d.id} role="treeitem" aria-selected={on} draggable
+      <div key={d.id}>
+      <div role="treeitem" aria-selected={on} draggable
         onDragStart={() => setDrag({ kind: "doc", id: d.id })} onDragEnd={() => { setDrag(null); setOver(null); }}
         onClick={() => onSelect(d.id)} title={d.feature ? `${d.name} · ${d.feature}` : d.name}
         className={`${rowCls} ${on ? "bg-primary/10 text-primary font-medium" : "text-text-main hover:bg-bg-subtle"}`}
@@ -141,6 +143,14 @@ export default function DocTree({
         <FileText className={`w-4 h-4 flex-shrink-0 ${on ? "text-primary" : "text-text-muted"}`} />
         <span className="truncate flex-1">{d.name}</span>
         {d.qa_doc && <span className="w-1.5 h-1.5 mr-1 rounded-full bg-emerald-500 flex-shrink-0" title="Документ QA готов" />}
+      </div>
+        {on && (d.release_pages?.length ?? 0) > 0 && <div role="group" aria-label={`Версии ${d.name}`}>
+          {d.release_pages!.map(page => <button type="button" key={page.id} role="treeitem"
+            aria-selected={selectedRelease === page.id} onClick={() => onSelect(d.id, page.id)}
+            title={`${page.id} — ${d.feature || d.name}`}
+            className={`block w-full truncate py-1 pr-2 text-left text-xs rounded-md ${selectedRelease === page.id ? "text-primary bg-primary/10" : "text-text-muted hover:bg-bg-subtle"}`}
+            style={{ paddingLeft: 46 + depth * STEP }}>{page.id} — {d.feature || d.name}</button>)}
+        </div>}
       </div>
     );
   };

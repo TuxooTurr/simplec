@@ -233,7 +233,10 @@ def collect(db: Session, scope: str = "all", secrets: bool = False) -> dict:
         if not _wanted(FILE_SECTION.get(p.name, "settings"), scope):
             continue
         try:
-            files[p.name] = clean(json.loads(p.read_text("utf-8")))
+            value = json.loads(p.read_text("utf-8"))
+            if p.name == "dashboard.json" and isinstance(value, dict) and not secrets:
+                value.pop("deliveries", None)
+            files[p.name] = clean(value)
         except (OSError, ValueError) as e:
             skipped.append(f"{p.name}: {e}"[:200])
     tables: dict[str, list[dict]] = {}
@@ -426,7 +429,7 @@ def _restore_dashboard(path: Path, incoming: dict, mode: str, login: str = '') -
     """Общие виджеты восстанавливаются всем; личные — только если копию загружает их владелец (login).
     Чужие личные виджеты на сервере не трогаются ни в одном режиме."""
     from db import dashboard_store
-    from backend.api.dashboard import positioned, is_personal
+    from backend.api.dashboard import Board, _position_boards, is_personal
     if isinstance(incoming, dict) and isinstance(incoming.get('widgets'), list):
         skip = {w.get('id') for w in incoming['widgets'] if isinstance(w, dict) and is_personal(w) and (not login or w.get('owner') != login)}
         incoming = {**incoming, 'widgets': [w for w in incoming['widgets'] if not (isinstance(w, dict) and w.get('id') in skip)],
@@ -439,7 +442,14 @@ def _restore_dashboard(path: Path, incoming: dict, mode: str, login: str = '') -
         if not isinstance(incoming, dict) or not isinstance(incoming.get('widgets'), list) or not isinstance(incoming.get('queues', {}), dict):
             raise ValueError('Некорректные данные Главной в копии.')
         # Validate even colliding incoming widgets; never silently import malformed settings.
-        source = positioned(incoming['widgets'], repair=True)
+        raw_boards = incoming.get('boards') or {}
+        if not isinstance(raw_boards, dict):
+            raise ValueError('Некорректный набор рабочих столов.')
+        own = [Board.model_validate(board).model_dump() for board in raw_boards.get(login, [])] if login else []
+        if len(own) > 12 or len({b['id'] for b in own}) != len(own) or any(b['id'] == 'main' for b in own):
+            raise ValueError('Некорректные рабочие столы в копии.')
+        incoming = {**incoming, 'boards': {login: own} if own else {}}
+        source = _position_boards(incoming['widgets'], repair=True)
         if len({w['id'] for w in source}) != len(source): raise ValueError('В копии повторяются id виджетов.')
         for queue in incoming.get('queues', {}).values():
             if not isinstance(queue, dict) or not isinstance(queue.get('entries', {}), dict): raise ValueError('Некорректная очередь Главной.')
@@ -451,12 +461,20 @@ def _restore_dashboard(path: Path, incoming: dict, mode: str, login: str = '') -
             known = {w['id'] for w in current['widgets']}
             by_id = {w['id']: w for w in source}
             existing = [merge_missing(w, by_id.get(w['id'], {}), merge_lists=False) for w in current['widgets']]
-            result['widgets'] = positioned([*existing, *(w for w in source if w['id'] not in known)], repair=True)
+            result['widgets'] = _position_boards([*existing, *(w for w in source if w['id'] not in known)], repair=True)
         else:
             # Перезапись не удаляет чужие личные виджеты и их очереди: их владельцы копию не загружали.
             keep = [w for w in current['widgets'] if is_personal(w) and w.get('owner') != login and w['id'] not in {x['id'] for x in source}]
             queues = {**{w['id']: current.get('queues', {})[w['id']] for w in keep if w['id'] in current.get('queues', {})}, **(incoming.get('queues') or {})}
-            result = {**incoming, 'widgets': positioned([*source, *keep]), 'queues': queues}
+            boards = {k: v for k, v in (current.get('boards') or {}).items() if k != login}
+            if 'boards' not in incoming or not own and any(w.get('boardId', 'main') != 'main' for w in source):
+                own = (current.get('boards') or {}).get(login, [])
+            if own:
+                boards[login] = own
+            result = {**incoming, 'widgets': _position_boards([*source, *keep], repair=True), 'queues': queues, 'boards': boards}
+        # Imported snapshots cannot silently authorize external messages.
+        present = {widget['id'] for widget in result['widgets']}
+        result['deliveries'] = {key: value for key, value in current.get('deliveries', {}).items() if key in present}
         # Invalidate old editor versions and in-flight Jira reads.
         result['version'] = int(current.get('version', 0)) + 1
         _write_json(path, result)

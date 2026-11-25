@@ -238,7 +238,7 @@ export const updateAqaIssue = async (key: string, change: AqaIssueChange) => {
 
 /** Параметр джоба: вид поля строится по нему. password и file — без значения по умолчанию. */
 export interface JenkinsParam {
-  name: string; kind: "string" | "multiline" | "boolean" | "choice" | "password" | "file";
+  name: string; kind: "string" | "multiline" | "boolean" | "choice" | "choice_unavailable" | "password" | "file";
   description: string; default: string | boolean; choices: string[];
 }
 /** result: RUNNING, SUCCESS, FAILURE, UNSTABLE, ABORTED. */

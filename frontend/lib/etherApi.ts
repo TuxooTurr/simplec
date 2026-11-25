@@ -47,7 +47,8 @@ const post = <T>(path: string, body: unknown) =>
   fetchJson<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 /** Кого можно отслеживать: человек, личный чат или группа. */
-export interface EtherParticipant { kind: "person" | "chat" | "group"; name: string; login?: string; email?: string; subtitle?: string }
+export interface EtherParticipant { kind: "person" | "chat" | "group"; name: string; login?: string; email?: string; subtitle?: string; peer?: EtherPeer }
+export type EtherPeer = Record<string, unknown> | unknown[] | string | number;
 export interface EtherSearchResult { items: EtherParticipant[]; people: boolean; reason?: string }
 export const etherSearch = (q: string) => post<EtherSearchResult>("/api/dashboard/ether/search", { q });
 

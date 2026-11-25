@@ -10,6 +10,8 @@ from db.paths import DATA_DIR
 
 FILE = DATA_DIR / 'dashboard.json'
 LOCK = threading.RLock()
+ACTIVITY_SETTINGS = ("employeeLogin", "activityProject", "activityBranch", "defectRoles",
+                     "activityPeriod", "activityFrom", "activityTo", "activityTimezone", "activityMetrics")
 
 def stamp():
     return datetime.now(timezone.utc).isoformat()
@@ -34,7 +36,7 @@ def write(data):
         finally:
             if os.path.exists(tmp.name): os.unlink(tmp.name)
 
-def layout(widgets, version):
+def layout(widgets, version, *, login=None, boards=None):
     with LOCK:
         data = read()
         if version != data['version']:
@@ -46,7 +48,20 @@ def layout(widgets, version):
                 # Preserve pending work when changing the filter; make its provenance explicit.
                 queue = data.get('queues', {}).get(widget['id'], {})
                 queue['filterChangedAt'] = stamp()
+            if old and old.get("kind") == "employee" and (
+                widget["kind"] != "employee" or any(old.get(key) != widget.get(key) for key in ACTIVITY_SETTINGS)
+            ):
+                queue = data.get("queues", {}).get(widget["id"], {})
+                for key in ("activity", "activitySignature", "lastCheckedAt"):
+                    queue.pop(key, None)
+                if widget["kind"] != "employee" or old.get("employeeLogin") != widget.get("employeeLogin"):
+                    queue.pop("employeeName", None)
+        if 'deliveries' in data:
+            ids = {w['id'] for w in widgets}
+            data['deliveries'] = {key: value for key, value in data['deliveries'].items() if key in ids}
         data['widgets'], data['version'] = widgets, version + 1
+        if boards is not None:
+            data.setdefault('boards', {})[login] = boards
         write(data)
         return data
 
@@ -93,6 +108,28 @@ def observe(widget_id, issues, *, retained=(), error='', partial=False, layout_v
             queue.update(currentKeys=[i['key'] for i in issues], lastCheckedAt=when, partial=partial)
             if full_sync is not None: queue.update(fullSyncAt=when, detailSig=full_sync)
         write(data)
+
+def observe_activity(widget_id, activity, signature, version, *, employee_name=""):
+    with LOCK:
+        data = read()
+        if data["version"] != version:
+            return
+        queue = data.setdefault("queues", {}).setdefault(widget_id, {"entries": {}})
+        previous = queue.get("activity", {}) if queue.get("activitySignature") == signature else {}
+        for name, source in activity.items():
+            if source.get("error") and name in previous:
+                activity[name] = {**previous[name], **source}
+                continue
+            known = {metric["label"]: metric for metric in previous.get(name, {}).get("metrics", [])}
+            for metric in source.get("metrics", []):
+                old = known.get(metric["label"], {})
+                if metric.get("unavailable") and old.get("value") is not None:
+                    metric.update(value=old["value"], url=old.get("url"), detail=f"Последнее полученное значение · {metric['detail']}")
+        queue.update(activity=activity, activitySignature=signature, lastCheckedAt=stamp())
+        if employee_name:
+            queue["employeeName"] = employee_name
+        write(data)
+
 
 def processed(widget_id, keys, value, actor):
     with LOCK:

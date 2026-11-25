@@ -66,7 +66,7 @@ from backend.api import (
     metrics_systems, metrics_settings, metrics_builder,
     revisor, autotests_gen, autotest_runs, app_settings,
     testdata, jobs, logs, mcp_logs, kafka_explorer, jira_defects, jira_views, jira_tool, zephyr, confluence, people, stands, backup, xlsx_export, model_bench, requirements,
-    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen, dashboard, jira_edit, ether_connect,
+    datagen, hub_tiles, incident_gen, corp_auth, aqa_tracking, tm_gen, dashboard, jira_edit, ether_connect, pixso,
 )
 
 # Веб-коннекторы (Playwright) и MCP-сервер для GigaCode временно отключены.
@@ -231,6 +231,7 @@ app.include_router(dashboard.router)
 app.include_router(jira_edit.router)
 app.include_router(ether_connect.router)
 app.include_router(datagen.router)
+app.include_router(pixso.router)
 app.include_router(requirements.router)
 app.include_router(incident_gen.router)
 app.include_router(corp_auth.router)

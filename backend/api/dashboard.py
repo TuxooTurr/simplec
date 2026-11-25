@@ -4,31 +4,38 @@ import asyncio
 import os
 import re
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
-from fastapi import APIRouter, Depends, HTTPException
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
 from db import dashboard_store as store
 from db.postgres import SessionLocal
 from db.paths import MOCK
 from backend.api.auth import require_user
 from backend.api import jira_tool as jira
+from backend.api import dashboard_delivery as delivery
 
 router = APIRouter(prefix='/api/dashboard', tags=['Dashboard'])
 _busy: set[str] = set()
 _guard = threading.Lock()
 _monitor = None
+_delivery_monitor = None
 _jobs: set[asyncio.Task] = set()
 _queued: dict[str, asyncio.Task] = {}
 GRID_COLUMNS = 128
 SIZES = {'S': (4, 4), 'M': (8, 8), 'L': (16, 8), 'XL': (24, 12), 'XXL': (GRID_COLUMNS, 12)}
+ActivityMetric = Literal['jiraCreated', 'jiraUpdated', 'jiraTransitions', 'jiraOpenDefects',
+                         'bbCommitCount', 'bbCommitList', 'zephyrRunCount', 'zephyrRunList']
+DEFAULT_ACTIVITY_METRICS = ['jiraCreated', 'jiraUpdated', 'jiraOpenDefects', 'bbCommitCount',
+                            'zephyrRunCount', 'zephyrRunList']
 
 class Widget(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1, max_length=100, pattern=r'^[\w-]+$')
     title: str = Field(min_length=1, max_length=200)
     jql: str = Field(min_length=1, max_length=4000)
-    kind: Literal['view', 'counter'] = 'view'
+    kind: Literal['view', 'counter', 'employee'] = 'view'
     size: Literal['S', 'M', 'L', 'XL', 'XXL'] = 'M'
     presentation: Literal['list', 'donut', 'bar'] = 'list'
     x: int | None = Field(default=None, ge=0, le=GRID_COLUMNS - 1)
@@ -49,6 +56,17 @@ class Widget(BaseModel):
     # «Для всех» (shared) видят все, меняет редактор Главной; «Личный» (personal) видит и меняет только владелец.
     scope: Literal['shared', 'personal'] = 'shared'
     owner: str = Field(default='', max_length=100)
+    boardId: str = Field(default='main', pattern=r'^[\w-]{1,64}$')
+    employeeName: str = Field(default='', max_length=160)
+    employeeLogin: str = Field(default='', max_length=160)
+    activityProject: str = Field(default='SBER911', pattern=r'^[A-Z][A-Z0-9_]{0,39}$')
+    activityBranch: str = Field(default='', max_length=160)
+    activityPeriod: Literal['today', 'week', 'fortnight', 'month', 'custom'] = 'week'
+    activityFrom: str = Field(default='', max_length=10)
+    activityTo: str = Field(default='', max_length=10)
+    activityTimezone: str = Field(default='', max_length=80)
+    activityMetrics: list[ActivityMetric] = Field(default_factory=lambda: DEFAULT_ACTIVITY_METRICS.copy(), max_length=8)
+    defectRoles: list[str] = Field(default_factory=lambda: ['assignee'], max_length=12)
     # Счётчик: свой цвет числа и пороги «от N задач — цвет» (ноль всегда зелёный).
     counterColor: str = Field(default='', max_length=7)
     thresholds: list[dict] = Field(default_factory=list, max_length=10)
@@ -78,6 +96,31 @@ class Widget(BaseModel):
         if any(not column or len(column) > 300 for column in self.columns):
             raise ValueError('Некорректное поле списка.')
         self.columns = list(dict.fromkeys(['key', *self.columns]))
+        if self.kind == 'employee':
+            self.employeeLogin = self.employeeLogin.strip()
+            if not self.employeeLogin:
+                raise ValueError('Укажите логин Jira.')
+            if not self.activityMetrics:
+                raise ValueError('Выберите хотя бы один показатель активности.')
+            self.activityMetrics = list(dict.fromkeys(self.activityMetrics))
+            if self.activityTimezone:
+                try:
+                    ZoneInfo(self.activityTimezone)
+                except (ValueError, ZoneInfoNotFoundError) as exc:
+                    raise ValueError('Некорректный часовой пояс.') from exc
+            if self.activityPeriod == 'custom':
+                try:
+                    start = date.fromisoformat(self.activityFrom)
+                    end = date.fromisoformat(self.activityTo or self.activityFrom)
+                    if start > end or end == date.max:
+                        raise ValueError
+                except ValueError as exc:
+                    raise ValueError('Укажите корректную дату или диапазон дат.') from exc
+                self.activityFrom = start.isoformat()
+                self.activityTo = end.isoformat() if self.activityTo else ''
+            if any(role not in ('assignee', 'reporter', 'creator') and not re.fullmatch(r'customfield_\d+', role)
+                   for role in self.defectRoles):
+                raise ValueError('Выберите поля Jira с участниками дефекта.')
         if self.kind == 'counter':
             self.size, self.w, self.h = 'S', 4, 4
             self.fullWidth = False
@@ -128,9 +171,15 @@ def positioned(widgets, *, repair=False):
         result.append(widget)
     return result
 
+class Board(BaseModel):
+    id: str = Field(pattern=r'^[\w-]{1,64}$')
+    name: str = Field(min_length=1, max_length=40, pattern=r'\S')
+
+
 class Layout(BaseModel):
     version: int
-    widgets: list[Widget] = Field(max_length=50)
+    widgets: list[Widget] = Field(max_length=250)
+    boards: list[Board] | None = Field(default=None, max_length=12)
 
 class Mark(BaseModel):
     keys: list[str] = Field(min_length=1, max_length=1000)
@@ -156,6 +205,13 @@ def _view(widgets, user):
     mine = [w for w in widgets if visible_to(w, user)]
     return [w for w in mine if not is_personal(w)] + [w for w in mine if is_personal(w)]
 
+def _position_boards(widgets, *, repair=False):
+    boards = {}
+    for widget in widgets:
+        boards.setdefault(widget.get('boardId', 'main'), []).append(widget)
+    return [w for group in boards.values() for w in positioned(group, repair=repair)]
+
+
 
 def _widget_or_404(data, widget_id, user):
     widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
@@ -166,8 +222,16 @@ def _widget_or_404(data, widget_id, user):
 @router.get('')
 def get_dashboard(user=Depends(require_user)):
     data = store.read()
-    return {'version': data['version'], 'widgets': positioned(_view(data['widgets'], user), repair=True),
+    return {'version': data['version'], 'widgets': _position_boards(_view(data['widgets'], user), repair=True),
+            'boards': data.get('boards', {}).get(user.get('login', ''), []),
             'canEdit': can_edit(user), 'login': user.get('login', ''), 'demo': MOCK}
+
+@router.get('/employee')
+def dashboard_employee(login: str = Query(min_length=1, max_length=160, pattern=r'\S'), user=Depends(require_user)):
+    from backend.api.dashboard_activity import employee_profile
+    profile = employee_profile(login.strip())
+    return {'name': profile.get('displayName', '')}
+
 
 @router.put('/layout')
 def save_layout(body: Layout, user=Depends(require_user)):
@@ -175,28 +239,42 @@ def save_layout(body: Layout, user=Depends(require_user)):
     Чужие личные виджеты не приходят и не затрагиваются."""
     login, editor = user.get('login', ''), can_edit(user)
     if len({w.id for w in body.widgets}) != len(body.widgets): raise HTTPException(422, 'Идентификаторы виджетов повторяются.')
-    incoming = [w.model_dump() for w in body.widgets]
-    for widget in incoming:
-        widget['owner'] = login if is_personal(widget) else ''
-        query_for(widget)
     current = store.read()
+    boards = current.get('boards', {}).get(login, []) if body.boards is None else [b.model_dump() for b in body.boards]
+    board_ids = {b['id'] for b in boards}
+    if 'main' in board_ids or len(board_ids) != len(boards):
+        raise HTTPException(422, 'Идентификаторы рабочих столов повторяются.')
+    incoming = [w.model_dump() for w in body.widgets]
+    previous = {w['id']: w for w in _view(current['widgets'], user)}
+    for widget in incoming:
+        if widget['boardId'] != 'main' and (widget['boardId'] not in board_ids or not is_personal(widget)):
+            raise HTTPException(422, 'Дополнительный рабочий стол может содержать только личные виджеты.')
+        widget['owner'] = login if is_personal(widget) else ''
+        if widget["kind"] != "employee":
+            query_for(widget)
+        elif widget['employeeLogin'] != previous.get(widget['id'], {}).get('employeeLogin'):
+            widget['employeeName'] = ''
     others = [w for w in current['widgets'] if is_personal(w) and w.get('owner') != login]
     if {w['id'] for w in incoming} & {w['id'] for w in others}: raise HTTPException(422, 'Идентификаторы виджетов повторяются.')
     if editor:
         shared = [w for w in incoming if not is_personal(w)]
     else:
         current_shared = [w for w in current['widgets'] if not is_personal(w)]
-        if {w['id'] for w in incoming if not is_personal(w)} - {w['id'] for w in current_shared}:
+        shared_ids = {w['id'] for w in current_shared}
+        if shared_ids & {w['id'] for w in incoming if is_personal(w)}:
+            raise HTTPException(403, 'Доступ к изменению общего виджета ограничен.')
+        if {w['id'] for w in incoming if not is_personal(w)} - shared_ids:
             raise HTTPException(403, 'Виджеты «Для всех» может добавлять только редактор Главной. Создайте личный виджет.')
         # Общие виджеты у не-редактора не меняются: берём их из хранилища (перетаскивание их не сдвигает).
         shared = current_shared
-    widgets = positioned([*shared, *(w for w in incoming if is_personal(w))])
+    widgets = _position_boards([*shared, *(w for w in incoming if is_personal(w))])
     for i, a in enumerate(widgets):
         for b in widgets[i + 1:]:
+            if a['boardId'] != b['boardId']: continue
             if a['x'] < b['x'] + b['w'] and a['x'] + a['w'] > b['x'] and a['y'] < b['y'] + b['h'] and a['y'] + a['h'] > b['y']:
                 if not editor and not is_personal(a) and not is_personal(b): continue   # общие — как есть
                 raise HTTPException(422, 'Виджеты пересекаются. Разместите их в свободных ячейках.')
-    try: store.layout([*widgets, *others], body.version)
+    try: store.layout([*widgets, *others], body.version, login=login, boards=boards)
     except ValueError as exc: raise HTTPException(409, str(exc)) from exc
     return get_dashboard(user)
 
@@ -282,7 +360,7 @@ def _merge_light(cfg, light, known, detail):
     return result
 
 
-def refresh(widget_id):
+def refresh(widget_id, force=False):
     layout_version = None
     with _guard:
         if widget_id in _busy: return
@@ -292,6 +370,18 @@ def refresh(widget_id):
         layout_version = data['version']
         widget = next((w for w in data['widgets'] if w['id'] == widget_id), None)
         if not widget: return
+        if widget["kind"] == "employee":
+            from backend.api.dashboard_activity import collect, date_range
+            widget = Widget.model_validate(widget).model_dump()
+            window = date_range(widget)
+            queue = data.get("queues", {}).get(widget_id, {})
+            checked = store._time(queue.get("lastCheckedAt"))
+            signature = [*(widget[key] for key in store.ACTIVITY_SETTINGS), *(day.isoformat() for day in window)]
+            if not force and checked and queue.get("activitySignature") == signature and datetime.now(timezone.utc) - checked < timedelta(minutes=5):
+                return
+            activity, employee_name = collect(widget, window)
+            store.observe_activity(widget_id, activity, signature, layout_version, employee_name=employee_name)
+            return
         with SessionLocal() as db:
             cfg = jira._load_cfg(db)
             expansion = {'expand': 'changelog'} if widget['kind'] == 'counter' else {}
@@ -344,9 +434,14 @@ def widget_data(widget_id: str, user=Depends(require_user)):
 
 @router.post('/widgets/{widget_id}/refresh', status_code=202)
 async def refresh_widget(widget_id: str, user=Depends(require_user)):
-    _widget_or_404(store.read(), widget_id, user)
+    widget = _widget_or_404(store.read(), widget_id, user)
     # The monitor and browser share the same single-flight worker.
-    launch(widget_id)
+    previous = _queued.get(widget_id)
+    if widget['kind'] == 'employee' and previous is not None:
+        # A refresh started before the calendar was saved cannot publish into the new layout.
+        previous.add_done_callback(lambda _: launch(widget_id))
+    else:
+        launch(widget_id, force=True)
     return {'running': True}
 
 @router.post('/widgets/{widget_id}/processed')
@@ -445,9 +540,33 @@ def ether_mail_reply(body: EtherMailReply, user=Depends(require_user)):
     _ether_writer(user)
     return _ether(ether_mcp.reply_mail, body.id, body.text)
 
-def launch(widget_id):
+
+def _delivery_widget(data, widget_id, user):
+    widget = _widget_or_404(data, widget_id, user)
+    if not is_personal(widget) and not can_edit(user):
+        raise HTTPException(403, 'Настройки отправки доступны редактору виджета.')
+    return widget
+
+
+@router.get('/widgets/{widget_id}/delivery')
+def get_delivery(widget_id: str, user=Depends(require_user)):
+    data = store.read()
+    return delivery.public_config(data, _delivery_widget(data, widget_id, user), user['login'])
+
+
+@router.put('/widgets/{widget_id}/delivery')
+def put_delivery(widget_id: str, body: delivery.Delivery, user=Depends(require_user)):
+    from agents import ether_mcp
+    widget = _delivery_widget(store.read(), widget_id, user)
+    if body.enabled:
+        _ether_writer(user)
+        if not ether_mcp.configured():
+            raise HTTPException(409, 'Подключите Эфир в настройках Shark.')
+    return delivery.save_config(widget, body, user['login'])
+
+def launch(widget_id, force=False):
     if widget_id in _queued: return _queued[widget_id]
-    task = asyncio.create_task(asyncio.to_thread(refresh, widget_id))
+    task = asyncio.create_task(asyncio.to_thread(refresh, widget_id, force))
     _queued[widget_id] = task
     _jobs.add(task)
     def finished(done):
@@ -465,11 +584,16 @@ async def _watch():
         await asyncio.sleep(30)
 
 async def start():
-    global _monitor
+    global _monitor, _delivery_monitor
     _monitor = asyncio.create_task(_watch())
+    _delivery_monitor = asyncio.create_task(delivery.watch())
 
 async def stop():
-    global _monitor
+    global _monitor, _delivery_monitor
+    if _delivery_monitor:
+        _delivery_monitor.cancel()
+        await asyncio.gather(_delivery_monitor, return_exceptions=True)
+        _delivery_monitor = None
     if _monitor:
         _monitor.cancel()
         await asyncio.gather(_monitor, return_exceptions=True)

@@ -13,6 +13,10 @@ export const SCENARIO_TYPES = ["Позитивные сценарии", "Нег�
 export interface TmRow {
   id: string;
   scenario: string;
+  version?: string;
+  tool?: string;
+  server?: string;
+  business?: string;
   type: string;
   name: string;
   platform: "W" | "M";
@@ -73,6 +77,8 @@ export interface TmSession {
   cases: TmCase[];
   qa_doc: string;
   review: (TmReview & { fixed?: TmRemark[] }) | null;
+  source_links_used?: string[];
+  service_catalog_live?: boolean;
   progress: { current: number; total: number; name: string } | null;
   error: string | null;
   failed_stage: string | null;
@@ -88,6 +94,10 @@ export interface TmStart {
   source: "free" | "data" | "task";
   place: string[];
   task?: TmTask;
+  source_links?: string[];
+  document_ids?: string[];
+  version_hint?: string;
+  microservices?: string[];
   batch?: string;
 }
 

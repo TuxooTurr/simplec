@@ -11,6 +11,7 @@ import MarkdownEditor from "@/components/data/MarkdownEditor";
 import QaGenerateModal from "@/components/data/QaGenerateModal";
 import DocAsk from "@/components/data/DocAsk";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { sourceLinks } from "@/lib/pixso";
 import { newReqVersion, parseFile, syncReqSources, type ReqFolder, type Requirement } from "@/lib/api";
 import { RefreshIcon } from "@/components/ui/RefreshButton";
 
@@ -137,16 +138,22 @@ function NewVersionModal({ open, initial, onClose, onSave }: { open: boolean; in
  * Остальное — в окне «Подробнее» (значок справа от заголовка): фича, «Что нужно» (уточнение для документа QA, если
  * в исходнике несколько СТ), папка, страницы Confluence (добавить СТ), версии и свод «что изменилось», исходник, удаление.
  */
-export default function DocPage({ doc, folders, provider, onPatch, onGenerate, onDelete, onReplace, onSettings }: {
+export default function DocPage({ doc, folders, provider, releaseId, onRelease, jobProgress, onCancelGenerate, onPatch, onGenerate, onDelete, onReplace, onSettings }: {
   doc: Requirement;
   folders: ReqFolder[];
   provider: string;
-  onPatch: (patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string }) => Promise<void>;
+  jobProgress: string;
+  onCancelGenerate: () => Promise<void>;
+  releaseId: string;
+  onRelease: (id: string) => void;
+  onPatch: (patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string; design_links?: string[] }) => Promise<void>;
   onGenerate: (links: string[], focus: string) => Promise<void>;
   onDelete: () => void;
   onReplace: (d: Requirement) => void;
   onSettings: () => void;
 }) {
+  const [linkDraft, setLinkDraft] = useState((doc.design_links ?? []).join("\n"));
+  useEffect(() => setLinkDraft((doc.design_links ?? []).join("\n")), [doc.id, doc.design_links]);
   const [title, setTitle] = useState(doc.name);
   const [feature, setFeature] = useState(doc.feature);
   const [focus, setFocus] = useState(doc.focus ?? "");
@@ -224,13 +231,21 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
     el.classList.add("bg-amber-100", "dark:bg-amber-900/40", "rounded");
     setTimeout(() => el.classList.remove("bg-amber-100", "dark:bg-amber-900/40", "rounded"), 1800);
   };
+  const release = doc.release_pages?.find(page => page.id === releaseId);
   const hasQa = !!view.qa_doc;
+  const markdown = release?.markdown ?? (hasQa ? view.qa_doc : view.text);
+  let inCode = false;
+  const contents = Array.from(new Set(markdown.split("\n").flatMap(line => {
+    if (line.trimStart().startsWith("```")) inCode = !inCode;
+    const match = !inCode && /^#{2,3}\s+(.+)$/.exec(line);
+    return match ? [match[1]] : [];
+  })));
   const where = folderPath(folders, doc.folder_id ?? "");
 
   const ROW_LABEL = "flex items-center gap-1.5 pt-0.5 text-text-muted";
 
   return (
-    <article className="pb-16">
+    <article className="max-w-6xl pb-16">
       <p className="mb-2 flex items-center gap-1.5 text-xs text-text-muted">
         <Folder className="w-3.5 h-3.5" /> {where || "Корень"}
       </p>
@@ -244,6 +259,13 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
           <SlidersHorizontal className="w-4 h-4" /> Подробнее
         </button>
       </div>
+
+      {doc.design_links?.length ? <div className="mt-2 flex flex-wrap gap-1.5">
+        {doc.design_links.map((url, index) => <a key={url} href={url} target="_blank" rel="noopener noreferrer" title={url}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border-main px-2.5 py-1 text-xs text-primary hover:bg-bg-subtle">
+          <ExternalLink className="w-3 h-3" /> {url.includes("pixso.design.sber.ru") ? "Макет Pixso" : "Доп. источник"} {index + 1}
+        </a>)}
+      </div> : null}
 
       {/* Под названием — только оригиналы в Confluence и обновление из них */}
       {sources.length > 0 && (
@@ -284,18 +306,22 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
         {isCur && (
           <div className="flex flex-wrap items-center gap-2">
             {hasQa ? (
-              <button type="button" className={BTN} onClick={() => void generate()} disabled={gen}>
-                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Обновить документ QA"}
+              <button type="button" className={BTN} onClick={() => void generate()} disabled={gen || !!jobProgress}>
+                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Переработать документ"}
               </button>
             ) : (
-              <button type="button" className={BTN_PRIMARY} onClick={() => void generate()} disabled={gen || editing}>
-                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Преобразовать в документ QA"}
+              <button type="button" className={BTN_PRIMARY} onClick={() => void generate()} disabled={gen || !!jobProgress || editing}>
+                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Обработать документ"}
               </button>
             )}
           </div>
         )}
       </div>
 
+      {jobProgress && !qaOpen && <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-text-muted" role="status">
+        <Loader2 className="w-4 h-4 animate-spin" /> {jobProgress}
+        <button type="button" className="text-primary hover:underline" onClick={() => void onCancelGenerate().catch(e => setErr(e.message))}>Остановить</button>
+      </div>}
       {err && (
         <div className="mt-3 flex items-start gap-2 text-sm text-red-600 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-lg px-3 py-2">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" /> <span>{err}</span>
@@ -306,10 +332,28 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
         <p className="mt-3 text-sm text-amber-700 dark:text-amber-300">Документ QA обрезан лимитом модели — конец может отсутствовать.</p>
       )}
 
-      <div ref={bodyRef} className="mt-5">
-        {hasQa ? <QaDocView doc={view.qa_doc} anchors />
-          : editing && isCur ? <SourceEditor initial={doc.text} onSave={saveSource} onCancel={() => setEditing(false)} />
-          : <SourceView text={view.text} anchors />}
+      {(doc.release_pages?.length ?? 0) > 0 && <nav aria-label="Версии содержания" className="mt-5 flex flex-wrap gap-2">
+        <button type="button" onClick={() => onRelease("")} aria-pressed={!release}
+          className={`${BTN} ${!release ? "border-primary text-primary" : ""}`}>Обзор фичи</button>
+        {doc.release_pages!.map(page => <button key={page.id} type="button" onClick={() => onRelease(page.id)} aria-pressed={release?.id === page.id}
+          className={`${BTN} ${release?.id === page.id ? "border-primary text-primary" : ""}`}>{page.id}</button>)}
+      </nav>}
+      {release && <h2 className="mt-5 text-xl font-semibold break-words">{release.id} — {doc.feature || doc.name}</h2>}
+      {isCur && doc.qa_link_errors?.map(warning => <p role="status" key={warning} className="mt-2 text-xs text-text-muted">{warning}</p>)}
+      <div className="mt-5 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_12rem]">
+        {contents.length > 0 && <nav aria-label="Оглавление" className="rounded-lg border border-border-main p-3 xl:order-2 xl:sticky xl:top-0 self-start">
+          <h2 className="text-sm font-semibold mb-2">Оглавление</h2>
+          <ul className="space-y-1.5">{contents.map(h => <li key={h}>
+            <a href={`#${headingSlug(h)}`} onClick={e => { e.preventDefault(); jump(h); }}
+              className="block break-words text-xs text-text-muted hover:text-primary">{h.replaceAll("*", "")}</a>
+          </li>)}</ul>
+        </nav>}
+        <div ref={bodyRef} className="min-w-0 xl:order-1">
+          {release ? <NotionRenderer text={release.markdown} anchors />
+            : hasQa ? <QaDocView doc={view.qa_doc} anchors />
+            : editing && isCur ? <SourceEditor initial={doc.text} onSave={saveSource} onCancel={() => setEditing(false)} />
+            : <SourceView text={view.text} anchors />}
+        </div>
       </div>
 
       {/* «Подробнее»: свойства документа, Confluence, версии, исходник */}
@@ -332,6 +376,13 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
             <span className={ROW_LABEL}><Link2 className="w-3.5 h-3.5" /> Confluence</span>
             <SourcesBar key={doc.id} doc={doc} onError={setErr} onSettings={onSettings}
               onChanged={(d, msg) => { onReplace(d); if (msg) setNote(msg); }} />
+            <label htmlFor="req-design-links" className={ROW_LABEL}><Link2 className="w-3.5 h-3.5" /> Ссылки</label>
+            <div className="space-y-1.5">
+              <textarea id="req-design-links" className={`${PROP_INPUT} w-full`} rows={3}
+                value={linkDraft} onChange={e => setLinkDraft(e.target.value)} placeholder="Pixso и Confluence, по одной ссылке на строку" />
+              <button type="button" className={BTN} onClick={() => void save({ design_links: sourceLinks(linkDraft) }).catch(() => undefined)}>Сохранить ссылки</button>
+              {err && <p role="alert" className="text-xs tone-danger">{err}</p>}
+            </div>
             <span className={ROW_LABEL}><History className="w-3.5 h-3.5" /> Версия</span>
             <div className="flex flex-wrap items-center gap-2">
               <select value={viewN} onChange={e => setViewN(Number(e.target.value))} aria-label="Версия документа"
@@ -382,7 +433,7 @@ export default function DocPage({ doc, folders, provider, onPatch, onGenerate, o
             : <SourceView text={view.text} actions={isCur ? <button type="button" className={BTN} onClick={() => setEditing(true)}><Pencil className="w-4 h-4" /> Править</button> : undefined} />}
         </div>
       </Modal>
-      <QaGenerateModal open={qaOpen} doc={doc} onClose={() => setQaOpen(false)} onGenerate={runGenerate} />
+      <QaGenerateModal progress={jobProgress} onCancelGenerate={onCancelGenerate} open={qaOpen} doc={doc} onClose={() => setQaOpen(false)} onGenerate={runGenerate} />
       <NewVersionModal open={newVer} initial={doc.text} onClose={() => setNewVer(false)}
         onSave={async (text, n) => { onReplace(await newReqVersion(doc.id, text, n)); setNewVer(false); setNote("Создана новая версия — соберите для неё документ QA."); }} />
     </article>

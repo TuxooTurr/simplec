@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from backend.api.auth import require_user
 from pydantic import BaseModel, Field
 
 from db.gen_sessions_store import GenSessionsStore
@@ -104,13 +106,73 @@ def _launch(sid: str, coro_fn):
 
 # ── Этапы ───────────────────────────────────────────────────────────────────
 
+SERVICE_MAP_URL = "https://confluence.sberbank.ru/pages/viewpage.action?pageId=25633370345"
+
+
+_service_lock = threading.Lock()
+_service_cache: tuple[float, str] = (0, "")
+
+
+def _service_catalog():
+    from backend.api.requirements import fetch_page
+    from db.paths import MOCK
+    if MOCK:
+        return ""
+    global _service_cache
+    with _service_lock:
+        expires, current = _service_cache
+        if expires > time.monotonic():
+            return current
+        try:
+            markdown = fetch_page(SERVICE_MAP_URL)["markdown"]
+        except HTTPException:
+            markdown = ""
+        _service_cache = (time.monotonic() + (300 if markdown else 45), markdown)
+        return markdown
+
+
 async def _do_plan(sid: str):
     from agents import tm_pipeline as tm
     from db.requirements_store import RequirementsStore
     s = _get(sid)
     _upd(sid, status="planning", error=None, progress=None)
     structure = tm.structure_text(RequirementsStore.list_folders())
-    plan = await _call(tm.plan, _llm(s["provider"]), s["requirement"], s["feature"], s.get("platforms", "W"),
+    from agents.pixso_mcp import design_context, source_links
+    from backend.api.requirements import linked_context
+    from urllib.parse import urlsplit
+
+    base = s.get("base_requirement", s["requirement"])
+    links = list(dict.fromkeys([*s.get("source_links", []), *source_links(base)]))
+    design = [u for u in links if urlsplit(u).hostname == "pixso.design.sber.ru"]
+    confluence = [u for u in links if u not in design]
+    unsupported = [u for u in confluence if urlsplit(u).scheme != "https" or
+                   urlsplit(u).hostname != "confluence.sberbank.ru"]
+    if unsupported:
+        raise ValueError("Поддерживаются ссылки на узлы Pixso и страницы корпоративного Confluence.")
+    dsl, used_design = await design_context(design, s.get("source_owner", ""))
+    linked, used_docs, errors = await asyncio.to_thread(linked_context, confluence, 8000) if confluence else ("", [], [])
+    if errors:
+        raise ValueError("\n".join(errors))
+    mapped = await asyncio.to_thread(_service_catalog)
+    index = {**tm.service_index(tm.ke_table()), **tm.service_index(mapped)}
+    selected_service = {name.casefold() for name in s.get("microservices", [])}
+    if len(mapped) > 10000:
+        lines = mapped.splitlines()
+        relevant = [line for line in lines if any(name in line.casefold() for name in selected_service)]
+        mapped = "\n".join(relevant or lines)[:10000]
+    mapping = f"\n\n=== СПРАВОЧНИК КЭ → МИКРОСЕРВИС → АС ===\n{SERVICE_MAP_URL}\n{mapped}" if mapped else ""
+    services = s.get("microservices") or []
+    service_info = "\nМикросервисы задачи (ST): " + ", ".join(services) if services else ""
+    requested = s.get("version_hint", "")
+    version = f"\nОбласть проверки, выбранная пользователем: {requested}\n" if requested else ""
+    context = dsl + linked + mapping
+    intro = version + service_info
+    if len(context) > 32500:
+        raise ValueError("Источники превышают объём планирования. Уточните нужные страницы и узлы макетов.")
+    requirement = intro + context + "\n\n=== ИСХОДНОЕ ТРЕБОВАНИЕ ===\n" + base if context or intro else base
+    used = used_design + [doc["url"] for doc in used_docs]
+    _upd(sid, requirement=requirement, source_links_used=used, service_catalog_live=bool(mapped), service_index=index)
+    plan = await _call(tm.plan, _llm(s["provider"]), requirement, s["feature"], s.get("platforms", "W"),
                        s.get("place") or [], structure)
     _upd(sid, status="plan_ready", plan=plan)
 
@@ -129,7 +191,7 @@ async def _do_write(sid: str):
             continue
         _upd(sid, progress={"current": i + 1, "total": len(rows), "name": row["name"][:80]})
         c = await _call(tm.case, llm, row, plan, s["requirement"], s["feature"], answers)
-        cases.append(c)
+        cases.append(tm.set_service_metadata(c, row, s.get("service_index") or {}, s.get("microservices") or []))
         order = {r["id"]: k for k, r in enumerate(rows)}
         cases.sort(key=lambda x: order.get(x.get("plan_id"), 999))
         _upd(sid, cases=cases)
@@ -168,6 +230,8 @@ async def _do_fix(sid: str):
         _upd(sid, progress={"current": n, "total": len(groups), "name": cname if not cname.startswith("__new__") else "Новый кейс"})
         target = next((c for c in cases if c.get("name") == cname), None)
         new = await _call(tm.fix, llm, target, rs, s["plan"], s["requirement"], s["feature"], s.get("answers") or {})
+        row = next((r for r in s["plan"]["scenarios"] if r["id"] == (target or {}).get("plan_id")), {})
+        new = tm.set_service_metadata(new, row, s.get("service_index") or {}, s.get("microservices") or [])
         if target:
             cases[cases.index(target)] = {**new, "plan_id": target.get("plan_id", "")}
         else:
@@ -196,19 +260,43 @@ class StartBody(BaseModel):
     source: str = "free"                 # free | data | task
     place: list[str] = []                # место в дереве «Данных», если известно (документ, задача)
     task: Optional[TaskMeta] = None
+    source_links: list[str] = Field(default_factory=list, max_length=24)
+    document_ids: list[str] = Field(default_factory=list, max_length=100)
+    version_hint: str = Field(default="", max_length=300)
+    microservices: list[str] = Field(default_factory=list, max_length=30)
     batch: str = ""                      # очередь по задачам — общая метка
 
 
 @router.post("/api/tm/sessions")
-async def start(body: StartBody) -> dict:
+async def start(body: StartBody, user=Depends(require_user)) -> dict:
     from agents.prompt_guard import sanitize_input
+    from db.requirements_store import RequirementsStore
+
+    docs = [RequirementsStore.get_requirement(doc_id) for doc_id in dict.fromkeys(body.document_ids)]
+    if any(not doc for doc in docs):
+        raise HTTPException(422, "Одно из требований удалено из «Данных». Выберите источники заново.")
+    if body.source == "task" and not any((doc.get("text") or doc.get("qa_doc") or "").strip() for doc in docs):
+        raise HTTPException(422, "Для задачи нужно прикрепить непустое требование из «Данных».")
+    folders = {f["id"]: f for f in RequirementsStore.list_folders()}
+    place = []
+    selected = next((doc["folder_id"] for doc in docs if doc.get("folder_id") in folders), "")
+    seen = set()
+    while selected in folders and selected not in seen:
+        seen.add(selected)
+        current = folders[selected]
+        place.insert(0, current["name"].replace("/", "-"))
+        selected = current["parent_id"]
+    feature = place[-1] if place else body.feature
     req = sanitize_input(body.requirement)
     if req.get("blocked"):
         raise HTTPException(status_code=422, detail="Входные данные не прошли проверку безопасности")
-    s = _store().create_session({"requirement": req["text"], "feature": sanitize_input(body.feature)["text"].strip(),
+    s = _store().create_session({"requirement": req["text"], "feature": sanitize_input(feature)["text"].strip(),
                                  "depth": "tm", "provider": body.provider, "platform": body.platforms})
     s = _upd(s["id"], kind="tm", status="planning", platforms=body.platforms if body.platforms in ("W", "M", "W и M") else "W",
-             source=body.source, place=[p.strip() for p in body.place if p.strip()],
+             source=body.source, place=place or ([p.strip() for p in body.place if p.strip()] if not docs else []),
+             base_requirement=req["text"], source_owner=user["login"],
+             source_links=list(dict.fromkeys([*body.source_links, *(link for doc in docs for link in doc.get("design_links", []))])),
+             version_hint=body.version_hint.strip(), microservices=body.microservices,
              task=body.task.model_dump() if body.task else None, batch=body.batch,
              plan=None, answers={}, review=None, progress=None, failed_stage=None)
     _launch(s["id"], _do_plan)
@@ -245,12 +333,8 @@ async def approve(sid: str, body: ApproveBody) -> dict:
     s = _get(sid)
     if s["status"] != "plan_ready":
         raise HTTPException(status_code=409, detail="План уже утверждён или ещё не готов")
-    plan = tm.normalize_plan(body.plan, [p for p in body.plan.get("place", []) if str(p).strip()], s["feature"])
-    # строки, которые человек отредактировал, сохраняют свои id — иначе id по порядку
-    for i, row in enumerate(plan["scenarios"]):
-        src = body.plan.get("scenarios", [])[i] if i < len(body.plan.get("scenarios", [])) else {}
-        if isinstance(src, dict) and src.get("id"):
-            row["id"] = str(src["id"])
+    chosen_place = [str(p).strip() for p in body.plan.get("place", []) if str(p).strip()]
+    plan = tm.normalize_plan(body.plan, s.get("place") or chosen_place, s["feature"])
     if not plan["scenarios"]:
         raise HTTPException(status_code=422, detail="В карте нет ни одного кейса")
     s = _upd(sid, plan=plan, answers={str(k): str(v)[:2000] for k, v in body.answers.items()}, cases=[], qa_doc="",

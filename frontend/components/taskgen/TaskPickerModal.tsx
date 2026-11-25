@@ -78,10 +78,10 @@ export default function TaskPickerModal({ open, picked, onPick, onClose }: {
     const keep = picked.filter(t => sel.has(t.key));
     const added: TaskPick[] = [...sel].filter(k => !keep.some(t => t.key === k)).map(key => {
       const f = issues[key]?.fields ?? {};
-      const linked: TaskDoc[] = docsOf(key).map(d => ({ id: d.id, name: d.name, feature: d.feature, text: d.text || d.qa_doc, dataPath: pathOf(d) }));
+      const linked: TaskDoc[] = docsOf(key).map(d => ({ id: d.id, name: d.name, feature: d.feature, text: d.text || d.qa_doc, dataPath: pathOf(d), version: d.version ?? 1, versions: d.versions, releases: d.release_pages }));
       return {
         key, summary: String(f.summary ?? ""), type: String(f.issuetype ?? ""), project: projectKeyOfIssue(key),
-        description: String(f.description ?? ""), docs: linked, dataPath: linked.find(d => d.dataPath.length)?.dataPath ?? [],
+        description: String(f.description ?? ""), docs: linked, microservices: state?.msLinks[key], dataPath: linked.find(d => d.dataPath.length)?.dataPath ?? [],
       };
     });
     onPick([...keep, ...added]);

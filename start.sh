@@ -11,6 +11,14 @@ err()  { echo -e "${RED}[✗] $1${NC}"; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+WITH_GIGACODE=false
+if [[ "${1:-}" == "--with-gigacode" ]]; then
+    WITH_GIGACODE=true
+    shift
+fi
+[[ $# == 0 ]] || err "Использование: bash start.sh [--with-gigacode]"
+
+
 echo ""
 echo "  ╔══════════════════════════════════════╗"
 echo "  ║        Shark — Запуск           ║"
@@ -90,6 +98,28 @@ if [ ! -f "frontend/.env.local" ]; then
     ok "frontend/.env.local создан"
 fi
 
+BACKEND_PID=""
+FRONTEND_PID=""
+BRIDGE_PID=""
+stop_children() {
+    local pid
+    for pid in "$FRONTEND_PID" "$BACKEND_PID" "$BRIDGE_PID"; do
+        if [[ -n "$pid" ]]; then
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+}
+trap stop_children EXIT
+trap 'exit 0' INT TERM
+
+if "$WITH_GIGACODE"; then
+    info "Запускаю локальный мост GigaCode…"
+    GIGACODE_BRIDGE_PY="${GIGACODE_BRIDGE_PY:-$(command -v python)}" bash scripts/start-gigacode-bridge.sh &
+    BRIDGE_PID=$!
+    sleep 1
+    kill -0 "$BRIDGE_PID" 2>/dev/null || err "Мост не запустился. Проверьте его окружение и порт."
+fi
+
 # ── Запуск бэкенда ────────────────────────────────────────────
 info "Запускаю бэкенд (порт 8000)..."
 python -m uvicorn backend.main:app --port 8000 &
@@ -131,6 +161,4 @@ echo "  ║  Нажмите Ctrl+C для остановки                    
 echo "  ╚══════════════════════════════════════════════════════╝"
 echo ""
 
-# Ждём Ctrl+C и останавливаем оба процесса
-trap "echo ''; info 'Останавливаю...'; kill $BACKEND_PID $FRONTEND_PID 2>/dev/null; ok 'Остановлено'; exit 0" INT TERM
 wait

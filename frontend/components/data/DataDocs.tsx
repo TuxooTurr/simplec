@@ -1,4 +1,5 @@
 "use client";
+/* Hallmark · document workspace · local Shark tokens · pre-emit critique P4 H4 E4 S5 R5 V4 */
 
 import { notify, onPage } from "@/lib/notifications";
 import { useEffect, useState } from "react";
@@ -11,7 +12,7 @@ import ConfluenceSettingsModal from "@/components/settings/ConfluenceSettingsMod
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import {
-  addReqFolder, addRequirement, deleteReqFolder, deleteRequirement, generateRequirementDoc, listReqFolders,
+  addReqFolder, addRequirement, deleteReqFolder, deleteRequirement, generateRequirementDoc, getRequirementDocJob, waitForRequirementDoc, cancelRequirementDoc, listReqFolders,
   listRequirements, updateReqFolder, updateRequirement, type ReqFolder, type Requirement,
 } from "@/lib/api";
 
@@ -27,6 +28,8 @@ export default function DataDocs() {
   const [docs, setDocs] = useState<Requirement[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [docJob, setDocJob] = useState<{ id: string; progress: string } | null>(null);
+  const [releaseId, setReleaseId] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<string | null>(null);   // папка нового документа; null — не создаём
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -51,7 +54,8 @@ export default function DataDocs() {
     });
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const select = (id: string | null) => {
+  const select = (id: string | null, release = "") => {
+    setReleaseId(release);
     setSelected(id); setCreating(null);
     try { if (id) localStorage.setItem(LAST_KEY, id); else localStorage.removeItem(LAST_KEY); } catch { /* приватный режим */ }
   };
@@ -59,6 +63,23 @@ export default function DataDocs() {
   const fail = (e: unknown) => setErr((e as Error).message);
 
   const doc = docs.find(d => d.id === selected) ?? null;
+  useEffect(() => {
+    if (!selected) return;
+    let live = true;
+    const id = selected;
+    const update = (progress: string) => { if (live) setDocJob(progress ? { id, progress } : null); };
+    void getRequirementDocJob(id).then(async job => {
+      if (!live || job.status !== "running") return;
+      update(job.progress);
+      try {
+        const updated = await waitForRequirementDoc(id, update);
+        if (live) replace(updated);
+      } catch (e) {
+        if (live && (e as Error).message !== "Обработка отменена.") fail(e);
+      } finally { if (live) setDocJob(null); }
+    }, () => {});
+    return () => { live = false; };
+  }, [selected]);
   // Дерево — шириной, которую тянут мышью (длинные названия папок видны целиком); запоминается в браузере.
   const treePane = usePaneSize("tree", 288, 220, 720, "st_data_panes");
 
@@ -66,13 +87,13 @@ export default function DataDocs() {
   usePanelRefresh(() => void load(), { title: "Перечитать дерево" });
 
   return (
-    <div className="flex gap-0 h-full min-h-[480px] bg-bg-card overflow-hidden">
-      <aside style={{ width: treePane.size }} className="flex-shrink-0 bg-bg-subtle/40 flex flex-col p-2 min-h-0">
+    <div className="flex flex-col md:flex-row gap-0 h-full min-h-[360px] bg-bg-card overflow-hidden">
+      <aside style={{ "--data-tree-width": `${treePane.size}px` } as React.CSSProperties} className="w-full md:w-[var(--data-tree-width)] max-h-48 md:max-h-none flex-shrink-0 bg-bg-subtle/40 flex flex-col p-2 min-h-0 border-b md:border-b-0 border-border-main">
         {loading ? (
           <p className="flex items-center gap-2 px-2 py-3 text-sm text-text-muted"><Loader2 className="w-4 h-4 animate-spin" /> Загрузка…</p>
         ) : (
           <DocTree folders={folders} docs={docs} selected={creating === null ? selected : null}
-            onSelect={id => select(id)}
+            selectedRelease={releaseId} onSelect={select}
             onNewDoc={folderId => { setCreating(folderId); }}
             onCreateFolder={async (name, parent) => { try { const f = await addReqFolder(name, parent); setFolders(fs => [...fs, f]); } catch (e) { fail(e); } }}
             onRenameFolder={async (id, name) => { try { const f = await updateReqFolder(id, { name }); setFolders(fs => fs.map(x => (x.id === id ? f : x))); } catch (e) { fail(e); } }}
@@ -91,9 +112,9 @@ export default function DataDocs() {
           </button>
         </div>
       </aside>
-      <Resizer pane={treePane} label="Ширина дерева документов" />
+      <div className="hidden md:flex"><Resizer pane={treePane} label="Ширина дерева документов" /></div>
 
-      <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-6">
+      <main className="flex-1 min-w-0 overflow-y-auto scrollbar-thin p-4 md:p-6">
         {err && <p className="mb-3 text-sm text-red-600 dark:text-red-400">{err}</p>}
         {creating !== null ? (
           <NewDocForm key={creating} folders={folders} folderId={creating} onCancel={() => setCreating(null)}
@@ -105,17 +126,21 @@ export default function DataDocs() {
               select(made.id);
             }} />
         ) : doc ? (
-          <DocPage doc={doc} folders={folders} provider={provider}
+          <DocPage jobProgress={docJob?.id === doc.id ? docJob.progress : ""} onCancelGenerate={async () => { await cancelRequirementDoc(doc.id); }}
+            releaseId={releaseId} onRelease={setReleaseId} doc={doc} folders={folders} provider={provider}
             onPatch={async patch => replace(await updateRequirement(doc.id, patch))}
             onGenerate={async (links, focus) => {
               const name = doc.name;
               try {
-                replace(await generateRequirementDoc(doc.id, provider, links, focus));
+                replace(await generateRequirementDoc(doc.id, provider, links, focus,
+                  progress => setDocJob(progress ? { id: doc.id, progress } : null)));
                 notify({ kind: "success", title: "Документ QA готов", text: name, links: [{ label: "Открыть Данные", href: "/etalons" }], silent: onPage("/etalons") });
               } catch (e) {
-                notify({ kind: "error", title: "Документ QA не сгенерирован", text: `${name} · ${(e as Error).message}`, silent: onPage("/etalons") });
+                if ((e as Error).message !== "Обработка отменена.") {
+                  notify({ kind: "error", title: "Документ QA не сгенерирован", text: `${name} · ${(e as Error).message}`, silent: onPage("/etalons") });
+                }
                 throw e;
-              }
+              } finally { setDocJob(job => job?.id === doc.id ? null : job); }
             }}
             onReplace={replace}
             onSettings={() => setSettingsOpen(true)}

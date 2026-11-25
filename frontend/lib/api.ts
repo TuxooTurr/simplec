@@ -1028,6 +1028,8 @@ export interface Requirement {
   /** Связанные страницы, по которым собран документ QA, и ссылки, которые прочитать не вышло. */
   qa_links?: { title: string; url: string }[];
   qa_link_errors?: string[];
+  design_links?: string[];
+  release_pages?: { id: string; markdown: string; requirement?: string }[];
   created_at: string;
   updated_at: string;
 }
@@ -1086,7 +1088,7 @@ export async function deleteRequirement(id: string): Promise<{ status: string }>
 }
 
 /** Заголовок, фича, исходник, папка документа. QA-документ не трогается — его пересобирают отдельно. */
-export async function updateRequirement(id: string, patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string }): Promise<Requirement> {
+export async function updateRequirement(id: string, patch: { name?: string; feature?: string; focus?: string; text?: string; folder_id?: string; design_links?: string[] }): Promise<Requirement> {
   return fetchJson(`/api/requirements/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -1167,12 +1169,31 @@ export async function deleteReqFolder(id: string): Promise<{ status: string; mov
 export const askRequirement = (id: string, provider: string, question: string) =>
   postJson<{ answer: string }>(`/api/requirements/${id}/ask`, { provider, question });
 
-export async function generateRequirementDoc(id: string, provider: string, links: string[] = [], focus?: string): Promise<Requirement> {
-  return fetchJson(`/api/requirements/${id}/generate-doc`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ provider, links, ...(focus !== undefined ? { focus } : {}) }),
-  });
+export interface RequirementDocJob {
+  status: "running" | "done" | "error" | "cancelled";
+  progress: string;
+  error: string;
+  item?: Requirement;
+}
+
+const docJobPath = (id: string) => "/api/requirements/" + encodeURIComponent(id) + "/generate-doc/job";
+export const getRequirementDocJob = (id: string) => fetchJson<RequirementDocJob>(docJobPath(id));
+export const cancelRequirementDoc = (id: string) => fetchJson<RequirementDocJob>(docJobPath(id), { method: "DELETE" });
+
+export async function waitForRequirementDoc(id: string, onProgress?: (stage: string) => void): Promise<Requirement> {
+  for (;;) {
+    const job = await getRequirementDocJob(id);
+    onProgress?.(job.progress);
+    if (job.status === "done" && job.item) return job.item;
+    if (job.status !== "running") throw new Error(job.error || (job.status === "cancelled" ? "Обработка отменена." : "Документ уже удалён."));
+    await new Promise(resolve => setTimeout(resolve, 1400));
+  }
+}
+
+export async function generateRequirementDoc(id: string, provider: string, links: string[] = [], focus?: string,
+  onProgress?: (stage: string) => void): Promise<Requirement> {
+  await postJson<RequirementDocJob>(docJobPath(id), { provider, links, focus });
+  return waitForRequirementDoc(id, onProgress);
 }
 
 // ─── Генератор данных: сценарий ТКС ────────────────────────────────────────

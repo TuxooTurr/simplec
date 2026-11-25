@@ -2,7 +2,8 @@
 import { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
 import IssueActions from "@/components/jiratool/IssueActions";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { cloneElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 import {
   AlertTriangle, ChevronDown, Info, ClipboardCheck, FileSpreadsheet, Columns3, Loader2, FilePlus2, FolderTree,
   GitBranch, Layers, LayoutList, LayoutTemplate, ListChecks, PanelLeftClose, ListFilter, PanelLeftOpen, Plus, Search, Trash2,
@@ -21,6 +22,8 @@ import ViewSwitcher from "@/components/jiratool/ViewSwitcher";
 import ListsNav, { ArchivedLists } from "@/components/jiratool/ListsNav";
 import { IssueTypeIcon, type ReqOption } from "@/components/jiratool/ListCells";
 import { isStoryColumn, storyBlocks, type IssueLevel } from "@/lib/jiraStoryView";
+import Modal from "@/components/ui/Modal";
+import { useAuth } from "@/contexts/AuthContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { listRequirements } from "@/lib/api";
 import AddIssuesModal, { type PickedSource } from "@/components/jiratool/AddIssuesModal";
@@ -32,7 +35,7 @@ import StageMappingModal from "@/components/jiratool/StageMappingModal";
 import ImportStructureModal, { type StructureImport } from "@/components/jiratool/ImportStructureModal";
 import DefectsModal from "@/components/jiratool/DefectsModal";
 import { ChatCopyControls, type ChatFieldsCfg } from "@/components/jiratool/ChatFieldsPicker";
-import { downloadJiraView, jiraViewSheet } from "@/lib/jiraExcelExport";
+import { downloadJiraViews, jiraViewSheet } from "@/lib/jiraExcelExport";
 import { addMs, getMsCatalog } from "@/lib/standsApi";
 import IssueModal from "@/components/jiratool/IssueModal";
 import StageModal from "@/components/jiratool/StageModal";
@@ -43,7 +46,7 @@ import LoadRowView from "@/components/jiratool/LoadRowView";
 import { getPeople, savePeople, saveJiraPeopleFields, type JiraPeopleFields } from "@/lib/peopleApi";
 import { copyToClipboard } from "@/lib/clipboard";
 import {
-  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
+  BLOCK_COL, DEFAULT_COLUMNS, DEFAULT_PROJECT, DEFECTS_COL, addView, auditLists, applySourceCheck, composeRelease, deleteView, listViews, newId, renameView, switchView, releaseKeys, upsertSource, withoutMark, moveIssues, LOAD_COL, REQ_COL, MS_COL, msOverlaps, chatReport, chatFieldLines, CHAT_FIXED_COLS, checklistReport, folderSections, loadSkip,
   type ReportSection, listFromTemplate, templateOf, ROLE_COLS, defaultLoadRange, fmtMinutes, getTimeFmt, setTimeFmt, setTimeDay, type TimeFmt, listLoad, FOLDER_COL, OWN_TYPE_LABEL, PARTICIPANT_COL, STAGE_COL, colLabel,
   NO_FOLDER, liveLists, setArchived, startList, applyGroupMove, categoryOf, colValues, setFolder, defectIndex, draftKey, emptyList, flattenStructure, listFields, loadState,
   epicLinkId, makeDefectsOf, moveItem, replaceDraft, fmtJiraDate, jiraDateKind, setCatalog,
@@ -133,7 +136,6 @@ export default function JiraToolSection() {
   const [colFilters, setColFilters] = useState<Record<string, string[]>>({});
   const [sort, setSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const excelTable = useRef<HTMLTableElement>(null);
   const [excelBusy, setExcelBusy] = useState(false);
   /** Режим выбора задач: чекбоксы в таблице и панель действий. Выход — снимает выбор. */
   const [selecting, setSelecting] = useState(false);
@@ -166,6 +168,10 @@ export default function JiraToolSection() {
 
   /* ── Требования («Данные») и отчёты в чат ── */
   const { provider } = useWorkspace();
+  const { user } = useAuth();
+  const [auditOpen, setAuditOpen] = useState(false);
+  const [renderExport, setRenderExport] = useState(false);
+  const exportTables = useRef<HTMLDivElement>(null);
   const [reqOptions, setReqOptions] = useState<ReqOption[]>([]);
   useEffect(() => {
     listRequirements().then(r => setReqOptions(r.map(x => ({ id: x.id, name: x.name, feature: x.feature })))).catch(() => setReqOptions([]));
@@ -362,12 +368,15 @@ export default function JiraToolSection() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const updateHere = useCallback((fn: StateChange) => setState(prev => {
-    if (!prev) return prev;
-    const next = fn(prev);
-    saveState(next);
-    return next;
-  }), []);
+  const updateHere = useCallback((fn: StateChange) => {
+    const at = new Date().toISOString();
+    setState(prev => {
+      if (!prev) return prev;
+      const next = auditLists(prev, fn(prev), user?.login ?? "Пользователь Shark", at);
+      saveState(next);
+      return next;
+    });
+  }, [user?.login]);
   useLayoutEffect(() => {
     liveUpdate = updateHere;
     return () => { if (liveUpdate === updateHere) liveUpdate = null; };
@@ -935,16 +944,23 @@ export default function JiraToolSection() {
     else { setPendingCopy(text); setReportNote("Браузер не дал скопировать автоматически — нажмите «Скопировать»."); }
   };
 
-  /** Отмеченные строки в том порядке, в котором они видны в открытой таблице. */
+  /** Один лист на каждое сохранённое представление. */
   const exportExcel = async () => {
-    if (!ctx || !excelTable.current || excelBusy) return;
-    const sheet = jiraViewSheet(excelTable.current, allIssues, ctx, selected, state.reqUrls);
+    if (!ctx || !list || excelBusy) return;
     setExcelBusy(true);
     try {
-      const name = await downloadJiraView(sheet);
-      setReportNote(`Выгружено в Excel: задач ${sheet.count} — ${name}`);
+      flushSync(() => setRenderExport(true));
+      const views = listViews(list);
+      const tables = Array.from(exportTables.current?.querySelectorAll("table") ?? []);
+      if (tables.length !== views.length) throw new Error("Не удалось подготовить таблицы представлений.");
+      const defects = new Map<string, Issue[]>();
+      const sheets = views.map((view, i) => jiraViewSheet(tables[i], allIssues,
+        { ...ctx, list: switchView(list, view.id) }, selected, state.reqUrls, view.name, defects));
+      setRenderExport(false);
+      const name = await downloadJiraViews(list.name, sheets, defects, stageOf);
+      setReportNote(`Выгружено в Excel: представлений ${sheets.length} — ${name}`);
     } catch (e) { setReportNote((e as Error).message); }
-    finally { setExcelBusy(false); }
+    finally { setRenderExport(false); setExcelBusy(false); }
   };
 
   const copyChatReport = async () => {
@@ -1085,11 +1101,107 @@ export default function JiraToolSection() {
 
   /** Из свёрнутой полоски: развернуть колонку и сразу открыть нужную настройку. */
 
+  const table = list && ctx && state ? (
+    <ListTable key={list.id} ctx={ctx} issues={listIssues} storyRows={storyRows} sort={sort} onSort={setSort}
+      timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
+      selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
+      selected={selected}
+      onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
+      onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
+      colFilters={colFilters} filterOptions={filterOptions}
+      onResetFilters={activeFilters.length ? () => setColFilters({}) : undefined}
+      onColFilter={(c, vals) => setColFilters(f => {
+        const next = { ...f };
+        if (vals) next[c] = vals; else delete next[c];
+        return next;
+      })}
+      stageManual={state.stageManual}
+      onStageManual={setStageManual}
+      onIcon={(key, fid, code) => updateList(l => {
+        const row = { ...l.icons?.[key] };
+        if (code) row[fid] = code; else delete row[fid];
+        return { ...l, icons: { ...l.icons, [key]: row } };
+      })}
+      onParticipant={(key, id) => updateListPeople(l => {
+        const a = { ...l.assignees };
+        if (id) a[key] = id; else delete a[key];
+        return { ...l, assignees: a };
+      })}
+      onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key), marks: withoutMark(l.marks, key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
+      onClearMark={key => updateList(l => ({ ...l, marks: withoutMark(l.marks, key) }))}
+      onOpenDefects={issue => setModal({ defectsFor: issue })}
+      onOpenIssue={openIssueWin}
+      onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
+      onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
+      onMoveToGroup={(key, changes, target, place) => updateListPeople(l => {
+        const moved = applyGroupMove(l, state.participants, key, changes);
+        return target ? { ...moved, keys: moveItem(moved.keys, key, target, place) } : moved;
+      })}
+      onMoveToFolder={(key, folder, target, place) => updateList(l => {
+        const moved = setFolder(l, key, folder);
+        return target ? { ...moved, keys: moveItem(moved.keys, key, target, place) } : moved;
+      })}
+      onResizeColumn={(col, w) => updateList(l => {
+        const widths = { ...l.widths };
+        if (w === null) delete widths[col]; else widths[col] = w;
+        return { ...l, widths };
+      })}
+      onRenameFolder={renameFolder}
+      onDeleteFolder={deleteFolder}
+      onMoveFolder={(name, target, place) => updateList(l => ({ ...l, folderList: moveItem(l.folderList ?? [], name, target, place) }))}
+      onOpenDraft={openDraft}
+      onSpend={(key, patch) => updateList(l => {
+        const cur = { ...l.spend?.[key] };
+        if ("plan" in patch) { if (patch.plan == null) delete cur.plan; else cur.plan = patch.plan; }
+        return { ...l, spend: { ...l.spend, [key]: cur } };
+      })}
+      onTogglePin={col => updateList(l => {
+        const p = l.pinned ?? [];
+        return { ...l, pinned: p.includes(col) ? p.filter(c => c !== col) : [...p, col] };
+      })}
+      onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))}
+      onOpenStage={issue => setModal({ stageFor: issue })}
+      onRole={(key, fid, patch) => updateListPeople(l => ({
+        ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
+      }))}
+      onAddPerson={addPerson} onLeaveDirection={leaveDirection}
+      onNoLoad={(key, skip) => setNoLoad([key], skip)}
+      reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
+      msLinks={state.msLinks} msCatalog={msCatalog.ms} msInfo={msCatalog.info} onCreateMs={createMs} msShared={msShared}
+      onMs={(key, names) => setMs([key], names, "set")}
+      onReqUrl={(key, u) => update(s => {
+        const m = { ...s.reqUrls };
+        if (u) m[key] = u; else delete m[key];
+        return { ...s, reqUrls: m };
+      })} />
+  ) : null;
+
   // «д · ч · мин» считает день по норме из настроек нагрузки — до отрисовки ячеек.
   if (state) setTimeDay(state.loadSettings.dayMinutes);
 
   return (
     <Shell>
+      {auditOpen && list && <Modal open onClose={() => setAuditOpen(false)} title={`Аудит · ${list.name}`} size="max-w-2xl">
+        <p className="mb-3 text-xs text-text-muted">История изменений списка в этом браузере.</p>
+        {!list.audit?.length && <p className="text-sm text-text-muted">Записей пока нет.</p>}
+        <ul className="max-h-[65vh] overflow-y-auto divide-y divide-border-main">
+          {[...(list.audit ?? [])].reverse().map((entry, i) => <li key={`${entry.at}-${i}`} className="py-2.5">
+            <div className="flex flex-wrap justify-between gap-2 text-sm">
+              <span className="font-medium">{entry.action}</span><time className="text-xs text-text-muted" dateTime={entry.at}>{new Date(entry.at).toLocaleString("ru-RU")}</time>
+            </div>
+            <p className="text-xs text-text-muted break-words">{entry.actor}{entry.keys.length > 0 && ` · ${entry.keys.join(", ")}`}</p>
+          </li>)}
+        </ul>
+      </Modal>}
+      {renderExport && table && ctx && list && <div ref={exportTables} aria-hidden="true" inert
+        className="fixed left-[-100000px] top-0 pointer-events-none">
+        {listViews(list).map(view => cloneElement(table, {
+          key: view.id, tableRef: undefined, ctx: { ...ctx, list: switchView(list, view.id) },
+          issues: blocks.filter(b => selected.has(b.issue.key)).map(b => b.issue),
+          storyRows: issueLevel === "story" ? new Map(blocks.filter(b => b.rows[0] !== b.issue).map(b => [b.issue.key, b.rows])) : undefined,
+          colFilters: {},
+        }))}
+      </div>}
       <div className="h-full flex gap-4 p-6 overflow-hidden">
         {collapsed ? (
           /* ── Свёрнутая полоска ── */
@@ -1343,6 +1455,9 @@ export default function JiraToolSection() {
                   Низ: поиск растягивается на всю свободную ширину; колонки и группировка — значками, действия — справа. */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-3 min-w-0">
+                  <button type="button" onClick={() => setAuditOpen(true)} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border-main hover:bg-bg-subtle">
+                    <ListChecks className="w-3.5 h-3.5" /> Аудит
+                  </button>
                   <ViewSwitcher views={listViews(list)} active={list.activeView ?? listViews(list)[0].id}
                     onSwitch={id => updateList(l => switchView(l, id))}
                     onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}
@@ -1549,78 +1664,7 @@ export default function JiraToolSection() {
                     onPlanSaved={key => { histAsked.current.delete(key); delete historyCache.items[key]; setHist({ ...historyCache.items }); }}
                     loading={histBusy} error={histErr} />
                 ) : (
-                  <ListTable key={list.id} tableRef={excelTable} ctx={ctx} issues={listIssues} storyRows={storyRows} sort={sort} onSort={setSort}
-                    timeFmt={timeFmt} onTimeFmt={f => { setTimeFmt(f); setTimeFmtState(f); }}
-                    selecting={selecting} onToggleSelecting={() => (selecting ? stopSelecting() : setSelecting(true))}
-                    selected={selected}
-                    onSelect={(keys, on) => setSelected(prev => { const n = new Set(prev); keys.forEach(k => (on ? n.add(k) : n.delete(k))); return n; })}
-                    onValue={(key, fid, v) => updateList(l => ({ ...l, values: { ...l.values, [key]: { ...l.values[key], [fid]: v } } }))}
-                    colFilters={colFilters} filterOptions={filterOptions}
-                    onResetFilters={activeFilters.length ? () => setColFilters({}) : undefined}
-                    onColFilter={(c, vals) => setColFilters(f => {
-                      const next = { ...f };
-                      if (vals) next[c] = vals; else delete next[c];
-                      return next;
-                    })}
-                    stageManual={state.stageManual}
-                    onStageManual={setStageManual}
-                    onIcon={(key, fid, code) => updateList(l => {
-                      const row = { ...l.icons?.[key] };
-                      if (code) row[fid] = code; else delete row[fid];
-                      return { ...l, icons: { ...l.icons, [key]: row } };
-                    })}
-                    onParticipant={(key, id) => updateListPeople(l => {
-                      const a = { ...l.assignees };
-                      if (id) a[key] = id; else delete a[key];
-                      return { ...l, assignees: a };
-                    })}
-                    onRemove={key => { updateList(l => ({ ...l, keys: l.keys.filter(k => k !== key), marks: withoutMark(l.marks, key) })); setSelected(p => { const n = new Set(p); n.delete(key); return n; }); }}
-                    onClearMark={key => updateList(l => ({ ...l, marks: withoutMark(l.marks, key) }))}
-                    onOpenDefects={issue => setModal({ defectsFor: issue })}
-                    onOpenIssue={openIssueWin}
-                    onMoveRow={(key, target, place) => updateList(l => ({ ...l, keys: moveItem(l.keys, key, target, place) }))}
-                    onMoveColumn={(col, target, place) => updateList(l => ({ ...l, columns: moveItem(l.columns, col, target, place) }))}
-                    onMoveToGroup={(key, changes, target, place) => updateListPeople(l => {
-                      const moved = applyGroupMove(l, state.participants, key, changes);
-                      return target ? { ...moved, keys: moveItem(moved.keys, key, target, place) } : moved;
-                    })}
-                    onMoveToFolder={(key, folder, target, place) => updateList(l => {
-                      const moved = setFolder(l, key, folder);
-                      return target ? { ...moved, keys: moveItem(moved.keys, key, target, place) } : moved;
-                    })}
-                    onResizeColumn={(col, w) => updateList(l => {
-                      const widths = { ...l.widths };
-                      if (w === null) delete widths[col]; else widths[col] = w;
-                      return { ...l, widths };
-                    })}
-                    onRenameFolder={renameFolder}
-                    onDeleteFolder={deleteFolder}
-                    onMoveFolder={(name, target, place) => updateList(l => ({ ...l, folderList: moveItem(l.folderList ?? [], name, target, place) }))}
-                    onOpenDraft={openDraft}
-                    onSpend={(key, patch) => updateList(l => {
-                      const cur = { ...l.spend?.[key] };
-                      if ("plan" in patch) { if (patch.plan == null) delete cur.plan; else cur.plan = patch.plan; }
-                      return { ...l, spend: { ...l.spend, [key]: cur } };
-                    })}
-                    onTogglePin={col => updateList(l => {
-                      const p = l.pinned ?? [];
-                      return { ...l, pinned: p.includes(col) ? p.filter(c => c !== col) : [...p, col] };
-                    })}
-                    onToggleWrap={fid => updateList(l => ({ ...l, ownFields: l.ownFields.map(f => (f.id === fid ? { ...f, wrap: !f.wrap } : f)) }))}
-                    onOpenStage={issue => setModal({ stageFor: issue })}
-                    onRole={(key, fid, patch) => updateListPeople(l => ({
-                      ...l, roles: { ...l.roles, [key]: { ...l.roles?.[key], [fid]: { ...l.roles?.[key]?.[fid], ...patch } } },
-                    }))}
-                    onAddPerson={addPerson} onLeaveDirection={leaveDirection}
-                    onNoLoad={(key, skip) => setNoLoad([key], skip)}
-                    reqLinks={state.reqLinks} reqUrls={state.reqUrls} reqOptions={reqOptions} onReqs={(key, ids) => setReqs([key], ids, "set")}
-                    msLinks={state.msLinks} msCatalog={msCatalog.ms} msInfo={msCatalog.info} onCreateMs={createMs} msShared={msShared}
-                    onMs={(key, names) => setMs([key], names, "set")}
-                    onReqUrl={(key, u) => update(s => {
-                      const m = { ...s.reqUrls };
-                      if (u) m[key] = u; else delete m[key];
-                      return { ...s, reqUrls: m };
-                    })} />
+                  table
                 )}
               </div>
 
@@ -1636,7 +1680,7 @@ export default function JiraToolSection() {
                     <ClipboardCheck className="w-4 h-4" /> Чек-лист
                   </button>
                   {view === "list" && <button type="button" onClick={exportExcel} disabled={!selected.size || !!reportBusy || excelBusy}
-                    title="Видимые отмеченные задачи, колонки и цвета открытой таблицы"
+                    title="Отмеченные задачи во всех представлениях и отдельные листы с дефектами"
                     className="flex items-center gap-1.5 text-text-muted hover:text-primary disabled:opacity-40 disabled:hover:text-text-muted">
                     {excelBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />} Выгрузить в Excel
                   </button>}

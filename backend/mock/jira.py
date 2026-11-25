@@ -289,6 +289,32 @@ def _items(s: str) -> list[str]:
     return [x.strip().strip('"\'').upper() for x in s.split(",") if x.strip()]
 
 
+def _activity_matches(query: str, key: str, fields: dict) -> bool:
+    users = re.findall(r'\b(creator|assignee|reporter|cf\[\d+\])\s*=\s*"([^"\n]+)"', query, re.I)
+    if users:
+        def matches(field, login):
+            field = field.lower()
+            field = f"customfield_{field[3:-1]}" if field.startswith("cf[") else field
+            user = fields.get(field) or (fields.get("reporter") if field == "creator" else None) or {}
+            return isinstance(user, dict) and str(user.get("name", "")).casefold() == login.casefold()
+
+        checks = (matches(field, login) for field, login in users)
+        if not (any(checks) if " OR " in query.upper() else all(checks)):
+            return False
+    limits = re.findall(r'\b(created|updated)\s*(>=|<)\s*"(\d{4}-\d\d-\d\d)"', query, re.I)
+    for field, op, day in limits:
+        value = str(fields.get(field.lower()) or "")[:10]
+        if not value or (value < day if op == ">=" else value >= day):
+            return False
+    transition = re.search(r'status CHANGED BY "([^"]+)" DURING \("([\d-]+) \d\d:\d\d", "([\d-]+) \d\d:\d\d"\)', query, re.I)
+    if transition:
+        login, start, end = transition.groups()
+        return any(start <= row["created"][:10] <= end and row["author"]["name"].casefold() == login.casefold()
+                   for row in changelog(key, fields)["histories"])
+    return not (re.search(r'\bstatusCategory\s*!=\s*Done\b', query, re.I)
+                and fields["status"]["statusCategory"]["key"] == "done")
+
+
 def jql_keys(jql: str) -> list[str]:
     q = jql.strip()
     m = re.search(r"\b(?:key|issuekey)\s+in\s*" + _LIST_RE, q, re.I)
@@ -317,6 +343,8 @@ def jql_keys(jql: str) -> list[str]:
     if m:
         want = _TYPE_ALIASES.get(m.group(1).lower(), m.group(1).lower())
         keys = [k for k in keys if issue(k)["fields"]["issuetype"]["name"].lower() == want]
+    if re.search(r'\b(?:creator|assignee|reporter|created|updated|status|statusCategory)\b', q, re.I):
+        keys = [key for key in keys if _activity_matches(q, key, issue(key)["fields"])]
     if re.search(r"currentUser\(\)", q, re.I):
         keys = keys[::3]
     return keys
@@ -547,6 +575,12 @@ def handle(method: str, path: str, params: dict, body: Any) -> Optional[Reply]:
                                       {"id": "2", "name": "Blocks", "inward": "is blocked by", "outward": "blocks"}]})
     if t == "project":
         return ok(PROJECTS)
+    if t == "user":
+        login = str(params.get("username") or params.get("key") or "").casefold()
+        if login == ME["name"]:
+            return ok(ME)
+        user = next((person for person in PEOPLE if person["name"] == login), None)
+        return ok(jira_user(user)) if user else not_found("пользователь Jira")
     if t in ("user/search", "user/assignable/search", "user/picker"):
         q = str(params.get("username") or params.get("query") or "").lower()
         users = [jira_user(x) for x in PEOPLE if not q or q in x["name"] or q in x["displayName"].lower()]

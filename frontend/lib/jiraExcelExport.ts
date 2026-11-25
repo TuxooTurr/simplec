@@ -1,16 +1,17 @@
+import { sortIssueRows } from "../components/jiratool/IssueTable";
 import { authHeaders } from "./authApi";
 import { FIELD_BY_ID } from "./jiraModel";
-import { textOn } from "./jiraStages";
+import { stageText, textOn, type StageInfo } from "./jiraStages";
 import { BLOCK_COL, DEFECTS_COL, LOAD_COL, PARTICIPANT_COL, REQ_COL, blockersOf, colLabel, colValues, fmtJiraDate,
-  isRoleCol, jiraDateKind, linkHref, type ColCtx, type ColRef, type Issue } from "./jiraTool";
+  isOpenDefect, isRoleCol, jiraDateKind, linkHref, type ColCtx, type ColRef, type Issue } from "./jiraTool";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const KEY = "__key";
 const CHIP = "[data-xlsx-chip]";
 type RGB = [number, number, number];
 type Tone = { fill: string; ink: string };
-type Format = "duration" | "date" | "datetime";
-type Cell = { v: string | number; link?: string; format?: Format; bold?: boolean; rowSpan?: number;
+type Format = "duration" | "date" | "datetime" | "bug";
+type Cell = { v: string | number; link?: string; sheetId?: string; format?: Format; bold?: boolean; rowSpan?: number;
   runs?: { text: string; ink?: string }[] } & Partial<Tone>;
 type Column = { title: string; width: number; group?: string };
 
@@ -77,7 +78,9 @@ function columnsOf(ref: ColRef, ctx: ColCtx, px: number): Column[] {
 
 function readCell(ref: ColRef, issue: Issue, td: HTMLTableCellElement, ctx: ColCtx, background: RGB, reqUrls: Record<string, string>): Cell[] {
   const chips = Array.from(td.querySelectorAll<HTMLElement>(CHIP));
-  const style = chipsCell(chips, background);
+  const jiraField = ref.startsWith("jira:") ? ref.slice(5) : "";
+  const personField = ["assignee", "reporter", "creator"].includes(jiraField) || FIELD_BY_ID[jiraField]?.kind === "user";
+  const style = personField ? {} : chipsCell(chips, background);
   if (ref === KEY) {
     const mark = chips[0]?.textContent?.trim();
     const anchor = td.querySelector("a[href]");
@@ -88,9 +91,13 @@ function readCell(ref: ColRef, issue: Issue, td: HTMLTableCellElement, ctx: ColC
     const role = tester ? undefined : ctx.list.roles?.[issue.key]?.[ref.slice(5)];
     const person = ctx.participants.find(p => p.id === (tester ? ctx.list.assignees[issue.key] : role?.pid));
     const duration = tester ? ctx.list.spend?.[issue.key]?.plan : role?.plan;
+    const memberColor = person?.color;
+    const memberStyle = memberColor && /^#[0-9a-f]{6}$/i.test(memberColor)
+      ? { fill: memberColor.slice(1), ink: textOn(memberColor).slice(1) }
+      : {};
     return [
-      { v: person?.name ?? role?.name ?? "", ...style },
-      { v: duration == null ? "" : duration / 1440, format: "duration", ...(!tester && style) },
+      { v: person?.name ?? role?.name ?? "", ...memberStyle },
+      { v: duration == null ? "" : duration / 1440, format: "duration" },
     ];
   }
   if (ref === REQ_COL) {
@@ -100,24 +107,25 @@ function readCell(ref: ColRef, issue: Issue, td: HTMLTableCellElement, ctx: ColC
     const sourceAnchor = td.querySelector("[data-xlsx-source]");
     return [{ v: documents, link, ...style }, { v: source, link: linkHref(source) ?? undefined, ...(sourceAnchor && tone(sourceAnchor, background)) }];
   }
-  if (ref === BLOCK_COL) {
+  if (ref === BLOCK_COL || ref === DEFECTS_COL) {
     const defects = ctx.defectsOf(issue);
-    return [{ v: defects ? blockersOf(defects).length || "" : "", ...style }];
+    const value = ref === BLOCK_COL ? blockersOf(defects ?? []).length || "" : defects?.filter(isOpenDefect).length ?? "";
+    return [{ v: value, ...(defects?.length && (ref === DEFECTS_COL || value) ? { sheetId: issue.key, format: "bug" as const } : {}), ...style }];
   }
   const values = colValues(ref, issue, ctx);
   const own = ref.startsWith("own:") ? ctx.list.ownFields.find(f => f.id === ref.slice(4)) : undefined;
   const dateKind = own?.type === "date" || own?.type === "datetime" ? own.type : jiraDateKind(ref);
   if (dateKind && values.length === 1) return [toExcelDate(values[0], dateKind)];
-  const numeric = ref === DEFECTS_COL || (ref.startsWith("jira:") && FIELD_BY_ID[ref.slice(5)]?.kind === "number");
+  const numeric = !!jiraField && FIELD_BY_ID[jiraField]?.kind === "number";
   if (numeric && values.length === 1 && Number.isFinite(Number(values[0]))) return [{ v: Number(values[0]), ...style }];
   const anchor = td.querySelector<HTMLAnchorElement>("a[href]");
-  const label = ref === LOAD_COL ? td.textContent?.trim() ?? "" : chips.length && ref !== "jira:priority"
+  const label = ref === LOAD_COL ? td.textContent?.trim() ?? "" : chips.length && !personField && ref !== "jira:priority"
     ? chips.map(c => c.textContent?.trim() ?? "").join(", ") : values.join(", ");
   return [{ v: label, link: anchor?.href, ...(anchor && tone(anchor, background)), ...style }];
 }
 
 /** Снимок текущей таблицы: порядок строк/колонок и CSS берём из того же представления, что видит пользователь. */
-export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: ColCtx, selected: Set<string>, reqUrls: Record<string, string>) {
+export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: ColCtx, selected: Set<string>, reqUrls: Record<string, string>, name: string, defects: Map<string, Issue[]>) {
   const headers = Array.from(table.tHead?.querySelectorAll<HTMLTableCellElement>("[data-xlsx-col]") ?? []);
   const base = rgb(getComputedStyle(table.parentElement ?? table).backgroundColor, white) ?? white;
   const ink = rgb(getComputedStyle(table).color, base);
@@ -134,6 +142,7 @@ export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: Col
   const columns = fields.flatMap(f => f.columns);
   const rows: Cell[][] = [];
   const sectionRows: number[] = [];
+  const extraLinks: { row: Cell[]; issue: Issue }[] = [];
   const sections: { depth: number; cell: Cell; written: boolean }[] = [];
   const byKey = new Map(issues.map(issue => [issue.key, issue]));
   const exported = new Set<string>();
@@ -160,7 +169,12 @@ export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: Col
       sectionRows.push(rows.length); rows.push([item.cell]); item.written = true;
     }
     exported.add(issue.key);
-    rows.push(fields.flatMap<Cell>(f => {
+    for (const owner of [issue, byKey.get(row.dataset.xlsxOwner ?? "")]) {
+      if (!owner || defects.has(owner.key)) continue;
+      const entries = ctx.defectsOf(owner);
+      if (entries?.length) defects.set(owner.key, entries);
+    }
+    const exportedRow = fields.flatMap<Cell>(f => {
       const ownCell = cells.get(f.ref);
       if (ownCell && ownCell.rowSpan > 1) shared.set(f.ref, ownCell);
       const td = ownCell ?? shared.get(f.ref) ?? row.cells[f.index];
@@ -170,20 +184,48 @@ export function jiraViewSheet(table: HTMLTableElement, issues: Issue[], ctx: Col
         ...bodyTone, ...cell, ...(td.rowSpan > 1 && { rowSpan: td.rowSpan }),
         ...(cell.link && !cell.ink && { ink: "" }),
       }));
-    }));
+    });
+    rows.push(exportedRow);
+    if (!fields.some(f => f.ref === DEFECTS_COL)) extraLinks.push({ row: exportedRow, issue });
   }
-  return { name: ctx.list.name, columns, rows, sectionRows, frozenCols, headerFill: header.fill, headerInk: header.ink, count: exported.size };
+  if (extraLinks.some(({ issue }) => defects.has(issue.key))) {
+    columns.push({ title: "Дефекты", width: 13 });
+    for (const { row, issue } of extraLinks) {
+      const related = defects.get(issue.key);
+      row.push(related ? { v: related.filter(isOpenDefect).length, format: "bug", sheetId: issue.key } : { v: "" });
+    }
+  }
+  return { name, columns, rows, sectionRows, frozenCols, headerFill: header.fill, headerInk: header.ink, count: exported.size };
 }
 
-export async function downloadJiraView(sheet: ReturnType<typeof jiraViewSheet>): Promise<string> {
-  const { count, ...data } = sheet;
-  if (!count) throw new Error("Нет видимых отмеченных задач. Раскройте нужную папку или группу.");
+export async function downloadJiraViews(name: string, views: ReturnType<typeof jiraViewSheet>[],
+  defects: Map<string, Issue[]>, stageOf: (issue: Issue) => StageInfo): Promise<string> {
+  if (!views.some(v => v.count)) throw new Error("Нет отмеченных задач для выгрузки.");
+  const bugSheets = Array.from(defects, ([key, issues]) => {
+    const open = issues.filter(isOpenDefect);
+    const fixed = issues.filter(d => !isOpenDefect(d));
+    const columns = ["Тип", "Номер", "Наименование", "Статус", "Статус (st)", "Приоритет", "Исполнитель"]
+      .map((title, i) => ({ title, width: [15, 19, 66, 24, 25, 20, 28][i] }));
+    const rows: Cell[][] = [];
+    const sectionRows: number[] = [];
+    for (const [label, group] of [["Неустранённые", open], ["Устранённые", fixed]] as const) {
+      if (!group.length) continue;
+      sectionRows.push(rows.length);
+      rows.push([{ v: `${label} · ${group.length}`, bold: true }]);
+      rows.push(...sortIssueRows(group, { col: "priority", dir: 1 }).map(d => [
+        { v: String(d.fields.issuetype ?? "") }, { v: d.key, link: d.url }, { v: String(d.fields.summary ?? "") },
+        { v: String(d.fields.status ?? "") }, { v: stageText(stageOf(d)) }, { v: String(d.fields.priority ?? "") },
+        { v: String(d.fields.assignee ?? "") },
+      ]));
+    }
+    return { id: key, name: `Bug${key.replace(/^.*-/, "")}`, columns, rows, sectionRows, frozenCols: 2 };
+  });
   const stamp = new Date().toLocaleDateString("ru-RU");
-  const filename = `Jira tool — ${sheet.name} — ${stamp}.xlsx`.replace(/[\\/:*?"<>|]+/g, "_");
+  const filename = `Jira tool — ${name} — ${stamp}.xlsx`.replace(/[\\/:*?"<>|]+/g, "_");
   const res = await fetch(`${API_BASE}/api/export/xlsx`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ filename, sheets: [data] }),
+    body: JSON.stringify({ filename, sheets: [...views.map(({ count: _count, ...sheet }) => sheet), ...bugSheets] }),
   });
   if (!res.ok) throw new Error(`Excel не собрался: ${(await res.text()).slice(0, 200)}`);
   const blob = await res.blob();

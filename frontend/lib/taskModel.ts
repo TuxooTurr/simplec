@@ -8,7 +8,7 @@
 import type { Parent, StagedCase, StagedFolder, Staging } from "./zephyrStaging";
 
 /** Требование задачи: документ «Данных» и его папки от корня. */
-export interface TaskDoc { id: string; name: string; feature: string; text: string; dataPath: string[] }
+export interface TaskDoc { id: string; name: string; feature: string; text: string; dataPath: string[]; version?: number; versions?: { n: number; text: string }[]; releases?: { id: string; requirement?: string }[] }
 
 /** Задача, выбранная перед генерацией. */
 export interface TaskPick {
@@ -17,13 +17,14 @@ export interface TaskPick {
   type: string;
   project: string;
   description: string;
+  microservices?: string[];
   docs: TaskDoc[];
   /** Папки «Данных» первого требования — по ним строится папка в модели. */
   dataPath: string[];
 }
 
 /** Выбранная задача в форме: предзаполнено из задачи и требований, можно поправить. */
-export interface TaskDraft extends TaskPick { feature: string; text: string }
+export interface TaskDraft extends TaskPick { feature: string; text: string; versionHint?: string; docVersions?: Record<string, number>; contentVersions?: Record<string, string> }
 
 /** Задача в очереди генерации. */
 export interface TaskJob {
@@ -57,7 +58,7 @@ export function dataFolderPath(folders: { id: string; name: string; parent_id: s
 
 /** Название фичи для имён кейсов: из документа, иначе последняя папка «Данных», иначе тема задачи. */
 export const featureOf = (t: Pick<TaskPick, "summary" | "docs" | "dataPath">): string =>
-  (t.docs.find(d => d.feature.trim())?.feature ?? t.dataPath[t.dataPath.length - 1] ?? t.summary).trim();
+  (t.dataPath[t.dataPath.length - 1] ?? t.docs.find(d => d.feature.trim())?.feature ?? t.summary).trim();
 
 /** Источник генерации: задача (что именно делаем) и её требования целиком. Пусто — генерировать не из чего. */
 export function taskSource(t: Pick<TaskPick, "key" | "summary" | "description" | "docs">): string {

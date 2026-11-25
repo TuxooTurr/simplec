@@ -8,6 +8,19 @@ Layer 4: LLM XML wrapping
 
 from typing import List, Optional
 from dataclasses import dataclass
+import re
+from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
+
+_XML_INVALID = re.compile(r"[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]")
+
+
+def _xml_text(text) -> str:
+    return escape(_XML_INVALID.sub("", str(text)), {'"': "&quot;"})
+
+
+def _cdata_value(text) -> str:
+    return _XML_INVALID.sub("", str(text)).replace("]]>", "]]]]><![CDATA[>")
 
 
 @dataclass
@@ -588,9 +601,9 @@ class LayeredGenerator:
             steps_xml.append(
                 '        <step index="' + str(i) + '">\n'
                 '            <customFields/>\n'
-                '            <description><![CDATA[' + s.get("action", "") + ']]></description>\n'
-                '            <expectedResult><![CDATA[' + exp + ']]></expectedResult>\n'
-                '            <testData><![CDATA[' + data + ']]></testData>\n'
+                '            <description><![CDATA[' + _cdata_value(s.get("action", "")) + ']]></description>\n'
+                '            <expectedResult><![CDATA[' + _cdata_value(exp) + ']]></expectedResult>\n'
+                '            <testData><![CDATA[' + _cdata_value(data) + ']]></testData>\n'
                 '        </step>\n'
             )
         return '<testScript type="steps">\n    <steps>\n' + "".join(steps_xml) + '    </steps>\n</testScript>'
@@ -606,7 +619,7 @@ class LayeredGenerator:
         labels = [l for l in (getattr(case, "labels", None) or []) if l]
         if not labels:
             return '    <labels/>\n'
-        return '    <labels>' + "".join('<label><![CDATA[' + l.replace("]]>", "") + ']]></label>' for l in labels) + '</labels>\n'
+        return '    <labels>' + "".join('<label><![CDATA[' + _cdata_value(l) + ']]></label>' for l in labels) + '</labels>\n'
 
     def _assemble_testcase_xml(self, case, case_id, case_key, project, system, team, domain,
                                 case_folder, critical, priority, objective_xml, precondition_xml,
@@ -616,57 +629,88 @@ class LayeredGenerator:
 
         custom_fields = (
             '    <customFields>\n'
-            + self._CUSTOM_FIELD_TPL.format(name="Команда", ftype="SINGLE_CHOICE_SELECT_LIST", value=team)
+            + self._CUSTOM_FIELD_TPL.format(name="Команда", ftype="SINGLE_CHOICE_SELECT_LIST", value=_cdata_value(team))
             + self._CUSTOM_FIELD_TPL.format(name="Вид тестирования", ftype="SINGLE_CHOICE_SELECT_LIST", value="Новый функционал")
-            + self._CUSTOM_FIELD_TPL.format(name="АС", ftype="SINGLE_CHOICE_SELECT_LIST", value=system)
+            + self._CUSTOM_FIELD_TPL.format(name="АС", ftype="SINGLE_CHOICE_SELECT_LIST", value=_cdata_value(system))
             + self._CUSTOM_FIELD_TPL.format(name="Автоматизирован", ftype="SINGLE_CHOICE_SELECT_LIST", value="Нет")
-            + self._CUSTOM_FIELD_TPL.format(name="Крит. регресс", ftype="CHECKBOX", value=critical)
-            + self._CUSTOM_FIELD_TPL.format(name="Домен", ftype="MULTI_CHOICE_SELECT_LIST", value=domain)
+            + self._CUSTOM_FIELD_TPL.format(name="Крит. регресс", ftype="CHECKBOX", value=_cdata_value(critical))
+            + self._CUSTOM_FIELD_TPL.format(name="Домен", ftype="MULTI_CHOICE_SELECT_LIST", value=_cdata_value(domain))
             + '    </customFields>\n'
         )
 
         return (
-            '<testCase id="' + str(case_id) + '" key="' + case_key + '">\n'
+            '<testCase id="' + str(case_id) + '" key="' + _xml_text(case_key) + '">\n'
             '    <attachments/>\n'
             '    <confluencePageLinks/>\n'
-            '    <createdBy>' + author_name + '</createdBy>\n'
+            '    <createdBy>' + _xml_text(author_name) + '</createdBy>\n'
             '    <createdOn>' + dt + '</createdOn>\n'
             + custom_fields
-            + '    <folder><![CDATA[' + case_folder + ']]></folder>\n'
+            + '    <folder><![CDATA[' + _cdata_value(case_folder) + ']]></folder>\n'
             '    <issues/>\n'
             + self._labels_xml(case) +
-            '    <name><![CDATA[' + case.name + ']]></name>\n'
+            '    <name><![CDATA[' + _cdata_value(case.name) + ']]></name>\n'
             '    ' + objective_xml + '\n'
-            '    <owner>' + author_tab_num + '</owner>\n'
+            '    <owner>' + _xml_text(author_tab_num) + '</owner>\n'
             '    ' + precondition_xml + '\n'
             '    <priority><![CDATA[' + priority + ']]></priority>\n'
             '    <status><![CDATA[Черновик]]></status>\n'
             '    <parameters/>\n'
             '    ' + script_xml + '\n'
-            '    <updatedBy>' + author_name + '</updatedBy>\n'
+            '    <updatedBy>' + _xml_text(author_name) + '</updatedBy>\n'
             '    <updatedOn>' + dt + '</updatedOn>\n'
             '</testCase>'
         )
 
     def _wrap_project_xml(self, case_xml_parts, folders_seen, project_id, project_key, jira_version, base_dt) -> str:
         folders_xml = "\n".join(
-            '<folder fullPath="' + path + '" index="' + str(idx) + '"/>'
+            '<folder fullPath="' + _xml_text(path) + '" index="' + str(idx) + '"/>'
             for path, idx in folders_seen.items()
         )
         export_date = base_dt.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
         combined = "\n".join(case_xml_parts)
-        return (
+        xml = (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
             '<project>\n'
             '<projectId>' + str(project_id) + '</projectId>\n'
-            '<projectKey>' + project_key + '</projectKey>\n'
+            '<projectKey>' + _xml_text(project_key) + '</projectKey>\n'
             '<modelVersion>1.0</modelVersion>\n'
-            '<jiraVersion>' + jira_version + '</jiraVersion>\n'
+            '<jiraVersion>' + _xml_text(jira_version) + '</jiraVersion>\n'
             '<exportDate>' + export_date + '</exportDate>\n'
             '<folders>\n' + folders_xml + '\n</folders>\n'
             '<testCases>\n' + combined + '\n</testCases>\n'
             '</project>'
         )
+        root = ET.fromstring(xml)
+        paths = [f.attrib["fullPath"] for f in root.findall("./folders/folder")]
+        known = set()
+        for path in paths:
+            parent = path.rpartition("/")[0]
+            if not path or path in known or (parent and parent not in known):
+                raise ValueError("Zephyr XML: отсутствует родительская папка или путь повторяется.")
+            known.add(path)
+        for tc in root.findall("./testCases/testCase"):
+            if tc.findtext("folder") not in known or not self._valid_script(tc.find("./testScript")):
+                raise ValueError("Zephyr XML: проверьте папку кейса и шаги теста.")
+        return xml
+
+    @staticmethod
+    def _valid_script(script, expected=None):
+        if script is None or script.attrib != {"type": "steps"} or [x.tag for x in script] != ["steps"]:
+            return False
+        steps = list(script[0])
+        return bool(steps) and (expected is None or len(steps) == expected) and all(
+            step.tag == "step" and step.attrib == {"index": str(i)}
+            and [node.tag for node in step] == ["customFields", "description", "expectedResult", "testData"]
+            and all(not len(node) and not node.attrib for node in step)
+            and bool((step[1].text or "").strip()) for i, step in enumerate(steps)
+        )
+
+    @staticmethod
+    def _add_folders(folders, path):
+        segments = path.split("/")
+        for length in range(1, len(segments) + 1):
+            folders.setdefault("/".join(segments[:length]), len(folders))
+
 
     def wrap_case_to_xml_via_llm(self, case, qa_doc,
                                   project="SBER911", system="",
@@ -687,7 +731,7 @@ class LayeredGenerator:
         critical = "true" if (crit_regress and case.priority == "High") else "false"
         case_key = project + "-T" + str(case_id)
         group = self._case_group(case.name)
-        case_folder = folder + "/" + group if group else folder
+        case_folder = "/".join(part.strip() for part in (folder + "/" + group).split("/") if part.strip())
         dt = (created_on or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
         prompt = (
@@ -737,7 +781,11 @@ class LayeredGenerator:
             "4. testData — «Что нужно: ...<br/>SQL: ...». SQL — рабочий SELECT под таблицы/поля из кейса, если "
             "проверка требует БД, иначе «SQL: не требуется»\n"
             "5. index шагов начинается с 0, количество шагов — как в исходном Markdown-кейсе\n"
-            "6. Не добавляй <testCase>, <name>, <priority> и другие теги — только objective, precondition, testScript\n\n"
+            "6. Верни ровно objective, precondition, testScript, по одному и в таком порядке. "
+            "Одна обёртка steps, в ней только step с непрерывными index от нуля. "
+            "В каждом step ровно четыре дочерних элемента в заданном порядке. "
+            "В description, expectedResult, testData и полях кейса содержимое только текстом в CDATA. "
+            "Не добавляй вложенных XML-полей, DOCTYPE или сущностей.\n\n"
             "Верни ТОЛЬКО эти три блока. Без пояснений, без markdown-обёртки."
         )
 
@@ -755,19 +803,23 @@ class LayeredGenerator:
             raw = re.sub(r"\n?```$", "", raw)
             raw = raw.strip()
 
-        objective_m = re.search(r'<objective>.*?</objective>', raw, re.DOTALL)
-        precondition_m = re.search(r'<precondition>.*?</precondition>', raw, re.DOTALL)
-        script_m = re.search(r'<testScript.*?</testScript>', raw, re.DOTALL)
-
-        objective_xml = objective_m.group(0) if objective_m else (
-            "<objective><![CDATA[" + case.name + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
+        objective_xml = (
+            "<objective><![CDATA[" + self._html(case.objective or case.name)
+            + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
             + str(case.estimated_minutes) + " мин]]></objective>"
         )
-        precondition_xml = precondition_m.group(0) if precondition_m else (
-            "<precondition><![CDATA[1. Тестовые данные подготовлены<br/>2. Пользователь имеет необходимые "
-            "права доступа]]></precondition>"
-        )
-        script_xml = script_m.group(0) if script_m else self._fallback_script_xml(case)
+        precondition_xml = "<precondition><![CDATA[" + self._html(case.precondition) + "]]></precondition>"
+        script_xml = self._fallback_script_xml(case)
+        try:
+            fragments = list(ET.fromstring(f"<fragments>{raw}</fragments>"))
+            if [item.tag for item in fragments] == ["objective", "precondition", "testScript"]:
+                objective, precondition, script = fragments
+                if not len(objective) and not len(precondition) and not objective.attrib and not precondition.attrib:
+                    if self._valid_script(script, len(case.steps)):
+                        objective_xml, precondition_xml, script_xml = (ET.tostring(node, encoding="unicode").strip()
+                                                                       for node in fragments)
+        except ET.ParseError:
+            pass
 
         return self._assemble_testcase_xml(
             case=case, case_id=case_id, case_key=case_key,
@@ -810,9 +862,8 @@ class LayeredGenerator:
             xml_parts.append(case_xml)
 
             group = self._case_group(case.name)
-            case_folder = folder + "/" + group if group else folder
-            if case_folder not in folders_seen:
-                folders_seen[case_folder] = len(folders_seen)
+            case_folder = "/".join(part.strip() for part in (folder + "/" + group).split("/") if part.strip())
+            self._add_folders(folders_seen, case_folder)
 
             case_id += 1
 
@@ -841,24 +892,16 @@ class LayeredGenerator:
             priority = case.priority if case.priority in ("High", "Normal") else "Normal"
             critical = "true" if (crit_regress and case.priority == "High") else "false"
             case_key = project + "-T" + str(case_id)
-            if case.folder:
-                # путь из тестовой модели по этапам: Блок/Раздел/Фича/Сценарий/Тип — родители в <folders> раньше детей
-                case_folder = folder.rstrip("/") + "/" + case.folder.strip("/")
-                parts = case_folder.split("/")
-                for k in range(1, len(parts) + 1):
-                    folders_seen.setdefault("/".join(parts[:k]), len(folders_seen))
-            else:
-                group = self._case_group(case.name)
-                case_folder = folder + "/" + group if group else folder
-            if case_folder not in folders_seen:
-                folders_seen[case_folder] = len(folders_seen)
+            suffix = case.folder or self._case_group(case.name)
+            case_folder = "/".join(part.strip() for part in (folder + "/" + suffix).split("/") if part.strip())
+            self._add_folders(folders_seen, case_folder)
             if case.critical is not None:
                 critical = "true" if case.critical else "false"
             dt = (base_dt + timedelta(minutes=i)).strftime("%Y-%m-%d %H:%M:%S") + " UTC"
 
             objective_xml = (
                 "<objective><![CDATA[" + self._html(case.objective) + "]]></objective>" if case.objective else
-                "<objective><![CDATA[" + case.name + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
+                "<objective><![CDATA[" + _cdata_value(case.name) + "<br/>Оценка времени прохождения (с учётом подготовки данных): "
                 + str(case.estimated_minutes) + " мин]]></objective>"
             )
             precondition_xml = (

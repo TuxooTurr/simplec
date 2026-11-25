@@ -6,6 +6,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
+from fastapi import HTTPException
 from agents import ether_mcp
 from db import ether_credentials
 from db.paths import MOCK
@@ -72,6 +73,8 @@ async def _run(wait_seconds):
             if saved:
                 await context.add_cookies([{'name':part.partition('=')[0].strip(),'value':part.partition('=')[2],
                                            'domain':'.sber.ru','path':'/','secure':True} for part in saved.split(';') if '=' in part])
+            else:
+                await context.clear_cookies()
             page=context.pages[0] if context.pages else await context.new_page()
             for _ in range(3):
                 try: await page.goto('https://efir.sber.ru/',wait_until='domcontentloaded',timeout=30000); break
@@ -94,10 +97,17 @@ async def _run(wait_seconds):
             if not _cancel.is_set(): _set('timeout','За 5 минут вход не завершён. Повторите подключение.')
         finally: await context.close()
 
-def start(wait_seconds=300):
+def start(wait_seconds=300, *, login=None):
     global _thread
     with _lock:
+        owner = ether_credentials.owner()
+        if login is not None and not MOCK and owner and owner != login:
+            raise HTTPException(403, 'Эфир уже закреплён за другим пользователем Shark.')
+        if login is not None and not MOCK and not owner and ether_mcp.credential_source() != 'none':
+            raise HTTPException(409, 'Существующему подключению Эфира нужно назначить владельца.')
         if _thread and _thread.is_alive(): return state()
+        if login is not None:
+            ether_credentials.set_owner(login)
         _cancel.clear();_set('waiting')
         def run():
             try: asyncio.run(_run(wait_seconds))
@@ -108,8 +118,11 @@ def start(wait_seconds=300):
         _thread=threading.Thread(target=run,daemon=True);_thread.start()
         return state()
 
-def cancel():
+def cancel(*, login=None):
     with _lock:
+        owner = ether_credentials.owner()
+        if login is not None and not MOCK and owner and owner != login:
+            raise HTTPException(403, 'Подключение Эфира может отключить его владелец.')
         _cancel.set();ether_credentials.clear();_set('idle')
     ether_mcp.reset_caches()
 

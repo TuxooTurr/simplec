@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, ExternalLink, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
-import Modal from "@/components/ui/Modal";
+import { Button, Modal, Select } from "@/components/ui";
 import { Problem, ago, fmtDur } from "@/components/aqa/widgets";
 import { getJenkinsJob, runJenkins, type JenkinsJob, type JenkinsParam, type JenkinsQueue } from "@/lib/aqaApi";
 import { watchJenkinsRun } from "@/lib/jenkinsWatch";
@@ -58,6 +58,7 @@ export default function JenkinsRunModal({ onClose, onSettings }: { onClose: () =
   const open = useRef(true);
   useEffect(() => { open.current = true; return () => { open.current = false; }; }, []);
 
+  const missingChoices = job?.params.some(p => p.kind === "choice_unavailable");
   const running = !!job?.builds.some(b => b.result === "RUNNING");
   useEffect(() => {
     if (!running) return;
@@ -108,10 +109,9 @@ export default function JenkinsRunModal({ onClose, onSettings }: { onClose: () =
           <div className="flex items-center gap-2 border-t border-border-main pt-3">
             <a href={job.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
               Открыть в Jenkins <ExternalLink className="h-3.5 w-3.5" /></a>
-            <button type="button" onClick={onClose} className="ml-auto rounded-lg border border-border-main px-3 py-2 text-sm text-text-muted hover:text-text-main">Закрыть</button>
-            <button type="button" onClick={() => void start()} disabled={busy || !job.buildable || run?.state === "queued"}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40">
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Запустить</button>
+            <Button variant="ghost" onClick={onClose} className="ml-auto">Закрыть</Button>
+            <Button onClick={() => void start()} loading={busy} disabled={!job.buildable || missingChoices || run?.state === "queued"}
+              icon={<Play className="h-4 w-4" />}>Запустить</Button>
           </div>
 
           {job.builds.length > 0 && (
@@ -160,9 +160,11 @@ function ParamField({ p, value, onChange }: { p: JenkinsParam; value: string | b
     <div>
       <label htmlFor={id} className={LBL}>{p.name}</label>
       {p.kind === "choice" ? (
-        <select id={id} value={String(value)} onChange={e => onChange(e.target.value)} className={INPUT}>
+        <Select id={id} value={String(value)} onChange={onChange} searchable={p.choices.length > 8}>
           {p.choices.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        </Select>
+      ) : p.kind === "choice_unavailable" ? (
+        <p id={id} className="text-xs text-text-muted">Jenkins не передал варианты. Выберите значение в Jenkins.</p>
       ) : p.kind === "multiline" ? (
         <textarea id={id} value={String(value)} onChange={e => onChange(e.target.value)} rows={3} className={`${INPUT} resize-y font-mono text-[13px]`} />
       ) : p.kind === "password" ? (

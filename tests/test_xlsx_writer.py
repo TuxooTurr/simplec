@@ -102,3 +102,15 @@ def test_общие_ячейки_эпика_объединены_по_строк
     merged = [el.get("ref") for el in sheet.findall("s:mergeCells/s:mergeCell", ns)]
     assert merged == ["B1:C1", "B3:B5", "C3:C5"]
     assert sheet.find("s:sheetData/s:row/s:c[@r='C3']/s:v", ns).text == "0.25"
+
+
+def test_внутренняя_ссылка_учитывает_переименование_листа():
+    from backend.xlsx_writer import sheet_from_payload
+
+    first = sheet_from_payload("Bug42", [{"title": "Дефекты"}], [[{"v": 3, "sheetId": "SBER911-42", "format": "bug"}]])
+    bugs = sheet_from_payload("Bug42", [{"title": "Дефект"}], [[{"v": "SBER911-99"}]], sheet_id="SBER911-42")
+    with zipfile.ZipFile(io.BytesIO(build_xlsx([first, bugs]))) as book:
+        sheet = ET.fromstring(book.read("xl/worksheets/sheet1.xml"))
+        link = sheet.find(".//{*}hyperlink")
+        assert link.attrib == {"ref": "A2", "location": "'Bug42 2'!A1"}
+        assert "xl/worksheets/_rels/sheet1.xml.rels" not in book.namelist()

@@ -47,6 +47,40 @@ def ke_table() -> str:
     return _read("ke-services.md")
 
 
+
+def service_index(markdown: str) -> dict[str, str]:
+    """Read local bullets or Confluence table rows where a service and one CI are explicit."""
+    candidates: dict[str, set[str]] = {}
+    for line in markdown.splitlines():
+        codes = re.findall(r"\bCI\d+\b", line, re.I)
+        if len(set(codes)) != 1:
+            continue
+        code = codes[0]
+        cells = [cell.strip(" *") for cell in line.strip("| ").split("|")]
+        title = next((cell for cell in cells if code in cell and re.search(r"[А-Яа-яЁё]", cell)), "")
+        title = re.split(r"\s*:\s*", title, maxsplit=1)[0].lstrip("- ").replace("**", "").strip()
+        if not title:
+            continue
+        title = title.replace(f"({code})", f"[{code}]")
+        if f"[{code}]" not in title:
+            title = title.replace(code, f"[{code}]")
+        for service in re.findall(r"(?<![\w-])[a-z][a-z\d]*(?:-[a-z\d]+)+(?![\w-])", line, re.I | re.ASCII):
+            candidates.setdefault(service.casefold(), set()).add(title)
+    return {service: next(iter(values)) for service, values in candidates.items() if len(values) == 1}
+
+
+def set_service_metadata(case: dict, row: dict, catalog: dict[str, str], task_services: list[str]) -> dict:
+    labels = list(case.get("labels") or [])
+    explicit = [row.get("server", ""), *labels]
+    matched = next((name for name in explicit if name.casefold() in catalog), "")
+    if not matched and len(task_services) == 1 and task_services[0].casefold() in catalog:
+        matched = task_services[0]
+    if matched:
+        service = matched.casefold()
+        case["system"] = catalog[service]
+        case["labels"] = [service, *(label for label in labels if label.casefold() != service)][:5]
+    return case
+
 def qa_template() -> str:
     return _read("qa-doc-template.md")
 
@@ -63,7 +97,7 @@ def structure_text(folders: list[dict]) -> str:
             cur = by_id.get(cur.get("parent_id") or "")
         return out
 
-    lines = sorted({" / ".join(p) for p in (path(f) for f in folders) if 0 < len(p) <= 3})
+    lines = sorted({" / ".join(p) for p in (path(f) for f in folders) if p})
     return "\n".join(lines)
 
 
@@ -150,11 +184,16 @@ def plan(llm, requirement: str, feature: str, platforms: str, place_hint: list[s
         '  "place_note": "",                       // фичи нет в приложении А — предложи место и объясни; иначе пусто\n'
         '  "scenarios": [{"scenario": "Глагол + что", "type": "Позитивные сценарии|Негативные сценарии|Граничные сценарии|E2E",\n'
         '                 "name": "[W][Фича] Группа проверок. Описание", "platform": "W|M", "checks": "что проверяет",\n'
-        '                 "steps": 5, "critical": false}],\n'
+        '                 "version": "", "server": "", "tool": "", "business": "", "steps": 5, "critical": false}],\n'
         '  "coverage": [{"item": "требование или экран", "cases": ["имя кейса"]}],\n'
         '  "questions": [{"unknown": "что неизвестно", "where": "где нужно", "question": "вопрос"}],\n'
         '  "contradictions": [{"requirement": "что в требованиях", "design": "что в дизайне", "resolution": "как написан кейс до ответа"}]\n'
         "}\n"
+        "Если сценарий относится к нескольким версиям или нескольким MCP-инструментам, отдельная строка для каждой применимой пары. "
+        "В строке укажи version, tool, server и business (краткая бизнес-проверка), только факты из источников. "
+        "Если одна строка объединяет несколько применимых комбинаций, перечисли их объектами в variants с теми же полями. "
+        "Для MCP наименование: [W][Фича] V2 · Сервер <имя> · Tool <имя> · <бизнес-проверка>. "
+        "Учитывай каждый источник макета и отрази покрытие в coverage. "
         "Мало кейсов, каждый — полный сценарий (раздел 5). Непокрытых требований быть не должно. "
         f"Если место указано во вводных, используй его. Крит регресс — по разделу 9."
     )
@@ -170,9 +209,17 @@ def normalize_plan(data: Any, place_hint: list[str], feature: str) -> dict:
     if not place:
         place = [feature]
     rows = []
-    for i, r in enumerate(_lst(d.get("scenarios"))):
-        if not isinstance(r, dict):
-            continue
+    raw_rows = []
+    for raw in _lst(d.get("scenarios")):
+        if isinstance(raw, dict):
+            variants = [variant for variant in _lst(raw.get("variants")) if isinstance(variant, dict)]
+            raw_rows.extend({**raw, **variant} for variant in variants or [{}])
+    used_ids = set()
+    for i, r in enumerate(raw_rows):
+        row_id = _s(r.get("id"), 60) or f"s{i + 1}"
+        if row_id in used_ids:
+            row_id = f"s{i + 1}-{len(used_ids)}"
+        used_ids.add(row_id)
         typ = _s(r.get("type"), 40)
         if typ not in TYPES:
             typ = next((t for t in TYPES if t.split()[0].lower() in typ.lower()), "Позитивные сценарии")
@@ -181,11 +228,20 @@ def normalize_plan(data: Any, place_hint: list[str], feature: str) -> dict:
             steps = int(r.get("steps") or 5)
         except (TypeError, ValueError):
             steps = 5
+        version = _s(r.get("version"), 24)
+        server = _s(r.get("server"), 36)
+        tool = _s(r.get("tool"), 40)
+        business = _s(r.get("business"), 100)
+        name = _s(r.get("name"), 120)
+        if tool and business:
+            labels = [x for x in (version[:12], f"Сервер {server[:23]}" if server else "", f"Tool {tool[:30]}", business) if x]
+            name = f"[{plat}][{feature[:20]}] " + " · ".join(labels)
         rows.append({
-            "id": f"s{i + 1}",
+            "id": row_id,
             "scenario": _s(r.get("scenario"), 150).replace("/", "-") or "Проверить фичу",
             "type": typ,
-            "name": _s(r.get("name"), 120),
+            "name": name[:120],
+            "version": version, "server": server, "tool": tool, "business": business,
             "platform": plat,
             "checks": _s(r.get("checks"), 600),
             "steps": max(1, min(steps, 12)),
@@ -228,6 +284,7 @@ def _case_prompt(row: dict, plan_: dict, requirement: str, feature: str, answers
         f"=== ФИЧА === {feature}; место: {' / '.join(plan_['place'])}\n"
         "=== СТРОКА КАРТЫ ===\n"
         f"Сценарий: {row['scenario']}\nТип: {row['type']}\nКейс: {row['name']}\nПлатформа: {row['platform']}\n"
+        f"Версия: {row.get('version') or 'по источникам'}; сервер: {row.get('server') or '—'}; инструмент: {row.get('tool') or '—'}.\n"
         f"Что проверяет: {row['checks']}\nШагов: около {row['steps']}\nКрит регресс: {'да' if row.get('critical') else 'нет'}\n\n"
         "=== ДРУГИЕ КЕЙСЫ НАБОРА (их проверки не дублируй) ===\n" + (others or "нет") + "\n\n"
         "=== ОТВЕТЫ НА ВОПРОСЫ И ПРОТИВОРЕЧИЯ ===\n" + (answers_text(plan_, answers) or "нет") + "\n\n"
@@ -244,6 +301,9 @@ def _case_prompt(row: dict, plan_: dict, requirement: str, feature: str, answers
         '  "steps": [{"action": "действие пользователя", "test_data": "данные шага", '
         '"ui": "проверки UI", "api": "проверки API", "db": "проверки БД"}]  // неприменимый слой — пустая строка\n'
         "}\n"
+        "Для АС и меток микросервисов используй корпоративный справочник из контекста, если получен. "
+        "При расхождении он приоритетнее приложения Б; не указывай АС по созвучию и не выдумывай имя сервиса. "
+        "Только JSON: по одному action на шаг, без XML, CDATA, заголовков или тегов Zephyr внутри значений. "
         "Ничего не выдумывай: неизвестный метод, таблицу или поле — ⚠ по разделу 2."
     )
 
@@ -255,9 +315,11 @@ def _case_from(data: Any, row: dict, place: list[str]) -> dict:
         if not isinstance(s, dict):
             continue
         steps.append({k: _s(s.get(k), 3000) for k in ("action", "test_data", "ui", "api", "db")})
+    if not steps or any(not step["action"] for step in steps):
+        raise ValueError("Модель вернула кейс без действия в шаге. Повторите генерацию.")
     plat = row.get("platform", "W")
     return {
-        "name": _s(d.get("name"), 120) or row["name"],
+        "name": row["name"] if row.get("tool") else _s(d.get("name"), 120) or row["name"],
         "priority": "Normal",
         "case_type": TYPES.get(row["type"], "positive"),
         "steps": steps,

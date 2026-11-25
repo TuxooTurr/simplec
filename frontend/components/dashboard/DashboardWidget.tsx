@@ -1,12 +1,15 @@
 "use client";
 import { useEffect, useState, useCallback, type CSSProperties, type ReactNode } from "react";
-import { ArrowUpRight, BarChart3, Donut, List, Lock, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { ArrowUpRight, BarChart3, CalendarClock, Donut, List, Lock, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui";
 import IssueTable, { NO_FILTER, filterIssueRows, type IssueFilter } from "@/components/jiratool/IssueTable";
 import { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
 import { getWidgetData, refreshWidget, type DashboardWidget as Widget, type WidgetData, type WidgetPresentation } from "@/lib/dashboardApi";
 import { seriesColor } from "@/lib/dashboardGrid";
 import IssueQueueModal from "./IssueQueueModal";
+import WidgetDeliveryModal from "./WidgetDeliveryModal";
+import EmployeeWidget from "./EmployeeWidget";
 import DashboardColumns from "./DashboardColumns";
 import { needsStList, useDashboardColumns } from "@/lib/dashboardColumns";
 import IssueActions from "@/components/jiratool/IssueActions";
@@ -22,10 +25,20 @@ const formats = [
   { id: "donut" as const, label: "Кольцо", Icon: Donut },
   { id: "bar" as const, label: "Гистограмма", Icon: BarChart3 },
 ];
-export default function DashboardWidget({ widget, canEdit, arranging, onEdit, onDelete, dragHandle, onColumnsChange }: {
+export default function DashboardWidget({ widget, canEdit, arranging, onPresentationChange, onEdit, onDelete, dragHandle, onColumnsChange }: {
+  onPresentationChange: (presentation: WidgetPresentation) => Promise<void>;
   widget: Widget; canEdit: boolean; arranging: boolean; onEdit: () => void; onDelete: () => void; dragHandle?: ReactNode; onColumnsChange: (columns: string[]) => Promise<void>;
 }) {
   const [kind, setKind] = useState<WidgetPresentation>(widget.presentation ?? "list");
+  const { user } = useAuth();
+  const presentationKey = `st_dashboard_presentation:${user?.login ?? ""}:${widget.id}`;
+  useEffect(() => {
+    let saved: string | null = null;
+    if (!canEdit) {
+      try { saved = localStorage.getItem(presentationKey); } catch {}
+    }
+    setKind(formats.find(format => format.id === saved)?.id ?? widget.presentation ?? "list");
+  }, [canEdit, presentationKey, widget.presentation]);
   const [data, setData] = useState<WidgetData | null>(null);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<IssueFilter>(NO_FILTER);
@@ -45,13 +58,24 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
     try { await refreshWidget(widget.id); await load(); }
     catch (e) { setError((e as Error).message); }
   }, [widget.id, load]);
+  const activitySettings = widget.kind === "employee" ? JSON.stringify([
+    widget.employeeLogin, widget.activityProject, widget.activityBranch, widget.activityPeriod,
+    widget.activityFrom, widget.activityTo, widget.activityTimezone, widget.activityMetrics, widget.defectRoles,
+  ]) : "";
+  useEffect(() => { if (activitySettings) setData(null); }, [activitySettings]);
   useEffect(() => {
     void refresh();
     const timer = setInterval(load, 5000);
     window.addEventListener(JIRA_ISSUES_CHANGED, refresh);
     return () => { clearInterval(timer); window.removeEventListener(JIRA_ISSUES_CHANGED, refresh); };
-  }, [load, refresh, widget.kind, widget.jql, widget.period, widget.fromDate, widget.toDate, widget.columns, widget.groupField, widget.valueField]);
-  useEffect(() => setKind(widget.presentation ?? "list"), [widget.presentation]);
+  }, [load, refresh, widget.kind, widget.jql, widget.period, widget.fromDate, widget.toDate, widget.columns, widget.groupField, widget.valueField, activitySettings]);
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const deliveryAction = canEdit && !arranging ? <Button variant="icon" title="Отправка в Эфир" aria-label={"Отправка в Эфир · " + widget.title}
+    onClick={() => setDeliveryOpen(true)} icon={<CalendarClock className="w-3.5 h-3.5" />} /> : undefined;
+  const deliveryModal = deliveryOpen && <WidgetDeliveryModal widget={widget} onClose={() => setDeliveryOpen(false)} />;
+  if (widget.kind === "employee") return <><EmployeeWidget widget={widget} data={data} error={error} canEdit={canEdit}
+    arranging={arranging} onEdit={onEdit} onDelete={onDelete} onRefresh={() => void refresh()} dragHandle={dragHandle} extraAction={deliveryAction} />{deliveryModal}</>;
+
   if (widget.kind === "counter") {
     const count = data?.lastCheckedAt ? data.pending : null;
     const problem = error || data?.error;
@@ -61,6 +85,7 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
         {dragHandle}
         {widget.scope === "personal" && <span title="Личный виджет: виден только вам"><Lock className="w-3 h-3 text-text-muted shrink-0" aria-label="Личный виджет" /></span>}
         <h2 className={`min-w-0 flex-1 text-sm font-semibold truncate ${problem ? "text-amber-600 dark:text-amber-400" : "text-text-main"}`} title={`${widget.title} · ${status}`}>{widget.title}</h2>
+        {deliveryAction}
         {canEdit && arranging && <>
           <Button variant="icon" title="Обновить виджет" disabled={data?.running} onClick={() => void refresh()} icon={<RefreshCw className="w-3.5 h-3.5" />} />
           <Button variant="icon" title="Настроить виджет" onClick={onEdit} icon={<Settings2 className="w-3.5 h-3.5" />} />
@@ -72,6 +97,7 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
         <strong className={`dashboard-counter-number ${count === 0 ? "tone-success-text" : counterColor(widget, count) ? "" : "text-primary"}`}
           style={{ "--counter-digits": String(count ?? "—").length, ...(count ? { color: counterColor(widget, count) } : {}) } as CSSProperties}>{count ?? "—"}</strong>
       </button>
+      {deliveryModal}
       {modal && data && <IssueQueueModal canEdit={canEdit} onColumnsChange={changeColumns} widget={widget} data={{ ...data, error: problem }} onClose={() => setModal(null)} onChanged={() => { void load(); void refresh(); }} />}
     </article>;
   }
@@ -109,6 +135,7 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
       {widget.scope === "personal" && <span title="Личный виджет: виден только вам"><Lock className="w-3 h-3 text-text-muted shrink-0" aria-label="Личный виджет" /></span>}
       <h2 className="min-w-0 flex-1 text-[13px] font-semibold truncate" title={widget.title}>{widget.title}</h2>
       <Button variant="icon" title="Обновить виджет" disabled={data?.running} onClick={() => void refresh()} icon={<RefreshCw className={`w-3.5 h-3.5 ${data?.running ? "animate-spin" : ""}`} />} />
+      {deliveryAction}
       {canEdit && <Button variant="icon" title="Настроить виджет" onClick={onEdit} icon={<Settings2 className="w-3.5 h-3.5" />} />}
       {canEdit && arranging && <Button variant="icon" title="Удалить виджет" onClick={onDelete} icon={<Trash2 className="w-3.5 h-3.5" />} />}
     </header>
@@ -116,7 +143,13 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
       <div className="flex bg-bg-subtle p-0.5 rounded-lg gap-0.5" role="group" aria-label="Представление списка">
         {formats.map(({ id, label, Icon }) => <button type="button" key={id} title={label} aria-label={label} aria-pressed={kind === id}
           className={`p-1.5 rounded-md transition-colors focus-visible:ring-2 focus-visible:ring-primary ${kind === id ? "bg-bg-card text-primary shadow-sm" : "text-text-muted hover:text-text-main"}`}
-          onClick={() => setKind(id)}><Icon className="w-3.5 h-3.5" /></button>)}
+          onClick={() => {
+            if (canEdit) void onPresentationChange(id).catch(() => {});
+            else {
+              setKind(id);
+              try { localStorage.setItem(presentationKey, id); } catch {}
+            }
+          }}><Icon className="w-3.5 h-3.5" /></button>)}
       </div>
       <div className="flex items-center gap-1">
       {kind === "list" && <button type="button" aria-pressed={selecting} aria-label={selecting ? "Скрыть выбор задач" : "Выбрать задачи"}
@@ -176,5 +209,6 @@ export default function DashboardWidget({ widget, canEdit, arranging, onEdit, on
       <span className="truncate">{data?.running ? "Обновление…" : data?.lastCheckedAt ? `Проверено ${new Date(data.lastCheckedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}` : "Ожидание данных"}</span>
     </footer>
     {modal && data && <IssueQueueModal canEdit={canEdit} onColumnsChange={changeColumns} widget={widget} data={data} subset={modal.keys} onClose={() => setModal(null)} onChanged={() => { void load(); void refresh(); }} />}
-  </article>;
+      {deliveryModal}
+</article>;
 }

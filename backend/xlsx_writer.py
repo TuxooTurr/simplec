@@ -30,6 +30,7 @@ class Cell:
     runs: list[tuple[str, str]] = field(default_factory=list)   # текст и цвет каждой метки в одной ячейке
     bold: bool = False
     row_span: int = 1
+    sheet_id: str = ""
 
 
 @dataclass
@@ -48,6 +49,7 @@ class Sheet:
     header_ink: str = "FFFFFF"
     frozen_cols: int = 0
     section_rows: set[int] = field(default_factory=set)
+    id: str = ""
 
 
 def _col(n: int) -> str:
@@ -72,6 +74,7 @@ _FORMATS = {
     "duration": (164, '[h]" ч "mm" мин"'),
     "date": (165, "dd.mm.yyyy"),
     "datetime": (166, "dd.mm.yyyy hh:mm"),
+    "bug": (167, '"↗ "0'),
 }
 Style = tuple[str, str, str, bool, bool]
 
@@ -85,7 +88,7 @@ def _link(cell: Cell) -> str:
 
 
 def _style(cell: Cell) -> Style:
-    link = bool(_link(cell))
+    link = bool(_link(cell) or cell.sheet_id)
     return _colour(cell.fill), _colour(cell.ink) or ("0563C1" if link else ""), cell.format, link, cell.bold
 
 
@@ -146,7 +149,7 @@ def _styles(sheets: list[Sheet]) -> tuple[str, dict[Style, int]]:
     return styles, style_ids
 
 
-def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tuple[str, list[tuple[str, str]], str]:
+def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool, sheet_names: dict[str, str]) -> tuple[str, list[tuple[str, str]], str]:
     """XML листа, его ссылки [(ячейка, url)] и диапазон фильтра."""
     ncol = len(sheet.columns)
     last = _col(max(ncol, 1) - 1)
@@ -155,6 +158,7 @@ def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tup
     nrows = len(sheet.rows) + header_rows
     links: list[tuple[str, str]] = []
     merges: list[str] = []
+    local_links: list[tuple[str, str]] = []
     header_style = style_ids[_header_style(sheet)]
 
     def header_row(r: int, labels: list[str], height: int) -> str:
@@ -192,7 +196,10 @@ def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tup
             val = "" if section and i else c.v
             link = _link(c) if not section else ""
             s_ = style_ids[_style(c)]
-            if link:
+            if not section and c.sheet_id and c.sheet_id in sheet_names:
+                target = sheet_names[c.sheet_id].replace("'", "''")
+                local_links.append((ref, f"'{target}'!A1"))
+            elif link:
                 links.append((ref, link))
             if val == "":
                 cells.append(f'<c r="{ref}" s="{s_}"/>')
@@ -210,8 +217,9 @@ def _sheet_xml(sheet: Sheet, style_ids: dict[Style, int], selected: bool) -> tup
         rows_xml.append(f'<row r="{r}">{"".join(cells)}</row>')
     cols = "".join(f'<col min="{i + 1}" max="{i + 1}" width="{max(3.0, float(c.width)):.1f}" customWidth="1"/>'
                    for i, c in enumerate(sheet.columns))
-    hyperlinks = ("<hyperlinks>" + "".join(f'<hyperlink ref="{ref}" r:id="rId{n + 1}"/>' for n, (ref, _) in enumerate(links))
-                  + "</hyperlinks>") if links else ""
+    external = [f'<hyperlink ref="{ref}" r:id="rId{n + 1}"/>' for n, (ref, _) in enumerate(links)]
+    internal = [f'<hyperlink ref="{ref}" location="{_text(target)}"/>' for ref, target in local_links]
+    hyperlinks = "<hyperlinks>" + "".join(external + internal) + "</hyperlinks>" if external or internal else ""
     area = f"A1:{last}{nrows}"
     filter_area = f"A{header_rows}:{last}{nrows}"
     frozen = max(0, min(sheet.frozen_cols, ncol))
@@ -262,15 +270,17 @@ def build_xlsx(sheets: "Sheet | list[Sheet]") -> bytes:
         base = _sheet_name(sh.name)
         name, n = base, 2
         while name.lower() in used:
-            name = f"{base[:28]} {n}"
+            suffix = f" {n}"
+            name = base[:31 - len(suffix)] + suffix
             n += 1
         used.add(name.lower())
         names.append(name)
 
+    sheet_names = {s.id: name for s, name in zip(sheets, names) if s.id}
     files: dict[str, str] = {}
     defined = []
     for k, sh in enumerate(sheets):
-        xml, links, area = _sheet_xml(sh, style_ids, k == 0)
+        xml, links, area = _sheet_xml(sh, style_ids, k == 0, sheet_names)
         files[f"xl/worksheets/sheet{k + 1}.xml"] = xml
         if links:
             files[f"xl/worksheets/_rels/sheet{k + 1}.xml.rels"] = _rels(
@@ -319,14 +329,16 @@ def _payload_cell(raw: dict) -> Cell:
         format=fmt if isinstance(fmt, str) and fmt in _FORMATS else "",
         runs=[(str(r.get("text") or ""), str(r.get("ink") or "")) for r in runs if isinstance(r, dict)] if isinstance(runs, list) else [],
         bold=raw.get("bold") is True,
+        sheet_id=str(raw.get("sheetId") or ""),
         row_span=max(1, min(20000, raw["rowSpan"])) if type(raw.get("rowSpan")) is int else 1,
     )
 
 
 def sheet_from_payload(name: str, columns: list[dict], rows: list[list[dict]], header_fill: Optional[str] = None,
-                       header_ink: str = "FFFFFF", frozen_cols: int = 0, section_rows: Optional[list[int]] = None) -> Sheet:
+                       header_ink: str = "FFFFFF", frozen_cols: int = 0, section_rows: Optional[list[int]] = None, sheet_id: str = "") -> Sheet:
     return Sheet(
         name=name,
+        id=sheet_id,
         columns=[Column(str(c.get("title", "")), float(c.get("width") or 14), str(c.get("group") or "")) for c in columns],
         rows=[[_payload_cell(x) for x in r] for r in rows],
         header_fill=header_fill if header_fill and _HEX.match(header_fill) else "1F3864",

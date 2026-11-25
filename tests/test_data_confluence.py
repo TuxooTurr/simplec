@@ -251,3 +251,22 @@ def test_документ_qa_со_связанными_страницами(conf
     assert "СВЯЗАННЫЕ СТРАНИЦЫ" in seen["prompt"] and "Адрес по ФИАС." in seen["prompt"]
     assert out["qa_links"] == [{"title": "СТ Адреса", "url": "https://c.ru/display/S/2"}] and out["focus"] == "только PDF"
     assert len(out["qa_link_errors"]) == 1 and out["qa_link_errors"][0].startswith("nope")
+
+
+def test_переработка_добавляет_версию_и_сохраняет_предыдущие():
+    from agents.requirement_versions import build_release_pages
+
+    item = {"text": "## V1 — Поиск\nЕсть поиск по имени."}
+    calls = []
+
+    def build(label, requirement):
+        calls.append(label)
+        return requirement
+
+    first = asyncio.run(build_release_pages(item, build, str))
+    item.update(release_pages=first, text=item["text"] + "\n\n## V2 — Сортировка\nПоявилась сортировка.")
+    second = asyncio.run(build_release_pages(item, build, str))
+    assert calls == ["V1", "V2"]
+    assert second[0] == first[0]
+    assert "сортировка" in second[1]["markdown"]
+    assert "поиск" not in second[1]["markdown"]

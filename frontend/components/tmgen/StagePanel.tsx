@@ -108,7 +108,9 @@ function PlanEditor({ s }: { s: TmSession }) {
     <div className="space-y-4">
       <section className="space-y-1.5 rounded-xl border border-border-main bg-bg-card p-4">
         <p className={H}>1. Место в дереве</p>
-        <PlaceEditor place={plan.place} onChange={p => setPlan(cur => ({ ...cur, place: p }))} />
+        {s.source !== "free" && s.place.length
+          ? <p className="text-sm text-text-main">{s.place.join(" / ")} <span className="text-xs text-text-muted">· папка в «Данных»</span></p>
+          : <PlaceEditor place={plan.place} onChange={p => setPlan(cur => ({ ...cur, place: p }))} />}
         {plan.place_note && <p className="flex items-start gap-1.5 text-xs text-text-muted"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />{plan.place_note}</p>}
         <p className="text-[11px] text-text-muted">Папки в XML: Новая ТМ / {place.join(" / ") || "…"} / Пользовательский сценарий / Тип сценария</p>
       </section>
@@ -348,6 +350,13 @@ export default function StagePanel({ session: s, onOpenCases, xml }: { session: 
           ))}
         </ul>
       )}
+      {!!s.source_links_used?.length && <details className="rounded-lg border border-border-main p-3 text-sm">
+        <summary className="cursor-pointer">Прочитано источников · {s.source_links_used.length}</summary>
+        <ul className="mt-2 space-y-1">{s.source_links_used.map(url => <li key={url}>
+          <a href={url} target="_blank" rel="noopener noreferrer" className="text-primary break-all">{url}</a>
+        </li>)}</ul>
+      </details>}
+      {s.service_catalog_live === false && !running && <p className="text-xs text-text-muted">Корпоративный справочник КЭ недоступен. Использована сохранённая таблица проекта.</p>}
       {s.status === "plan_ready" && s.plan && <PlanEditor s={s} />}
       {s.status === "review_ready" && <ReviewView s={s} onOpenCases={() => onOpenCases(s.id)} />}
       {s.status === "done" && (

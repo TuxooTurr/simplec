@@ -518,6 +518,13 @@ export function jiraDateKind(ref: ColRef): "date" | "datetime" | null {
   return k === "date" || k === "datetime" ? k : null;
 }
 
+export interface ListAuditEvent {
+  at: string;
+  actor: string;
+  action: string;
+  keys: string[];
+}
+
 export interface TaskList {
   id: string;
   name: string;
@@ -581,6 +588,7 @@ export interface TaskList {
   /** откуда импортирована структура */
   structure?: { id: number; name: string; importedAt: string };
   createdAt: string;
+  audit?: ListAuditEvent[];
 }
 
 export interface ToolState {
@@ -816,6 +824,41 @@ function migrateList(l: TaskList): TaskList {
     out.folderList = Array.from(new Set(out.keys.map(k => out.folders![k]).filter(Boolean)));
   }
   return out;
+}
+
+/** История хранится вместе со списком, включая перенос через резервную копию. */
+export function auditLists(before: ToolState, after: ToolState, actor: string, at: string): ToolState {
+  const previous = new Map(before.lists.map(l => [l.id, l]));
+  const same = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  return { ...after, lists: after.lists.map(list => {
+    const old = previous.get(list.id);
+    const events: ListAuditEvent[] = [];
+    const add = (action: string, keys: string[] = []) => events.push({ at, actor, action, keys });
+    if (!old) add("Список создан", list.keys);
+    else {
+      const priorKeys = new Set(old.keys);
+      const nextKeys = new Set(list.keys);
+      const added = list.keys.filter(k => !priorKeys.has(k));
+      const removed = old.keys.filter(k => !nextKeys.has(k));
+      if (added.length) add("Добавлены задачи", added);
+      if (removed.length) add("Убраны задачи", removed);
+      if (old.name !== list.name || old.project !== list.project) add("Изменены свойства списка");
+      if (old.archivedAt !== list.archivedAt) add(list.archivedAt ? "Список архивирован" : "Список восстановлен");
+      const changed = (pairs: [Record<string, unknown> | undefined, Record<string, unknown> | undefined][]) =>
+        list.keys.filter(k => priorKeys.has(k) && pairs.some(([a, b]) => !same(a?.[k], b?.[k])));
+      const team = changed([[old.assignees, list.assignees], [old.roles, list.roles], [old.spend, list.spend]]);
+      if (team.length) add("Изменены команда или трудозатраты", team);
+      const fields = changed([[old.values, list.values], [old.folders, list.folders], [old.icons, list.icons],
+        [before.reqLinks, after.reqLinks], [before.reqUrls, after.reqUrls], [before.msLinks, after.msLinks], [before.stageManual, after.stageManual]]);
+      if (fields.length) add("Изменены поля, связи или папки задач", fields);
+      if (!same(listViews(old), listViews(list)) || !same(old.groupBy, list.groupBy) ||
+          !same(old.ownFields, list.ownFields) || !same(old.folderList, list.folderList)) add("Изменена настройка таблицы");
+      if (!same(old.sources, list.sources) && !same(old.sources?.map(x => [x.id, x.name]), list.sources?.map(x => [x.id, x.name]))) {
+        add("Изменены источники списка");
+      }
+    }
+    return events.length ? { ...list, audit: [...(list.audit ?? []), ...events].slice(-500) } : list;
+  }) };
 }
 
 export function saveState(s: ToolState): void {

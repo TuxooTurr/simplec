@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useId, useState } from "react";
-import { BarChart3, Donut, Check, Gauge, LayoutList, List } from "lucide-react";
+import { BarChart3, Donut, Check, Gauge, LayoutList, List, UserRound } from "lucide-react";
 import { Button, Modal, Select } from "@/components/ui";
 import type { DashboardWidget, WidgetPresentation, WidgetSize } from "@/lib/dashboardApi";
 import { getWidgetData } from "@/lib/dashboardApi";
 import { GRID_COLUMNS, pixels, sizeLabel, WIDGET_SIZES, PALETTES } from "@/lib/dashboardGrid";
 import { useDashboardColumns } from "@/lib/dashboardColumns";
 import { PickerPanel } from "@/components/jiratool/FieldPicker";
+import EmployeeSettings from "./EmployeeSettings";
 const input = "w-full mt-1 rounded-lg border border-border-main bg-bg-card px-3 py-2 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
 export default function WidgetModal({ widget, canShare, onSave, onClose }: {
   widget?: DashboardWidget;
@@ -30,7 +31,7 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
   const allFields = [...fields, ...st.fields];
   useEffect(() => {
     let live = true;
-    if (widget) getWidgetData(widget.id).then(data => {
+    if (widget && widget.kind !== "employee") getWidgetData(widget.id).then(data => {
       const groups = data.items.flatMap(i => {
         const values = st.values(v.groupField, i);
         return values.length ? values : ["Не указано"];
@@ -54,11 +55,19 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
     footer={<div className="flex justify-end gap-2"><Button variant="ghost" type="button" onClick={onClose}>Отмена</Button><Button form={formId} type="submit" loading={busy}>Сохранить</Button></div>}>
     <form id={formId} className="space-y-5" onSubmit={async e => {
       e.preventDefault(); setBusy(true); setError("");
-      try { await onSave({ ...v, size: currentSize ?? v.size }); onClose(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+      const employee = v.kind === "employee" ? {
+        title: v.title.trim() || "Активность сотрудника",
+        period: "all" as const,
+        employeeLogin: v.employeeLogin?.trim(),
+        activityTimezone: v.activityTimezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      } : {};
+      try { await onSave({ ...v, ...employee, size: currentSize ?? v.size }); onClose(); } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
     }}>
-      <div className="grid grid-cols-2 gap-3" role="group" aria-label="Тип виджета">
-        {[{ id: "view" as const, title: "Список", text: "Задачи и диаграммы", Icon: LayoutList }, { id: "counter" as const, title: "Счётчик", text: "Общая очередь команды", Icon: Gauge }].map(({ id, title, text, Icon }) =>
-          <button type="button" key={id} aria-pressed={v.kind === id} onClick={() => id === "counter" ? setV(s => ({ ...s, kind: id, size: "S", w: 4, h: 4, fullWidth: false, x: s.x === undefined ? undefined : Math.min(GRID_COLUMNS - 4, s.x) })) : set("kind", id)}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" role="group" aria-label="Тип виджета">
+        {[{ id: "view" as const, title: "Список", text: "Задачи и диаграммы", Icon: LayoutList }, { id: "counter" as const, title: "Счётчик", text: "Общая очередь команды", Icon: Gauge }, { id: "employee" as const, title: "Сотрудник", text: "Jira, Bitbucket и Zephyr", Icon: UserRound }].map(({ id, title, text, Icon }) =>
+          <button type="button" key={id} aria-pressed={v.kind === id} onClick={() => id === "counter" ? setV(s => ({ ...s, kind: id, size: "S", w: 4, h: 4, fullWidth: false, x: s.x === undefined ? undefined : Math.min(GRID_COLUMNS - 4, s.x) })) : setV(s => s.kind === "counter"
+              ? { ...s, kind: id, size: "M", ...WIDGET_SIZES.M, x: undefined, y: undefined }
+              : { ...s, kind: id })}
             className={`text-left rounded-xl border p-3 focus-visible:ring-2 focus-visible:ring-primary transition-colors ${v.kind === id ? "border-primary bg-primary/5" : "border-border-main hover:bg-bg-subtle"}`}>
             <span className="flex items-center gap-2"><Icon className="w-4 h-4 text-primary" /><b className="text-sm">{title}</b>{v.kind === id && <Check className="ml-auto w-3.5 h-3.5 text-primary" />}</span>
             <span className="text-[11px] text-text-muted block mt-1.5">{text}</span>
@@ -73,8 +82,9 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
             {label}</button>)}
         <span className="text-[11px] text-text-muted">{(v.scope ?? "shared") === "personal" ? "Виден только вам; в резервную копию попадает, восстанавливается только вам." : canShare ? "Виден всем пользователям." : "«Для всех» создаёт редактор Главной."}</span>
       </div>
-      <label className="block text-sm">Название<input required maxLength={200} placeholder="Например, ошибки на ИФТ" value={v.title} onChange={e => set("title", e.target.value)} className={input} /></label>
-      <label className="block text-sm">Фильтр JQL<textarea aria-label="Фильтр JQL" required maxLength={4000} rows={3} value={v.jql} onChange={e => set("jql", e.target.value)} className={input + " font-mono text-xs"} /></label>
+      <label className="block text-sm">Название<input required={v.kind !== "employee"} maxLength={200} placeholder={v.kind === "employee" ? "Активность сотрудника" : "Например, ошибки на ИФТ"} value={v.title} onChange={e => set("title", e.target.value)} className={input} /></label>
+      {v.kind === "employee" ? <EmployeeSettings widget={v} set={set} fields={fields} inputClass={input} />
+        : <label className="block text-sm">Фильтр JQL<textarea aria-label="Фильтр JQL" required maxLength={4000} rows={3} value={v.jql} onChange={e => set("jql", e.target.value)} className={input + " font-mono text-xs"} /></label>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label id={formId + "-size"} className="text-sm block mb-1">Размер</label>
           {v.kind === "counter" ? <div className="rounded-lg border border-border-main bg-bg-subtle px-3 py-2 text-sm" aria-label="Размер счётчика">{sizeLabel("S")}</div> : <Select aria-label="Размер виджета" value={currentSize ?? "custom"} onChange={s => { if (s !== "custom") size(s as WidgetSize); }}>
@@ -82,10 +92,10 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
             {(Object.keys(WIDGET_SIZES) as WidgetSize[]).map(name => <option key={name} value={name}>{sizeLabel(name)}</option>)}
           </Select>}<p className="text-[11px] text-text-muted mt-1">{v.kind === "counter" ? "Счётчик всегда квадратный, только S" : "Можно изменить вручную на рабочем столе"}</p>
         </div>
-        <div><label className="text-sm block mb-1">Период создания</label><Select aria-label="Период создания" value={v.period} onChange={s => set("period", s as DashboardWidget["period"])}>
+        {v.kind !== "employee" && <div><label className="text-sm block mb-1">Период создания</label><Select aria-label="Период создания" value={v.period} onChange={s => set("period", s as DashboardWidget["period"])}>
           <option value="all">Любой · по JQL</option><option value="today">Сегодня</option><option value="week">Последние 7 дней</option><option value="custom">Указать даты</option>
-        </Select></div>
-        {v.period === "custom" && <><label className="text-sm">С даты<input required type="date" className={input} value={v.fromDate} onChange={e => set("fromDate", e.target.value)} /></label>
+        </Select></div>}
+        {v.kind !== "employee" && v.period === "custom" && <><label className="text-sm">С даты<input required type="date" className={input} value={v.fromDate} onChange={e => set("fromDate", e.target.value)} /></label>
           <label className="text-sm">По дату<input required type="date" min={v.fromDate} className={input} value={v.toDate} onChange={e => set("toDate", e.target.value)} /></label></>}
       </div>
       {v.kind === "view" && <div className="space-y-4 border-t border-border-main pt-4">

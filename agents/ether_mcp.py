@@ -1,8 +1,8 @@
 """Efir feed (read) plus explicit user actions (reply in chat / mail); process caches and a rolling account budget.
 
 Инструменты MCP берутся только из реального tools/list: известные имена или точное имя из переменной окружения.
-Чтение — инструменты с readOnlyHint=true. Запись (ответ в чат, ответ на письмо) — только по нажатию пользователя
-«Отправить», инструмент не должен объявлять destructiveHint=true. Нет инструмента — честная недоступность."""
+Чтение — инструменты с readOnlyHint=true. Запись — по команде пользователя или по сохранённому им расписанию виджета.
+Инструмент записи не должен объявлять destructiveHint=true. Нет инструмента — честная недоступность."""
 from __future__ import annotations
 import json
 import os
@@ -443,7 +443,7 @@ def search_participants(query):
                 reason = str(exc)
         seen, unique = set(), []
         for it in items:
-            key = (it['kind'], it['name'].casefold())
+            key = (it['kind'], json.dumps(it.get('peer'), sort_keys=True) if it.get('peer') else it['name'].casefold())
             if it['name'] and key not in seen: seen.add(key); unique.append(it)
         return {'items': unique[:30], 'people': not reason, 'reason': reason}
     return _run(run)
@@ -483,8 +483,8 @@ def get_thread(peer):
     return _run(run)
 
 
-def send_message(peer, text):
-    """Ответ в диалог — только по явному действию пользователя («Отправить»)."""
+def send_message(peer, text, *, sender=None):
+    """Отправка в диалог по явному действию либо расписанию владельца подключения."""
     text = str(text).strip()
     if not text: raise EtherMcpError('Пустое сообщение.')
     if MOCK:
@@ -493,8 +493,18 @@ def send_message(peer, text):
         return {'sent': True}
 
     async def run():
-        async with open_client() as client:
+        headers = None
+        if sender is not None:
+            if ether_credentials.owner() != sender:
+                raise EtherMcpError('Владелец подключения Эфира изменился. Проверьте расписание.')
+            headers = auth_headers()
+            if not headers or ether_credentials.owner() != sender:
+                raise EtherMcpError('Подключение Эфира владельца расписания недоступно.')
+        async with open_client(headers) if headers else open_client() as client:
             tool = await _tool_of(client, 'send')
+            props = tool.input_schema.get('properties', {})
+            if 'peer' not in props or not {'text', 'message', 'body'}.intersection(props):
+                raise EtherMcpError('MCP Эфира не объявил адресата и текст сообщения.')
             await _execute(client, tool, {'peer': peer, 'text': text, 'message': text, 'body': text}, write=True)
         _messages.pop(json.dumps(peer, sort_keys=True, ensure_ascii=False), None)
         _feed_cache.clear()

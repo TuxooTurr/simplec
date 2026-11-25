@@ -179,6 +179,10 @@ def norm_run(r: dict) -> dict:
     summary = r.get("executionSummary")
     if isinstance(summary, dict) and not counts:
         counts = {str(k): int(v) for k, v in summary.items() if isinstance(v, (int, float))}
+    assignments = r.get("items", r.get("testRunItems"))
+    assignees = None
+    if isinstance(assignments, list):
+        assignees = sorted({_name(i.get("assignedTo") or i.get("userKey")) for i in assignments if isinstance(i, dict)} - {""})
     return {
         "key": r.get("key", ""),
         "name": r.get("name") or "",
@@ -189,6 +193,7 @@ def norm_run(r: dict) -> dict:
         # Вид прогона (Регресс, Новый функционал…) — пользовательское поле прогона SBER911.
         "type": _name((r.get("customFields") or {}).get(RUN_TYPE_FIELD)) if isinstance(r.get("customFields"), dict) else "",
         "owner": _name(r.get("owner")),
+        "assignees": assignees,
         "created": r.get("createdOn") or "",
         "plannedStart": r.get("plannedStartDate") or "",
         "plannedEnd": r.get("plannedEndDate") or "",

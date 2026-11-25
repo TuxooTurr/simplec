@@ -25,6 +25,7 @@ MAX_COLUMNS = 512
 
 class XlsxSheet(BaseModel):
     name: str = "Лист1"
+    id: str = Field(default="", max_length=160)
     columns: list[dict] = Field(..., min_length=1, max_length=MAX_COLUMNS)
     rows: list[list[dict]] = Field(default_factory=list, max_length=20000)
     headerFill: str = "1F3864"
@@ -35,7 +36,7 @@ class XlsxSheet(BaseModel):
 
 class XlsxBody(BaseModel):
     filename: str = "Shark.xlsx"
-    sheets: list[XlsxSheet] = Field(default_factory=list, max_length=20)
+    sheets: list[XlsxSheet] = Field(default_factory=list, max_length=1000)
     # один лист — без sheets
     sheet: str = "Лист1"
     columns: list[dict] = Field(default_factory=list, max_length=MAX_COLUMNS)
@@ -47,7 +48,7 @@ def export_xlsx(body: XlsxBody) -> Response:
     sheets = body.sheets or ([XlsxSheet(name=body.sheet, columns=body.columns, rows=body.rows)] if body.columns else [])
     if not sheets:
         raise HTTPException(422, "Нет колонок")
-    data = build_xlsx([sheet_from_payload(s.name, s.columns, s.rows, s.headerFill, s.headerInk, s.frozenCols, s.sectionRows) for s in sheets])
+    data = build_xlsx([sheet_from_payload(s.name, s.columns, s.rows, s.headerFill, s.headerInk, s.frozenCols, s.sectionRows, s.id) for s in sheets])
     name = re.sub(r'[\\/:*?"<>|]+', "_", body.filename).strip() or "Shark.xlsx"
     if not name.lower().endswith(".xlsx"):
         name += ".xlsx"

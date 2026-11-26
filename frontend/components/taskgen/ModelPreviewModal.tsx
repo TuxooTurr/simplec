@@ -1,44 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, ChevronRight, ExternalLink, FileCheck2, Folder, FolderOpen, Loader2, PlayCircle, Send } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ExternalLink, FileCheck2, Loader2, PlayCircle, Send } from "lucide-react";
 import Modal from "@/components/ui/Modal";
+import { Button, Select } from "@/components/ui";
 import { applyStaging, createTaskRuns, getTaskPlan, type TaskPlan, type TaskRunResult } from "@/lib/zephyrStaging";
-import { modelTree, newFolders, stagingOf, type ModelCase, type ModelGroup, type ModelNode } from "@/lib/taskModel";
+import { cleanPath, inModelFolder, modelTree, moveModelCases, newFolders, stagingOf, type ModelCase, type ModelGroup, type ModelNode } from "@/lib/taskModel";
+import ModelPreviewTree, { acceptsModelMove, modelFolderName, selectedModelCases, type ModelMove } from "./ModelPreviewTree";
 
 const INPUT = "w-full rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 font-mono text-xs text-text-main focus:outline-none focus:ring-2 focus:ring-primary/30";
-
-/** Папка раскладки: новая помечена; внутри — вложенные папки и кейсы с галочками. */
-function Node({ node, depth, sent, onToggle }: { node: ModelNode; depth: number; sent: Record<string, string>; onToggle: (g: ModelGroup, c: ModelCase) => void }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <li>
-      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open} style={{ paddingLeft: 8 + depth * 16 }}
-        className="flex w-full items-center gap-1.5 py-1 pr-2 text-left text-xs hover:bg-bg-subtle">
-        <ChevronRight className={`h-3 w-3 flex-shrink-0 text-text-muted transition-transform ${open ? "rotate-90" : ""}`} />
-        {open ? <FolderOpen className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" /> : <Folder className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />}
-        <span className="truncate text-text-main">{node.name}</span>
-        {node.isNew && node.count > 0 && <span className="flex-shrink-0 rounded bg-emerald-500/15 px-1.5 text-[10px] text-emerald-700 dark:text-emerald-400">новая</span>}
-        <span className="ml-auto flex-shrink-0 tabular-nums text-text-muted">{node.count}</span>
-      </button>
-      {open && (
-        <ul>
-          {node.children.map(n => <Node key={n.path} node={n} depth={depth + 1} sent={sent} onToggle={onToggle} />)}
-          {node.cases.map(({ group, c }) => (
-            <li key={c.id}>
-              <label style={{ paddingLeft: 26 + depth * 16 }} className="flex cursor-pointer items-center gap-1.5 py-0.5 pr-2 text-xs hover:bg-bg-subtle">
-                <input type="checkbox" checked={c.on} disabled={!!sent[c.id]} onChange={() => onToggle(group, c)} aria-label={`Отправить кейс ${c.name}`} />
-                <span className={`truncate ${c.on ? "text-text-main" : "text-text-muted line-through"}`} title={c.name}>{c.name}</span>
-                {group.task && <span className="ml-auto flex-shrink-0 font-mono text-[10px] text-text-muted">{group.task.key}</span>}
-                {sent[c.id] && <span className="flex-shrink-0 font-mono text-[10px] text-emerald-600 dark:text-emerald-400">{sent[c.id]}</span>}
-              </label>
-            </li>
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
 
 /**
  * Предпросмотр выгрузки в тестовую модель: как кейсы лягут в дерево Zephyr (новые папки помечены), куда идёт каждая
@@ -52,39 +22,79 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
   const [plan, setPlan] = useState<TaskPlan | null>(null);
   const [planErr, setPlanErr] = useState("");
   const [planBusy, setPlanBusy] = useState(false);
+  const [planAttempt, setPlanAttempt] = useState(0);
   const [sent, setSent] = useState<Record<string, string>>({});
   const [runs, setRuns] = useState<Record<string, TaskRunResult>>({});
   const [errors, setErrors] = useState<string[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [fatal, setFatal] = useState("");
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const [moveNotice, setMoveNotice] = useState("");
+  const [moving, setMoving] = useState<ModelMove | null>(null);
+  const [destination, setDestination] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<ModelNode | null>(null);
   const stop = useRef(false);
 
   useEffect(() => {
     if (!open) return;
-    setGroups(initial); setSent({}); setRuns({}); setErrors([]); setFatal(""); setPlan(null); setPlanErr(""); setPlanBusy(true);
-    getTaskPlan(project, initial.flatMap(g => (g.task ? [g.task.key] : [])))
-      .then(setPlan, e => setPlanErr((e as Error).message)).finally(() => setPlanBusy(false));
+    setGroups(initial); setSent({}); setRuns({}); setErrors([]); setFatal(""); setMoving(null); setRemoving(null); setSelection(new Set()); setMoveNotice("");
   }, [open, project, initial]);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setPlan(null); setPlanErr(""); setPlanBusy(true);
+    getTaskPlan(project, initial.flatMap(g => (g.task ? [g.task.key] : [])))
+      .then(value => { if (live) setPlan(value); }, e => { if (live) setPlanErr((e as Error).message); })
+      .finally(() => { if (live) setPlanBusy(false); });
+    return () => { live = false; };
+  }, [open, project, initial, planAttempt]);
 
-  const existing = useMemo(() => (plan ? new Set(plan.folders) : null), [plan]);
-  const tree = useMemo(() => modelTree(groups, existing), [groups, existing]);
+  const existing = useMemo(() => (plan ? new Set(plan.folders.map(cleanPath).filter(Boolean)) : null), [plan]);
+  const tree = useMemo(() => modelTree(groups, existing, sent), [groups, existing, sent]);
+  const selected = useMemo(() => selectedModelCases(tree, selection, sent), [tree, selection, sent]);
   const chosen = groups.flatMap(g => g.cases.filter(c => c.on).map(c => ({ g, c })));
   const left = chosen.filter(x => !sent[x.c.id]);
   const runGroups = groups.filter(g => g.task && g.run && g.cases.some(c => c.on));
   const runsLeft = runGroups.filter(g => !runs[g.task!.key]?.run);
   const sending = progress !== null;
-  const badFolder = groups.some(g => g.task && g.cases.some(c => c.on) && !g.folder.trim());
+  const badFolder = groups.some(g => g.task && !cleanPath(g.folder) && g.cases.some(c => c.on && !sent[c.id] && c.destination === undefined));
   const nothing = !left.length && !runsLeft.length;
 
   const toggle = (g: ModelGroup, c: ModelCase) => setGroups(gs => gs.map(x => (x.id !== g.id ? x
     : { ...x, cases: x.cases.map(y => (y.id === c.id ? { ...y, on: !y.on } : y)) })));
   const patch = (id: string, p: Partial<ModelGroup>) => setGroups(gs => gs.map(g => (g.id === id ? { ...g, ...p } : g)));
 
+  function move(source: ModelMove, path: string) {
+    if (sending || !plan || !acceptsModelMove(source, path)) return;
+    if (source.kind === "cases") {
+      const ids = new Set(source.ids);
+      setGroups(current => moveModelCases(current, sent, (from, id) => ids.has(id) ? path : from));
+      setSelection(current => new Set([...current].filter(id => !ids.has(id))));
+    } else {
+      const next = cleanPath(`${path}/${source.name}`);
+      setGroups(current => moveModelCases(current, sent, from => inModelFolder(from, source.path) ? next + from.slice(source.path.length) : from));
+    }
+    setMoveNotice(`Перемещено: ${source.name} → ${modelFolderName(path)}`);
+    setMoving(null);
+  }
+
+  function pickDestination(source: ModelMove) {
+    setDestination(null);
+    setMoving(source);
+  }
+
+  function removeFolder(node: ModelNode) {
+    if (!node.canMove || sending) return;
+    const parent = node.path.slice(0, node.path.lastIndexOf("/"));
+    setGroups(current => moveModelCases(current, sent, from => inModelFolder(from, node.path) ? parent + from.slice(node.path.length) : from));
+    setRemoving(null);
+  }
+
   const send = async () => {
     stop.current = false;
     setFatal(""); setErrors([]);
     const made = { ...sent };
-    const staging = stagingOf(groups, made);
+    const staging = stagingOf(groups, made, existing ?? undefined);
     setProgress({ done: 0, total: staging.cases.length });
     try {
       if (staging.cases.length) {
@@ -117,9 +127,11 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
 
   const allDone = nothing && chosen.length > 0;
 
-  return (
+  const destinations = moving ? tree.flatMap(function paths(node): string[] { return [node.path, ...node.children.flatMap(paths)]; }) : [];
+
+  return (<>
     <Modal open={open} onClose={() => { if (!sending) onClose(); }} title={`Выгрузка в тестовую модель · ${project}`} size="max-w-7xl">
-      <div className="grid h-[72vh] grid-cols-[minmax(0,5fr)_minmax(0,6fr)] gap-4">
+      <div className="grid h-[72vh] grid-rows-[minmax(0,1fr)_minmax(0,1.5fr)] gap-4 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:grid-rows-1">
         {/* Задачи: куда и что */}
         <div className="flex min-h-0 flex-col gap-2">
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 scrollbar-thin">
@@ -140,7 +152,7 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
                   {g.reqNames.length > 0 && <p className="truncate text-xs text-text-muted" title={g.reqNames.join("; ")}>Требования: {g.reqNames.join("; ")}</p>}
                   {g.task && (
                     <>
-                      <label className="block text-[11px] text-text-muted">Папка фичи в модели
+                      <label className="block text-[11px] text-text-muted">Папка фичи по умолчанию
                         <input value={g.folder} onChange={e => patch(g.id, { folder: e.target.value })} list="model-folders" disabled={sending || made > 0}
                           aria-label={`Папка фичи ${g.task.key}`} className={`mt-1 ${INPUT}`} />
                       </label>
@@ -187,11 +199,23 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
             {planBusy && <span className="inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> сверяю с моделью</span>}
             {plan && <span>новых папок: {newFolders(tree)}</span>}
           </p>
-          {planErr && <p className="text-xs text-amber-700 dark:text-amber-400">С моделью не сверилось — новые папки не помечены: {planErr}</p>}
+          {planErr && <div className="flex items-center gap-2 text-xs tone-warning"><p>{planErr}</p>
+            <Button variant="sm" onClick={() => setPlanAttempt(n => n + 1)}>Перечитать дерево</Button></div>}
+          {plan && <div className="flex min-h-8 flex-wrap items-center gap-2 text-xs">
+            {selected?.kind === "cases" ? <>
+              <span className="font-semibold text-primary">Выбрано для переноса: {selected.ids.length}</span>
+              <Button variant="sm" disabled={sending} onClick={() => pickDestination(selected)}>Переместить</Button>
+              <Button variant="ghost" onClick={() => setSelection(new Set())}>Снять выбор</Button>
+            </> : <p role="status" className="text-text-muted">{moveNotice || "Выберите кейсы и перетащите их за ручку на папку."}</p>}
+          </div>}
           <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border-main py-1 scrollbar-thin">
-            {tree.length ? (
-              <ul>{tree.map(n => <Node key={n.path} node={n} depth={0} sent={sent} onToggle={toggle} />)}</ul>
-            ) : <p className="p-4 text-center text-sm text-text-muted">Кейсов нет</p>}
+            <ModelPreviewTree tree={tree} batch={selected} sent={sent} disabled={sending || !plan} selected={selection} onToggle={toggle} onMove={move}
+              onSelect={id => setSelection(current => {
+                const next = new Set(current);
+                if (next.has(id)) next.delete(id);
+                else next.add(id);
+                return next;
+              })} onPickDestination={pickDestination} onRemove={setRemoving} />
           </div>
         </div>
       </div>
@@ -218,7 +242,7 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
           {allDone ? (
             <span className="inline-flex items-center gap-1.5 text-sm text-emerald-700 dark:text-emerald-400"><FileCheck2 className="h-4 w-4" /> В модели</span>
           ) : (
-            <button type="button" onClick={() => void send()} disabled={sending || nothing || badFolder}
+            <button type="button" onClick={() => void send()} disabled={sending || nothing || badFolder || !plan}
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
               {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               {Object.keys(sent).length ? "Отправить остаток" : "Отправить в Zephyr"}</button>
@@ -226,5 +250,18 @@ export default function ModelPreviewModal({ open, project, groups: initial, onCl
         </div>
       </div>
     </Modal>
-  );
+    {moving && <Modal open title="Переместить в папку" onClose={() => setMoving(null)} size="max-w-md"
+      footer={<div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setMoving(null)}>Отмена</Button>
+        <Button disabled={destination === null} onClick={() => { if (destination !== null) move(moving, destination); }}>Переместить</Button></div>}>
+      <p className="mb-2 break-words text-sm text-text-main">{moving.name}</p>
+      <Select searchable aria-label="Папка назначения" value={destination ?? "•"} placeholder="Выберите папку" onChange={setDestination}>
+        {destinations.filter(path => acceptsModelMove(moving, path)).map(path => <option key={path} value={path}>{path || "Корень тестовой модели"}</option>)}
+      </Select>
+    </Modal>}
+    {removing && <Modal open title="Убрать папку из выгрузки" onClose={() => setRemoving(null)} size="max-w-md"
+      footer={<div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setRemoving(null)}>Отмена</Button>
+        <Button onClick={() => removeFolder(removing)}>Убрать папку</Button></div>}>
+      <p className="text-sm text-text-main">Кейсы и вложенные папки из «{removing.name}» перейдут на уровень выше.</p>
+    </Modal>}
+  </>);
 }

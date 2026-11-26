@@ -22,15 +22,18 @@ export default function IssueQueueModal({
   data,
   onClose,
   onChanged,
-  subset, canEdit, onColumnsChange,
+  subset, canEdit, onColumnsChange, loading, loadError, notice,
 }: {
   widget: DashboardWidget;
   canEdit: boolean;
   onColumnsChange: (columns: string[]) => Promise<void>;
-  data: WidgetData;
+  data: Pick<WidgetData, "pending" | "error" | "partial"> & { items: Issue[] };
   onClose: () => void;
   onChanged: () => void;
   subset?: Set<string>;
+  loading?: boolean;
+  loadError?: string;
+  notice?: string;
 }) {
   const [done, setDone] = useState(false),
     [picked, setPicked] = useState<Set<string>>(new Set()),
@@ -39,7 +42,7 @@ export default function IssueQueueModal({
     [busy, setBusy] = useState(false);
   const rows = data.items.filter(
     (i) =>
-      (widget.kind !== "counter" || !!i.processedAt === done) &&
+      (widget.kind !== "counter" || !!(i as QueueIssue).processedAt === done) &&
       (!subset || subset.has(i.key)),
   );
   const table = useDashboardColumns(widget, rows);
@@ -70,6 +73,9 @@ export default function IssueQueueModal({
       <div className="space-y-3">
         {data.error && <p role="alert" className="text-sm tone-warning rounded-lg p-3">{data.error} Показаны последние сохранённые данные.</p>}
         {data.partial && <p className="text-xs text-text-muted">Выдача ограничена; сузьте JQL для полной проверки.</p>}
+        {notice && <p className="text-xs text-text-muted">{notice}</p>}
+        {loading && <p role="status" className="text-sm text-text-muted">Загружаю дефекты из Jira…</p>}
+        {loadError && <p role="alert" className="text-sm tone-danger">{loadError}</p>}
         {widget.kind === "counter" && (
           <div className="flex gap-2">
             <Button

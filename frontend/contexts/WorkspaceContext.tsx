@@ -39,6 +39,9 @@ interface WorkspaceCtx {
   /** Что показывается в правой панели */
   rightSection: SectionId | null;
   setRightSection: (id: SectionId | null) => void;
+  /** Рабочая панель, к которой относятся общие действия шапки. */
+  activePane: "left" | "right";
+  setActivePane: (side: "left" | "right") => void;
   /** Какая секция сейчас тащится из сайдбара */
   dragging: SectionId | null;
   setDragging: (id: SectionId | null) => void;
@@ -63,6 +66,8 @@ const WorkspaceContext = createContext<WorkspaceCtx>({
   setProviderStatuses: () => {},
   rightSection: null,
   setRightSection: () => {},
+  activePane: "left",
+  setActivePane: () => {},
   dragging: null,
   setDragging: () => {},
   leftVisible: true,
@@ -79,6 +84,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [provider, setProvider] = useState("gigachat");
   const [providerStatuses, setProviderStatuses] = useState<Record<string, "green" | "yellow" | "red"> | null>(null);
   const [rightSection, setRightSection] = useState<SectionId | null>(null);
+  const [activePane, setActivePane] = useState<"left" | "right">("left");
   const [dragging, setDragging] = useState<SectionId | null>(null);
   const [leftVisible, setLeftVisible] = useState(true);
   const [rightOpen, setRightOpen] = useState(false);
@@ -92,6 +98,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         provider, setProvider,
         providerStatuses, setProviderStatuses,
         rightSection, setRightSection,
+        activePane, setActivePane,
         dragging, setDragging,
         leftVisible, setLeftVisible,
         rightOpen, setRightOpen,

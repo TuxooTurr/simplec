@@ -51,7 +51,7 @@ def test_bitbucket_uses_login_and_author_date_for_saved_calendar(monkeypatch):
 def test_hidden_sources_are_not_called(monkeypatch):
     widget = employee(activityMetrics=["jiraCreated"])
     monkeypatch.setattr(activity, "employee_profile", lambda login: {"displayName": "Имя из Jira"})
-    monkeypatch.setattr(activity, "_issue_metrics", lambda widget, window: {"metrics": [{"value": 1}]})
+    monkeypatch.setattr(activity, "_issue_metrics", lambda widget, window, profile: {"metrics": [{"value": 1}]})
 
     def unexpected(*args):
         pytest.fail("Пользователь отключил источник")
@@ -79,3 +79,46 @@ def test_zephyr_checks_only_runs_overlapping_the_selected_window(monkeypatch):
     data = activity._assigned_runs(widget, activity.date_range(widget), {})
     assert data["metrics"] == []
     assert [run["key"] for run in data["runs"]] == ["SBER911-C3"]
+
+
+def test_jira_defect_metrics_use_creator_assignee_tester_and_actual_history(monkeypatch):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(activity, "SessionLocal", lambda: nullcontext(None))
+    monkeypatch.setattr(activity.jira, "_load_cfg", lambda db: {"issuetype": "Дефект"})
+    monkeypatch.setattr(activity.jira, "catalog", lambda db: {"fields": [
+        {"id": "customfield_12345", "name": "Тестировщик", "kind": "user"},
+        {"id": "customfield_56789", "name": "Аналитик", "kind": "user"},
+    ]})
+    calls = []
+
+    def record(day, name, field):
+        return {"created": day + "T08:00:00.000+0300", "author": {"name": name}, "items": [{"field": field}]}
+
+    history = [
+        {"key": "SBER911-1", "changelog": {"total": 2, "histories": [
+            record("2026-11-25", "qa_user", "priority"), record("2026-11-25", "qa_user", "assignee"),
+        ]}},
+        {"key": "SBER911-2", "changelog": {"total": 0, "histories": []}},
+        {"key": "SBER911-3", "changelog": {"total": 1, "histories": [record("2026-11-26", "qa_user", "status")]}},
+        {"key": "SBER911-4", "changelog": {"total": 1, "histories": [record("2026-11-25", "another", "status")]}},
+        {"key": "SBER911-5", "changelog": {"total": 4, "histories": []}},
+    ]
+
+    def search(cfg, jql, **options):
+        calls.append(jql)
+        assert options["validate_query"]
+        assert 'issuetype = "Дефект"' in jql
+        if options.get("expand") == "changelog":
+            return history, len(history)
+        return [], 3
+
+    monkeypatch.setattr(activity.jira, "_search", search)
+    widget = employee(activityPeriod="custom", activityFrom="2026-11-25",
+                      activityMetrics=["jiraCreated", "jiraOpenDefects", "jiraUpdated", "jiraTransitions"])
+    created, active, processed = activity._issue_metrics(widget, activity.date_range(widget), {})["metrics"]
+    assert 'creator = "qa_user" AND created >= "2026-11-25" AND created < "2026-11-26"' in calls[0]
+    assert 'statusCategory != Done AND (assignee = "qa_user" OR cf[12345] = "qa_user")' in calls[1]
+    assert [created["value"], active["value"], processed["value"]] == [3, 3, 1]
+    assert processed["issueKeys"] == ["SBER911-1"]
+    assert processed["partial"] is True

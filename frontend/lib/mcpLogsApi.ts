@@ -1,7 +1,7 @@
 import { ApiRequestError, fetchJson } from "./api";
 
 export interface LogPeriod { start: string; end: string }
-export interface LogQuery extends LogPeriod { service?: string; errorsOnly: boolean }
+export interface LogQuery extends LogPeriod { services: string[]; errorsOnly: boolean }
 export interface LogRecord {
   service: string; namespace: string; timestamp: string; level: string; message: string; stack: string[]; traceId: string; requestId: string; error: boolean;
 }
@@ -14,9 +14,29 @@ export interface LogLookup {
 }
 export interface LogGroup {
   records: LogRecord[]; result: LogDiagnosis; lookups: LogLookup[]; limited: boolean;
-  correlation: "trace" | "request" | "record"; correlationId: string;
+  correlation: "trace" | "request" | "record" | "file"; correlationId: string;
 }
-export interface LogAnalysis { groups: LogGroup[] }
+export interface LogUpload {
+  fileCount: number; sizeBytes: number; lineCount: number; eventCount: number;
+  errorCount: number; sampleCount: number; longLines: number; errorsOnly: boolean;
+}
+export interface LogAnalysis { groups: LogGroup[]; upload?: LogUpload }
+export interface LogAuditEntry {
+  id: string; actor: string; source: "pvs" | "file"; status: "running" | "done" | "error" | "timeout" | "cancelled";
+  started_at: string; finished_at: string | null; provider: string; item_count: number | null; size_bytes: number | null;
+  period_start: string | null; period_end: string | null; errors_only: number | null;
+}
+export interface LogAuditPage { entries: LogAuditEntry[]; hasMore: boolean }
+
+export const MAX_LOG_UPLOAD_BYTES = 500 * 1024 * 1024;
+export const MAX_LOG_UPLOAD_FILES = 12;
+export const MAX_LOG_SERVICES = 30;
+
+export function formatLogSize(bytes: number): string {
+  return bytes < 1024 ? `${bytes} Б` : bytes < 1024 ** 2
+    ? `${(bytes / 1024).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} КБ`
+    : `${(bytes / 1024 ** 2).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`;
+}
 export interface PvsSettings {
   login: string; credentialSource: "saved" | "environment" | "none" | "unavailable"; demo: boolean;
   launchConfigured: boolean; apiUrl: string; namespace: string; index: string;
@@ -26,7 +46,7 @@ const post = <T,>(path: string, body: unknown, signal?: AbortSignal) => fetchJso
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
 });
 
-export interface LogJobProgress { phase: "search" | "related" | "model"; seconds: number; reconnecting?: boolean }
+export interface LogJobProgress { phase: "search" | "related" | "model" | "upload" | "scan"; seconds: number; reconnecting?: boolean }
 export interface LogJobOptions { signal: AbortSignal; onProgress: (progress: LogJobProgress) => void }
 
 type LogJob<T> = LogJobProgress & (
@@ -34,13 +54,17 @@ type LogJob<T> = LogJobProgress & (
   { status: "error" | "timeout"; detail: string }
 );
 
-async function runLogJob<T>(kind: "query" | "analyze" | "pvs/test", body: unknown, { signal, onProgress }: LogJobOptions): Promise<T> {
+async function runLogJob<T>(kind: "query" | "analyze" | "pvs/test", body: unknown, options: LogJobOptions): Promise<T> {
   // The start request is short. Keep its response so cancellation during startup can still stop the server job.
   const { id } = await post<{ id: string }>(`${kind}/jobs`, body, AbortSignal.timeout(15_000));
+  return pollLogJob(id, kind === "analyze" ? "related" : "search", options);
+}
+
+async function pollLogJob<T>(id: string, phase: LogJobProgress["phase"], { signal, onProgress }: LogJobOptions): Promise<T> {
   const path = `/api/mcp-logs/jobs/${encodeURIComponent(id)}`;
   let failures = 0;
   let finished = false;
-  let progress: LogJobProgress = { phase: kind === "analyze" ? "related" : "search", seconds: 0 };
+  let progress: LogJobProgress = { phase, seconds: 0 };
   try {
     for (;;) {
       signal.throwIfAborted();
@@ -70,6 +94,19 @@ async function runLogJob<T>(kind: "query" | "analyze" | "pvs/test", body: unknow
     if (!finished) void fetchJson(path, { method: "DELETE", signal: AbortSignal.timeout(5_000) }).catch(() => {});
   }
 }
+
+export async function analyzeLogFiles(files: File[], provider: string, errorsOnly: boolean, options: LogJobOptions) {
+  const body = new FormData();
+  files.forEach(file => body.append("files", file));
+  body.set("provider", provider);
+  body.set("errorsOnly", String(errorsOnly));
+  options.onProgress({ phase: "upload", seconds: 0 });
+  const { id } = await fetchJson<{ id: string }>("/api/mcp-logs/upload/jobs", { method: "POST", body, signal: options.signal });
+  return pollLogJob<LogAnalysis>(id, "scan", options);
+}
+
+export const getLogAudit = (offset: number, signal: AbortSignal) =>
+  fetchJson<LogAuditPage>(`/api/mcp-logs/audit?offset=${offset}`, { cache: "no-store", signal });
 
 export const getLogCatalog = () => fetchJson<LogCatalog>("/api/mcp-logs/catalog");
 export const queryMcpLogs = (query: LogQuery, options: LogJobOptions) => runLogJob<LogResult>("query", query, options);

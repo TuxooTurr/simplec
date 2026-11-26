@@ -92,6 +92,13 @@ def offline_checks(*, software_only=False):
         major = int(result.stdout.strip().lstrip('v').split('.')[0]) if result else 0
     except (OSError, subprocess.SubprocessError, ValueError): major = 0
     check(items, 'node', 'pass' if major >= 20 else 'missing', 'Node.js 20+ доступен.' if major >= 20 else 'Установите Node.js 20+ из разрешённого источника.')
+    if major >= 20:
+        from agents.plantuml_render import render_markdown
+        _, diagram_errors = render_markdown("@startuml\ncomponent A\ncomponent B\nA --> B\n@enduml",
+                                            lambda _: "/health/diagram.svg")
+        check(items, 'plantuml', 'missing' if diagram_errors else 'pass',
+              'Схема не построилась. Проверьте наличие vendor/plantuml в дистрибутиве Shark.' if diagram_errors
+              else 'Встроенный PlantUML построил схему без сети.')
     check(items, 'frontend_dependencies', 'pass' if (ROOT / 'frontend/node_modules/next/package.json').is_file() else 'missing',
           'Проверьте npm ci --prefix frontend по package-lock.json.')
     if software_only: return items

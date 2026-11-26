@@ -6,13 +6,13 @@ export type WidgetPresentation = "list" | "donut" | "bar";
 export type WidgetSize = "S" | "M" | "L" | "XL" | "XXL";
 export type WidgetPalette = "indigo" | "ocean" | "forest" | "warm" | "spectrum";
 export type ActivityPeriod = "today" | "week" | "fortnight" | "month" | "custom";
-export type ActivityMetric = "jiraCreated" | "jiraUpdated" | "jiraTransitions" | "jiraOpenDefects" |
+export type ActivityMetric = "jiraDefectsCreated" | "jiraDefectsActive" | "jiraDefectsProcessed" |
   "bbCommitCount" | "bbCommitList" | "zephyrRunCount" | "zephyrRunList";
 export const ACTIVITY_PERIODS: Record<ActivityPeriod, string> = {
   today: "Сегодня", week: "Последние 7 дней", fortnight: "Последние 14 дней", month: "Последние 30 дней", custom: "Календарь",
 };
 export const DEFAULT_ACTIVITY_METRICS: ActivityMetric[] = [
-  "jiraCreated", "jiraUpdated", "jiraOpenDefects", "bbCommitCount", "zephyrRunCount", "zephyrRunList",
+  "jiraDefectsCreated", "jiraDefectsActive", "jiraDefectsProcessed", "bbCommitCount", "zephyrRunCount", "zephyrRunList",
 ];
 export interface DashboardWidget {
   id: string;
@@ -71,11 +71,15 @@ export type QueueIssue = Issue & {
   processedReason?: string;
   statusChange?: { from: string; to: string; at: string };
 };
+export type ActivityMetricValue = {
+  label: string; value: number | null; url?: string; detail?: string;
+  jql?: string; issueKeys?: string[]; partial?: boolean;
+};
 export interface WidgetData {
   items: QueueIssue[];
   employeeName?: string;
   activity?: Record<string, {
-    metrics?: { label: string; value: number | null; url?: string; detail?: string }[];
+    metrics?: ActivityMetricValue[];
     runs?: { key: string; name: string; url: string }[];
     commits?: { hash: string; id: string; message: string; url: string; date: string }[];
     listDetail?: string;
@@ -116,7 +120,11 @@ export const markWidget = (id: string, keys: string[], processed: boolean) =>
   );
 
 
+export type WidgetMessageFormat = "full" | "link";
+
 export interface WidgetDelivery {
+  messageFormat: WidgetMessageFormat;
+  intro: string;
   statusColors?: Record<string, string>;
   enabled: boolean;
   recipients: { name: string; peer: EtherPeer }[];

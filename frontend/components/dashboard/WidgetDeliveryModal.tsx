@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Loader2, X } from "lucide-react";
-import { Button, Modal } from "@/components/ui";
+import { Button, Modal, Select, Textarea } from "@/components/ui";
 import { PickerPanel } from "@/components/jiratool/FieldPicker";
 import { dashboardColumns, useDashboardColumns } from "@/lib/dashboardColumns";
-import { getWidgetData, getWidgetDelivery, saveWidgetDelivery, type DashboardWidget, type WidgetDelivery, type WidgetDeliveryState } from "@/lib/dashboardApi";
+import { getWidgetData, getWidgetDelivery, saveWidgetDelivery, type DashboardWidget, type WidgetDelivery, type WidgetDeliveryState, type WidgetMessageFormat } from "@/lib/dashboardApi";
 import { applyStageStyles, stageForStatus, stageStyle } from "@/lib/jiraStages";
 import { loadState } from "@/lib/jiraTool";
 import { projectKeyOfIssue } from "@/lib/jiraModel";
 import { etherSearch, type EtherParticipant } from "@/lib/etherApi";
 
+const INTRO_LIMIT = 225;
 const days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const fullDays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
 const input = "w-full rounded-lg border border-border-main bg-bg-card px-3 py-2 text-sm focus-visible:outline-primary";
@@ -21,7 +22,7 @@ const format = (at: string, zone: string) =>
 
 async function captureColors(widget: DashboardWidget, draft: WidgetDelivery) {
   const colors = { ...draft.statusColors };
-  if (!draft.enabled || !draft.columns.includes("status")) return colors;
+  if (!draft.enabled || draft.messageFormat === "link" || !draft.columns.includes("status")) return colors;
   const data = await getWidgetData(widget.id).catch(() => null);
   if (!data) return colors;
   const state = loadState();
@@ -41,7 +42,7 @@ async function captureColors(widget: DashboardWidget, draft: WidgetDelivery) {
 export default function WidgetDeliveryModal({ widget, onClose }: { widget: DashboardWidget; onClose: () => void }) {
   const [state, setState] = useState<WidgetDeliveryState | null>(null);
   const [draft, setDraft] = useState<WidgetDelivery>(() => ({
-    enabled: false, recipients: [], weekdays: [], time: "09:00",
+    enabled: false, recipients: [], weekdays: [], time: "09:00", messageFormat: "full", intro: "",
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/Moscow",
     columns: dashboardColumns(widget).filter(c => !c.startsWith("st:")).slice(0, 12),
   }));
@@ -95,8 +96,11 @@ export default function WidgetDeliveryModal({ widget, onClose }: { widget: Dashb
     finally { setSaving(false); }
   };
 
-  const valid = !draft.enabled || !!(draft.recipients.length && draft.weekdays.length && draft.columns.length);
-  const form = "widget-delivery-" + widget.id;
+  const messageFormat = draft.messageFormat ?? "full";
+  const intro = draft.intro ?? "";
+  const fullReport = messageFormat === "full";
+  const valid = !draft.enabled || !!(draft.recipients.length && draft.weekdays.length && (!fullReport || draft.columns.length));
+  const form = "widget-delivery-" + useId();
   return <Modal open onClose={onClose} title={"Отправка в Эфир · " + widget.title} size="max-w-2xl"
     footer={state && <div className="flex justify-end gap-2">
       <Button type="button" variant="ghost" onClick={onClose}>Закрыть</Button>
@@ -111,6 +115,27 @@ export default function WidgetDeliveryModal({ widget, onClose }: { widget: Dashb
         <input type="checkbox" checked={draft.enabled} onChange={e => setDraft(d => ({ ...d, enabled: e.target.checked }))} />
         Отправлять по расписанию
       </label>
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor={form + "-intro"} className="text-sm font-medium">Текст перед сообщением</label>
+            <span id={form + "-intro-count"} className="text-xs tabular-nums text-text-muted">{Array.from(intro).length} / {INTRO_LIMIT}</span>
+          </div>
+          <Textarea id={form + "-intro"} aria-describedby={form + "-intro-count"} rows={2} value={intro}
+            onChange={e => {
+              const intro = Array.from(e.target.value).slice(0, INTRO_LIMIT).join("");
+              setDraft(d => ({ ...d, intro }));
+            }} />
+        </div>
+        <div className="space-y-1 sm:max-w-xs">
+          <label htmlFor={form + "-format"} className="text-sm font-medium">Формат сообщения</label>
+          <Select id={form + "-format"} value={messageFormat}
+            onChange={messageFormat => setDraft(d => ({ ...d, messageFormat: messageFormat as WidgetMessageFormat }))}>
+            <option value="full">Весь текст</option>
+            <option value="link">Только ссылка</option>
+          </Select>
+        </div>
+      </div>
       <div className="space-y-2">
         <label htmlFor={form + "-peer"} className="text-sm font-medium">Получатели</label>
         {!!draft.recipients.length && <ul className="flex flex-wrap gap-2">
@@ -156,14 +181,16 @@ export default function WidgetDeliveryModal({ widget, onClose }: { widget: Dashb
           </datalist>
         </label>
       </div>
-      <details className="rounded-lg border border-border-main p-3">
+      {fullReport && <details className="rounded-lg border border-border-main p-3">
         <summary className="cursor-pointer text-sm font-medium">Колонки Jira · {draft.columns.length}</summary>
         <div className="mt-2">
           <PickerPanel label="Колонки сообщения" options={options.filter(o => !o.value.startsWith("st:"))}
             selected={draft.columns} ordered max={12} onChange={columns => setDraft(d => ({ ...d, columns }))} />
         </div>
-      </details>
-      <p className="text-xs text-text-muted">Отчёт содержит задачи из JQL виджета, цветные маркеры статусов и ссылку на полную выдачу Jira.
+      </details>}
+      <p className="text-xs text-text-muted">{fullReport
+        ? "Отчёт содержит задачи из JQL виджета, цветные маркеры статусов и ссылку на полную выдачу Jira."
+        : "В сообщение попадёт ссылка на фильтр Jira."}
         {widget.kind === "counter" && " Для счётчика используется текущая выдача JQL."}
         {widget.kind === "employee" && " Для сотрудника используются назначенные ему задачи выбранного проекта."}</p>
       {state.sourceChanged && <p role="status" className="text-sm tone-danger">Источник виджета изменился. Сохраните расписание, чтобы возобновить отправку.</p>}

@@ -10,12 +10,15 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from threading import RLock
 from typing import Optional
 from db.paths import DATA_DIR
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SCRIPTS_FILE  = DATA_DIR / "alert_scripts.json"
 _FOLDERS_FILE  = DATA_DIR / "alert_folders.json"
+_LOCK = RLock()
 
 
 class AlertsStore:
@@ -32,8 +35,14 @@ class AlertsStore:
     @staticmethod
     def _save_scripts(scripts: list[dict]) -> None:
         _SCRIPTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(_SCRIPTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(scripts, f, ensure_ascii=False, indent=2)
+        with NamedTemporaryFile("w", encoding="utf-8", dir=_SCRIPTS_FILE.parent, delete=False) as f:
+            temp = Path(f.name)
+            try:
+                json.dump(scripts, f, ensure_ascii=False, indent=2)
+                f.close()
+                temp.replace(_SCRIPTS_FILE)
+            finally:
+                temp.unlink(missing_ok=True)
 
     @classmethod
     def get_scripts(cls) -> list[dict]:
@@ -49,47 +58,45 @@ class AlertsStore:
     @classmethod
     def save_script(cls, script: dict) -> dict:
         """Создать или обновить скрипт. Если id не задан — генерируем."""
-        scripts = cls._load_scripts()
-        if not script.get("id"):
-            script["id"] = str(uuid.uuid4())[:8]
-        if not script.get("created_at"):
-            script["created_at"] = datetime.now(timezone.utc).isoformat()
-        # Обновить существующий
-        for i, s in enumerate(scripts):
-            if s.get("id") == script["id"]:
-                scripts[i] = script
-                cls._save_scripts(scripts)
-                return script
-        # Добавить новый
-        scripts.append(script)
-        cls._save_scripts(scripts)
-        return script
+        return cls.save_scripts([script])[0]
+
+    @classmethod
+    def save_scripts(cls, batch: list[dict]) -> list[dict]:
+        with _LOCK:
+            scripts = {s.get("id"): s for s in cls._load_scripts()}
+            for script in batch:
+                script["id"] = script.get("id") or uuid.uuid4().hex[:8]
+                existing = scripts.get(script["id"], {})
+                script["created_at"] = script.get("created_at") or existing.get("created_at") or datetime.now(timezone.utc).isoformat()
+                scripts[script["id"]] = script
+            cls._save_scripts(list(scripts.values()))
+            return batch
 
     @classmethod
     def delete_script(cls, script_id: str) -> bool:
         """Удалить скрипт. Встроенные (builtin=true) удалять нельзя."""
-        scripts = cls._load_scripts()
-        for s in scripts:
-            if s.get("id") == script_id:
-                if s.get("builtin"):
-                    return False   # нельзя удалить встроенный
-                scripts = [x for x in scripts if x.get("id") != script_id]
-                cls._save_scripts(scripts)
-                return True
-        return False
+        with _LOCK:
+            scripts = cls._load_scripts()
+            script = next((s for s in scripts if s.get("id") == script_id), None)
+            if not script or script.get("builtin"):
+                return False
+            cls._save_scripts([s for s in scripts if s.get("id") != script_id])
+            return True
 
     @classmethod
     def reorder_scripts(cls, ids: list[str]) -> list[dict]:
         """Порядок скриптов = порядок в файле. Переданные id встают в нужном порядке
         на те же места, что занимали (обычно — скрипты одной папки); остальные не двигаются."""
-        scripts = cls._load_scripts()
-        wanted = [i for i in dict.fromkeys(ids) if any(s.get("id") == i for s in scripts)]
-        slots = [n for n, s in enumerate(scripts) if s.get("id") in set(wanted)]
-        by_id = {s.get("id"): s for s in scripts}
-        for slot, sid in zip(slots, wanted):
-            scripts[slot] = by_id[sid]
-        cls._save_scripts(scripts)
-        return scripts
+        with _LOCK:
+            scripts = cls._load_scripts()
+            by_id = {s.get("id"): s for s in scripts}
+            wanted = [i for i in dict.fromkeys(ids) if i in by_id]
+            selected = set(wanted)
+            slots = [n for n, s in enumerate(scripts) if s.get("id") in selected]
+            for slot, sid in zip(slots, wanted):
+                scripts[slot] = by_id[sid]
+            cls._save_scripts(scripts)
+            return scripts
 
     # ── Folders ─────────────────────────────────────────────────────────────
 
@@ -132,12 +139,11 @@ class AlertsStore:
         if len(folders) == before:
             return False
         cls._save_folders(folders)
-        scripts = cls._load_scripts()
-        changed = False
-        for s in scripts:
-            if s.get("folder_id") == folder_id:
+        with _LOCK:
+            scripts = cls._load_scripts()
+            moved = [s for s in scripts if s.get("folder_id") == folder_id]
+            for s in moved:
                 s["folder_id"] = None
-                changed = True
-        if changed:
-            cls._save_scripts(scripts)
+            if moved:
+                cls._save_scripts(scripts)
         return True

@@ -21,6 +21,7 @@ class LogFilter:
     trace_id: str = ""
     request_id: str = ""
     errors_only: bool = False
+    services: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,18 +39,20 @@ async def read_matching(source, start: datetime, end: datetime, filters: LogFilt
     if filters.value is not None and not filters.field:
         raise ValueError("Укажите имя поля, если ищете по значению.")
     namespace = filters.namespace if filters.namespace is not None else configured_namespace()
+    selection = {"services": filters.services} if filters.services else {}
     data = await source.search(service=filters.service, start=start, end=end, limit=limit, namespace=namespace,
-                               trace_id=filters.trace_id, errors_only=filters.errors_only)
+                               trace_id=filters.trace_id, errors_only=filters.errors_only, **selection)
     rows, truncated = normalize(data, filters.service, limit, namespace=namespace, field=filters.field)
     timed_out = isinstance(data, dict) and data.get("timed_out") is True
     levels = {level.strip().upper().replace("WARNING", "WARN") for level in filters.levels}
     text = filters.text.casefold()
+    services = {service.casefold() for service in filters.services}
 
     def matches(row: Record) -> bool:
         ts = as_time(row.timestamp)
         return (not namespace or row.namespace == namespace) and (not ts or start <= ts <= end) and (
             not filters.service or row.service.casefold() == filters.service.casefold()
-        ) and (not levels or row.level.replace("WARNING", "WARN") in levels) and (
+        ) and (not services or row.service.casefold() in services) and (not levels or row.level.replace("WARNING", "WARN") in levels) and (
             not filters.errors_only or row.error
         ) and (not filters.trace_id or row.traceId == filters.trace_id) and (
             not filters.request_id or row.requestId == filters.request_id

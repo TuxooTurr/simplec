@@ -119,10 +119,12 @@ class RequirementsStore:
         return item
 
     @classmethod
-    def update_requirement(cls, req_id: str, **fields) -> Optional[dict]:
+    def update_requirement(cls, req_id: str, *, expected_updated_at: str | None = None, **fields) -> Optional[dict]:
         items = cls._load()
         for i in items:
             if i.get("id") == req_id:
+                if expected_updated_at is not None and expected_updated_at != (i.get("updated_at") or ""):
+                    return None
                 i.update(fields)
                 i["updated_at"] = datetime.now(timezone.utc).isoformat()
                 cls._save(items)
@@ -130,10 +132,10 @@ class RequirementsStore:
         return None
 
     @classmethod
-    def new_version(cls, req_id: str, text: str, note: str = "", sources: Optional[list] = None) -> Optional[dict]:
+    def new_version(cls, req_id: str, text: str, note: str = "", sources: Optional[list] = None, **qa_fields) -> Optional[dict]:
         """
         Новая версия документа: текущие исходник и QA-документ уходят в историю (versions), исходник — новый,
-        QA-документ — пустой (собирается заново по новой версии). Номер версии растёт.
+        QA-документ очищается или сохраняется вместе с исходником, если уже подготовлен. Номер версии растёт.
         """
         items = cls._load()
         for i in items:
@@ -148,6 +150,7 @@ class RequirementsStore:
                          version_at=now, version_note=note.strip(), updated_at=now)
                 if sources is not None:
                     i["sources"] = sources
+                i.update(qa_fields)
                 cls._save(items)
                 return i
         return None

@@ -1,6 +1,7 @@
 "use client";
 import { JIRA_ISSUES_CHANGED } from "@/components/jiratool/IssueEditButton";
 import IssueActions from "@/components/jiratool/IssueActions";
+import { usePanelAudit, type PanelAudit } from "@/components/PanelAudit";
 
 import { cloneElement, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { flushSync } from "react-dom";
@@ -62,6 +63,23 @@ import { describeNotes, dropSent, peopleFieldChanges, peopleSnapshot, queuePeopl
 import { FIELD_BY_ID } from "@/lib/jiraModel";
 import { REFRESH_MS, bindCacheTo, issueCache, persistCache } from "@/lib/jiraToolCache";
 import { RefreshIcon, usePanelRefresh } from "@/components/ui/RefreshButton";
+
+function JiraListAudit({ list, onClose }: { list: TaskList; onClose: () => void }) {
+  return (
+    <Modal open onClose={onClose} title={`Аудит · ${list.name}`} size="max-w-2xl">
+      <p className="mb-3 text-xs text-text-muted">История изменений списка в этом браузере.</p>
+      {!list.audit?.length && <p className="text-sm text-text-muted">Записей пока нет.</p>}
+      <ul className="max-h-[65vh] overflow-y-auto divide-y divide-border-main">
+        {[...(list.audit ?? [])].reverse().map((entry, i) => <li key={`${entry.at}-${i}`} className="py-2.5">
+          <div className="flex flex-wrap justify-between gap-2 text-sm">
+            <span className="font-medium">{entry.action}</span><time className="text-xs text-text-muted" dateTime={entry.at}>{new Date(entry.at).toLocaleString("ru-RU")}</time>
+          </div>
+          <p className="text-xs text-text-muted break-words">{entry.actor}{entry.keys.length > 0 && ` · ${entry.keys.join(", ")}`}</p>
+        </li>)}
+      </ul>
+    </Modal>
+  );
+}
 
 /* ── Jira tool ─────────────────────────────────────────────────────────────
    Списки задач для планирования и назначения. Задачи, поля, статусы, переходы и
@@ -169,7 +187,6 @@ export default function JiraToolSection() {
   /* ── Требования («Данные») и отчёты в чат ── */
   const { provider } = useWorkspace();
   const { user } = useAuth();
-  const [auditOpen, setAuditOpen] = useState(false);
   const [renderExport, setRenderExport] = useState(false);
   const exportTables = useRef<HTMLDivElement>(null);
   const [reqOptions, setReqOptions] = useState<ReqOption[]>([]);
@@ -432,6 +449,11 @@ export default function JiraToolSection() {
     };
   }, [defectIdx, byEpic]);
   const list = state?.lists.find(l => l.id === activeId) ?? null;
+  const audit = useMemo<PanelAudit | null>(() => list ? {
+    id: `jira:${list.id}`,
+    render: onClose => <JiraListAudit list={list} onClose={onClose} />,
+  } : null, [list]);
+  usePanelAudit(audit);
   /** Изменений людей, ждущих записи в Jira (уйдут при обновлении). */
   const pendingPeople = state?.jiraPending?.length ?? 0;
 
@@ -1181,18 +1203,6 @@ export default function JiraToolSection() {
 
   return (
     <Shell>
-      {auditOpen && list && <Modal open onClose={() => setAuditOpen(false)} title={`Аудит · ${list.name}`} size="max-w-2xl">
-        <p className="mb-3 text-xs text-text-muted">История изменений списка в этом браузере.</p>
-        {!list.audit?.length && <p className="text-sm text-text-muted">Записей пока нет.</p>}
-        <ul className="max-h-[65vh] overflow-y-auto divide-y divide-border-main">
-          {[...(list.audit ?? [])].reverse().map((entry, i) => <li key={`${entry.at}-${i}`} className="py-2.5">
-            <div className="flex flex-wrap justify-between gap-2 text-sm">
-              <span className="font-medium">{entry.action}</span><time className="text-xs text-text-muted" dateTime={entry.at}>{new Date(entry.at).toLocaleString("ru-RU")}</time>
-            </div>
-            <p className="text-xs text-text-muted break-words">{entry.actor}{entry.keys.length > 0 && ` · ${entry.keys.join(", ")}`}</p>
-          </li>)}
-        </ul>
-      </Modal>}
       {renderExport && table && ctx && list && <div ref={exportTables} aria-hidden="true" inert
         className="fixed left-[-100000px] top-0 pointer-events-none">
         {listViews(list).map(view => cloneElement(table, {
@@ -1455,9 +1465,6 @@ export default function JiraToolSection() {
                   Низ: поиск растягивается на всю свободную ширину; колонки и группировка — значками, действия — справа. */}
               <div className="flex flex-col gap-2">
                 <div className="flex items-center gap-3 min-w-0">
-                  <button type="button" onClick={() => setAuditOpen(true)} className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md border border-border-main hover:bg-bg-subtle">
-                    <ListChecks className="w-3.5 h-3.5" /> Аудит
-                  </button>
                   <ViewSwitcher views={listViews(list)} active={list.activeView ?? listViews(list)[0].id}
                     onSwitch={id => updateList(l => switchView(l, id))}
                     onAdd={() => updateList(l => addView(l, `Представление ${listViews(l).length + 1}`))}

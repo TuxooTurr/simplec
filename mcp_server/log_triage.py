@@ -102,7 +102,7 @@ def _from_json(text: str) -> Optional[tuple[str, str, list[str], Optional[str]]]
         return None
     try:
         obj = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if not isinstance(obj, dict):
         return None
@@ -126,8 +126,9 @@ def _from_json(text: str) -> Optional[tuple[str, str, list[str], Optional[str]]]
             break
         if isinstance(v, dict):
             stack_raw = v.get("stack") or v.get("message") or ""
-            if stack_raw:
+            if isinstance(stack_raw, str) and stack_raw:
                 break
+            stack_raw = ""
     stack = [l for l in stack_raw.splitlines() if l.strip()]
     if stack and not message:
         message, stack = stack[0], stack[1:]
@@ -142,52 +143,56 @@ def parse_lines(lines: Iterable[tuple[Optional[str], str]]) -> list[LogEvent]:
     last_by_pod: dict[Optional[str], LogEvent] = {}
 
     for pod, raw in lines:
-        if not raw or not raw.strip():
+        ev = parse_line(raw, pod, last_by_pod.get(pod))
+        if ev is None:
             continue
-        ts = None
-        text = raw.rstrip("\n")
-        m = _K8S_TS_RE.match(text)
-        if m:
-            ts, text = m.group(1), m.group(2)
-
-        prev = last_by_pod.get(pod)
-        if prev is not None and not _LEVEL_RE.match(text.strip()) and (
-            _CONTINUATION_RE.match(text) or (_INDENTED_RE.match(text) and prev.is_error)
-        ):
-            prev.stack.append(text)
-            continue
-
-        # Java (logback/log4j): «ERROR … сообщение», а исключение — следующей строкой.
-        # Это одна ошибка: исключение уходит в стек сообщения, а не в отдельное событие.
-        if (prev is not None and prev.level in ERROR_LEVELS and not prev.stack
-                and _EXCEPTION_START_RE.match(text) and not _LEVEL_RE.search(text[:40])):
-            prev.stack.append(text)
-            continue
-
-        # Python: «Traceback…», кадры, а суть ошибки — последней строкой без отступа.
-        if prev is not None and prev.message.startswith("Traceback") and _EXCEPTION_START_RE.match(text):
-            prev.stack.insert(0, prev.message)
-            prev.message = text
-            continue
-
-        parsed = _from_json(text)
-        if parsed:
-            level, message, stack, json_ts = parsed
-            ts = ts or json_ts
-        else:
-            lm = _LEVEL_RE.search(text[:200])
-            level = lm.group(1) if lm else ""
-            if level == "WARNING":
-                level = "WARN"
-            message, stack = text, []
-            if not level and _EXCEPTION_START_RE.match(text):
-                level = "ERROR"
-
-        ev = LogEvent(ts=ts, pod=pod, level=level or "INFO", message=message, stack=stack)
         events.append(ev)
         last_by_pod[pod] = ev
     return events
 
+
+def parse_line(raw: str, pod: Optional[str], prev: Optional[LogEvent]) -> Optional[LogEvent]:
+    if not raw or not raw.strip():
+        return None
+    ts = None
+    text = raw.rstrip("\n")
+    m = _K8S_TS_RE.match(text)
+    if m:
+        ts, text = m.group(1), m.group(2)
+
+    if prev is not None and not _LEVEL_RE.match(text.strip()) and (
+        _CONTINUATION_RE.match(text) or (_INDENTED_RE.match(text) and prev.is_error)
+    ):
+        prev.stack.append(text)
+        return None
+
+    # Java (logback/log4j): «ERROR … сообщение», а исключение — следующей строкой.
+    # Это одна ошибка: исключение уходит в стек сообщения, а не в отдельное событие.
+    if (prev is not None and prev.level in ERROR_LEVELS and not prev.stack
+            and _EXCEPTION_START_RE.match(text) and not _LEVEL_RE.search(text[:40])):
+        prev.stack.append(text)
+        return None
+
+    # Python: «Traceback…», кадры, а суть ошибки — последней строкой без отступа.
+    if prev is not None and prev.message.startswith("Traceback") and _EXCEPTION_START_RE.match(text):
+        prev.stack.insert(0, prev.message)
+        prev.message = text
+        return None
+
+    parsed = _from_json(text)
+    if parsed:
+        level, message, stack, json_ts = parsed
+        ts = ts or json_ts
+    else:
+        lm = _LEVEL_RE.search(text[:200])
+        level = lm.group(1) if lm else ""
+        if level == "WARNING":
+            level = "WARN"
+        message, stack = text, []
+        if not level and _EXCEPTION_START_RE.match(text):
+            level = "ERROR"
+
+    return LogEvent(ts=ts, pod=pod, level=level or "INFO", message=message, stack=stack)
 
 # ── Категории и важность ─────────────────────────────────────────────────────
 

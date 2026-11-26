@@ -9,6 +9,7 @@ import threading
 from colorsys import rgb_to_hls
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
+from typing import Literal
 from urllib.parse import urlencode
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,6 +24,7 @@ from db.postgres import SessionLocal
 
 logger = logging.getLogger(__name__)
 MAX_TEXT = 4000
+MAX_INTRO = 225
 MAX_ROWS = 30
 GRACE = timedelta(minutes=10)
 FIELD_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
@@ -50,6 +52,8 @@ class Delivery(BaseModel):
     timezone: str = Field(default="Europe/Moscow", min_length=1, max_length=80)
     columns: list[str] = Field(default_factory=lambda: ["key", "summary", "status", "assignee"], max_length=12)
     statusColors: dict[str, str] = Field(default_factory=dict, max_length=200)
+    messageFormat: Literal["full", "link"] = "full"
+    intro: str = Field(default="", max_length=MAX_INTRO)
 
     @field_validator("timezone")
     @classmethod
@@ -72,8 +76,10 @@ class Delivery(BaseModel):
         self.weekdays = sorted(set(self.weekdays))
         self.columns = list(dict.fromkeys(self.columns))
         self.recipients = list({json.dumps(p.peer, sort_keys=True): p for p in self.recipients}.values())
-        if self.enabled and (not self.weekdays or not self.recipients or not self.columns):
-            raise ValueError("Выберите получателей, дни отправки и колонки.")
+        if self.enabled and (not self.weekdays or not self.recipients):
+            raise ValueError("Выберите получателей и дни отправки.")
+        if self.enabled and self.messageFormat == "full" and not self.columns:
+            raise ValueError("Выберите колонки для полного отчёта.")
         return self
 
 
@@ -199,17 +205,28 @@ def _cell(widget, raw, issue, col, colors):
     return value
 
 
-def _report(widget, columns, colors):
+def _report(widget, config):
     from backend.api.dashboard import query_for
     from backend.api.dashboard_activity import _quote
 
+    if widget["kind"] == "employee":
+        jql = (f"project = {_quote(widget['activityProject'])} AND assignee = {_quote(widget['employeeLogin'])}"
+               " ORDER BY updated DESC")
+    else:
+        jql = query_for(widget)
+    intro = config.get("intro", "").strip()
+    prefix = f"{intro}\n\n" if intro else ""
     with SessionLocal() as db:
         cfg = jira._load_cfg(db)
-        if widget["kind"] == "employee":
-            jql = (f"project = {_quote(widget['activityProject'])} AND assignee = {_quote(widget['employeeLogin'])}"
-                   " ORDER BY updated DESC")
-        else:
-            jql = query_for(widget)
+        link = f"{cfg['base_url'].rstrip('/')}/issues/?{urlencode({'jql': jql})}"
+        if config.get("messageFormat") == "link":
+            message = prefix + link
+            if len(message) > MAX_TEXT:
+                raise ValueError("Ссылка JQL слишком длинная для одного сообщения Эфира.")
+            return message
+
+        columns = config["columns"]
+        colors = config.get("statusColors") or {}
         fields = list(dict.fromkeys("issuetype" if col == "type" else col for col in columns if col != "key"))
         if "status" in fields and "issuetype" not in fields:
             fields.append("issuetype")
@@ -219,14 +236,13 @@ def _report(widget, columns, colors):
             names.update((f["id"], f["name"]) for f in jira.catalog(db=db)["fields"])
         except HTTPException:
             pass  # A field ID remains an unambiguous heading when the catalog is unavailable.
-    link = f"{cfg['base_url'].rstrip('/')}/issues/?{urlencode({'jql': jql})}"
     lead = widget["title"]
     if widget["kind"] == "employee":
         lead += f" · Задачи сотрудника {widget['employeeName']}"
     header = f"{lead}\nЗадач по JQL: {total}\n"
     table = " | ".join(names.get(col, col)[:60] for col in columns)
     rows = [table]
-    budget = MAX_TEXT - len(header) - len(link) - 180
+    budget = MAX_TEXT - len(prefix) - len(header) - len(link) - 180
     if budget < len(table):
         raise ValueError("Ссылка JQL слишком длинная для одного сообщения Эфира.")
     for item in raw:
@@ -240,7 +256,7 @@ def _report(widget, columns, colors):
     body = "\n".join(rows) if raw else "По этому фильтру задач нет."
     if shown < total:
         body += f"\nВ сообщении {shown} из {total}. Полный список открыт по ссылке."
-    return f"{header}\n{body}\n\nФильтр Jira (JQL)\n{link}"
+    return f"{prefix}{header}\n{body}\n\nФильтр Jira (JQL)\n{link}"
 
 
 def run_due(widget_id: str, now: datetime | None = None, stopping: threading.Event | None = None):
@@ -257,7 +273,7 @@ def run_due(widget_id: str, now: datetime | None = None, stopping: threading.Eve
         _ether_writer({"login": config["owner"]})
         if not ether_mcp.configured():
             raise HTTPException(409, "Эфир не подключён.")
-        message = _report(widget, config["columns"], config.get("statusColors") or {})
+        message = _report(widget, config)
         for recipient in config["recipients"]:
             if stopping and stopping.is_set():
                 error = "Shark завершает работу."

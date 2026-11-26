@@ -26,10 +26,12 @@ _jobs: set[asyncio.Task] = set()
 _queued: dict[str, asyncio.Task] = {}
 GRID_COLUMNS = 128
 SIZES = {'S': (4, 4), 'M': (8, 8), 'L': (16, 8), 'XL': (24, 12), 'XXL': (GRID_COLUMNS, 12)}
-ActivityMetric = Literal['jiraCreated', 'jiraUpdated', 'jiraTransitions', 'jiraOpenDefects',
+ActivityMetric = Literal['jiraDefectsCreated', 'jiraDefectsActive', 'jiraDefectsProcessed',
                          'bbCommitCount', 'bbCommitList', 'zephyrRunCount', 'zephyrRunList']
-DEFAULT_ACTIVITY_METRICS = ['jiraCreated', 'jiraUpdated', 'jiraOpenDefects', 'bbCommitCount',
+DEFAULT_ACTIVITY_METRICS = ['jiraDefectsCreated', 'jiraDefectsActive', 'jiraDefectsProcessed', 'bbCommitCount',
                             'zephyrRunCount', 'zephyrRunList']
+_ACTIVITY_METRIC_ALIASES = {'jiraCreated': 'jiraDefectsCreated', 'jiraOpenDefects': 'jiraDefectsActive',
+                            'jiraUpdated': 'jiraDefectsProcessed', 'jiraTransitions': 'jiraDefectsProcessed'}
 
 class Widget(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex, min_length=1, max_length=100, pattern=r'^[\w-]+$')
@@ -81,6 +83,9 @@ class Widget(BaseModel):
             value['kind'] = 'view'
         if 'columns' not in value and value.get('kind') == 'counter':
             value['columns'] = ['key', 'type', 'summary', 'status', 'priority', 'assignee']
+        if isinstance(value.get('activityMetrics'), list):
+            value['activityMetrics'] = [_ACTIVITY_METRIC_ALIASES.get(key, key) if isinstance(key, str) else key
+                                        for key in value['activityMetrics']]
         if value.get('gridVersion') != 2:
             old = {'S': (4, 4), 'M': (4, 6), 'L': (6, 8), 'XL': (8, 10)}
             name = value.get('size', 'M')

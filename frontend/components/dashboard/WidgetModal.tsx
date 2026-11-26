@@ -83,7 +83,7 @@ export default function WidgetModal({ widget, canShare, onSave, onClose }: {
         <span className="text-[11px] text-text-muted">{(v.scope ?? "shared") === "personal" ? "Виден только вам; в резервную копию попадает, восстанавливается только вам." : canShare ? "Виден всем пользователям." : "«Для всех» создаёт редактор Главной."}</span>
       </div>
       <label className="block text-sm">Название<input required={v.kind !== "employee"} maxLength={200} placeholder={v.kind === "employee" ? "Активность сотрудника" : "Например, ошибки на ИФТ"} value={v.title} onChange={e => set("title", e.target.value)} className={input} /></label>
-      {v.kind === "employee" ? <EmployeeSettings widget={v} set={set} fields={fields} inputClass={input} />
+      {v.kind === "employee" ? <EmployeeSettings widget={v} set={set} inputClass={input} />
         : <label className="block text-sm">Фильтр JQL<textarea aria-label="Фильтр JQL" required maxLength={4000} rows={3} value={v.jql} onChange={e => set("jql", e.target.value)} className={input + " font-mono text-xs"} /></label>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label id={formId + "-size"} className="text-sm block mb-1">Размер</label>

@@ -65,6 +65,7 @@ VERSIONS = [
 F_EPIC_LINK, F_EPIC_NAME, F_SP, F_SPRINT = "customfield_10006", "customfield_10008", "customfield_10002", "customfield_10004"
 F_KE, F_ENV, F_TEAM = "customfield_11001", "customfield_11002", "customfield_12010"
 F_PLAN_START, F_PLAN_END = "customfield_12001", "customfield_12002"
+F_TESTER = "customfield_12015"
 
 FIELDS = [
     *[{"id": fid, "name": name, "custom": False, "navigable": True, "schema": schema} for fid, name, schema in [
@@ -105,6 +106,7 @@ FIELDS = [
      "schema": {"type": "date", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker", "customId": 12001}},
     {"id": F_PLAN_END, "name": "Плановое окончание", "custom": True, "navigable": True,
      "schema": {"type": "date", "custom": "com.atlassian.jira.plugin.system.customfieldtypes:datepicker", "customId": 12002}},
+    {"id": F_TESTER, "name": "Тестировщик", "custom": True, "navigable": True, "schema": {"type": "user"}},
 ]
 
 _SUBJECTS = ["карточки инцидента", "формы заявки", "уведомлений о статусе", "выгрузки отчёта", "поиска по адресу",
@@ -173,6 +175,7 @@ def _generate(key: str) -> dict:
         "priority": r.choice(PRIORITIES),
         "assignee": jira_user(assignee) if assignee else None,
         "reporter": jira_user(reporter),
+        F_TESTER: jira_user(PEOPLE[(n // 2) % len(PEOPLE)]) if itype == "Дефект" else None,
         "components": [{"name": c} for c in r.sample(COMPONENTS, r.randint(0, 2))],
         "fixVersions": [{"id": v["id"], "name": v["name"]} for v in r.sample(VERSIONS, r.randint(0, 1))],
         "labels": r.sample(["911-Команда-БазовыеСервисы", "регресс", "техдолг", "UX", "мобильный"], r.randint(0, 2)),
@@ -307,8 +310,12 @@ def _activity_matches(query: str, key: str, fields: dict) -> bool:
         if not value or (value < day if op == ">=" else value >= day):
             return False
     transition = re.search(r'status CHANGED BY "([^"]+)" DURING \("([\d-]+) \d\d:\d\d", "([\d-]+) \d\d:\d\d"\)', query, re.I)
-    if transition:
-        login, start, end = transition.groups()
+    updated_by = re.search(r'updatedBy\("([^"]+)", "([\d-]+)", "([\d-]+)"\)', query, re.I)
+    if action := transition or updated_by:
+        login, start, end = action.groups()
+        creator = fields.get("creator") or fields.get("reporter") or {}
+        if updated_by and creator.get("name") == login and start <= fields["created"][:10] <= end:
+            return True
         return any(start <= row["created"][:10] <= end and row["author"]["name"].casefold() == login.casefold()
                    for row in changelog(key, fields)["histories"])
     return not (re.search(r'\bstatusCategory\s*!=\s*Done\b', query, re.I)
@@ -343,7 +350,7 @@ def jql_keys(jql: str) -> list[str]:
     if m:
         want = _TYPE_ALIASES.get(m.group(1).lower(), m.group(1).lower())
         keys = [k for k in keys if issue(k)["fields"]["issuetype"]["name"].lower() == want]
-    if re.search(r'\b(?:creator|assignee|reporter|created|updated|status|statusCategory)\b', q, re.I):
+    if re.search(r'\b(?:creator|assignee|reporter|created|updated|status|statusCategory|updatedBy)\b', q, re.I):
         keys = [key for key in keys if _activity_matches(q, key, issue(key)["fields"])]
     if re.search(r"currentUser\(\)", q, re.I):
         keys = keys[::3]

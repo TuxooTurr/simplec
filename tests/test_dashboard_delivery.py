@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from backend.api import dashboard, dashboard_delivery as delivery
 from db import dashboard_store as store
@@ -27,6 +28,12 @@ def scheduled(tmp_path, monkeypatch):
 
 def test_widget_sends_once_per_slot_with_rollup_columns_url_and_color(scheduled, monkeypatch):
     _, state = scheduled
+    data = store.read()
+    data["deliveries"]["bugs"].pop("messageFormat")
+    data["deliveries"]["bugs"].pop("intro")
+    store.write(data)
+    legacy = dashboard.get_delivery("bugs", {"login": "alice"})["config"]
+    assert legacy["messageFormat"] == "full" and legacy["intro"] == ""
     calls = []
     monkeypatch.setattr(delivery, "SessionLocal", lambda: nullcontext(None))
     monkeypatch.setattr(delivery.jira, "_load_cfg", lambda db: {"base_url": "https://jira.test"})
@@ -85,3 +92,56 @@ def test_timezone_and_weekday_determine_next_slot():
     due = delivery.next_slot(cfg, now)
     assert due == datetime(2026, 11, 30, 1, tzinfo=timezone.utc)
     assert delivery.next_slot(cfg, due) == due + timedelta(days=7)
+
+
+
+def test_link_only_delivery_preserves_intro_and_skips_jira_issue_queries(scheduled, monkeypatch):
+    _, state = scheduled
+    intro = "Коллеги, посмотрите задачи.\nСпасибо! 🙂"
+    body = delivery.Delivery.model_validate({**state["config"], "messageFormat": "link", "intro": intro, "columns": []})
+    state = dashboard.put_delivery("bugs", body, {"login": "alice"})
+    assert state["config"]["messageFormat"] == "link" and state["config"]["intro"] == intro
+    calls = []
+    monkeypatch.setattr(delivery, "SessionLocal", lambda: nullcontext(None))
+    monkeypatch.setattr(delivery.jira, "_load_cfg", lambda db: {"base_url": "https://jira.test/"})
+    monkeypatch.setattr(delivery.jira, "_search", lambda *a, **kw: pytest.fail("Выдача Jira не нужна для ссылки"))
+    monkeypatch.setattr(delivery.jira, "catalog", lambda **kw: pytest.fail("Колонки Jira не нужны для ссылки"))
+    monkeypatch.setattr(delivery.ether_mcp, "send_message", lambda peer, message, *, sender: calls.append(message))
+
+    delivery.run_due("bugs", datetime.fromisoformat(state["nextAt"]))
+
+    jql = "(project = QA AND issuetype = Bug) AND created >= startOfDay() ORDER BY created ASC, key ASC"
+    assert len(calls) == 1
+    added, link = calls[0].split("\n\n")
+    assert added == intro and urlsplit(link).path == "/issues/" and parse_qs(urlsplit(link).query) == {"jql": [jql]}
+    assert delivery._report(scheduled[0], {"messageFormat": "link"}) == link
+
+
+def test_full_report_adds_intro_within_the_message_limit(scheduled, monkeypatch):
+    _, state = scheduled
+    intro = "🙂" * 225
+    body = delivery.Delivery.model_validate({**state["config"], "intro": intro, "columns": ["summary", "status", "key"]})
+    state = dashboard.put_delivery("bugs", body, {"login": "alice"})
+    assert state["config"]["intro"] == intro
+    with pytest.raises(ValidationError, match="225"):
+        delivery.Delivery(intro=intro + "а")
+    with pytest.raises(ValidationError, match="колонки"):
+        delivery.Delivery.model_validate({**state["config"], "columns": []})
+
+    calls = []
+    monkeypatch.setattr(delivery, "SessionLocal", lambda: nullcontext(None))
+    monkeypatch.setattr(delivery.jira, "_load_cfg", lambda db: {"base_url": "https://jira.test"})
+    monkeypatch.setattr(delivery.jira, "catalog", lambda **kwargs: {"fields": []})
+    monkeypatch.setattr(delivery.jira, "_search", lambda cfg, jql, **kw: ([
+        {"key": f"QA-{i}", "fields": {"summary": "Д" * 220, "status": {"name": "Исправлен"}}}
+        for i in range(30)
+    ], 30))
+    monkeypatch.setattr(delivery.ether_mcp, "send_message", lambda peer, message, *, sender: calls.append(message))
+
+    delivery.run_due("bugs", datetime.fromisoformat(state["nextAt"]))
+
+    assert len(calls) == 1
+    text = calls[0]
+    assert len(text) <= delivery.MAX_TEXT and text.startswith(f"{intro}\n\nДефекты\n")
+    assert "🟣 Исправлен | QA-0" in text and "В сообщении " in text
+    assert text.splitlines()[-1].startswith("https://jira.test/issues/?jql=")

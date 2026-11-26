@@ -19,9 +19,10 @@ import { BackupPanel } from "@/components/BackupModal";
 import { getCorpAuthStatus, getProviders, listTestDataConnections } from "@/lib/api";
 import { getSettings } from "@/lib/settingsApi";
 import { getAqaSettings } from "@/lib/aqaApi";
+import { getPixso } from "@/lib/pixso";
 
 /**
- * «Настройки» — три вкладки: «Интеграции» (внешние сервисы и модели), «Подключения» (Kafka и базы данных),
+ * «Настройки» — три вкладки: «Интеграции» (внешние сервисы и модели), «Подключения» (MCP, Kafka и базы данных),
  * «Резервная копия» (выгрузка и восстановление прямо во вкладке, без окна). Тема, «Что нового» и выход —
  * в меню под ФИО вверху справа. Строка интеграции или подключения → по клику окно.
  * Окна те же, что открываются из разделов (Jira tool, Метрики, Тестовые данные…), — одна реализация на всё
@@ -52,10 +53,8 @@ interface Row {
 
 const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
   integrations: [
-      { id: "ether", icon: MessagesSquare, title: "Эфир · Главная", description: "Чат, почта и встречи через один MCP · вход в браузере" },
       { id: "jira", icon: Ticket, title: "Jira", description: "Учётная запись Сигмы и адрес Jira" },
       { id: "confluence", icon: BookOpen, title: "Confluence", description: "Учётная запись Сигмы и пространство для страниц" },
-      { id: "pixso", icon: BookOpen, title: "Pixso MCP", description: "Доступ к экранам и слоям для генерации тестов" },
       { id: "testops", icon: Rocket, title: "Allure TestOps", description: "Проект с запусками автотестов и API-токен" },
       { id: "bitbucket", icon: GitBranch, title: "Bitbucket", description: "Репозиторий автотестов и маркер доступа" },
       { id: "jenkins", icon: Play, title: "Jenkins", description: "Джоб запуска автотестов, логин и API-токен" },
@@ -63,6 +62,8 @@ const TAB_ROWS: Record<Exclude<TabId, "backup">, Row[]> = {
   ],
   connections: [
       { id: "pvs", icon: FileSearch, title: "PVS MCP", description: "Логи ИФТ, сервисная учётная запись и проверка подключения" },
+      { id: "ether", icon: MessagesSquare, title: "Эфир MCP", description: "Чат, почта, встречи и рассылка виджетов · вход в браузере" },
+      { id: "pixso", icon: BookOpen, title: "Pixso MCP", description: "Доступ к экранам и слоям для генерации тестов" },
       { id: "kafka", icon: Network, title: "Kafka", description: "Поток для «Метрик ОД»: SASL, SSL, сертификаты" },
       { id: "testdata", icon: Database, title: "Базы для тестовых данных", description: "Подключения к внешним БД и JDBC-драйверы" },
       { id: "stores", icon: HardDrive, title: "Служебные хранилища", description: "PostgreSQL самого приложения" },
@@ -98,8 +99,8 @@ function writeUrl(tab: TabId, panel: PanelId | null) {
 
 /** Каждый запрос — сам по себе: упал один, остальные строки всё равно показывают своё. */
 async function loadChips(): Promise<Partial<Record<PanelId, Chip>>> {
-  const [providers, corp, settings, conns, aqa, ether] = await Promise.allSettled([
-    getProviders(), getCorpAuthStatus(), getSettings(), listTestDataConnections(), getAqaSettings(), fetchEtherState(),
+  const [providers, corp, settings, conns, aqa, ether, pixso] = await Promise.allSettled([
+    getProviders(), getCorpAuthStatus(), getSettings(), listTestDataConnections(), getAqaSettings(), fetchEtherState(), getPixso(),
   ]);
   const chips: Partial<Record<PanelId, Chip>> = {};
 
@@ -136,6 +137,7 @@ async function loadChips(): Promise<Partial<Record<PanelId, Chip>>> {
       : a.jenkinsUser && a.jenkinsToken ? { tone: "ok", text: "Подключено" } : { tone: "warn", text: "Нужны логин и токен" };
   }
   if (ether.status === "fulfilled") { const e = ether.value; chips.ether = e.source === "cookie" || e.state === "connected" ? {tone:"ok",text:"Подключено"} : e.source === "env" ? {tone:"ok",text:"Из окружения"} : e.source === "broken" ? {tone:"bad",text:"Ошибка хранилища"} : {tone:"idle",text:"Не настроено"}; }
+  if (pixso.status === "fulfilled") chips.pixso = pixso.value.configured ? { tone: "ok", text: "Токен настроен" } : { tone: "idle", text: "Нужен токен" };
   return chips;
 }
 

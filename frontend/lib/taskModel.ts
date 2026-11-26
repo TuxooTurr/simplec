@@ -93,6 +93,8 @@ export type ModelCase = Omit<StagedCase, "target" | "error"> & {
   caseType?: string;
   /** Пользовательский сценарий из тестовой модели по этапам — папка между фичей и типом сценария. */
   scenario?: string;
+  /** Ручное назначение при отправке. Пустой путь — корень проекта. */
+  destination?: string;
   on: boolean;
 };
 
@@ -109,7 +111,18 @@ export interface ModelGroup {
 
 /** Итоговая папка кейса. */
 export const casePath = (g: ModelGroup, c: ModelCase) =>
-  (g.task ? cleanPath(`${g.folder}/${c.scenario ? `${c.scenario}/` : ""}${scenarioFolder(c.caseType)}`) : cleanPath(c.folder));
+  c.destination ?? (g.task ? cleanPath(`${g.folder}/${c.scenario ? `${c.scenario}/` : ""}${scenarioFolder(c.caseType)}`) : cleanPath(c.folder));
+
+export const inModelFolder = (path: string, folder: string) => path === folder || path.startsWith(folder + "/");
+
+export function moveModelCases(groups: ModelGroup[], sent: Record<string, string>, destination: (path: string, id: string) => string) {
+  return groups.map(group => ({ ...group, cases: group.cases.map(c => {
+    if (sent[c.id]) return c;
+    const from = casePath(group, c);
+    const to = cleanPath(destination(from, c.id));
+    return from === to ? c : { ...c, destination: to };
+  }) }));
+}
 
 /** Задача и требования — в цель кейса: из кейса видно, откуда он. */
 export function linkedObjective(g: ModelGroup, objective: string): string {
@@ -119,28 +132,28 @@ export function linkedObjective(g: ModelGroup, objective: string): string {
 }
 
 /** Что отправить: отмеченные и ещё не созданные кейсы — черновик Zephyr Tool, папки по путям. */
-export function stagingOf(groups: ModelGroup[], sent: Record<string, string>): Staging {
+export function stagingOf(groups: ModelGroup[], sent: Record<string, string>, existing = new Set<string>()): Staging {
   const byPath = new Map<string, string>();
   const folders: StagedFolder[] = [];
-  const ensure = (path: string): string => {
+  const ensure = (path: string): StagedCase["target"] => {
     let parent: Parent = { kind: "root" };
     let acc = "";
-    let id = "";
     for (const name of path.split("/").filter(Boolean)) {
       acc += `/${name}`;
-      id = byPath.get(acc) ?? "";
+      if (existing.has(acc)) { parent = { kind: "existing", path: acc }; continue; }
+      let id = byPath.get(acc) ?? "";
       if (!id) { id = `m${folders.length}`; byPath.set(acc, id); folders.push({ id, name, parent }); }
       parent = { kind: "new", id };
     }
-    return id;
+    return parent.kind === "root" ? { kind: "existing", path: "" } : parent;
   };
   const cases: StagedCase[] = [];
   for (const g of groups) for (const c of g.cases) {
     if (!c.on || sent[c.id]) continue;
-    const { folder: _f, caseType: _t, on: _o, ...rest } = c;
+    const { folder: _f, caseType: _t, on: _o, destination: _d, scenario: _s, ...rest } = c;
     cases.push({
       ...rest, objective: linkedObjective(g, c.objective), issueLinks: g.task ? [g.task.key] : c.issueLinks ?? [],
-      target: { kind: "new", id: ensure(casePath(g, c)) },
+      target: ensure(casePath(g, c)),
     });
   }
   return { source: "Генерация по задачам", createdAt: new Date().toISOString(), folders, cases };
@@ -152,29 +165,43 @@ export interface ModelNode {
   path: string;
   isNew: boolean;
   count: number;
+  canMove: boolean;
   children: ModelNode[];
   cases: { group: ModelGroup; c: ModelCase }[];
 }
 
 /** Дерево раскладки; existing — папки модели, null — сверить не удалось (тогда новых не помечаем). */
-export function modelTree(groups: ModelGroup[], existing: Set<string> | null): ModelNode[] {
-  const root: ModelNode = { name: "", path: "", isNew: false, count: 0, children: [], cases: [] };
-  for (const group of groups) for (const c of group.cases) {
-    let node = root;
-    const n = c.on ? 1 : 0;                      // снятый кейс остаётся в дереве — галочку можно вернуть
-    for (const name of casePath(group, c).split("/").filter(Boolean)) {
-      const path = `${node.path}/${name}`;
-      let next = node.children.find(n => n.name === name);
-      if (!next) {
-        next = { name, path, isNew: !!existing && !existing.has(path), count: 0, children: [], cases: [] };
-        node.children.push(next);
-      }
-      next.count += n;
-      node = next;
-    }
-    node.cases.push({ group, c });
+export function modelTree(groups: ModelGroup[], existing: Set<string> | null, sent: Record<string, string> = {}): ModelNode[] {
+  const root: ModelNode = { name: "Корень тестовой модели", path: "", isNew: false, count: 0, canMove: false, children: [], cases: [] };
+  const nodes = new Map([["", root]]);
+  function ensure(path: string): ModelNode {
+    const known = nodes.get(path);
+    if (known) return known;
+    const slash = path.lastIndexOf("/");
+    const parent = ensure(path.slice(0, slash));
+    const node: ModelNode = { name: path.slice(slash + 1), path, isNew: !!existing && !existing.has(path),
+      count: 0, canMove: false, children: [], cases: [] };
+    nodes.set(path, node); parent.children.push(node);
+    return node;
   }
-  return root.children;
+  for (const path of existing ?? []) ensure(path);
+  const lockedFolders = new Set<string>();
+  for (const group of groups) for (const c of group.cases) {
+    const path = casePath(group, c);
+    ensure(path).cases.push({ group, c });
+    for (let current = path; current; current = current.slice(0, current.lastIndexOf("/"))) {
+      const node = nodes.get(current)!;
+      if (sent[c.id]) lockedFolders.add(current);
+      else node.canMove = node.isNew;
+      if (c.on && !sent[c.id]) node.count += 1;
+    }
+    if (c.on && !sent[c.id]) root.count += 1;
+  }
+  for (const node of nodes.values()) {
+    if (lockedFolders.has(node.path)) { node.canMove = false; node.isNew = false; }
+    node.children.sort((a, b) => a.name.localeCompare(b.name, "ru", { numeric: true }));
+  }
+  return [root];
 }
 
 /** Новых папок в раскладке: папка только со снятыми кейсами создана не будет. */

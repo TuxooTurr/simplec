@@ -1640,13 +1640,15 @@ def task_plan(body: TaskPlanBody, db: Session = Depends(get_db)) -> dict:
     cfg = _load_cfg(db)
     project = body.project.strip().upper()
     idx = get_index(cfg, project)
-    folders = {a for p in [*(c.get("folder") or "" for c in idx["cases"].values()), *idx.get("folders", set())] if p for a in _ancestors(p)}
-    try:
-        runs = list(get_index(cfg, project, kind="testrun")["cases"].values())
-    except HTTPException as e:
-        if e.status_code == 401:
-            raise
-        runs = []
+    paths = [c.get("folder") or "" for c in idx["cases"].values() if not c.get("archived")]
+    folders = {a for p in [*paths, *idx.get("folders", set())] if p for a in _ancestors(p)}
+    runs = []
+    if body.tasks:
+        try:
+            runs = list(get_index(cfg, project, kind="testrun")["cases"].values())
+        except HTTPException as e:
+            if e.status_code == 401:
+                raise
     tasks: dict[str, dict] = {}
     for raw in body.tasks:
         key = _issue_key(raw, "Номер задачи")

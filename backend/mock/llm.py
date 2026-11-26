@@ -90,7 +90,21 @@ def answer(messages) -> str:
         return tm
     prompt = " ".join(str(getattr(m, "content", "")) for m in messages)
     component = "\nКомпонент Jira: 1" if "Компонент Jira: <номер или 0>" in prompt else ""
+    if prompt.startswith("Собери краткую Markdown-страницу изменений версии"):
+        release = prompt.split("\n\n", 1)[-1].split("\n\nПРЕДЫДУЩИЕ БИЗНЕС-ВЕРСИИ:", 1)[0]
+        return "## Что добавили\n\n" + release.partition("\n")[2].strip()
+    if prompt.startswith("Обнови только затронутые разделы действующего QA-обзора"):
+        changes = prompt.partition("ИЗМЕНЕНИЯ ИСТОЧНИКА:")[2].splitlines()
+        added = [line[1:] for line in changes if line.startswith("+") and not line.startswith("+++") and line[1:].strip()]
+        sections = ["## Изменения источника · демо\n\n" + "\n".join(added)] if added else []
+        return json.dumps({"replace": [], "add": sections}, ensure_ascii=False)
     if "скрипт-генератор событий для Jupyter Notebook" in prompt:
+        if "list_links" in prompt and "filter_links" in prompt:
+            return json.dumps({"scripts": [
+                {"version": version, "server": "incident-tools", "tool": tool, "business": purpose,
+                 "cells": [{"type": "code", "source": f'tool = "{tool}"\nprint(tool)'}], "params": []}
+                for version, tool, purpose in [("V1", "list_links", "Показать связи инцидента"), ("V2", "filter_links", "Отобрать связи по статусу")]
+            ]}, ensure_ascii=False)
         return json.dumps({"name": "Демо: событие инцидента", "topic": "incidents", "cells": [
             {"type": "markdown", "source": "# Отправка события инцидента\nДемо-скрипт ИИ-помощника."},
             {"type": "code", "source": "from kafka import KafkaProducer\nimport json\nsystem = \"CI0000001\"\npriority = \"P2\"\nraised = \"2026-11-23T10:00\"\nevent = {\"system\": system, \"priority\": priority, \"raised\": raised}\nprint(json.dumps(event, ensure_ascii=False))"}],

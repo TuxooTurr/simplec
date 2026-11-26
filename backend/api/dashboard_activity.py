@@ -2,7 +2,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, time, timedelta
 import re
-from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
@@ -45,46 +44,85 @@ def employee_profile(login):
                            lambda: jira._jira_request(cfg, "GET", "/rest/api/2/user", params={"username": login}))
 
 
-def _issue_metrics(widget, window):
+JIRA_DEFECT_METRICS = {
+    "jiraDefectsCreated": "Создал дефектов",
+    "jiraDefectsActive": "Дефекты в работе",
+    "jiraDefectsProcessed": "Обработал дефектов",
+}
+
+
+def _processed_defects(cfg, query, widget, window, profile):
+    start, stop = map(date.isoformat, window)
+    login = _quote(widget["employeeLogin"])
+    candidate = f'{query} AND key IN updatedBy({login}, "{start}", "{stop}")'
+    try:
+        issues, total = jira._search(cfg, candidate, fields="updated", expand="changelog", validate_query=True)
+    except HTTPException as exc:
+        if exc.status_code != 400:
+            raise
+        # Jira editions without updatedBy can still supply the actual change history.
+        issues, total = jira._search(cfg, f'{query} AND updated >= "{start}"',
+                                     fields="updated", expand="changelog", validate_query=True)
+    identities = {_identity(widget["employeeLogin"]), _identity(profile.get("key")), _identity(profile.get("accountId"))} - {""}
+    keys = {}
+    partial = len(issues) < total
+    for issue in issues:
+        log = issue.get("changelog") or {}
+        histories = log.get("histories")
+        if not isinstance(histories, list):
+            partial = True
+            continue
+        for history in histories:
+            day = str(history.get("created") or "")[:10]
+            author = history.get("author") or {}
+            if (start <= day < stop and history.get("items") and
+                    identities.intersection(_identity(author.get(field)) for field in ("name", "key", "accountId"))):
+                keys[issue["key"]] = None
+                break
+        else:
+            if log.get("total", 0) > len(histories):
+                partial = True
+    return {"value": len(keys), "issueKeys": list(keys), "partial": partial,
+            "detail": "Учтена доступная часть истории" if partial else "По изменениям в истории Jira"}
+
+
+def _issue_metrics(widget, window, profile):
     with SessionLocal() as db:
         cfg = jira._load_cfg(db)
-    login = _quote(widget["employeeLogin"])
-    project = f"project = {_quote(widget['activityProject'])}"
-    start, stop = map(date.isoformat, window)
+        login = _quote(widget["employeeLogin"])
+        query = f"project = {_quote(widget['activityProject'])} AND issuetype = {_quote(cfg['issuetype'])}"
+        start, stop = map(date.isoformat, window)
 
-    def within(field):
-        return f'{field} >= "{start}" AND {field} < "{stop}"'
+        def count(jql, detail="", partial=False):
+            _, total = jira._search(cfg, jql, limit=1, fields="key", validate_query=True)
+            return {"value": total, "jql": jql, "detail": detail, "partial": partial}
 
-    def metric(label, clause, detail=""):
-        query = f"{project} AND {clause}"
-        try:
-            data = jira._jira_request(cfg, "GET", "/rest/api/2/search", params={
-                "jql": query, "fields": "key", "maxResults": 1, "validateQuery": "true",
-            })
-            return {"label": label, "value": int(data["total"]),
-                    "url": f"{cfg['base_url']}/issues/?{urlencode({'jql': query})}", "detail": detail}
-        except HTTPException as exc:
-            return {"label": label, "value": None, "detail": str(exc.detail)[:160], "unavailable": True}
+        def active():
+            fields = jira.catalog(db=db)["fields"]
+            testers = [f"cf[{field['id'].split('_')[1]}]" for field in fields
+                       if field["name"].strip().casefold() in ("тестировщик", "тестировщики", "tester", "testers")
+                       and field["kind"] in ("user", "multi") and re.fullmatch(r"customfield_\d+", field["id"])]
+            working = f"{query} AND statusCategory != Done"
+            if testers:
+                roles = " OR ".join(f"{field} = {login}" for field in ["assignee", *testers])
+                return count(f"{working} AND ({roles})", "Исполнитель или тестировщик · сейчас")
+            return count(f"{working} AND assignee = {login}", "Поле «Тестировщик» недоступно · учтены исполнители", partial=True)
 
-    last = window[1] - timedelta(days=1)
-    metrics = {
-        "jiraCreated": ("Созданные задачи", f"creator = {login} AND {within('created')}", ""),
-        "jiraUpdated": ("Обновлённые назначенные задачи", f"assignee = {login} AND {within('updated')}", "По дате последнего обновления"),
-        "jiraTransitions": ("Задачи со сменой статуса", f'status CHANGED BY {login} DURING ("{start} 00:00", "{last} 23:59")', "Статус менял сотрудник"),
-    }
-    roles = []
-    for role in widget["defectRoles"]:
-        field = f"cf[{role.removeprefix('customfield_')}]" if role.startswith("customfield_") else role
-        roles.append(f"{field} = {login}")
-    if roles:
-        metrics["jiraOpenDefects"] = (
-            "Открытые дефекты", f"issuetype = {_quote(cfg['issuetype'])} AND statusCategory != Done AND ({' OR '.join(roles)})",
-            "На текущий момент",
-        )
-    result = [metric(*metrics[key]) for key in widget["activityMetrics"] if key in metrics]
-    if "jiraOpenDefects" in widget["activityMetrics"] and not roles:
-        result.append({"label": "Открытые дефекты", "value": None, "detail": "Выберите роли в дефектах"})
-    return {"metrics": result}
+        read = {
+            "jiraDefectsCreated": lambda: count(f'{query} AND creator = {login} AND created >= "{start}" AND created < "{stop}"'),
+            "jiraDefectsActive": active,
+            "jiraDefectsProcessed": lambda: _processed_defects(cfg, query, widget, window, profile),
+        }
+        metrics = []
+        for metric, label in JIRA_DEFECT_METRICS.items():
+            if metric not in widget["activityMetrics"]:
+                continue
+            try:
+                result = read[metric]()
+            except HTTPException as exc:
+                result = {"value": None, "detail": str(exc.detail)[:160], "unavailable": True}
+            metrics.append({"label": label, **result})
+        return {"metrics": metrics}
 
 
 def _commits(widget, window, profile):
@@ -194,7 +232,7 @@ def collect(widget, window):
     selected = widget["activityMetrics"]
     sources = {}
     if any(key.startswith("jira") for key in selected):
-        sources["Jira"] = (_issue_metrics, (widget, window))
+        sources["Jira"] = (_issue_metrics, (widget, window, profile))
     if any(key.startswith("bb") for key in selected):
         sources["Bitbucket"] = (_commits, (widget, window, profile))
     if any(key.startswith("zephyr") for key in selected):

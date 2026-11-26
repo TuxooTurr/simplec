@@ -74,7 +74,8 @@ export default function DashboardWidget({ widget, canEdit, arranging, onPresenta
     onClick={() => setDeliveryOpen(true)} icon={<CalendarClock className="w-3.5 h-3.5" />} /> : undefined;
   const deliveryModal = deliveryOpen && <WidgetDeliveryModal widget={widget} onClose={() => setDeliveryOpen(false)} />;
   if (widget.kind === "employee") return <><EmployeeWidget widget={widget} data={data} error={error} canEdit={canEdit}
-    arranging={arranging} onEdit={onEdit} onDelete={onDelete} onRefresh={() => void refresh()} dragHandle={dragHandle} extraAction={deliveryAction} />{deliveryModal}</>;
+    arranging={arranging} onEdit={onEdit} onDelete={onDelete} onRefresh={() => void refresh()}
+    onColumnsChange={changeColumns} dragHandle={dragHandle} extraAction={deliveryAction} />{deliveryModal}</>;
 
   if (widget.kind === "counter") {
     const count = data?.lastCheckedAt ? data.pending : null;

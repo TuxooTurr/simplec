@@ -427,3 +427,98 @@ def test_batch_sends_each_group_once_and_keeps_model_answers_with_matching_ids(m
     groups = asyncio.run(investigation.investigate_selection(records, [], START, END, "custom_corp"))["groups"]
     assert [[r["service"] for r in group["selected"]] for group in calls[0]] == [["api", "worker"], ["push"]]
     assert len(calls) == 1 and [g["result"].title for g in groups] == ["Группа 1", "Группа 2"]
+
+
+def test_pvs_queries_selected_services_in_one_search(monkeypatch):
+    monkeypatch.setenv("LOGS_MCP_NAMESPACE", "ift")
+    monkeypatch.setenv("LOGS_PVS_INDEX", "logs")
+    monkeypatch.setenv("LOGS_PVS_FIELDS", '{"namespace":"ns","service":"app","timestamp":"time","level":"level"}')
+    calls = []
+
+    async def call(*_args, **_kwargs):
+        calls.append(_args[2])
+        return {"hits": {"hits": [{"_source": {"ns": "ift", "app": app, "time": END.isoformat(),
+                                               "level": "ERROR", "message": app}}
+                                 for app in ("a", "b", "unselected")]}}
+
+    monkeypatch.setattr(logs_mcp, "_call_search", call)
+    source = logs_mcp.PvsLogSource(None, SimpleNamespace(input_schema={"properties": {
+        "index": {}, "query_dsl": {}, "size": {},
+    }}))
+
+    @asynccontextmanager
+    async def open_source():
+        yield source
+
+    monkeypatch.setattr(mcp_logs, "open_source", open_source)
+    monkeypatch.setattr(mcp_logs, "configured", lambda: True)
+    monkeypatch.setattr(mcp_logs, "_services", lambda: ["a", "b", "unselected"])
+    result = asyncio.run(mcp_logs.query(mcp_logs.Query(start=START, end=END, services=["a", "b", "a"], errorsOnly=True)))
+    assert [record.service for record in result["records"]] == ["a", "b"]
+    assert len(calls) == 1
+    filters = calls[0]["query_dsl"]["query"]["bool"]["filter"]
+    assert {"terms": {"app": ["a", "b"]}} in filters
+    assert any("ERROR" in item.get("terms", {}).get("level", ()) for item in filters)
+
+
+def test_log_analysis_audits_uploads_live_events_rejections_and_cancellation(tmp_path, monkeypatch):
+    from db import log_analysis_audit
+
+    monkeypatch.setattr(log_analysis_audit, "_FILE", tmp_path / "audit.sqlite3")
+    monkeypatch.setattr(mcp_logs, "_jobs", {})
+    monkeypatch.setattr(investigation, "MOCK", True)
+    monkeypatch.setattr(mcp_logs, "MAX_BYTES", 256)
+    for actor, role in [("qa", "user"), ("other", "user"), ("admin", "superuser")]:
+        monkeypatch.setitem(auth._sessions, actor, {"role": role, "login": actor})
+    app = FastAPI()
+    app.include_router(mcp_logs.router)
+
+    async def scenario():
+        prefix = "/api/mcp-logs"
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test",
+                                     headers={"Authorization": "Bearer qa"}) as client:
+            accepted = await client.post(prefix + "/upload/jobs", data={"errorsOnly": "true"}, files=[
+                ("files", ("first.log", b"INFO startup\nERROR db failed token=synthetic-secret\n  at frame\n")),
+                ("files", ("second.log", b'{"level":"error","message":"second failure"}\n')),
+            ])
+            assert accepted.status_code == 202, accepted.text
+            job_id = accepted.json()["id"]
+            await mcp_logs._jobs[job_id].task
+            job = (await client.get(f"{prefix}/jobs/{job_id}")).json()
+            assert job["status"] == "done"
+            stats = job["result"]["upload"]
+            assert (stats["fileCount"], stats["eventCount"], stats["errorCount"], stats["sampleCount"]) == (2, 3, 2, 2)
+            assert "synthetic-secret" not in str(job)
+            assert all(row["error"] for row in job["result"]["groups"][0]["records"])
+            too_big = await client.post(prefix + "/upload/jobs", files=[
+                ("files", ("a.log", b"a" * 150)), ("files", ("b.log", b"b" * 150)),
+            ])
+            assert too_big.status_code == 413
+            invalid = await client.post(prefix + "/analyze/jobs", json={})
+            assert invalid.status_code == 422
+            body = {"start": START.isoformat(), "end": END.isoformat(), "provider": "test-model",
+                    "records": [{"service": "test", "message": "temporary evidence"}]}
+            sync = await client.post(prefix + "/analyze", json=body)
+            assert sync.status_code == 200
+
+            release = asyncio.Event()
+
+            async def wait_for_cancel(_body, _job=None):
+                await release.wait()
+
+            monkeypatch.setattr(mcp_logs, "_analyze", wait_for_cancel)
+            active = (await client.post(prefix + "/analyze/jobs", json=body)).json()["id"]
+            assert (await client.delete(f"{prefix}/jobs/{active}")).status_code == 200
+            await asyncio.gather(mcp_logs._jobs[active].task, return_exceptions=True)
+            entries = (await client.get(prefix + "/audit")).json()["entries"]
+            assert {(entry["source"], entry["status"]) for entry in entries} == {
+                ("file", "done"), ("file", "error"), ("pvs", "done"), ("pvs", "error"), ("pvs", "cancelled"),
+            }
+            assert "temporary evidence" not in str(entries) and "first.log" not in str(entries)
+            assert all(entry["actor"] == "qa" and entry["finished_at"] for entry in entries)
+            other = await client.get(prefix + "/audit", headers={"Authorization": "Bearer other"})
+            assert not other.json()["entries"]
+            admin = await client.get(prefix + "/audit", headers={"Authorization": "Bearer admin"})
+            assert len(admin.json()["entries"]) == len(entries)
+
+    asyncio.run(scenario())

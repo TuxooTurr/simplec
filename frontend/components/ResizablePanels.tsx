@@ -7,7 +7,7 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import type { SectionId } from "@/contexts/WorkspaceContext";
 import TopActions from "./TopActions";
 import { usePanelRefreshSlot } from "./ui/RefreshButton";
-import { sectionOfPath } from "@/lib/backupApi";
+import { PanelAuditContext, type PanelAudit, type SetPanelAudit } from "./PanelAudit";
 
 /** Название раздела в шапке панели — единственный заголовок раздела (внутри раздела его не повторяем).
  *  Ключи — путь страницы (test-data) и id раздела правой панели (test_data). */
@@ -37,6 +37,8 @@ function PanelChrome({
   title,
   actions,
   onClose,
+  onActivate,
+  setAudit,
   children,
   dropTarget,
   isDraggingSection,
@@ -47,6 +49,8 @@ function PanelChrome({
   /** Верхний правый угол окна — только у крайней справа панели. */
   actions?: React.ReactNode;
   onClose: () => void;
+  onActivate: () => void;
+  setAudit: SetPanelAudit;
   children: React.ReactNode;
   dropTarget?: boolean;
   isDraggingSection?: boolean;
@@ -67,7 +71,7 @@ function PanelChrome({
     >
       {/* Sticky header */}
       <div className="sticky top-0 z-20 flex h-11 items-center justify-between gap-3 px-6 border-b border-border-main bg-[var(--color-chrome)] flex-shrink-0">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5" onPointerDownCapture={onActivate} onFocusCapture={onActivate}>
           <span className="truncate text-sm font-semibold text-text-main tracking-wide">
             {title}
           </span>
@@ -84,7 +88,11 @@ function PanelChrome({
         {actions}
       </div>
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin">{provideRefresh(children)}</div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin"
+        onPointerDownCapture={e => { if (e.currentTarget.contains(e.target as Node)) onActivate(); }}
+        onFocusCapture={e => { if (e.currentTarget.contains(e.target as Node)) onActivate(); }}>
+        <PanelAuditContext.Provider value={setAudit}>{provideRefresh(children)}</PanelAuditContext.Provider>
+      </div>
     </div>
   );
 }
@@ -126,8 +134,12 @@ export default function ResizablePanels({
   const [isDividerDragging, setIsDividerDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const pathname = usePathname();
+  const [leftAudit, setLeftAudit] = useState<PanelAudit | null>(null);
+  const [rightAudit, setRightAudit] = useState<PanelAudit | null>(null);
 
   const {
+    activePane,
+    setActivePane,
     dragging: sectionDragging,
     rightSection,
     setRightSection,
@@ -136,6 +148,8 @@ export default function ResizablePanels({
     rightOpen,
     setRightOpen,
   } = useWorkspace();
+
+  useEffect(() => setActivePane("left"), [pathname, setActivePane]);
 
   const leftTitle =
     SECTION_LABELS[pathname?.replace(/^\//, "") ?? ""] ?? "Рабочая зона";
@@ -174,26 +188,26 @@ export default function ResizablePanels({
       if (id) {
         setRightSection(id);
         setRightOpen(true);
+        setActivePane("right");
       }
     },
-    [setRightSection, setRightOpen]
+    [setRightSection, setRightOpen, setActivePane]
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
   }, []);
 
-  const rightBackupSection = rightSection ? sectionOfPath(`/${String(rightSection).replace(/_/g, "-")}`) : "settings";
-  const actions = <TopActions section={leftVisible ? sectionOfPath(pathname ?? "") : rightBackupSection} />;
+  const useRightAudit = rightOpen && (!leftVisible || activePane === "right");
+  const audit = useRightAudit ? rightAudit : leftVisible ? leftAudit : null;
+  const activeSection = useRightAudit ? `right:${rightSection ?? ""}` : `left:${leftVisible ? pathname : ""}`;
+  const actions = <TopActions audit={audit} auditContext={activeSection}
+    sectionTitle={useRightAudit ? rightTitle : leftVisible ? leftTitle : "Рабочая область"} />;
 
   const closeRight = useCallback(() => {
     setRightOpen(false);
     setRightSection(null);
   }, [setRightOpen, setRightSection]);
-
-  const openRight = useCallback(() => {
-    setRightOpen(true);
-  }, [setRightOpen]);
 
   // ── Render states ─────────────────────────────────────────────────────────
   const showLeft = leftVisible;
@@ -206,7 +220,7 @@ export default function ResizablePanels({
         ref={containerRef}
         className="relative flex flex-1 min-h-0 h-full overflow-hidden"
       >
-        <RestoreStrip side="left" onClick={() => setLeftVisible(true)} />
+        <RestoreStrip side="left" onClick={() => { setLeftVisible(true); setActivePane("left"); }} />
         <div className="absolute right-6 top-2 z-20">{actions}</div>
         <div
           className={`flex-1 flex items-center justify-center text-text-muted text-sm transition-all ${
@@ -230,10 +244,12 @@ export default function ResizablePanels({
         ref={containerRef}
         className="flex flex-1 min-h-0 h-full overflow-hidden"
       >
-        <RestoreStrip side="left" onClick={() => setLeftVisible(true)} />
+        <RestoreStrip side="left" onClick={() => { setLeftVisible(true); setActivePane("left"); }} />
         <div className="flex-1 h-full flex flex-col animate-panel-in-right">
           <PanelChrome
             title={rightTitle}
+            onActivate={() => setActivePane("right")}
+            setAudit={setRightAudit}
             actions={actions}
             onClose={closeRight}
             dropTarget
@@ -264,6 +280,8 @@ export default function ResizablePanels({
         >
           <PanelChrome
             title={leftTitle}
+            onActivate={() => setActivePane("left")}
+            setAudit={setLeftAudit}
             actions={actions}
             onClose={() => setLeftVisible(false)}
           >
@@ -289,6 +307,8 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={leftTitle}
+          onActivate={() => setActivePane("left")}
+          setAudit={setLeftAudit}
           onClose={() => setLeftVisible(false)}
         >
           {left}
@@ -312,6 +332,8 @@ export default function ResizablePanels({
       >
         <PanelChrome
           title={rightTitle}
+          onActivate={() => setActivePane("right")}
+          setAudit={setRightAudit}
           actions={actions}
           onClose={closeRight}
           dropTarget

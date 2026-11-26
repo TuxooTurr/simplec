@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, LogOut, Moon, Settings, SlidersHorizontal, Sparkles, Sun } from "lucide-react";
 import { NAV_EDIT_EVENT } from "./Sidebar";
 import NotificationBell from "./NotificationBell";
+import AuditAction, { type PanelAudit } from "./PanelAudit";
 import WhatsNewModal from "./WhatsNewModal";
 import { applyTheme, useTheme } from "./ui";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,11 +16,15 @@ const ITEM = "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-
   "focus-visible:bg-bg-subtle focus-visible:outline-none";
 
 /**
- * Верхний правый угол всего окна: колокольчик и ФИО. По ФИО — меню: настроить разделы, тема, настройки, «Что нового», выход.
+ * Верхний правый угол всего окна: аудит активной панели, колокольчик и ФИО. По ФИО — меню: настроить разделы, тема, настройки, «Что нового», выход.
  * Резервная копия — в «Настройках». Стоит в шапке крайней справа панели: отдельная полоса над панелями
- * отняла бы высоту у рабочих зон. `section` оставлен для совместимости с ResizablePanels.
+ * отняла бы высоту у рабочих зон.
  */
-export default function TopActions({ section: _section }: { section: string }) {
+export default function TopActions({ audit, auditContext, sectionTitle }: {
+  audit: PanelAudit | null;
+  auditContext: string;
+  sectionTitle: string;
+}) {
   const { user, logout, isSuperuser } = useAuth();
   const router = useRouter();
   const [theme] = useTheme();
@@ -49,6 +54,7 @@ export default function TopActions({ section: _section }: { section: string }) {
 
   return (
     <div className="flex min-w-0 items-center gap-1">
+      {audit && <AuditAction audit={audit} auditContext={auditContext} sectionTitle={sectionTitle} />}
       <NotificationBell />
       {user && (
         <div ref={wrap} className="relative min-w-0">

@@ -104,9 +104,23 @@ export interface AlertScript {
 }
 
 /** ИИ-помощник: черновик нового скрипта по требованиям (не сохраняется). notes — что ИИ поправил при проверке. */
+export interface AlertScriptDraft extends Pick<AlertScript, "id" | "name" | "topic" | "notebook" | "dynamic_params"> {
+  version: string;
+  server: string;
+  tool: string;
+  business: string;
+  notes: string[];
+}
+
 export function aiGenerateScript(body: { provider: string; confluence_ref: string; requirement_ids: string[]; example_id: string; notes: string }) {
-  return fetchJson<{ name: string; topic: string; notebook: NotebookCell[]; dynamic_params: DynamicParam[]; notes: string[] }>(
+  return fetchJson<AlertScriptDraft & { drafts?: AlertScriptDraft[] }>(
     "/api/alerts/ai-generate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+export function saveAlertScriptBatch(scripts: Partial<AlertScript>[]) {
+  return fetchJson<{ scripts: AlertScript[] }>("/api/alerts/scripts/batch", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scripts }),
+  });
 }
 
 export async function getAlertFolders(): Promise<AlertFolder[]> {
@@ -1028,6 +1042,7 @@ export interface Requirement {
   /** Связанные страницы, по которым собран документ QA, и ссылки, которые прочитать не вышло. */
   qa_links?: { title: string; url: string }[];
   qa_link_errors?: string[];
+  qa_confluence_refs?: string[];
   design_links?: string[];
   release_pages?: { id: string; markdown: string; requirement?: string }[];
   created_at: string;
@@ -1094,6 +1109,10 @@ export async function updateRequirement(id: string, patch: { name?: string; feat
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
+}
+
+export function renderRequirementDiagrams(id: string, signal: AbortSignal): Promise<Requirement> {
+  return fetchJson(`/api/requirements/${encodeURIComponent(id)}/render-diagrams`, { method: "POST", signal });
 }
 
 const postJson = <T,>(path: string, body: unknown): Promise<T> =>

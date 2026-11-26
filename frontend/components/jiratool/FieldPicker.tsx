@@ -17,6 +17,7 @@ interface PickerProps {
   onChange: (next: string[]) => void;
   /** Сколько можно выбрать (группировка — 3). */
   max?: number;
+  searchPlaceholder?: string;
   /** Порядок выбора важен и показывается номерами: первый выбранный — первый уровень. */
   ordered?: boolean;
   footer?: ReactNode;
@@ -25,7 +26,7 @@ interface PickerProps {
 }
 
 /** Строка поиска + список с множественным выбором. Используется и во всплывающем окне, и в колонке. */
-export function PickerPanel({ label, options, selected, onChange, max, ordered, footer, collapsed, listHeight = "max-h-72" }:
+export function PickerPanel({ label, options, selected, onChange, max, ordered, footer, collapsed, searchPlaceholder = "Поиск поля", listHeight = "max-h-72" }:
   PickerProps & { listHeight?: string }) {
   const [q, setQ] = useState("");
   const [opened, setOpened] = useState<Set<string>>(new Set());
@@ -53,7 +54,7 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
       <label className="flex items-center gap-2 rounded-lg border border-border-main bg-[var(--color-input-bg)] px-2.5 py-1.5 mb-2
         focus-within:ring-2 focus-within:ring-primary/30">
         <Search className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Поиск поля"
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder={searchPlaceholder}
           aria-label={`Поиск: ${label}`} className="flex-1 min-w-0 bg-transparent text-sm text-text-main focus:outline-none" />
         {q && <button type="button" onClick={() => setQ("")} aria-label="Очистить поиск"><X className="w-3.5 h-3.5 text-text-muted" /></button>}
       </label>
@@ -70,7 +71,7 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
       )}
       {max !== undefined && (
         <p className="text-[11px] text-text-muted px-1 mb-1.5">
-          {full ? `Выбрано максимум — ${max}. Уберите уровень, чтобы выбрать другой.` : `Можно выбрать до ${max}.`}
+          {full ? `Выбрано максимум — ${max}. Снимите отметку, чтобы выбрать другой вариант.` : `Можно выбрать до ${max}.`}
         </p>
       )}
 
@@ -120,31 +121,35 @@ export function PickerPanel({ label, options, selected, onChange, max, ordered, 
 }
 
 /** Кнопка со всплывающим выбором. align — к какому краю кнопки прижать окно; up — раскрыть вверх (кнопка у нижнего края страницы). */
-export default function FieldPicker({ align = "left", up = false, iconOnly = false, ...props }: PickerProps & {
+export default function FieldPicker({ align = "left", up = false, iconOnly = false, triggerText, triggerId, disabled, fullWidth, ...props }: PickerProps & {
   icon?: ReactNode; align?: "left" | "right"; up?: boolean;
   /** Только значок: название — в подсказке и для чтения с экрана. */
   iconOnly?: boolean;
+  triggerText?: string;
+  triggerId?: string;
+  disabled?: boolean;
+  fullWidth?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || disabled) return;
     const close = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
     const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
-  }, [open]);
+  }, [open, disabled]);
 
   return (
-    <div ref={box} className="relative">
-      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+    <div onKeyDown={e => { if (e.key === "Enter" && e.target instanceof HTMLInputElement) e.preventDefault(); }} ref={box} className="relative">
+      <button id={triggerId} type="button" disabled={disabled} onClick={() => setOpen(o => !o)} aria-expanded={open && !disabled}
         aria-label={iconOnly ? props.label : undefined} title={iconOnly ? props.label : undefined}
-        className={`flex items-center gap-1.5 ${iconOnly ? "px-2" : "px-3"} py-1.5 rounded-lg border text-sm transition-colors
+        className={`flex items-center gap-1.5 ${fullWidth ? "w-full min-h-9 justify-between" : ""} ${iconOnly ? "px-2" : "px-3"} py-1.5 rounded-lg border text-sm transition-colors disabled:opacity-50
           ${open ? "border-primary/50 bg-primary/5 text-text-main" : "border-border-main text-text-main hover:bg-bg-subtle"}`}>
         {props.icon}
-        {!iconOnly && props.label}
+        {!iconOnly && <span className={fullWidth ? "min-w-0 flex-1 truncate text-left" : undefined}>{triggerText ?? props.label}</span>}
         {props.selected.length > 0 && (
           <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-primary/15 text-primary text-[10px] font-bold flex items-center justify-center">
             {props.selected.length}
@@ -152,8 +157,8 @@ export default function FieldPicker({ align = "left", up = false, iconOnly = fal
         )}
         <ChevronDown className={`w-3.5 h-3.5 text-text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
-      {open && (
-        <div className={`absolute z-40 ${align === "right" ? "right-0" : "left-0"} ${up ? "bottom-full mb-1.5" : "mt-1.5"} w-80 rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-xl p-2 animate-fade-in`}>
+      {open && !disabled && (
+        <div className={`absolute z-40 ${align === "right" ? "right-0" : "left-0"} ${up ? "bottom-full mb-1.5" : "mt-1.5"} w-80 max-w-[calc(100vw-3rem)] rounded-xl border border-border-main bg-[var(--color-modal-bg)] shadow-xl p-2 animate-fade-in`}>
           <PickerPanel {...props} />
         </div>
       )}

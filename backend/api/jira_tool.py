@@ -155,7 +155,8 @@ def field_kind(f: dict) -> str:
 
 # ── Запросы к Jira ───────────────────────────────────────────────────────────
 
-def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*navigable", *, expand: str = "") -> tuple[list[dict], int]:
+def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*navigable", *, expand: str = "",
+            validate_query: bool = False) -> tuple[list[dict], int]:
     """Задачи по JQL постранично. validateQuery=false: несуществующий ключ в «key in (…)»
     не роняет весь запрос, Jira просто его пропускает."""
     issues: list[dict] = []
@@ -163,7 +164,7 @@ def _search(cfg: dict, jql: str, limit: int = MAX_ISSUES, fields: str = "*naviga
     while start < total and len(issues) < limit:
         data = _jira_request(cfg, "GET", "/rest/api/2/search", params={
             "jql": jql, "fields": fields, "maxResults": min(_PAGE, limit - len(issues)),
-            "startAt": start, "validateQuery": "false", **({"expand": expand} if expand else {}),
+            "startAt": start, "validateQuery": "true" if validate_query else "false", **({"expand": expand} if expand else {}),
         })
         total = int(data.get("total", 0) or 0)
         page = data.get("issues") or []

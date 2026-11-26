@@ -2,15 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { Select } from "@/components/ui";
-import { PickerPanel } from "@/components/jiratool/FieldPicker";
 import { ACTIVITY_PERIODS, DEFAULT_ACTIVITY_METRICS, getDashboardEmployee, type ActivityMetric, type ActivityPeriod, type DashboardWidget } from "@/lib/dashboardApi";
 
 const SOURCES = [
   { name: "Jira", metrics: [
-    ["jiraCreated", "Созданные задачи"],
-    ["jiraUpdated", "Обновлённые назначенные задачи"],
-    ["jiraTransitions", "Задачи, в которых сотрудник менял статус"],
-    ["jiraOpenDefects", "Открытые дефекты по ролям"],
+    ["jiraDefectsCreated", "Созданные дефекты"],
+    ["jiraDefectsActive", "Дефекты в работе"],
+    ["jiraDefectsProcessed", "Обработанные дефекты"],
   ] },
   { name: "Bitbucket", metrics: [
     ["bbCommitCount", "Количество коммитов"],
@@ -22,10 +20,9 @@ const SOURCES = [
   ] },
 ] as const;
 
-export default function EmployeeSettings({ widget, set, fields, inputClass }: {
+export default function EmployeeSettings({ widget, set, inputClass }: {
   widget: DashboardWidget;
   set: <K extends keyof DashboardWidget>(key: K, value: DashboardWidget[K]) => void;
-  fields: { id: string; name: string; kind?: string }[];
   inputClass: string;
 }) {
   const login = widget.employeeLogin?.trim() ?? "";
@@ -95,13 +92,8 @@ export default function EmployeeSettings({ widget, set, fields, inputClass }: {
             <input type="checkbox" className="accent-primary" checked={selected.includes(key)}
               onChange={e => select([key], e.target.checked)} />{label}
           </label>)}</div>
-        {name === "Jira" && selected.includes("jiraOpenDefects") && <div className="mt-3">
-          <PickerPanel label="Роли в открытых дефектах"
-            options={fields.filter(field => field.kind === "user" &&
-              (["assignee", "reporter", "creator"].includes(field.id) || field.id.startsWith("customfield_")))
-              .map(field => ({ value: field.id, label: field.name, group: "Поля Jira" }))}
-            selected={widget.defectRoles ?? ["assignee"]} onChange={roles => set("defectRoles", roles)} max={12} />
-        </div>}
+        {name === "Jira" && selected.includes("jiraDefectsActive") &&
+          <p className="mt-2 text-xs text-text-muted">Дефекты в работе учитывают исполнителя и тестировщика.</p>}
         {name === "Bitbucket" && selected.some(key => key.startsWith("bb")) &&
           <label className="text-sm block mt-3">Ветка Bitbucket
             <input maxLength={160} value={widget.activityBranch ?? ""} placeholder="Ветка по умолчанию"

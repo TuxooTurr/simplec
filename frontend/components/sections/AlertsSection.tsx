@@ -6,25 +6,28 @@ import {
   Upload, Code, AlignLeft, ChevronDown, ChevronUp, GripVertical,
   BookOpen, Settings2, Play, Square, Timer,
   CircleCheck, CircleX, Wifi, WifiOff, RefreshCw,
-  RotateCcw, Eye, EyeOff, Clock, User, List,
+  RotateCcw, Eye, EyeOff,
   FolderOpen, FolderClosed, FolderPlus, ChevronRight,
   Maximize2, Minimize2, Copy, Sparkles,
 } from "lucide-react";
 import { Select } from "@/components/ui";
 import Modal from "@/components/ui/Modal";
 import {
-  saveAlertScript, deleteAlertScript, parseNotebook, reorderAlertScripts,
+  saveAlertScript, saveAlertScriptBatch, aiGenerateScript, deleteAlertScript, parseNotebook, reorderAlertScripts,
   saveAlertFolder, deleteAlertFolder,
-  kernelAllStatus, kernelAudit,
-  type AlertScript, type AlertFolder, type DynamicParam, type NotebookCell,
-  type ParamFieldType, type KernelInfo, type KernelAuditEntry,
+  kernelAllStatus,
+  type AlertScript, type AlertScriptDraft, type AlertFolder, type DynamicParam, type NotebookCell,
+  type ParamFieldType, type KernelInfo,
 } from "@/lib/api";
 import { useAlertsScheduler, missingParams } from "@/contexts/AlertsSchedulerContext";
 import KernelChat from "@/components/alerts/KernelChat";
+import KernelAuditModal from "@/components/alerts/KernelAuditModal";
+import { usePanelAudit, type PanelAudit } from "@/components/PanelAudit";
 import { useAuth } from "@/contexts/AuthContext";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import RequirementsPicker, { CONFLUENCE_REF_RE, type RequirementsSource } from "@/components/jiratool/RequirementsPicker";
-import { aiGenerateScript } from "@/lib/api";
+
+const KERNEL_AUDIT: PanelAudit = { id: "alert-kernels", render: onClose => <KernelAuditModal onClose={onClose} /> };
 
 // ── Styles ───────────────────────────────────────────────────────────────────
 
@@ -549,7 +552,7 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
   folders:  AlertFolder[];
   /** Папка для нового алерта — та, из которой его создают. */
   defaultFolderId?: string | null;
-  onSave:   (s: AlertScript) => void;
+  onSave:   (scripts: AlertScript[], selected: AlertScript) => void;
   onClose:  () => void;
 }) {
   const { isSuperuser } = useAuth();
@@ -581,17 +584,31 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
   const [aiExample, setAiExample] = useState("");
   const [aiNotes, setAiNotes] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
-  const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string; notes?: string[] } | null>(null);
+  const [aiMsg, setAiMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [drafts, setDrafts] = useState<AlertScriptDraft[]>([]);
+  const [draftIndex, setDraftIndex] = useState(0);
+  const currentDraft = drafts[draftIndex];
   const aiReady = CONFLUENCE_REF_RE.test(aiReqs.ref.trim()) || aiReqs.ids.length > 0;
+  const draftEdits = () => drafts.map((draft, index) => index === draftIndex
+    ? { ...draft, name, notebook: cells, dynamic_params: params } : draft);
+  function showDraft(draft: AlertScriptDraft, index: number) {
+    setDraftIndex(index);
+    setName(draft.name);
+    setCells(draft.notebook.map(c => ({ ...c, type: normType(c.type) })));
+    setParams(draft.dynamic_params.map(p => ({ ...p, options: p.options ?? [] })));
+    setEditTab("fields");
+  }
   const generate = async () => {
     setAiBusy(true); setAiMsg(null);
     try {
       const d = await aiGenerateScript({ provider, confluence_ref: CONFLUENCE_REF_RE.test(aiReqs.ref.trim()) ? aiReqs.ref.trim() : "",
         requirement_ids: aiReqs.ids, example_id: aiExample, notes: aiNotes });
-      setName(n => n.trim() ? n : d.name);
-      setCells(d.notebook.map(c => ({ ...c, type: normType(c.type) })));
-      setParams(d.dynamic_params.map(p => ({ ...p, options: p.options ?? [] })));
-      setAiMsg({ ok: true, text: `Готово: ячеек ${d.notebook.length}, параметров ${d.dynamic_params.length}. Проверьте код и параметры, поправьте при необходимости и сохраните.`, notes: d.notes });
+      const generated = d.drafts ?? [d];
+      if (!generated.length) throw new Error("Модель не вернула ни одного черновика.");
+      const first = generated.length === 1 && !drafts.length && name.trim() ? { ...generated[0], name } : generated[0];
+      setDrafts([first, ...generated.slice(1)]);
+      showDraft(first, 0);
+      setAiMsg({ ok: true, text: `Черновиков: ${generated.length}. Проверьте код и параметры перед сохранением.` });
       setAiOpen(false);
     } catch (e) { setAiMsg({ ok: false, text: (e as Error).message }); }
     finally { setAiBusy(false); }
@@ -651,22 +668,32 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
     if (!name.trim()) { setErr("Название обязательно"); return; }
     setSaving(true); setErr("");
     try {
+      const options = { visible_to_monitoring: visibleToMon, folder_id: folderId || null };
+      if (drafts.length) {
+        const scripts = draftEdits().map(draft => ({
+          id: draft.id, name: draft.name.trim(), topic: draft.topic,
+          notebook: draft.notebook, dynamic_params: draft.dynamic_params, ...options,
+        }));
+        if (scripts.some(script => !script.name)) throw new Error("Укажите название каждого черновика.");
+        const saved = await saveAlertScriptBatch(scripts);
+        onSave(saved.scripts, saved.scripts[draftIndex]);
+        return;
+      }
       const saved = await saveAlertScript({
         id: initial?.id,
         name: name.trim(),
-        topic: "",
+        topic: initial?.topic ?? "",
         notebook: cells,
         dynamic_params: params,
-        visible_to_monitoring: visibleToMon,
-        folder_id: folderId || null,
+        ...options,
       });
-      onSave(saved as AlertScript);
-    } catch (e) { setErr(String(e)); } finally { setSaving(false); }
+      onSave([saved], saved);
+    } catch (e) { setErr((e as Error).message); } finally { setSaving(false); }
   };
 
   return (
     // Ширина переключается: обычная — для названия и папки, широкая — когда пишешь код (в max-w-4xl редактор ячеек едва помещается).
-    <Modal open onClose={onClose} title={editing ? "Редактировать алерт" : "Новый алерт"} size={wide ? "max-w-none" : "max-w-4xl"}
+    <Modal open onClose={() => { if (!saving) onClose(); }} title={editing ? "Редактировать алерт" : "Новый алерт"} size={wide ? "max-w-none" : "max-w-4xl"}
       headerExtra={(
         <button onClick={() => setWide(w => !w)} title={wide ? "Обычная ширина" : "Во всю ширину"} aria-label={wide ? "Обычная ширина" : "Во всю ширину"}
           className="p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-subtle transition-colors">
@@ -674,9 +701,9 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
         </button>
       )}
       footer={<div className="flex items-center justify-end gap-3">
-        <button onClick={onClose} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
-        <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} Сохранить
+        <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-text-muted border border-border-main rounded-lg">Отмена</button>
+        <button onClick={handleSave} disabled={saving || aiBusy} className="flex items-center gap-2 px-5 py-2 text-sm font-semibold bg-primary text-white rounded-lg hover:bg-primary-dark disabled:opacity-40">
+          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null} {drafts.length > 1 ? `Сохранить скрипты (${drafts.length})` : "Сохранить"}
         </button>
       </div>}>
       <div className="space-y-5">
@@ -684,7 +711,7 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
           <button type="button" onClick={() => setAiOpen(o => !o)} aria-expanded={aiOpen} className="flex items-center gap-2 text-sm font-semibold text-primary">
             <Sparkles className="w-4 h-4" /> ИИ-помощник: скрипт по требованиям</button>
           {aiOpen && <>
-            <p className="text-xs text-text-muted">ИИ изучит требования, напишет блокнот и объявит параметры запуска с проверкой типа. Где тип неизвестен — свободный ввод; всё можно поправить ниже.</p>
+            <p className="text-xs text-text-muted">Для каждого варианта сценария ИИ подготовит отдельный блокнот и параметры запуска.</p>
             <RequirementsPicker value={aiReqs} onChange={setAiReqs} disabled={aiBusy} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <label className="block"><span className="block mb-1 text-text-muted">Пример — существующий скрипт (необязательно)</span>
@@ -700,13 +727,23 @@ function ScriptModal({ initial, folders, defaultFolderId, onSave, onClose }: {
               className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40">
               {aiBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}{aiBusy ? "Пишу скрипт…" : "Сгенерировать"}</button>
           </>}
-          {aiMsg && <div role={aiMsg.ok ? "status" : "alert"} className={`text-xs ${aiMsg.ok ? "tone-success-text" : "tone-danger"}`}>{aiMsg.text}
-            {!!aiMsg.notes?.length && <ul className="mt-1 list-disc pl-4 text-text-muted">{aiMsg.notes.map(n => <li key={n}>{n}</li>)}</ul>}</div>}
+          {aiMsg && <p role={aiMsg.ok ? "status" : "alert"} className={`text-xs ${aiMsg.ok ? "tone-success-text" : "tone-danger"}`}>{aiMsg.text}</p>}
+          {drafts.length > 1 && <div>
+            <p className="mb-1 text-xs text-text-muted">Вариант сценария</p>
+            <Select aria-label="Вариант сценария" value={String(draftIndex)} disabled={saving || aiBusy} onChange={value => {
+              const changed = draftEdits();
+              setDrafts(changed);
+              showDraft(changed[Number(value)], Number(value));
+            }}>
+              {drafts.map((draft, index) => <option key={draft.id} value={String(index)}>{index === draftIndex ? name : draft.name}</option>)}
+            </Select>
+          </div>}
+          {!!currentDraft?.notes?.length && <ul className="list-disc pl-4 text-xs text-text-muted">{currentDraft.notes.map(n => <li key={n}>{n}</li>)}</ul>}
         </section>}
         {/* Name */}
         <div>
           <label className={LABEL_CLS}>Название *</label>
-          <input value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="МПР" />
+          <input aria-label="Название скрипта" value={name} onChange={e => setName(e.target.value)} className={INPUT_CLS} placeholder="МПР" />
         </div>
 
         {/* Folder */}
@@ -895,6 +932,7 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
   onFolderDeleted?: () => void;
 } = {}) {
   const { isSuperuser } = useAuth();
+  usePanelAudit(isSuperuser ? KERNEL_AUDIT : null);
   const scoped = folderId !== undefined;
 
   const {
@@ -918,8 +956,6 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
   const [showModal,  setShowModal]  = useState(false);
   const [editScript, setEditScript] = useState<AlertScript | null>(null);
   const [allKernels, setAllKernels] = useState<KernelInfo[]>([]);
-  const [auditLog,   setAuditLog]   = useState<KernelAuditEntry[]>([]);
-  const [showAudit,  setShowAudit]  = useState(false);
 
   const [openFolders,     setOpenFolders]     = useState<Set<string>>(new Set());
   const [newFolderName,   setNewFolderName]   = useState("");
@@ -1105,10 +1141,7 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
 
   useEffect(() => {
     if (!isSuperuser) return;
-    const load = () => {
-      kernelAllStatus().then(setAllKernels).catch(() => {});
-      kernelAudit(20).then(setAuditLog).catch(() => {});
-    };
+    const load = () => { kernelAllStatus().then(setAllKernels).catch(() => {}); };
     load();
     const timer = setInterval(load, 10000);
     return () => clearInterval(timer);
@@ -1118,17 +1151,17 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
     setSelectedId(s.id);
   };
 
-  const handleModalSave = (saved: AlertScript) => {
+  const handleModalSave = (saved: AlertScript[], selected: AlertScript) => {
     setScripts(prev => {
-      const idx = prev.findIndex(s => s.id === saved.id);
-      if (idx >= 0) { const n = [...prev]; n[idx] = saved; return n; }
-      return [...prev, saved];
+      const byId = new Map(prev.map(script => [script.id, script]));
+      for (const script of saved) byId.set(script.id, script);
+      return [...byId.values()];
     });
     setShowModal(false); setEditScript(null);
-    setSelectedId(saved.id);
+    setSelectedId(selected.id);
     setValues(prev => {
       const v: Record<string, string> = {};
-      for (const p of saved.dynamic_params) v[p.id] = prev[p.id] ?? p.placeholder;
+      for (const p of selected.dynamic_params) v[p.id] = prev[p.id] ?? p.placeholder;
       return v;
     });
   };
@@ -1327,14 +1360,6 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
             </>
           )}
           {isSuperuser && (
-            <button onClick={() => setShowAudit(v => !v)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-all ${
-                showAudit ? "border-amber-200 bg-amber-50 text-amber-700" : "border-border-main text-text-muted hover:bg-bg-subtle"
-              }`}>
-              <List className="w-3.5 h-3.5" /> Аудит
-            </button>
-          )}
-          {isSuperuser && (
             <button onClick={() => { setEditScript(null); setShowModal(true); }}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary-dark transition-all">
               <Plus className="w-4 h-4" /> Новый алерт
@@ -1342,38 +1367,6 @@ export default function AlertsSection({ folderId, onFolderDeleted }: {
           )}
         </div>
       </div>
-
-      {/* Audit panel for superuser */}
-      {isSuperuser && showAudit && (
-        <div className="bg-bg-card border border-amber-200 rounded-xl p-4 space-y-2">
-          <h3 className="text-sm font-semibold text-amber-800 flex items-center gap-1.5">
-            <Clock className="w-4 h-4" /> Аудит запусков ядер
-          </h3>
-          {auditLog.length === 0 ? (
-            <p className="text-xs text-text-muted">Нет записей</p>
-          ) : (
-            <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
-              {auditLog.map((entry, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs text-text-muted bg-bg-subtle rounded-lg px-2.5 py-1.5">
-                  <span className="font-mono text-[11px] text-text-muted">
-                    {entry.ts ? new Date(entry.ts).toLocaleString("ru-RU") : ""}
-                  </span>
-                  <span className={`px-1.5 py-0.5 rounded-full font-semibold text-[10px] ${
-                    entry.action === "start" ? "bg-green-50 text-green-700" :
-                    entry.action === "stop"  ? "bg-red-50 text-red-700" :
-                    "bg-blue-50 text-blue-700"
-                  }`}>
-                    {entry.action}
-                  </span>
-                  <User className="w-3 h-3" />
-                  <span className="font-medium text-text-main">{entry.user}</span>
-                  <span className="truncate">{entry.script_name || entry.script_id}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {scopedScripts.length === 0 ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center gap-3 text-text-muted">

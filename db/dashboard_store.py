@@ -124,7 +124,8 @@ def observe_activity(widget_id, activity, signature, version, *, employee_name="
             for metric in source.get("metrics", []):
                 old = known.get(metric["label"], {})
                 if metric.get("unavailable") and old.get("value") is not None:
-                    metric.update(value=old["value"], url=old.get("url"), detail=f"Последнее полученное значение · {metric['detail']}")
+                    metric.update({**old, **metric, "value": old["value"],
+                                   "detail": f"Последнее полученное значение · {metric['detail']}"})
         queue.update(activity=activity, activitySignature=signature, lastCheckedAt=stamp())
         if employee_name:
             queue["employeeName"] = employee_name

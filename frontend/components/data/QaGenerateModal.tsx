@@ -29,9 +29,18 @@ export default function QaGenerateModal({ open, doc, onClose, onGenerate, progre
   const [err, setErr] = useState("");
   useEffect(() => {
     if (!open) return;
+    let active = true;
     setFound(null); setErr(""); setExtra([]); setDraft(""); setFocus(doc.focus ?? "");
-    getReqLinks(doc.id).then(r => { setFound(r.found); setChecked(new Set(r.found.map(f => f.url))); }, e => { setFound([]); setErr((e as Error).message); });
-  }, [open, doc.id, doc.focus]);
+    const previous = doc.qa_confluence_refs;
+    getReqLinks(doc.id).then(r => {
+      if (!active) return;
+      setFound(r.found);
+      const discovered = new Set(r.found.map(f => f.url));
+      setChecked(new Set(previous ? previous.filter(url => discovered.has(url)) : discovered));
+      setExtra(previous?.filter(url => !discovered.has(url)) ?? []);
+    }, e => { if (active) { setFound([]); setExtra(previous ?? []); setErr((e as Error).message); } });
+    return () => { active = false; };
+  }, [open, doc.id, doc.focus, doc.qa_confluence_refs]);
 
   const addExtra = () => {
     const v = draft.trim();
@@ -49,7 +58,9 @@ export default function QaGenerateModal({ open, doc, onClose, onGenerate, progre
   return (
     <Modal open={open} onClose={onClose} title="Документ QA" size="max-w-2xl">
       <div className="space-y-4 text-sm">
-        <p className="text-text-muted">Обзор и страницы версий для <b className="text-text-main">«{doc.name}»</b> собираются из исходника, макетов и выбранных страниц Confluence.</p>
+        <p className="text-text-muted">{doc.qa_doc
+          ? <>Shark перечитает исходники <b className="text-text-main">«{doc.name}»</b>, обновит затронутые разделы обзора и добавит новые версии.</>
+          : <>Shark соберёт актуальный QA-обзор для <b className="text-text-main">«{doc.name}»</b> и отдельную страницу изменений для каждой версии.</>}</p>
 
         <label className="block">
           <span className="mb-1 flex items-center gap-1.5 text-xs font-medium text-text-muted"><Target className="w-3.5 h-3.5" /> Что именно нужно (необязательно)</span>
@@ -114,9 +125,9 @@ export default function QaGenerateModal({ open, doc, onClose, onGenerate, progre
           {busy && onCancelGenerate && <button type="button" className="text-xs text-primary hover:underline"
             onClick={() => void onCancelGenerate().catch(e => setErr(e.message))}>Остановить</button>}
           <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-border-main px-3 py-1.5 hover:bg-bg-subtle">Отмена</button>
-          <button type="button" onClick={() => void run()} disabled={busy}
+          <button type="button" onClick={() => void run()} disabled={busy || found === null}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 font-semibold text-white hover:bg-primary-dark disabled:opacity-50">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {busy ? "Собираю…" : "Собрать документ QA"}</button>
+            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {busy ? "Обрабатываю…" : doc.qa_doc ? "Обновить QA" : "Собрать документ QA"}</button>
         </div>
       </div>
     </Modal>

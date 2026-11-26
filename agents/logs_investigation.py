@@ -223,3 +223,28 @@ async def investigate_selection(records: list[Record], services: list[str], star
     else:
         diagnoses = await asyncio.to_thread(_diagnose_groups, groups, provider)
     return {"groups": [{**group, "result": diagnosis} for group, diagnosis in zip(groups, diagnoses)]}
+
+
+def _diagnose_upload(records: list[Record], stats: dict, provider: str) -> Diagnosis:
+    from agents.llm_client import LLMClient, Message
+    from agents.tm_pipeline import parse_json
+
+    system = _SYSTEM + """
+Источник — загруженные текстовые файлы. Переданы сводные счётчики и выборка событий.
+Порядок элементов выборки не гарантирует порядок событий. Номера файлов — только номера источников.
+Отличай общую статистику от содержания примеров, не делай выводы о непоказанных строках.
+Не связывай разные операции по совпадению времени. Укажи неполноту выборки, если она влияет на вывод."""
+    evidence = {"statistics": stats, "sample": [_brief(r) for r in records]}
+    client = LLMClient(provider=provider, timeout=60)
+    answer = client.chat([Message("system", system), Message("user", json.dumps(evidence, ensure_ascii=False))],
+                         temperature=0.2, max_tokens=2000)
+    return _safe_diagnosis(parse_json(answer.content))
+
+
+async def investigate_upload(records: list[Record], stats: dict, provider: str) -> dict:
+    if not records:
+        return {"groups": [], "upload": stats}
+    result = (_demo_diagnosis(records, []) if MOCK else
+              await asyncio.to_thread(_diagnose_upload, records, stats, provider))
+    return {"groups": [{"records": records, "lookups": [], "limited": False,
+                        "correlation": "file", "correlationId": "", "result": result}], "upload": stats}

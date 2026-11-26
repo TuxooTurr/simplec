@@ -13,8 +13,10 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { usePanelRefresh } from "@/components/ui/RefreshButton";
 import {
   addReqFolder, addRequirement, deleteReqFolder, deleteRequirement, generateRequirementDoc, getRequirementDocJob, waitForRequirementDoc, cancelRequirementDoc, listReqFolders,
-  listRequirements, updateReqFolder, updateRequirement, type ReqFolder, type Requirement,
+  listRequirements, renderRequirementDiagrams, updateReqFolder, updateRequirement, type ReqFolder, type Requirement,
 } from "@/lib/api";
+
+const DIAGRAM_NEEDS_RENDERING = /(?:^ {0,3}(?:`{3}(?:plantuml|puml)\s*$|@startuml\b)|Для отрисовки схем настройте PlantUML на сервере Shark|PlantUML не смог обработать схему|Не удалось запустить встроенный рендерер PlantUML)/im;
 
 const LAST_KEY = "st_data_doc";   // последний открытый документ — удобство одного браузера
 
@@ -33,6 +35,7 @@ export default function DataDocs() {
   const [selected, setSelected] = useState<string | null>(null);
   const [creating, setCreating] = useState<string | null>(null);   // папка нового документа; null — не создаём
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rendering, setRendering] = useState<string | null>(null);
 
   const load = async () => {
     setErr("");
@@ -80,6 +83,23 @@ export default function DataDocs() {
     }, () => {});
     return () => { live = false; };
   }, [selected]);
+  const renderNeeded = !!doc && [doc.qa_doc, ...(doc.release_pages ?? []).map(page => page.markdown)]
+    .some(text => DIAGRAM_NEEDS_RENDERING.test(text));
+  const updatedAt = doc?.updated_at;
+  const generating = docJob?.id === selected;
+  useEffect(() => {
+    if (!selected || !renderNeeded || generating || creating !== null) return;
+    const controller = new AbortController();
+    setRendering(selected);
+    void renderRequirementDiagrams(selected, controller.signal).then(updated => {
+      if (!controller.signal.aborted) {
+        setDocs(current => current.map(item => item.id === updated.id && item.updated_at <= updated.updated_at ? updated : item));
+      }
+    }, error => {
+      if (!controller.signal.aborted) setErr((error as Error).message);
+    }).finally(() => { if (!controller.signal.aborted) setRendering(null); });
+    return () => { controller.abort(); setRendering(null); };
+  }, [selected, renderNeeded, generating, creating, updatedAt]);
   // Дерево — шириной, которую тянут мышью (длинные названия папок видны целиком); запоминается в браузере.
   const treePane = usePaneSize("tree", 288, 220, 720, "st_data_panes");
 
@@ -125,7 +145,10 @@ export default function DataDocs() {
               setDocs(ds => [made, ...ds]);
               select(made.id);
             }} />
-        ) : doc ? (
+        ) : doc ? (<>
+          {rendering === doc.id && <p role="status" className="mb-2 flex items-center gap-2 text-xs text-text-muted">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Отрисовываю схемы…
+          </p>}
           <DocPage jobProgress={docJob?.id === doc.id ? docJob.progress : ""} onCancelGenerate={async () => { await cancelRequirementDoc(doc.id); }}
             releaseId={releaseId} onRelease={setReleaseId} doc={doc} folders={folders} provider={provider}
             onPatch={async patch => replace(await updateRequirement(doc.id, patch))}
@@ -148,7 +171,7 @@ export default function DataDocs() {
               if (!confirm(`Удалить документ «${doc.name}»?`)) return;
               void deleteRequirement(doc.id).then(() => { setDocs(ds => ds.filter(x => x.id !== doc.id)); select(null); }, fail);
             }} />
-        ) : !loading && (
+        </>) : !loading && (
           <div className="h-full flex flex-col items-center justify-center text-center text-sm text-text-muted gap-3">
             <p>Выберите документ слева или создайте новый.</p>
             <button type="button" onClick={() => setCreating("")}

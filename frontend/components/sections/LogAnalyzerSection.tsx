@@ -1,8 +1,9 @@
 "use client";
-import { refreshLogCatalog } from "@/lib/mcpLogsApi";
-
 import { useEffect, useId, useRef, useState } from "react";
-import { AlertTriangle, Bug, ChevronLeft, ChevronRight, Filter, Loader2, Search, Sparkles } from "lucide-react";
+import { AlertTriangle, Bug, ChevronLeft, ChevronRight, FileText, Loader2, Search, Sparkles, Upload, X } from "lucide-react";
+import FieldPicker from "@/components/jiratool/FieldPicker";
+import LogAuditModal from "@/components/logs/LogAuditModal";
+import { usePanelAudit, type PanelAudit } from "@/components/PanelAudit";
 import IssueFormModal from "@/components/jiratool/IssueFormModal";
 import PvsSettingsModal from "@/components/settings/PvsSettingsModal";
 import { Badge, Button, Card, EmptyState, Input, Label, SectionSettingsButton, Select } from "@/components/ui";
@@ -10,9 +11,12 @@ import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { openForm } from "@/lib/backgroundForms";
 import { getJiraSettings } from "@/lib/jiraApi";
 import { DEFAULT_PROJECT } from "@/lib/jiraModel";
-import { analyzeMcpLogs, getLogCatalog, queryMcpLogs,
+import { analyzeLogFiles, analyzeMcpLogs, formatLogSize, getLogCatalog, queryMcpLogs, refreshLogCatalog,
+  MAX_LOG_SERVICES, MAX_LOG_UPLOAD_BYTES, MAX_LOG_UPLOAD_FILES,
   type LogAnalysis, type LogCatalog, type LogGroup, type LogJobOptions, type LogJobProgress,
   type LogPeriod, type LogQuery, type LogRecord, type LogResult } from "@/lib/mcpLogsApi";
+
+const LOG_AUDIT: PanelAudit = { id: "logs", render: onClose => <LogAuditModal onClose={onClose} /> };
 
 const MAX_PICKED = 12;
 const PAGE_SIZE = 50;
@@ -22,12 +26,14 @@ const CORRELATION = {
   no_data: "Подходящих событий нет",
   unavailable: "Не удалось прочитать логи",
 };
-const PERIODS = [["15", "15 минут"], ["60", "1 час"], ["360", "6 часов"], ["1440", "24 часа"], ["custom", "Выбрать даты"]] as const;
+const PERIODS = [["15", "15 мин"], ["60", "1 час"], ["360", "6 часов"], ["1440", "24 часа"], ["custom", "От и до"]] as const;
 const PLURAL = new Intl.PluralRules("ru");
 const JOB_PHASES = {
   search: "Получаю события из MCP…",
   related: "Проверяю связанные сервисы…",
   model: "Готовлю разбор ИИ…",
+  upload: "Загружаю файлы…",
+  scan: "Читаю файлы и собираю выборку…",
 };
 
 function countLabel(count: number, one: string, few: string, many: string): string {
@@ -90,9 +96,9 @@ function EventCard({ event, number, checked, canSelect, busy, onSelect, onAnalyz
   );
 }
 
-function GroupResult({ group, onDefect }: { group: LogGroup; onDefect: () => void }) {
+function GroupResult({ group, onDefect }: { group: LogGroup; onDefect?: () => void }) {
   const { result } = group;
-  const reference = group.correlation === "trace" ? `trace ID ${group.correlationId}`
+  const reference = group.correlation === "file" ? "Выборка из файлов" : group.correlation === "trace" ? `trace ID ${group.correlationId}`
     : group.correlation === "request" ? `request ID ${group.correlationId}` : "Отдельное событие";
   return (
     <article aria-label={result.title} className="rounded-xl border border-border-main bg-bg-card p-4 space-y-3">
@@ -104,9 +110,9 @@ function GroupResult({ group, onDefect }: { group: LogGroup; onDefect: () => voi
           </p>
           <h3 className="mt-0.5 font-semibold text-text-main">{result.title}</h3>
         </div>
-        <Button type="button" variant="ghost" icon={<Bug className="h-4 w-4" aria-hidden />} onClick={onDefect}>
+        {onDefect && <Button type="button" variant="ghost" icon={<Bug className="h-4 w-4" aria-hidden />} onClick={onDefect}>
           Завести дефект по разбору
-        </Button>
+        </Button>}
       </div>
       <p className="text-sm text-text-main">{result.summary}</p>
       <p className="text-sm text-text-main"><b>Влияние на пользователя.</b> {result.impact}</p>
@@ -143,7 +149,13 @@ export default function LogAnalyzerSection() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [catalog, setCatalog] = useState<LogCatalog | null>(null);
   const [jiraProject, setJiraProject] = useState(DEFAULT_PROJECT);
-  const [service, setService] = useState("");
+  usePanelAudit(LOG_AUDIT);
+  const [source, setSource] = useState<"pvs" | "file">("pvs");
+  const [services, setServices] = useState<string[]>([]);
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [fileNames, setFileNames] = useState<string[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [period, setPeriod] = useState<string>("60");
   const [from, setFrom] = useState(() => localInput(new Date(Date.now() - 3600_000)));
   const [to, setTo] = useState(() => localInput(new Date()));
@@ -199,23 +211,50 @@ export default function LogAnalyzerSection() {
     }
   };
 
-  const search = async (errorsOnly: boolean) => {
+  const search = async () => {
     const range = readPeriod();
     if (!range) { setProblem("Проверьте начало и конец периода. Можно запросить до 7 дней."); return; }
-    const query: LogQuery = { ...range, ...(service && { service }), errorsOnly };
-    setReading(true); setProblem(""); setAnalysis(null); setPicked(new Set());
-    setResult(null); setPage(0);
+    const query: LogQuery = { ...range, services, errorsOnly };
+    setReading(true); setProblem("");
     const response = await runOperation(options => queryMcpLogs(query, options));
-    if (response) setResult({ query, response });
+    if (response) {
+      setAnalysis(null);
+      setPicked(new Set());
+      setPage(0);
+      setResult({ query, response });
+    }
     setReading(false);
   };
 
   const investigate = async (records: LogRecord[]) => {
-    if (!result || !records.length) return;
-    setAnalyzing(true); setProblem(""); setAnalysis(null);
+    if (!result || !records.length || activeOperation.current) return;
+    setAnalyzing(true); setProblem("");
     const { start, end } = result.query;
     const response = await runOperation(options => analyzeMcpLogs({ start, end }, records, provider, options));
     if (response) setAnalysis(response);
+    setAnalyzing(false);
+  };
+
+  const fileSize = files.reduce((sum, file) => sum + file.size, 0);
+  const addFiles = (selected: File[]) => {
+    const next = [...files];
+    for (const file of selected) {
+      if (!next.some(item => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified)) next.push(file);
+    }
+    if (next.length > MAX_LOG_UPLOAD_FILES) { setProblem(`Выберите до ${MAX_LOG_UPLOAD_FILES} файлов за один раз.`); return; }
+    if (next.reduce((sum, file) => sum + file.size, 0) > MAX_LOG_UPLOAD_BYTES) { setProblem("Общий объём файлов превышает 500 МБ."); return; }
+    setProblem("");
+    setFiles(next);
+  };
+
+  const upload = async () => {
+    if (!fileSize || activeOperation.current) return;
+    setAnalyzing(true); setProblem("");
+    const response = await runOperation(options => analyzeLogFiles(files, provider, errorsOnly, options));
+    if (response) {
+      setFileNames(files.map(file => file.name));
+      setAnalysis(response);
+    }
     setAnalyzing(false);
   };
 
@@ -242,7 +281,18 @@ export default function LogAnalyzerSection() {
   };
 
   const discover = async () => { setLoading(true); try { setCatalog(await refreshLogCatalog()); } catch (e) { setProblem((e as Error).message); } finally { setLoading(false); } };
-  const disabled = !catalog?.configured || reading || analyzing;
+  const busy = reading || analyzing;
+  const disabled = busy || (source === "pvs" ? !catalog?.configured : !fileSize);
+  const displayedAnalysis = analysis && (analysis.upload ? source === "file" : source === "pvs") ? analysis : null;
+  const errorFilter = <label className="inline-flex min-h-9 shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-sm text-text-main">
+    <input type="checkbox" checked={errorsOnly} disabled={busy} className="h-4 w-4 accent-primary"
+      onChange={e => setErrorsOnly(e.target.checked)} />
+    Только ошибки
+  </label>;
+  const submit = <Button type="submit" className="ml-auto min-h-9 shrink-0 whitespace-nowrap" disabled={disabled} loading={busy}
+    icon={source === "pvs" ? <Search className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}>
+    {source === "pvs" ? "Получить логи" : "Разобрать файлы"}
+  </Button>;
   const records = result?.response.records ?? [];
   const pageCount = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
   const seconds = progress?.seconds ?? 0;
@@ -262,45 +312,80 @@ export default function LogAnalyzerSection() {
       </header>
       <PvsSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {catalog?.configured && catalog.canDiscoverServices && <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" loading={loading} disabled={reading || analyzing} onClick={() => void discover()}>Обновить микросервисы из логов</Button><span className="text-xs text-text-muted">Период сервисов: {catalog.servicesHours ?? 72} ч; кеш на 12 часов.</span></div>}
-      {catalog && !catalog.configured && <div className="tone-warning flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
+      {source === "pvs" && catalog?.configured && catalog.canDiscoverServices && <div className="flex flex-wrap items-center gap-2"><Button variant="ghost" loading={loading} disabled={reading || analyzing} onClick={() => void discover()}>Обновить микросервисы из логов</Button><span className="text-xs text-text-muted">Период сервисов: {catalog.servicesHours ?? 72} ч; кеш на 12 часов.</span></div>}
+      {source === "pvs" && catalog && !catalog.configured && <div className="tone-warning flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
         <p>Источник MCP не подключён. Откройте «Подключения» и проверьте параметры PVS.</p>
         <Button type="button" variant="sm" onClick={loadCatalog} loading={loading}>Обновить</Button>
       </div>}
-      {!catalog && !loading && problem && <Button type="button" variant="ghost" onClick={loadCatalog}>Повторить загрузку справочника</Button>}
+      {source === "pvs" && !catalog && !loading && problem && <Button type="button" variant="ghost" onClick={loadCatalog}>Повторить загрузку справочника</Button>}
 
       <Card padded={false} className="p-4">
-        <form className="space-y-3" onSubmit={e => { e.preventDefault(); if (!disabled) void search(false); }}>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-0 flex-[1_1_14rem]">
-              <Label htmlFor={`${filtersId}-service`}>Микросервис</Label>
-              <Select id={`${filtersId}-service`} aria-label="Микросервис" value={service} onChange={setService}
-                disabled={loading || reading || !catalog} searchable searchPlaceholder="Найти микросервис…">
-                <option value="">Все микросервисы</option>
-                {catalog?.services.map(name => <option key={name} value={name}>{name}</option>)}
-              </Select>
+        <form className="space-y-3" onSubmit={event => {
+          event.preventDefault();
+          if (!disabled) void (source === "pvs" ? search() : upload());
+        }}>
+          <fieldset disabled={busy} className="flex flex-wrap gap-1">
+            <legend className="sr-only">Источник логов</legend>
+            {(["pvs", "file"] as const).map(value => <label key={value}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm
+                focus-within:ring-2 focus-within:ring-primary/40 ${source === value ? "border-primary/50 bg-primary/10 text-primary" : "border-border-main text-text-muted hover:bg-bg-subtle"}`}>
+              <input type="radio" name={`${filtersId}-source`} className="sr-only" value={value} checked={source === value}
+                onChange={() => { setSource(value); setProblem(""); }} />
+              {value === "pvs" ? "Логи MCP" : "Файлы логов"}
+            </label>)}
+          </fieldset>
+          {source === "pvs" ? <>
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-0 flex-[1_1_14rem]">
+                <Label htmlFor={`${filtersId}-service`}>Микросервисы</Label>
+                <FieldPicker label="Микросервисы" triggerId={`${filtersId}-service`} fullWidth
+                  triggerText={services.length ? services.join(", ") : "Все микросервисы"}
+                  options={(catalog?.services ?? []).map(value => ({ value, label: value, group: "Микросервисы" }))}
+                  selected={services} onChange={setServices} max={MAX_LOG_SERVICES}
+                  disabled={loading || busy || !catalog?.configured} searchPlaceholder="Найти микросервис…"
+                  footer={services.length > 0 && <Button variant="sm" type="button" onClick={() => setServices([])}>Сбросить выбор</Button>} />
+              </div>
+              <div className="w-[8rem] max-w-full shrink-0">
+                <Label htmlFor={`${filtersId}-period`}>Период</Label>
+                <Select id={`${filtersId}-period`} aria-label="Период" value={period} onChange={setPeriod} disabled={busy}>
+                  {PERIODS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+                </Select>
+              </div>
+              {errorFilter}
+              {submit}
             </div>
-            <div className="min-w-0 flex-[1_1_9rem]">
-              <Label htmlFor={`${filtersId}-period`}>Период</Label>
-              <Select id={`${filtersId}-period`} aria-label="Период" value={period} onChange={setPeriod} disabled={reading}>
-                {PERIODS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-              </Select>
+            {period === "custom" && <div className="flex flex-wrap gap-3">
+              <div className="min-w-0">
+                <Label htmlFor={`${filtersId}-from`}>От</Label>
+                <Input id={`${filtersId}-from`} aria-label="Дата и время от" type="datetime-local" value={from}
+                  onChange={e => setFrom(e.target.value)} disabled={busy} required />
+              </div>
+              <div className="min-w-0">
+                <Label htmlFor={`${filtersId}-to`}>До</Label>
+                <Input id={`${filtersId}-to`} aria-label="Дата и время до" type="datetime-local" value={to}
+                  onChange={e => setTo(e.target.value)} disabled={busy} required />
+              </div>
+            </div>}
+          </> : <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <input ref={fileInput} type="file" multiple hidden aria-label="Файлы для анализа"
+                onChange={e => { addFiles(Array.from(e.currentTarget.files ?? [])); e.currentTarget.value = ""; }} />
+              <Button type="button" variant="ghost" disabled={busy} icon={<Upload className="h-4 w-4" />}
+                onClick={() => fileInput.current?.click()}>{files.length ? "Добавить файлы" : "Выбрать файлы"}</Button>
+              <span className="text-xs text-text-muted">{formatLogSize(fileSize)} / 500 МБ · текстовые логи UTF-8</span>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button type="submit" className="min-h-9 whitespace-nowrap" disabled={disabled} loading={reading}
-                icon={<Search className="h-4 w-4" aria-hidden />}>Получить логи</Button>
-              <Button type="button" variant="ghost" className="min-h-9 whitespace-nowrap" disabled={disabled}
-                icon={<Filter className="h-4 w-4" aria-hidden />} onClick={() => void search(true)}>Только ошибки</Button>
-            </div>
-          </div>
-          {period === "custom" && <div className="flex flex-wrap gap-3">
-            <div className="min-w-0">
-              <Label htmlFor={`${filtersId}-from`}>С</Label>
-              <Input id={`${filtersId}-from`} type="datetime-local" value={from} onChange={e => setFrom(e.target.value)} />
-            </div>
-            <div className="min-w-0">
-              <Label htmlFor={`${filtersId}-to`}>По</Label>
-              <Input id={`${filtersId}-to`} type="datetime-local" value={to} onChange={e => setTo(e.target.value)} />
+            {files.length > 0 && <ul className="max-h-36 space-y-1 overflow-y-auto scrollbar-thin">
+              {files.map((file, i) => <li key={i} className="flex items-center gap-2 rounded-md bg-bg-subtle px-2 text-xs">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden />
+                <span className="min-w-0 flex-1 truncate text-text-main" title={file.name}>{file.name}</span>
+                <span className="shrink-0 text-text-muted">{formatLogSize(file.size)}</span>
+                <Button type="button" variant="icon" title={`Убрать ${file.name}`} disabled={busy}
+                  onClick={() => setFiles(current => current.filter(item => item !== file))}><X className="h-3.5 w-3.5" /></Button>
+              </li>)}
+            </ul>}
+            <div className="flex flex-wrap items-center gap-2 border-t border-border-main pt-3">
+              {errorFilter}
+              {submit}
             </div>
           </div>}
         </form>
@@ -318,24 +403,38 @@ export default function LogAnalyzerSection() {
         <Button type="button" variant="ghost" onClick={() => activeOperation.current?.abort()}>Отменить</Button>
       </Card>}
 
-      {analysis && <section ref={analysisRef} aria-label="Разбор ИИ" className="rounded-xl border border-primary/30 bg-bg-subtle/40 p-4 space-y-3">
+      {displayedAnalysis && <section ref={analysisRef} aria-label="Разбор ИИ" className="rounded-xl border border-primary/30 bg-bg-subtle/40 p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <h2 className="flex items-center gap-2 text-base font-bold text-text-main"><Sparkles className="w-4 h-4 text-primary" aria-hidden /> Разбор ИИ</h2>
-          <p className="text-xs text-text-muted">
-            {countLabel(analysis.groups.reduce((sum, group) => sum + group.records.length, 0), "запись", "записи", "записей")}
-            {" · "}{countLabel(analysis.groups.length, "группа", "группы", "групп")}
-          </p>
+          {displayedAnalysis.upload ? <p className="text-xs text-text-muted">
+            Файлов {displayedAnalysis.upload.fileCount} · {formatLogSize(displayedAnalysis.upload.sizeBytes)} ·
+            событий {displayedAnalysis.upload.eventCount} · ошибок {displayedAnalysis.upload.errorCount} ·
+            в выборке ИИ {displayedAnalysis.upload.sampleCount}
+          </p> : <p className="text-xs text-text-muted">
+            {countLabel(displayedAnalysis.groups.reduce((sum, group) => sum + group.records.length, 0), "запись", "записи", "записей")}
+            {" · "}{countLabel(displayedAnalysis.groups.length, "группа", "группы", "групп")}
+          </p>}
         </div>
-        {analysis.groups.map((group, i) => <GroupResult key={i} group={group} onDefect={() => toDefect(group.records, group)} />)}
+        {displayedAnalysis.upload && <>
+          <p className="break-words text-xs text-text-muted">{fileNames.map((name, i) => `Файл ${i + 1} — ${name}`).join(" · ")}</p>
+          {displayedAnalysis.upload.longLines > 0 && <p className="text-xs text-text-muted">
+            Длинных строк прочитано с усечением: {displayedAnalysis.upload.longLines}
+          </p>}
+          {!displayedAnalysis.groups.length && <p className="text-sm text-text-main" role="status">
+            {displayedAnalysis.upload.errorsOnly ? "В загруженных логах ошибок не найдено." : "В загруженных файлах нет событий."}
+          </p>}
+        </>}
+        {displayedAnalysis.groups.map((group, i) => <GroupResult key={i} group={group}
+          onDefect={displayedAnalysis.upload ? undefined : () => toDefect(group.records, group)} />)}
       </section>}
 
-      {result && <section aria-label="Результаты поиска" className="space-y-2.5">
+      {source === "pvs" && result && <section aria-label="Результаты поиска" className="space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-xs text-text-muted">
-            <p className="text-sm font-semibold text-text-main">{result.query.service ?? "Все микросервисы"} · {result.query.errorsOnly ? "Только ошибки" : "Все события"}</p>
+            <p className="text-sm font-semibold text-text-main">{result.query.services.join(", ") || "Все микросервисы"} · {result.query.errorsOnly ? "Только ошибки" : "Все события"}</p>
             <p>{when(result.query.start)} — {when(result.query.end)} · записей {records.length} · ошибок {result.response.errorCount}</p>
           </div>
-          {records.length > 0 && <Button type="button" variant="ghost" disabled={!picked.size || analyzing}
+          {records.length > 0 && <Button type="button" variant="ghost" disabled={!picked.size || busy}
             icon={<Sparkles className="h-4 w-4" aria-hidden />}
             onClick={() => void investigate(records.filter((_, i) => picked.has(i)))}>
             Разобрать выбранное{picked.size ? ` (${picked.size})` : ""}
@@ -354,7 +453,7 @@ export default function LogAnalyzerSection() {
         </Card>}
         {records.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((event, i) => {
           const index = page * PAGE_SIZE + i;
-          return <EventCard key={index} event={event} number={index + 1} checked={picked.has(index)} busy={analyzing}
+          return <EventCard key={index} event={event} number={index + 1} checked={picked.has(index)} busy={busy}
             canSelect={picked.has(index) || picked.size < MAX_PICKED} onSelect={() => setPicked(prev => {
               const next = new Set(prev); if (next.has(index)) next.delete(index); else if (next.size < MAX_PICKED) next.add(index); return next;
             })} onAnalyze={() => void investigate([event])} onDefect={() => toDefect([event])} />;

@@ -242,7 +242,8 @@ def test_документ_qa_со_связанными_страницами(conf
             pass
 
         def chat_continued(self, messages, **kw):
-            seen["prompt"] = messages[0].content
+            if messages[0].content.startswith("Ты — старший тестировщик"):
+                seen["prompt"] = messages[0].content
             return type("R", (), {"content": "# QA", "finish_reason": "stop"})()
     monkeypatch.setattr(llm_client, "LLMClient", FakeLLM)
     d = S.add_requirement("Экспорт карточки", "", "Исходник документа.")
@@ -270,3 +271,187 @@ def test_переработка_добавляет_версию_и_сохран�
     assert second[0] == first[0]
     assert "сортировка" in second[1]["markdown"]
     assert "поиск" not in second[1]["markdown"]
+
+
+def test_versii_from_confluence_tables_paragraphs_and_lists():
+    from agents.requirement_versions import explicit_versions
+
+    html = (
+        "<h2>История изменений</h2>"
+        "<table><tr><th>Дата</th><th>Версия</th><th>Что менялось</th></tr>"
+        "<tr><td>01.10</td><td><strong>V1</strong></td><td>Базовый поиск</td></tr>"
+        "<tr><td>02.10</td><td>2</td><td>Добавили расчёт</td></tr></table>"
+        "<h2>Другие изменения</h2><p><strong>V3</strong> — параметр limit</p>"
+        "<ul><li>V4 - возвращаем total</li></ul><h2>Общие ограничения</h2><p>READ доступ</p>"
+        '<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[V9 - example]]>'
+        '</ac:plain-text-body></ac:structured-macro>'
+    )
+    versions = explicit_versions(storage_to_markdown(html))
+    assert list(versions) == ["V1", "V2", "V3", "V4"]
+    for revision, phrase in zip(versions, ("Базовый поиск", "Добавили расчёт", "параметр limit", "возвращаем total")):
+        assert phrase in versions[revision]
+        assert sum(phrase in page for page in versions.values()) == 1
+    assert "Общие ограничения" not in versions["V4"]
+    assert list(explicit_versions("V1 — функция; V2 — расчёт")) == ["V1", "V2"]
+    no_header = storage_to_markdown("<table><tr><td>V1</td><td>Поиск</td></tr><tr><td>V2</td><td>Расчёт</td></tr></table>")
+    assert list(explicit_versions(no_header)) == ["V1", "V2"]
+
+
+@pytest.mark.parametrize("imported", (True, False), ids=("imported_page", "direct_link"))
+def test_QA_update_adds_new_business_version_and_patches_overview(confluence, monkeypatch, imported):
+    import copy
+    import json
+    import re
+    from types import SimpleNamespace
+    from agents import llm_client
+
+    page = copy.deepcopy(PAGES["1"])
+    html = (
+        "<h2>Версии</h2><table><tr><th>Версия</th><th>Изменения</th></tr>"
+        "<tr><td>V1</td><td>Метод GET /items</td></tr>"
+        "<tr><td>V2</td><td>Расчёт total</td></tr>"
+        "<tr><td>V3</td><td>Добавили параметр limit</td></tr>"
+        "<tr><td>V4</td><td>Значение limit по умолчанию 20</td></tr></table>"
+        "<h2>Доступ</h2><p>Только оператор.</p>"
+    )
+    page["body"]["storage"]["value"] = html
+    monkeypatch.setitem(PAGES, "1", page)
+    calls = []
+    fail_patch = False
+
+    class FakeLLM:
+        def __init__(self, provider):
+            pass
+
+        def chat_continued(self, messages, **kw):
+            prompt = messages[0].content
+            if prompt.startswith("Ты — старший тестировщик"):
+                calls.append("full")
+                assert "V1, V2, V3, V4" in prompt and "Расчёт total" in prompt
+                markdown = "## Доступ\nТолько оператор.\n\n## API методы\nGET /items. total рассчитан. limit: 20."
+            elif prompt.startswith("Обнови только затронутые разделы"):
+                calls.append("patch")
+                assert "+| V5 |" in prompt and "limit по умолчанию 50" in prompt
+                markdown = "не JSON" if fail_patch else json.dumps({
+                    "replace": [{"index": 2, "markdown": "## API методы\nGET /items. total рассчитан. limit: 50."}],
+                    "add": [],
+                }, ensure_ascii=False)
+            else:
+                version = re.search(r"страницу изменений версии (V\d+)", prompt)[1]
+                calls.append(version)
+                change = prompt.split(f"ИЗМЕНЕНИЯ {version}:\n", 1)[1].split("\n\nПРЕДЫДУЩИЕ", 1)[0]
+                markdown = "## Что добавили\n" + change
+            return SimpleNamespace(content=markdown, finish_reason="stop")
+
+    monkeypatch.setattr(llm_client, "LLMClient", FakeLLM)
+    url = "https://c.ru/pages/viewpage.action?pageId=1"
+    if imported:
+        doc = asyncio.run(api.confluence_import(api.ConfluenceImport(ref=url)))["created"][0]
+    else:
+        doc = S.add_requirement("Поиск", "", url)
+        assert api.document_links(doc["id"])["found"][0]["url"] == url
+    S.update_requirement(doc["id"], qa_doc="## Старый QA", release_pages=[{"id": "V1", "markdown": "Старый V1"}])
+    body = api.GenerateDocBody(provider="fake")
+    first = asyncio.run(api._generate_doc(doc["id"], body, "qa"))
+    assert calls == ["full", "V1", "V2", "V3", "V4"]
+    assert "limit: 20" in first["qa_doc"]
+    assert [p["id"] for p in first["release_pages"]] == ["V1", "V2", "V3", "V4"]
+    page["version"]["number"] += 1
+    page["body"]["storage"]["value"] = html.replace("</table>", "<tr><td>V5</td><td>Значение limit по умолчанию 50</td></tr></table>")
+    fail_patch = True
+    with pytest.raises(HTTPException, match="корректные правки"):
+        asyncio.run(api._generate_doc(doc["id"], body, "qa"))
+    assert S.get_requirement(doc["id"]) == first
+    fail_patch = False
+    second = asyncio.run(api._generate_doc(doc["id"], body, "qa"))
+    assert calls == ["full", "V1", "V2", "V3", "V4", "patch", "patch", "V5"]
+    assert second["qa_doc"] == first["qa_doc"].replace("limit: 20", "limit: 50")
+    assert second["release_pages"][:4] == first["release_pages"]
+    assert "limit по умолчанию 50" in second["release_pages"][4]["markdown"]
+    assert second["version"] == first["version"] + int(imported)
+    asyncio.run(api._generate_doc(doc["id"], body, "qa"))
+    assert calls[-2:] == ["patch", "V5"] and calls.count("patch") == 2
+
+
+def test_plantuml_renders_qa_and_repairs_previously_processed_versions(tmp_path, monkeypatch):
+    import re
+    import shutil
+    from types import SimpleNamespace
+    from xml.etree import ElementTree
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from agents import llm_client
+    from agents.plantuml_render import LEGACY_DIAGRAM_ERRORS
+    from backend.api.auth import require_user
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Встроенная отрисовка использует Node.js 20+.")
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    (binaries / "node").symlink_to(node)
+    monkeypatch.setenv("PATH", str(binaries))
+    monkeypatch.setenv("PLANTUML_JAR", "/missing/old-renderer.jar")
+    monkeypatch.setattr(api, "ASSETS_DIR", tmp_path / "assets")
+    diagram = (
+        "## Диаграммы\n\n"
+        "```plantuml\n"
+        "@startuml\nparticipant \"Клиент\" as A\nparticipant \"Сервис\" as B\nA -> B: Запрос\n@enduml\n```\n"
+        "@startuml\ncomponent API\ncomponent Storage\nAPI --> Storage\n@enduml\n"
+        "```puml\nstart\n:Проверка;\nstop\n```\n"
+        "@startuml\nentity Client\nentity Request\nClient ||--o{ Request\n@enduml\n"
+    )
+    calls = []
+
+    class FakeLLM:
+        def __init__(self, provider):
+            pass
+
+        def chat_continued(self, messages, **kwargs):
+            calls.append(messages[0].content)
+            return SimpleNamespace(content=diagram, finish_reason="stop")
+
+    monkeypatch.setattr(llm_client, "LLMClient", FakeLLM)
+    req = S.add_requirement("Схемы", "", "## V1 — Запрос\nКлиент вызывает API.")
+    generated = asyncio.run(api._generate_doc(req["id"], api.GenerateDocBody(provider="fake"), "qa"))
+    assert len(calls) == 2
+    assert not generated["qa_link_errors"]
+    urls = re.findall(r"\]\((/api/requirements/assets/\w+\.svg)\)", generated["qa_doc"])
+    assert len(urls) == 4
+    assert all(url in generated["release_pages"][0]["markdown"] for url in urls)
+
+    app = FastAPI()
+    app.include_router(api.router)
+    app.dependency_overrides[require_user] = lambda: {"login": "qa"}
+    with TestClient(app) as client:
+        diagrams = [client.get(url) for url in urls]
+        assert all(response.status_code == 200 and response.headers["content-type"] == "image/svg+xml"
+                   and "default-src 'none'" in response.headers["content-security-policy"] for response in diagrams)
+        assert all(ElementTree.fromstring(response.content).tag.endswith("}svg") for response in diagrams)
+        assert "Клиент" in diagrams[0].text
+        warning = f"> Схема 1. {LEGACY_DIAGRAM_ERRORS[0]}"
+        S.update_requirement(req["id"], qa_doc=warning, qa_link_errors=[*LEGACY_DIAGRAM_ERRORS, "Исходник недоступен"],
+                             release_pages=[{**generated["release_pages"][0], "markdown": f"> Схема 1. {LEGACY_DIAGRAM_ERRORS[1]}"}])
+        route = f"/api/requirements/{req['id']}/render-diagrams"
+        response = client.post(route).raise_for_status().json()
+        assert response["qa_doc"] == generated["qa_doc"]
+        assert response["release_pages"] == generated["release_pages"]
+        assert response["qa_link_errors"] == ["Исходник недоступен"]
+        assert len(calls) == 2
+        assert client.post(route).raise_for_status().json()["updated_at"] == response["updated_at"]
+
+
+def test_plantuml_requests_external_assets_are_kept_offline(tmp_path, monkeypatch):
+    from agents.plantuml_render import render_markdown
+
+    monkeypatch.setenv("PATH", str(tmp_path))
+    warnings = []
+    def unexpected_save(_):
+        pytest.fail("External imports must not be rendered")
+
+    markdown, warnings = render_markdown(
+        "@startuml\n!includeurl https://example.invalid/page.puml\nAlice -> Bob\n@enduml", unexpected_save,
+    )
+    assert len(warnings) == 1 and "внешний файл" in markdown

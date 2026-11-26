@@ -67,7 +67,7 @@ function AiBadge() {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const { setDragging } = useWorkspace();
+  const { setDragging, setActivePane } = useWorkspace();
   const { isSuperuser } = useAuth();
 
   const [order, setOrder] = useState<string[]>([]);
@@ -203,6 +203,9 @@ export default function Sidebar() {
             <Link
               key={href}
               href={href}
+              onClick={event => {
+                if (!event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) setActivePane("left");
+              }}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData("sectionId", id);

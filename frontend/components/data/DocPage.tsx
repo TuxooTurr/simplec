@@ -307,7 +307,7 @@ export default function DocPage({ doc, folders, provider, releaseId, onRelease, 
           <div className="flex flex-wrap items-center gap-2">
             {hasQa ? (
               <button type="button" className={BTN} onClick={() => void generate()} disabled={gen || !!jobProgress}>
-                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Собираю документ QA…" : "Переработать документ"}
+                {gen ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />} {gen ? "Обновляю документ QA…" : "Обновить документ QA"}
               </button>
             ) : (
               <button type="button" className={BTN_PRIMARY} onClick={() => void generate()} disabled={gen || !!jobProgress || editing}>

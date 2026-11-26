@@ -178,6 +178,8 @@ class McpLogSource:
 class PvsLogSource:
     """Search a configured PVS index using SearchIndexTool and OpenSearch DSL."""
 
+    supports_multiple_services = True
+
     def __init__(self, client: Any, tool: Any):
         self.client = client
         self.tool = tool
@@ -205,7 +207,8 @@ class PvsLogSource:
         return "traceId" in self.fields
 
     async def search(self, *, service: str | None, start: datetime, end: datetime, limit: int,
-                     errors_only: bool = False, trace_id: str = "", namespace: str | None = None) -> dict:
+                     errors_only: bool = False, trace_id: str = "", namespace: str | None = None,
+                     services: tuple[str, ...] = ()) -> dict:
         if namespace and namespace != self.namespace:
             raise LogSourceError("Запрос PVS выходит за пределы namespace, настроенного в Shark.")
         fields = self.fields
@@ -215,7 +218,9 @@ class PvsLogSource:
             {"range": {fields["timestamp"]: {"gte": start.isoformat(), "lte": end.isoformat(),
                                              "format": "strict_date_optional_time||epoch_millis"}}},
         ]
-        if service:
+        if services:
+            filters.append({"terms": {fields["service"]: list(services)}})
+        elif service:
             filters.append({"term": {fields["service"]: service}})
         if errors_only:
             levels = sorted({variant for level in LOG_ERROR_LEVELS for variant in (level, level.lower(), level.title())})
@@ -248,9 +253,11 @@ class PvsLogSource:
 
 class DemoLogSource:
     supports_trace = True
+    supports_multiple_services = True
 
     async def search(self, *, service: str | None, start: datetime, end: datetime, limit: int,
-                     errors_only: bool = False, trace_id: str = "", namespace: str | None = None) -> dict:
+                     errors_only: bool = False, trace_id: str = "", namespace: str | None = None,
+                     services: tuple[str, ...] = ()) -> dict:
         stamp = max(start, end - timedelta(minutes=2))
         rows = [
             {"service": "payments-api", "timestamp": stamp.isoformat(), "level": "ERROR", "traceId": "demo-payment-42",
@@ -266,7 +273,8 @@ class DemoLogSource:
              "message": "Запрос на подтверждение оплаты получен", "traceId": "demo-payment-42"},
         ]
         scope = namespace if namespace is not None else configured_namespace()
-        rows = [{**r, "namespace": scope} for r in rows if (not service or r["service"] == service) and
+        rows = [{**r, "namespace": scope} for r in rows if (not services or r["service"] in services) and
+                (not service or r["service"] == service) and
                 (not trace_id or r.get("traceId") == trace_id) and (not errors_only or r["level"] == "ERROR")]
         return {"records": rows[:limit], "truncated": len(rows) > limit}
 

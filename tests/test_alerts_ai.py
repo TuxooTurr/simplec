@@ -33,3 +33,33 @@ def test_parse_json_inside_fence():
     assert alerts._ai_parse('```json\n{"name": "x", "cells": []}\n```')["name"] == "x"
     with pytest.raises(HTTPException):
         alerts._ai_parse("не json")
+
+
+def test_each_tool_and_version_gets_a_separate_named_draft():
+    scripts = [
+        {"version": "V1", "server": "incident-tools", "tool": "list_links", "business": "Показать связи",
+         "cells": [{"type": "code", "source": "print('read')"}]},
+        {"version": "V2", "server": "incident-tools", "tool": "filter_links", "business": "Отобрать связи",
+         "cells": [{"type": "code", "source": "print('filter')"}]},
+    ]
+    drafts = alerts.ai_drafts({"scripts": scripts})
+    assert len({draft["id"] for draft in drafts}) == 2
+    assert [draft["name"] for draft in drafts] == [
+        "V1 · Сервер incident-tools · Tool list_links · Показать связи",
+        "V2 · Сервер incident-tools · Tool filter_links · Отобрать связи",
+    ]
+    assert [draft["notebook"][0]["source"] for draft in drafts] == ["print('read')", "print('filter')"]
+    with pytest.raises(HTTPException, match="повторил название"):
+        alerts.ai_drafts({"scripts": [scripts[0], scripts[0]]})
+
+
+def test_batch_save_retry_preserves_order_and_reuses_ids(monkeypatch, tmp_path):
+    from db import alerts_store
+
+    monkeypatch.setattr(alerts_store, "_SCRIPTS_FILE", tmp_path / "scripts.json")
+    alerts.AlertsStore.save_script({"id": "existing", "name": "Существующий"})
+    batch = [{"id": "qa-v1", "name": "V1"}, {"id": "qa-v2", "name": "V2"}]
+    saved = alerts.AlertsStore.save_scripts(batch)
+    again = alerts.AlertsStore.save_scripts([{"id": "qa-v1", "name": "V1 после правки"}, batch[1]])
+    assert again[0]["created_at"] == saved[0]["created_at"]
+    assert [script["name"] for script in alerts.AlertsStore.get_scripts()] == ["Существующий", "V1 после правки", "V2"]
